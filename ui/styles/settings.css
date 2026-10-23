@@ -284,7 +284,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-choice-blocks:empty{display:none}
 .settings-choice-block{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:0;font-size:var(--t-sm);color:var(--muted)}
 .settings-choice-block .ghost{padding:2px 8px;font-size:var(--t-sm)}
-.settings-bulk-list [data-state=blocked] .settings-cell-note{color:var(--warn, #b7791f)}
+.settings-bulk-list [data-state=blocked] .settings-cell-note{color:var(--wait-ink)}
 .settings-bot-name{display:flex;align-items:center;gap:7px;min-width:0}
 .settings-bot-name a{color:var(--ink);font-weight:600}
 .settings-bot-name small,.settings-cell-note{display:block;color:var(--muted);font-size:var(--t-xs);margin-top:2px}
@@ -336,7 +336,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .computer-detail-body{padding:4px 16px 16px;overflow:auto;max-height:calc(86vh - 70px)}
 .computer-detail-section{padding:10px 0;border-bottom:1px solid var(--line)}.computer-detail-section:last-child{border-bottom:0}
 .computer-detail-section h3{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-.computer-detail-note{margin:8px 0 0;padding:6px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait)}
+.computer-detail-note{margin:8px 0 0;padding:6px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .computer-detail-empty{display:flex;align-items:center;gap:6px;margin:0 0 6px}
 .computer-detail-facts{margin:0 0 6px}
 .computer-conn{display:grid;gap:3px;padding:8px 0;font-size:var(--t-sm)}.computer-conn+.computer-conn{border-top:1px dashed var(--line)}
@@ -377,7 +377,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .model-login-body pre{max-height:200px;overflow:auto;white-space:pre-wrap;background:var(--surface2);padding:8px;border-radius:6px;font-size:var(--t-sm)}
 .model-login-actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px 16px}
 /* one row on a desktop: owner, kind, name, then the button; every control 32px */
-.machine-outdated-banner{margin:var(--s2) 0;padding:var(--s2) var(--s3);border-radius:8px;background:var(--wait-bg);color:var(--wait)}
+.machine-outdated-banner{margin:var(--s2) 0;padding:var(--s2) var(--s3);border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .machine-enroll{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);padding-top:var(--s3);border-top:1px solid var(--line)}
 .machine-enroll>select.settings-inline-select{flex:0 1 200px;max-width:none;padding:5px 28px 5px 9px;font-size:var(--t-base)}
 .machine-enroll>input{flex:1 1 180px;width:auto;min-width:180px}
@@ -524,7 +524,7 @@ input[type=search].repos-filter{flex:0 1 220px;margin-left:auto;padding:4px 10px
 .repo-setup input[readonly]{background:transparent;cursor:default}
 .repo-src{flex:none;font-size:var(--t-xs);color:var(--muted);opacity:.8;font-family:var(--mono)}
 .repo-state{display:flex;justify-content:flex-end;min-width:0}
-.repo-warn{font-size:var(--t-sm);color:var(--wait);white-space:nowrap}
+.repo-warn{font-size:var(--t-sm);color:var(--wait-ink);white-space:nowrap}
 /* Two or three choices as one strip of radios (New bots get, a bot's mode, Read or Write) */
 .repo-seg{display:inline-flex;flex:none;background:var(--surface2);border-radius:7px;padding:2px;gap:2px}
 .repo-seg label{position:relative;display:inline-flex;margin:0;cursor:pointer}
@@ -639,17 +639,17 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
 .sysr-switch{display:inline-flex;gap:6px;align-items:center}
 .sysr-owner,.sysr-needed{font-size:var(--t-sm)}
-.sysr-note{font-size:var(--t-sm);color:var(--wait)}
+.sysr-note{font-size:var(--t-sm);color:var(--wait-ink)}
 .sysr-failed{color:var(--fail);font-weight:600}
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
-.sysr-fallback{flex-basis:100%;color:var(--wait)}
+.sysr-fallback{flex-basis:100%;color:var(--wait-ink)}
 @media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}
 /* Settings > Billing (ui/app/settings-billing.js) */
 #set-billing h3{margin:var(--s3) 0 var(--s1);font-size:var(--t-sm);display:flex;align-items:center;gap:var(--s2)}
 .billing-head{display:flex;justify-content:space-between;align-items:flex-start;gap:var(--s2);flex-wrap:wrap}
 .billing-balance{font-size:2rem;font-weight:600;font-variant-numeric:tabular-nums}
 #set-billing h3 select{width:auto;font-size:var(--t-sm)}
-.billing-status{margin:2px 0 0}.billing-status[data-tone=ok]{color:var(--ok)}.billing-status[data-tone=warn]{color:var(--wait)}.billing-status[data-tone=bad]{color:var(--fail)}
+.billing-status{margin:2px 0 0}.billing-status[data-tone=ok]{color:var(--ok)}.billing-status[data-tone=warn]{color:var(--wait-ink)}.billing-status[data-tone=bad]{color:var(--fail)}
 .billing-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
 .billing-table td,.billing-table th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
 .billing-table .num,.billing-days .num,.billing-hour .num{text-align:right;font-variant-numeric:tabular-nums}

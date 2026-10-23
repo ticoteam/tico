@@ -204,6 +204,28 @@ def test_t3_a_bots_own_comment_never_wakes_it_and_the_skip_is_logged(api):
         (said[1]["comment"]["id"], {"bot": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
 
 
+def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api):
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        mine = H.task_create(c, "human:ana", "Plan the launch", "Plan it", "bot:cpo")
+        c.execute("DELETE FROM jobs")
+    post(api, "chat/cpo", {"text": "Run your check"})
+    attempt = claim(api, r, "cpo")
+    with api.app.state.store.read() as c:
+        before = jobs(c, "cpo")
+    # a bot comments on a task whose recipient is a person: delivered, no bot turn
+    told = post(api, f"tasks/{mine['id']}/comments", {"text": "Done, Ana."}, token=attempt["token"])
+    assert told["comment"]["to_actor"] == "human:ana" and told["woke"] is False and told["delivered"] is True
+    with api.app.state.store.read() as c:
+        assert jobs(c, "cpo") == before
+    # a person comments to a bot owner: one job
+    asked = post(api, f"tasks/{mine['id']}/comments", {"text": "Please start this today."})
+    assert asked["woke"] is True and asked["delivered"] is False
+    with api.app.state.store.read() as c:
+        assert jobs(c, "cpo") == before + 1
+
+
 def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):
     setup(api)
     with api.app.state.store.transaction() as c:

@@ -24,7 +24,7 @@
 .tl-tabs [role=tab][aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
 .tl-tabs [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tl-tabs .cnt{font-size:var(--t-xs);color:var(--muted);font-weight:500}
-.tl-tabs .cnt.hot{color:var(--wait);font-weight:600}
+.tl-tabs .cnt.hot{color:var(--wait-ink);font-weight:600}
 .tl-type-search{display:flex;align-items:center;gap:10px;flex:0 1 380px;min-width:0}
 .tl-types{display:inline-flex;align-items:center;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .tl-types[hidden]{display:none}
@@ -117,7 +117,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-note{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:5px;margin-left:4px;color:var(--muted);font-size:var(--t-sm);overflow:hidden}
 .tl-note-ic{flex:none;display:inline-flex;opacity:.8}
 .tl-note-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tl-row.mine .tl-note{color:var(--wait)}
+.tl-row.mine .tl-note{color:var(--wait-ink)}
 .tl-fill{flex:1 1 0}
 .tl-chips{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:45%;overflow:hidden}
 .tl-chips:empty{display:none}
@@ -314,7 +314,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal:has(.task-layout) .tmodal-title{font-size:var(--t-lg);line-height:1.3;margin:12px 16px 2px;overflow-wrap:anywhere}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:var(--t-sm)}
 /* a bot's task set waiting on you (`--on`) */
-.tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait)}
+.tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
 .tchip-blocked{flex:none;font-size:var(--t-xs);line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:var(--t-sm);color:var(--muted);cursor:default}
 .tmodal-age{flex:none}

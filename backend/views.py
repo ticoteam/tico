@@ -18,7 +18,7 @@ from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import visuals
-from . import app_delivery, providers, runner_versions
+from . import app_delivery, login_holds, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
 from . import auto_tasks
@@ -65,10 +65,10 @@ def attempt_details(c, turn):
             result = json.loads(attempt["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = result.get("error") or result.get("reason") or result.get("message") or (
+        reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
         details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
-                       failure_reason=details["end_reason"] or str(reason))
+                       failure_reason=login_holds.failure_line(result) or details["end_reason"] or str(reason))
     return details
 
 
@@ -96,7 +96,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             result = json.loads(row["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = (result.get("error") or result.get("reason") or result.get("message")
+        reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],

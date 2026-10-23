@@ -421,6 +421,24 @@ def recorded(c, attempt_id, result, runtime):
     return source(c, attempt_id, (row and row[0]) or runtime or "primary", result)
 
 
+def failure_line(result):
+    """A failed run's reason in plain words from the limit source its attempt kept (`limit_source`): "failed: quota
+    (Codex fallback, login work, model gpt-5.5)" or "failed: usage limit (Claude, primary)". None when the attempt
+    did not end on a limit, so its own error text is used."""
+    src = result.get("limit_source") if isinstance(result, dict) else None
+    if not isinstance(src, dict) or not src.get("runtime"):
+        return None
+    kind = src.get("kind") or ""
+    what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing") else "usage limit")
+    who = str(src["runtime"]).capitalize() + (" fallback" if src.get("role") == "fallback" else "")
+    parts = [who + ("" if src.get("role") == "fallback" else ", primary")]
+    if src.get("profile"):
+        parts.append(f"login {src['profile']}")
+    if src.get("model"):
+        parts.append(f"model {src['model']}")
+    return f"failed: {what} ({', '.join(parts)})"
+
+
 def label(src, at="", primary_until=""):
     """One line a person reads: "Fallback codex (the work login) API quota or billing limit at 20:05; primary claude
     not limited", "Primary claude plan usage limit (5-hour window)". `at` is when it was met; `primary_until` when the

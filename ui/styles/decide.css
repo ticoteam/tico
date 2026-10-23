@@ -1,7 +1,7 @@
 /* ui/styles/decide.css — Decide: one card at a time, the count on top, two big buttons at the bottom; on a phone it
    takes the whole screen. The way in on the Tasks page header ("Decide · N").
    The cascade runs in the order index.html links these files; keep rules in order. */
-.tl-decide{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-base);font-weight:600;white-space:nowrap;text-decoration:none;font-variant-numeric:tabular-nums}
+.tl-decide{flex:none;display:inline-flex;align-items:center;height:30px;padding:0 12px;border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-base);font-weight:600;white-space:nowrap;text-decoration:none;font-variant-numeric:tabular-nums}
 .tl-decide:hover{text-decoration:none;border-color:var(--wait)}
 .tl-decide[hidden]{display:none}
 .tl-decide-bar{height:24px;padding:0 9px;border-radius:6px;font-size:var(--t-sm)}

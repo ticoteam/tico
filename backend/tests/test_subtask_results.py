@@ -45,7 +45,8 @@ def test_nested_reviews_return_once_to_the_live_builder_then_builder_returns_to_
             H.task_update(c, "bot:ops", build["id"], status="waiting")
         checking = start(api, machine, review["id"], reviewer + "-review")
         verdict = "No blocking findings.\nVERDICT: approve PR #12 head " + "a" * 40
-        post(api, f"tasks/{review['id']}/comments", {"text": verdict}, checking["token"])
+        said = post(api, f"tasks/{review['id']}/comments", {"text": verdict}, checking["token"])
+        assert said["woke"] is True, "the forwarded result queued a bot job on the parent"
         assert [m["refs"]["task"] for m in queued(api, "ops")] == [build["id"]]
         assert claim(api, machine) is None, "the result joins the active Builder task instead of a child session"
         inputs = post(api, f"attempts/{builder['id']}/inputs", {}, machine["token"])["messages"]

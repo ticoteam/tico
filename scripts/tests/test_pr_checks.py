@@ -39,10 +39,10 @@ def test_only_audited_leaves_are_focused_shared_missing_and_main_run_everything(
 def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbalance(tmp_path):
     counts = Counter({"a.py": 1, "b.py": 1, "c.py": 1, "d.py": 100, "new.py": 1})
     times = {"a.py": 12, "b.py": 11, "c.py": 10, "d.py": 1}
-    split, loads = checks.groups(counts, times)
+    split, loads = checks.groups(counts, times, total=4)
     assert sorted(sum(split, [])) == sorted(counts)
     assert max(loads) <= 12 and len(split) == 4
-    assert checks.groups(counts, times) == (split, loads)
+    assert checks.groups(counts, times, total=4) == (split, loads)
     checks.groups(counts, {"a.py": float("nan"), "b.py": -1, "c.py": "text"})
     xml = tmp_path / "python-1.xml"
     xml.write_text('<testsuites><testsuite><testcase file="a.py" time="2.5"/>'
@@ -65,7 +65,8 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     main = checks.prepare("push", "base", target)
     assert guarded == ["base"]  # A direct release cut on main is checked by the release guards.
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
-    assert len(groups) == 4 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
+    # 48 measured seconds fit one VM; the time target, not a fixed count, sets the number of groups.
+    assert len(groups) == 1 and sorted(sum([j["files"] for j in groups], [])) == sorted(files)
     monkeypatch.setattr(checks, "changed_files", lambda base: ["conftest.py"])
     assert checks.prepare("pull_request", "base", target)["python"] is None
     monkeypatch.setattr(checks, "ROOT", tmp_path)
@@ -182,3 +183,57 @@ def test_cached_system_packages_match_the_locked_browser_version():
     assert manifest["playwright"] == lock["packages"]["node_modules/playwright-core"]["version"]
     assert manifest["platform"] == "ubuntu24.04-x64"
     assert len(set(manifest["packages"])) == len(manifest["packages"]) > 0
+
+
+def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch):
+    # One VM holds WORKERS x (target - setup) seconds of one-worker test time; never 0 VMs, never past the cap.
+    per_python = checks.WORKERS * (checks.JOB_SECONDS - checks.SETUP_SECONDS["python"])
+    assert checks.job_count(0, "python") == 1
+    assert checks.job_count(per_python, "python") == 1 and checks.job_count(per_python + 1, "python") == 2
+    assert checks.job_count(10 ** 9, "python") == checks.MAX_JOBS
+    counts = Counter({f"t{i}.py": 1 for i in range(30)})
+    split, loads = checks.groups(counts, {name: 100 for name in counts})
+    assert len(split) == checks.job_count(3000, "python") and max(loads) <= per_python
+    assert sorted(sum(split, [])) == sorted(counts)
+
+    names = [f"s{i}" for i in range(40)]
+    listed = []
+    monkeypatch.setattr(checks, "browser_scripts", lambda args: listed.append(args) or names)
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_api.py": 1}))
+    monkeypatch.setattr(checks, "guard_changelog", lambda base: None)
+    monkeypatch.setattr(checks, "changed_files", lambda base: ["ui/app/core.js"])
+    timings = tmp_path / "durations.json"
+    timings.write_text(json.dumps({f"ui/tests/{n}.cjs": 60 for n in names}))
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
+    assert listed == [["--all"]]
+    browser = [j for j in plan["matrix"]["include"] if j["suite"].startswith("browser-")]
+    assert len(browser) == checks.job_count(2400, "browser") > 1
+    assert sorted(sum([j["files"] for j in browser], [])) == sorted(names)
+    # With no measured times, each script still counts, so a first --all run is split too.
+    timings.write_text("{}")
+    plan = checks.prepare("pull_request", "base", tmp_path / "plan.json", timings)
+    assert len([j for j in plan["matrix"]["include"] if j["suite"].startswith("browser-")]) == \
+        checks.job_count(40 * checks.UNTIMED_SCRIPT_SECONDS, "browser")
+
+    # A browser job runs exactly its scripts at full width and records their times for the next split.
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    calls = []
+    monkeypatch.setattr(checks.subprocess, "run",
+                        lambda command, **kw: calls.append((command, kw["env"])) or SimpleNamespace(returncode=0))
+    (tmp_path / "plan.json").write_text(json.dumps({"matrix": {"include": [{"suite": "browser-1", "files": ["chat"]},
+                                                                          {"suite": "browser-2", "files": []}]}}))
+    assert checks.run(tmp_path / "plan.json", "browser-1") == 0
+    command, env = calls[-1]
+    assert command == ["node", "scripts/ui-tests.cjs", "-j", str(checks.WORKERS), "chat"]
+    assert env["TICO_UI_TIMINGS"] == str(tmp_path / "ci-results" / "browser-1.json")
+    with pytest.raises(RuntimeError, match="nonempty"):
+        checks.run(tmp_path / "plan.json", "browser-2")
+    recorded = tmp_path / "browser-1.json"
+    recorded.write_text(json.dumps({"chat": 12.5, "bad": "x"}))
+    assert checks.durations([], [recorded]) == {"ui/tests/chat.cjs": 12.5}
+
+
+def test_browser_listing_matches_the_runner_selection():
+    core = checks.browser_scripts([])
+    assert "chat" in core and len(core) < len(checks.browser_scripts(["--all"]))
+    assert checks.browser_scripts(["chat"]) == ["chat"]
