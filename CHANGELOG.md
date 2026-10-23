@@ -7,6 +7,30 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-23
+
+### Added
+- **Sign in to Grok Build and Cursor from Computers.** Settings > Computers supports sign-in, sign-out and account switching for the computer's shared login. Grok reports its saved sign-in state. Cursor keeps Tico sign-ins in files; an existing macOS Keychain login needs a new sign-in from Tico.
+- **Sign out of Muse Code and switch accounts.** Cancelling a switch preserves the previous login. Tico uses Muse's file credential backend on Mac as well as Docker. A login saved only in the macOS Keychain asks for a new sign-in from Tico; Tico does not read or copy that Keychain item. Update the server and runner to use these controls.
+- **Health names blocked bots and stalled work.** The checks show queue counts, oldest ages, blocking reasons and actions for blocked bots, stalled tasks and bot pull requests.
+- **Finished runs record tokens and estimated cost.** Usage includes cached tokens and records why usage is missing or a model is unpriced. Existing legacy usage history is retained.
+- **Hosted setup carries company charts up to 300 seats.** A private plan bucket and verified file carry larger charts, and a retry can finish a failed first boot.
+- **Live meetings can be private.** The person connecting a meeting can share it with selected people and attached bots. Unauthorized people cannot list or open it. Existing clients retain the default team visibility.
+
+### Changed
+- **First-run provider choices follow the selected plan.** Provider details appear for the applicable choice, phone layouts put the main choice first, and computer sign-in help follows the selected provider preset.
+- **Held runs recover after a usage limit.** Eligible runs resume or dismiss when the limit resets. A ready fallback can run while the primary is limited, and a fallback startup failure waits for the reset.
+- **The server gets CPU priority on shared Docker hosts.** The server, HTTPS front door and tunnel get a higher CPU weight than the runner. Under severe memory pressure, the runner is preferred for termination.
+
+### Fixed
+- **An explicitly cleared login stays cleared.** A stale Settings page cannot switch to a subscription after Clear key or Sign out. An unconfirmed sign-out keeps automatic key login blocked.
+- **Renewed worktrees survive retired pull-request cleanup.** Reused worktrees and new trees for Doing tasks are kept when older work is removed or merged.
+- **Separate model messages keep their paragraphs.** Muse, Grok, Cursor, Gemini and Antigravity replies preserve boundaries between messages instead of joining their words together.
+- **Company-file import accepts all the goals setup suggests.** The goal limit rises from 20 to 325; the 300-seat limit is unchanged.
+- First-run and sign-in documentation follows the current wizard.
+- Prerelease candidates use their matching release notes. Product pull requests reject ordinary changelog edits, and nightly gate failures use a tasks-only service key.
+- The runner state test compares table names with the declared schema instead of a stale count.
+
 ## [0.4.1] - 2026-10-23
 
 ### Changed
@@ -4323,7 +4347,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
 [0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
