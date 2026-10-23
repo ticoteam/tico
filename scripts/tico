@@ -6,7 +6,7 @@
 #        scripts/tico [-e ENV] update | open | help   (restart/update wait for turns in flight; TICO_RESTART_NOW=1 skips)
 #        scripts/tico env create|list|show|remove ...          the companies on this Mac
 #        scripts/tico -e ENV enroll --code-file F --label L    register this Mac for one company
-#        scripts/tico -e ENV profile add|list|login|assign     the subscriptions its bots run on
+#        scripts/tico -e ENV profile add|list|login            the computer's login its bots run on
 #        scripts/tico [-e ENV] screen on|off|status            offer this computer's screen to the web app (Linux)
 #        scripts/tico -e ENV bot create SLUG --name "Display" [--template T]  a catalog template
 #                                                              or employee-repo (the default)

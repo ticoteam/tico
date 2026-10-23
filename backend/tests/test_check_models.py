@@ -352,14 +352,6 @@ def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
         assert [x["runner_id"] for x in out_of_quota_logins(c)] == [machine["runner_id"]]
 
 
-def test_a_subscription_for_the_checks_tool_ends_the_move(api):
-    machine, sub = moved_to_grok(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-    with api.app.state.store.read() as c:
-        assert check_models.of(c, sub["id"], "ops")["runtime"] == "codex", "its turns use the subscription's login"
-
-
 def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai", "cursor")
@@ -460,14 +452,14 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
     assert claim(api, machine)["job_id"] == person, "only the person's message is handed out"
 
 
-def test_a_declined_check_is_not_handed_out_before_the_tick_lets_it_go(api, monkeypatch):
+def test_a_declined_checks_notice_is_cancelled_on_claim_without_waiting_for_the_tick(api, monkeypatch):
     machine, sub, check = limited_check(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='declined' WHERE id=?", (sub["id"],))
     later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "queued"
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "cancelled"
 
 
 def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(api):

@@ -37,6 +37,9 @@ CAP_REACHED, RATE_LIMITED = "cap_reached", "rate_limited"
 # Tico HQ pauses a company's Tico models while its credit is at its minimum (Waitlist spec v3 test 12): the company's
 # wait, not a login's. The Gateway asks again after a minute (its Retry-After), and HQ sees new credit within one.
 OUT_OF_CREDIT, OUT_OF_CREDIT_WAIT = "out_of_credit", 60
+# How long a Tico login is held when the Gateway, not the login, refused a turn another model then finished: its
+# key's rate window is a minute, and no Retry-After reaches the server from a turn that ended on a fallback.
+GATEWAY_WAIT = OUT_OF_CREDIT_WAIT
 PAUSED_MESSAGE = "Tico models are paused: this company is out of credit"
 REVOKED_KEY, UNKNOWN_KEY = "revoked_key", "unknown_key"
 # States that say nothing about the key: the Gateway was down or asked to slow down. They never replace a real answer.

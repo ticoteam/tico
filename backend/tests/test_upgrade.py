@@ -55,11 +55,12 @@ def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):
     assert state(path)[0] == len(H.MIGRATIONS)
 
 
-def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tmp_path):
+@pytest.mark.parametrize("version", [38, 39])
+def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tmp_path, version):
     conn = H.connect(tmp_path / "purpose.sqlite")
     try:
         # A file may have the column before recording the version bump.
-        conn.execute("PRAGMA user_version=38")
+        conn.execute(f"PRAGMA user_version={version}")
         conn.executemany("INSERT INTO turns(id,bot,started,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
                          [("builder", "pr-reviewer", "pr_checks", None),
                           ("reviewer", "pr-reviewer-sol", "status_or_relation", None),

@@ -391,12 +391,12 @@ def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
 
 
 @pytest.mark.parametrize("gateway", ["connected", "connected, no pi", "connected, no repository",
-                                     "connected, invalid settings", "connected, own subscription signed out", "none"])
+                                     "connected, invalid settings", "none"])
 def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_login(api, monkeypatch, gateway):
     """Dev 326: with no Claude login and the Gateway connected under the recommended choice, the bot's own state, its
     model check and its chat say what runs it, never "Claude login required"; with no Gateway either, they still do.
-    A computer without the Gateway's runtime, a bot without its checkout or with settings that differ, or a bot on
-    its own signed-out subscription, holds the turn (the claim's rule), so the bot's row stays as reported."""
+    A computer without the Gateway's runtime, or a bot without its checkout or with settings that differ, holds the
+    turn (the claim's rule), so the bot's row stays as reported."""
     from backend import readiness, views
     if gateway != "none":
         connected(api, monkeypatch)
@@ -411,12 +411,6 @@ def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_logi
     elif gateway == "connected, invalid settings":
         report = {**report, "configuration_valid": False,
                   "problems": [*report["problems"], "Configuration differs from server"]}
-    elif gateway == "connected, own subscription signed out":
-        report = {**report, "profile": "team-plan", "problems": ["team-plan: Claude login required"]}
-        with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-            c.execute("INSERT INTO computer_profiles(runner_id,profile,runtimes_json,updated) VALUES(?,?,?,?)",
-                      (machine["runner_id"], "team-plan", json.dumps({"claude": {"signed_in": False}}), "2026-10-21"))
     post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
         "schema_version": 1, "isolated": True, "bots": {"ops": report},
         "runtimes": {"claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"},
@@ -436,10 +430,6 @@ def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_logi
         assert location["ready"] is False and location["readiness"]["problems"] == report["problems"], location
         assert "gateway" not in location["readiness"]
         assert can["can_run"] is True and can["gateway"], can     # the model is fine; the bot's own setup is not
-    elif gateway == "connected, own subscription signed out":
-        assert location["ready"] is False and location["readiness"]["problems"] == report["problems"], location
-        assert "gateway" not in location["readiness"] and "gateway" not in can
-        assert can["can_run"] is False and can["sign_in"] is True and "team-plan" in can["problem"], can
     else:
         assert location["ready"] is False and location["readiness"]["problems"] == ["Claude login required"]
         assert "gateway" not in location["readiness"]

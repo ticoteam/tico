@@ -714,7 +714,8 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
     if stopped:
         post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
-    assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
+    assert claim(api, machine) is None
+    assert job_state(api, attempt['job_id']) == ('cancelled' if stopped else 'uncertain')
     return machine, message, attempt
 
 
@@ -853,9 +854,10 @@ def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_
     machine = runner(api, 'ana')
     for bot, dismissed in (('ops', False), ('finance', True)):
         assign(api, machine, bot)
-        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=True)
+        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=not dismissed)
         aged(api, attempt['id'])
         if dismissed:
+            post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})
             post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
                  'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
         filed = hand_in(api, machine, attempt)

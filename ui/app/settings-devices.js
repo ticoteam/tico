@@ -322,11 +322,6 @@ function machineSharedLoginHTML(machine, runtime, profile = '') {
   const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
   return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
 }
-function machineProfileSignIn(state, runtime) {
-  if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
-  if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
-  return '<span class="pill waiting">Couldn\'t check</span>';
-}
 // Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
 // one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
 // computer without a driver reports no `appdriver`, so it shows nothing here.
@@ -427,7 +422,6 @@ function renderSettingsMachines() {
       await loadSettings();
     } catch (error) { toast(error.message, true); box.checked = !box.checked; box.disabled = false; }
   };
-  el.onsubmit = event => { subsHandleSubmit(event); };   // a bare `false` would cancel any other form's submit
   el.onclick = async event => {
     // The pop-up: a click on a row (its name, a chip, anywhere on it) opens it; ✕ or the backdrop closes it.
     const dialog = el.querySelector('dialog.computer-detail');
@@ -438,9 +432,6 @@ function renderSettingsMachines() {
     if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
     const row = event.target.closest('[data-computer-open], [data-computer-row]');
     if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
-    if (subsHandleClick(event)) return;
-    const removeLine = event.target.closest('[data-connection-remove]');
-    if (removeLine) { if (!removeLine.disabled) computerRemoveOpen(removeLine); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
     if (perfLink) { dialog?.close(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
     const shown = event.target.closest('[data-computer-bots]');
@@ -493,7 +484,6 @@ function renderSettingsMachines() {
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
   el.querySelector('[data-machines-list]').innerHTML = `${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
   computerDetailPaint();
-  subsScheduleRefresh();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };

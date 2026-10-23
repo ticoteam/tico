@@ -44,16 +44,6 @@ def test_refresh_access_and_unsupported_without_runner_command(api):
     assert get(api, 'runner-subscription-refreshes', r['token'])['refreshes'] == []
 
 
-def test_signin_invalidates_report_and_rejects_older_inflight(api):
-    r, body = setup(api)
-    request = post(api, 'subscriptions/refresh', body)
-    post(api, f'runners/{r["runner_id"]}/logins', {'runtime': 'codex', 'profile': 'sample'})
-    response = api.post(f'/api/v2/runner-subscription-refreshes/{request["id"]}/report', json={
-        'profile': 'sample', 'runtime': 'codex', 'state': 'succeeded', 'weekly': reading()}, headers=headers(r['token']))
-    assert response.status_code == 409
-    assert state(api)['weekly'] is None
-
-
 def test_wrong_runner_cannot_report_and_unknown_never_success(api):
     r, body = setup(api)
     other = runner(api, label='Other')

@@ -20,7 +20,7 @@
     },
     {
       "name": "Subscriptions",
-      "description": "Named provider logins on Computers and the one each bot runs on."
+      "description": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it."
     },
     {
       "name": "Team chart",
@@ -1683,7 +1683,7 @@
     },
     "/api/v2/bots/{bot}/subscription": {
       "get": {
-        "summary": "Effective bot subscription",
+        "summary": "The Computer login a bot runs on",
         "operationId": "getBotSubscription",
         "parameters": [
           {
@@ -12359,7 +12359,7 @@
     },
     "/api/v2/subscriptions": {
       "get": {
-        "summary": "Profiles and assignments",
+        "summary": "Subscription logins reported by each Computer",
         "operationId": "listSubscriptions",
         "responses": {
           "200": {
@@ -12368,55 +12368,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SubscriptionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Subscriptions"
-        ]
-      },
-      "put": {
-        "summary": "Assign or clear a subscription",
-        "operationId": "assignSubscription",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscriptionAssignment"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubscriptionAssignmentResult"
                 }
               }
             }
@@ -18232,7 +18183,6 @@
           },
           "source": {
             "enum": [
-              "bot",
               "computer"
             ]
           },
@@ -26746,66 +26696,6 @@
         ],
         "additionalProperties": true
       },
-      "SubscriptionAssignment": {
-        "properties": {
-          "scope": {
-            "type": "string",
-            "const": "bot",
-            "title": "Scope",
-            "default": "bot"
-          },
-          "target": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Target"
-          },
-          "profile": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Profile"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "target"
-        ],
-        "title": "SubscriptionAssignment"
-      },
-      "SubscriptionAssignmentResult": {
-        "type": "object",
-        "properties": {
-          "scope": {
-            "enum": [
-              "bot"
-            ]
-          },
-          "target": {
-            "type": "string"
-          },
-          "profile": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "profile",
-          "scope",
-          "target"
-        ],
-        "additionalProperties": true
-      },
       "SubscriptionIdentity": {
         "type": "object",
         "properties": {
@@ -26871,41 +26761,9 @@
               ],
               "additionalProperties": true
             }
-          },
-          "assignments": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "scope": {
-                  "type": "string"
-                },
-                "target": {
-                  "type": "string"
-                },
-                "profile": {
-                  "type": "string"
-                },
-                "updated": {
-                  "type": "string"
-                },
-                "updated_by": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "profile",
-                "scope",
-                "target",
-                "updated",
-                "updated_by"
-              ],
-              "additionalProperties": true
-            }
           }
         },
         "required": [
-          "assignments",
           "profiles_by_computer"
         ],
         "additionalProperties": true

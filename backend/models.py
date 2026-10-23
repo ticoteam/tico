@@ -1054,6 +1054,8 @@ class AppDriverReadiness(Contract):
 
 
 class StructuredReadiness(Contract):
+    # Physical home of the computer's one login; present only after the computer_logins_v1 handshake.
+    computer_profile: str | None = Field(default=None, max_length=80)
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
@@ -1126,13 +1128,6 @@ class ComputerProfile(Contract):
     runtimes: dict[str, SubscriptionRuntime] = Field(default_factory=dict, max_length=20)
 
 
-class SubscriptionAssignment(Contract):
-    # Only a bot chooses a subscription; a group no longer gives its bots one.
-    scope: Literal["bot"] = "bot"
-    target: str = Field(min_length=1, max_length=100)
-    profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
-
-
 class WorktreeStatus(Contract):
     repo: str | None = Field(default=None, max_length=200)
     last_activity: float | None = Field(default=None, ge=0)
@@ -1161,7 +1156,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1815,8 +1810,16 @@ class Claim(Contract):
     next_run: bool = False
 
 
+class LoadSnapshot(Contract):
+    at: float = Field(ge=0, allow_inf_nan=False)
+    cpu_pct: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mem_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    running_turns: int = Field(ge=0, le=10_000)
+
+
 class Started(Contract):
     thread_id: ID
+    load_snapshot: LoadSnapshot | None = None
 
 
 class Event(Contract):
@@ -1906,6 +1909,7 @@ class RunPush(Contract):
 
 
 class Completion(Contract):
+    load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
@@ -2079,6 +2083,7 @@ class PerformanceProcess(_Sampled):
 
 
 class PerformanceSample(_Sampled):
+    interval_s: Literal[30, 60] = 30  # old runners sample twice a minute
     at: float = Field(ge=0, allow_inf_nan=False)
     scope: Literal["host", "container"] = "host"
     # A container's memory is the host's when it has no memory limit; an older runner leaves this out.
@@ -2090,6 +2095,9 @@ class PerformanceSample(_Sampled):
     mem_used: Bytes | None = None
     swap_total: Bytes | None = None
     swap_used: Bytes | None = None
+    # Raw swap for the simple load reading; macOS omits diagnostic swap because its total grows with use.
+    load_swap_total: Bytes | None = None
+    load_swap_used: Bytes | None = None
     disk: list[PerformanceDisk] = Field(default_factory=list, max_length=4)
     active: int = Field(default=0, ge=0, le=10_000)
     procs: list[PerformanceProcess] = Field(default_factory=list, max_length=16)
