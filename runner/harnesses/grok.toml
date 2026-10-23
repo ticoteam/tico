@@ -1,5 +1,5 @@
 # xAI's Grok Build, the official CLI (npm package published by xAI; docs.x.ai/build). Its browser
-# login redirects to a local callback, so it is signed in from the computer's terminal, not relayed.
+# device-code login works on a remote computer without a local browser callback.
 id = "grok"
 name = "Grok Build"
 host = "grok"
@@ -19,14 +19,23 @@ pattern = '(\d+\.\d+\.\d+)'
 policy = "latest"
 
 [auth]
-methods = ["subscription", "api-key"]
+methods = ["device-code", "subscription", "api-key"]
 api_key_env = ["XAI_API_KEY"]
+
+[login]
+command = ["login", "--device-auth"]
+terminal = false
+logout = ["logout"]
+files = [".grok/auth.json"]
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
+api_key_in_turn = true
 terminal_login = ["login"]
 subscription_profiles = true
 profile_home = "HOME"
+profile_home_overrides = ["GROK_HOME", "GROK_AUTH_PATH"]
+subscription_marker = "grok account"
 weekly_usage = "manual"
 mcp_transports = ["http", "sse"]
 resume_command = "grok --resume"
@@ -34,4 +43,6 @@ model_list = "command"
 model_list_args = ["models"]
 
 [capabilities.sign_in_status]
-check = "none"
+check = "file"
+ready_detail = "Signed in with a Grok account"
+missing_detail = "Grok sign-in required (sign in from Tico) or XAI_API_KEY"

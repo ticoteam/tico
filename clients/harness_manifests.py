@@ -82,7 +82,7 @@ def _row(harness, runtime, data, where, auth=None, login=None):
     caps = capabilities(data.get("capabilities", {}), where)
     executable = str(data.get("executable") or "")
     auth = auth or {}
-    keys = list(auth.get("api_key_env") or []) if caps["api_keys"] else []
+    keys = list(auth.get("api_key_env") or []) if caps["api_keys"] or caps["api_key_in_turn"] else []
     relay = list((login or {}).get("command") or [])
     # What the API says: the manifest's own values plus the sign-in facts [login] and [auth] already hold.
     public = {**caps, "sign_in_status": caps["sign_in_status"].get("check", "none"),
