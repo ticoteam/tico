@@ -134,7 +134,8 @@ def install_reviews(app, store, primary, reviewer):
                     return json.loads(previous["response_json"])
                 raise Problem("github_review_unknown", "A review with this key may already have been submitted; check GitHub before a fresh operation", 409)
         issuer = reviewer.for_bot(bot)
-        token, _ = issuer.mint([repository], {"pull_requests": "write", "metadata": "read"})
+        token, _ = issuer.mint([repository], {"pull_requests": "write", "metadata": "read"},
+                               diagnose=issuer is primary)
         headers = {"Authorization": "Bearer " + token}
         path = f"/repos/{repository}/pulls/{body.number}"
         current = issuer._call("GET", path, headers=headers)

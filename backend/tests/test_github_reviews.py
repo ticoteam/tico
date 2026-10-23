@@ -190,3 +190,17 @@ def test_reviewer_ignores_known_missing_repo_without_changing_primary_cache(api,
     reviewer = api.app_state.github_reviewer_app
     token, _, repos = reviewer.mint_reachable([REPO, "Acme/gone"], G.READ_PERMISSIONS, missing={"acme/gone"})
     assert token.startswith("reviewer-") and repos == [REPO]
+
+
+def test_review_missing_from_reviewer_installation_refuses_before_claim_or_post(api, gh, tmp_path, monkeypatch):
+    _, seen = configured(api, gh, tmp_path, monkeypatch)
+    def unexpected(*args, **kw):
+        raise AssertionError("reviewer refusal must not diagnose through primary Administration")
+    monkeypatch.setattr(G.GitHubApp, "can_create_repos", unexpected)
+    gh.missing.add("product")  # Scoped mint refuses; a wide token still succeeds for diagnosis.
+    reply = submit(api, key="not-installed")
+    assert reply.status_code == 409, reply.text
+    assert reply.json()["error"]["code"] == "github_repo_not_accessible"
+    assert seen["reviews"] == []
+    with api.app_state.store.read_transaction() as c:
+        assert c.execute("SELECT count(*) FROM github_review_operations").fetchone()[0] == 0

@@ -82,7 +82,8 @@ repository access to themselves.
    permissions **Contents**, **Pull requests** and **Issues** to read and write, **Metadata** to read, and
    **Actions**, **Checks**, **Commit statuses** and **Deployments** to read. Leave Administration and Workflows
    unset. Install it on the same organization, covering the reviewers' own bot repositories and their existing
-   repository grants. Selected repositories work if every required repository is included.
+   repository grants. Selected repositories work if every required repository is included. A grant omitted from the
+   reviewer installation refuses the bot's token request; include every granted repository before starting it.
 2. Generate a private key in that App's settings. Store the PEM as a server-only secret file, readable by the
    server user (uid 10001 in the standard image) and mounted read-only. Never put it in a bot repository, a task, a message or a runner environment.
    Keep it in the operator's secret backup. Record the **App ID** and **installation ID** (the number at the end
@@ -104,7 +105,8 @@ repository access to themselves.
    ```
 
    Use the actual reviewer **bot slugs**, not their display names or starter-template names. Leave the Builder
-   out of the list. Keep the primary App connected in Tools. This configuration chooses an identity only;
+   out of the list, and keep each selected reviewer's home repository pointed at its own bot repository, never a
+   product repository: the home repository keeps write access. Keep the primary App connected in Tools. This configuration chooses an identity only;
    existing own/chosen/all repository grants still limit every token, with separate read and write groups.
 4. Start fresh reviewer runs. Both start-of-run tokens and renewed git/`gh` credentials use the reviewer App;
    no runner upgrade is needed. Verify a review on a Builder-authored PR appears as the reviewer App and names
