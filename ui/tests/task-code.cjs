@@ -67,7 +67,9 @@ function fixtures() {
   const runView = {task_id: 't-checkout', checkpoint: {text: 'Summary step built; receipts next.', at: ago(300), by: 'bot:eng'},
     attempts: [
       {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
-       took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: null, next: null,
+       took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5', effort: 'high'}],
+         task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
+       lease: [], reason: null, next: null,
        wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
@@ -277,7 +279,10 @@ async function desktop(browser) {
   assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m ago']);
   const tries = runs.locator('.truns-try');
   assert.equal(await tries.count(), 2);
-  assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5/);
+  assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5 \(high\)/);
+  // What ran and why: the fallback from the bot's task model (backend/task_models.py).
+  assert.match(await tries.first().innerText(), /Ran on the bot's model claude-opus-5-5 \(high\): task model grok-4\.6 \(low\) could not run \(grok is not signed in on this bot's computer\)/);
+  assert.doesNotMatch(await tries.nth(1).innerText(), /task model/, 'a run with no task model says nothing about one');
   assert.equal(await tries.first().evaluate(x => x.open), true);
   assert.match(await tries.first().locator('.truns-wake').innerText(), /^Woke for: Review comments · Token saver · held until /);
   assert.equal(await tries.nth(1).locator('.truns-wake').count(), 0, 'a run from before presets says nothing about its wake');

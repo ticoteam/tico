@@ -1,5 +1,5 @@
-"""What a run says when its ChatGPT login is busy with another turn (runner-rs/src/login_turns.rs: one Codex turn at a
-time per ChatGPT login, as OpenAI's terms allow it).
+"""What a run says for the optional login queue (runner-rs/src/login_turns.rs). Codex opts out: its bots run
+concurrently on one ChatGPT login, and old queue events must not show a current wait.
 
 The runner streams a `status` event `{"waiting": line, "login": label, "holder": bot, "holder_attempt", "holder_task",
 "since", "position"}` while the turn waits for the login and `{"waiting": ""}` once the login is its own, a `status`
@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timezone
 
 from . import task_privacy as privacy
+from .harnesses import harness_caps
 from .store import H
 from .turns import clip
 
@@ -78,6 +79,10 @@ def _task(c, run):
 
 def wait(c, aid):
     """The attempt's newest login wait as the runner reported it, or None once the login is its own."""
+    # This event contract describes the ChatGPT queue. Once Codex opts out, ignore even the last wait an
+    # older runner reported; it must not label a running bot as waiting or raise an unknown-holder finding.
+    if not harness_caps("codex").get("one_turn_per_login"):
+        return None
     payload = _payload(c, aid, "status", "waiting")
     return payload if payload.get("waiting") else None
 

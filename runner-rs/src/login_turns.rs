@@ -1,8 +1,8 @@
-//! One turn at a time on a login whose provider allows it only one job stream (`one_turn_per_login`, Codex signed in
-//! with ChatGPT: OpenAI's Codex docs allow one auth.json per serialized job stream, never shared by concurrent jobs).
+//! Optional one-turn-per-login queue (`one_turn_per_login`). Disabled for Codex: bots sharing a ChatGPT login
+//! run concurrently and share the plan's usage allowance. Kept for harnesses that opt in.
 //! A turn takes its login before its host starts and keeps it until the host stops; another bot's turn on the same
 //! login waits for it in order, or runs on its own fallback (crate::execute). A login signed in with a key (an OpenAI
-//! API key) is never held, and neither is any other CLI's.
+//! API key) is never held.
 //!
 //! In memory: this runner starts every turn on this computer, and a turn that ends, fails, runs out of time or
 //! panics drops what it holds. That frees the login at once, unless the process of the host the turn started is still
@@ -10,7 +10,7 @@
 //! the login is kept until that process has been stopped and reaped. A restarted runner holds nothing.
 //!
 //! A login is never copied into another bot's home to get round this: a copy of a ChatGPT auth.json rotates apart
-//! from the original, and two bots on two copies would slip past the lock (the guard test below).
+//! from the original (the guard test below). Concurrent turns use the original login in its own home.
 
 use std::collections::HashMap;
 use std::future::Future;

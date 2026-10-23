@@ -17,7 +17,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import update_feeds, wake_presets
+from . import task_models, update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -199,6 +199,8 @@ class SettingsAdmin:
                 "subtask_session": effective.get("subtask_session"),
                 "task_goal": effective.get("task_goal"),
                 "review_model": effective.get("review_model"),
+                # What the bot's tasks run on; null is the same as the bot (backend/task_models.py).
+                "task_model": task_models.of(effective),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
@@ -649,6 +651,8 @@ class SettingsAdmin:
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == "fallback":
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
+        if field == "task_model":
+            return task_models.of(_json(config["config_json"], {}) or {})
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
         if field == "wake_preset":
@@ -986,6 +990,11 @@ class SettingsAdmin:
             return self.set_fallback(c, who, bot, SimpleNamespace(
                 fallback=SimpleNamespace(**before) if before else None,
                 expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == "task_model":
+            return self.set_task_model(c, who, bot, SimpleNamespace(
+                task_model=SimpleNamespace(effort=before.get("reasoning_effort"), **{
+                    k: before[k] for k in ("harness", "model")}) if before else None,
+                expected_revision=body.expected_revision), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
     def team_names(self, c):
@@ -1072,6 +1081,47 @@ class SettingsAdmin:
                       (who.actor, H.now(), undo_change_id))
         H.event(c, who.actor, "bot.fallback_changed", bot, {"before": before, "after": after})
         return {"bot": bot, "fallback": after, "revision": config["revision"] + 1}
+
+    def set_task_model(self, c, who, bot, body, undo_change_id=None):
+        """The harness, model and effort the bot's tasks run on (backend/task_models.py); None clears it to the same
+        as the bot. Only the one key changes: the bot's own model, and so its sessions, stay as they are. A model the
+        bot's computer cannot run is saved all the same, and its tasks run on the bot's model until it can: the
+        answer's `readiness` says so now."""
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        if body.task_model is None:
+            target = None
+        else:
+            choice = self.models.get(body.task_model.model)
+            if not choice:
+                raise Problem("model", "Choose one of the supported models", 422)
+            self.refuse_retired(choice)
+            harness = self._harness(choice, body.task_model.harness)
+            target = {"harness": harness, "model": choice["id"],
+                      "reasoning_effort": self._effort(choice, body.task_model.effort),
+                      "runtime": runtime_of(harness) or choice["runtime"]}
+        before = self.snapshot(c, bot, "task_model")
+        if before == target:
+            raise Problem("unchanged", "That task model is already selected", 409)
+        declared = _json(config["config_json"], {}) or {}
+        if target is None:
+            declared.pop(task_models.KEY, None)
+        else:
+            declared[task_models.KEY] = target
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        after = self.snapshot(c, bot, "task_model")
+        self.record(c, who.actor, bot, "task_model", before, after)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
+        readiness = task_models.readiness(c, bot, after) if after else None
+        warning = task_models.warning(c, self.settings, bot, declared, after) if after else ""
+        return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness,
+                "warning": warning}
 
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the

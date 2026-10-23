@@ -294,8 +294,11 @@ function issuesTable(list, showOwner) {
   ${list.map(i => `<tr><td>${issueLink(i)}</td><td>${esc(i.title)}${i.last_comment ? `<details><summary>last comment</summary><div class="q">${esc(i.last_comment)}</div></details>` : ''}</td>
     ${showOwner ? `<td>${empChip(i.owner)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
 }
-// The models that did a run's work (not the bot's configured one); empty when nothing was counted.
-const ranOn = made => [...new Set(((made || {}).segments || []).map(s => s.model).filter(Boolean))].join(' then ');
+// The models that did a run's work, each with its effort (not the bot's configured one); empty when nothing was counted.
+const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || []).filter(s => s.model)
+  .map(s => s.model + (effort && s.effort ? ` (${s.effort})` : '')))].join(' then ');
+// Why a task run was on that model: the bot's task model, the fallback from it, or a check kept (backend/task_models.py).
+const ranOnNote = made => ((made || {}).task_model || {}).note || '';
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
 function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
@@ -310,7 +313,7 @@ function runsTable(list, showEmp=true) {
     <td class="muted tnum">${ago(r.finished)}</td><td>${r.record_kind === 'attempt' ? `<span class="pill fail">${esc(r.outcome)} attempt</span><div class="mono muted">${esc(r.attempt_id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
     <td class="tnum">${r.duration_s != null ? Math.round(r.duration_s/60) + 'm ' + (r.duration_s%60) + 's' : ''}</td>
     <td class="tnum">${r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : (r.output_tokens != null ? r.output_tokens.toLocaleString() + ' tokens out' : '')}</td>
-    <td class="mono muted" title="the model that actually ran it, which a fallback changes">${esc(ranOn(r.ran_on))}</td>
+    <td class="mono muted" title="${esc(ranOnNote(r.ran_on) || 'the model that actually ran it, which a fallback changes')}">${esc(ranOn(r.ran_on))}${(r.ran_on?.task_model || {}).source === 'fallback' ? ` <span class="pill waiting" title="${esc(ranOnNote(r.ran_on))}">task model off</span>` : ''}</td>
     <td>${r.fallback ? `<span class="pill waiting" title="ran on the fallback harness after the primary was unavailable">${esc(r.fallback)}</span>` : r.resumed ? 'Where it left off' : 'From the start'}</td><td><a href="${API}/runs/${r.run}/log" target="_blank" rel="noopener">Log</a></td></tr>`).join('')}</table></div>`;
 }
 
