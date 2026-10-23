@@ -22,8 +22,9 @@ def real_starters(api, *names):
         shutil.copytree(CATALOG / name, Path(api.app.state.store.settings.catalog_dir) / name, dirs_exist_ok=True)
 
 
-def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its_setup_is_done(environment):
-    """Create, parked, woken only by a person, onboarded by the bot itself; and the member limit ignores parked bots."""
+def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_marks_it_complete(environment):
+    """Create, parked, woken only by a person, ready by the bot itself and completed by a person above it; and the member
+    limit ignores parked bots."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     real_starters(api, "support", "chief-of-staff", "issue-triage")
     computer = machine(api)
@@ -69,15 +70,21 @@ def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its
     shown = api.get(f"/api/v2/conversations/{chats[0]['id']}/messages", headers=who).json()["messages"]
     assert "Let's set you up." in [m["body"] for m in shown]           # beside the task notice the room already held
 
-    # Only the bot itself (or its manager) says it is onboarded, and saying it twice changes nothing.
-    def call(token):
-        return api.post("/api/v2/bots/support/onboarded", json={}, headers=headers(token))
+    # The bot says it is ready, with what it learned; a person above it marks onboarding complete, once.
+    def call(token, summary=""):
+        return api.post("/api/v2/bots/support/onboarded", json={"summary": summary}, headers=headers(token))
     assert call(computer["token"]).status_code == 403                 # the computer is not the bot
-    said = call(attempt["token"])                                      # the bot, in its own turn
-    assert said.status_code == 200 and said.json() == {"bot": "support", "onboarding_state": "onboarded", "changed": True,
-                                                                "routine": None}
-    assert call(attempt["token"]).json()["changed"] is False
-    assert api.get("/api/v2/bots/support", headers=who).json()["onboarding_state"] == "onboarded"
+    said = call(attempt["token"], "I know the queue and the refund rules.")      # the bot, in its own turn
+    assert said.status_code == 200 and said.json()["stage"] == "onboarding" and said.json()["changed"] is False
+    assert said.json()["ready"]["summary"] == "I know the queue and the refund rules."
+    shown = api.get("/api/v2/bots/support", headers=who).json()
+    assert shown["stage"] == "onboarding" and shown["can_complete_onboarding"] is True
+    assert shown["onboarding_ready"]["summary"] == "I know the queue and the refund rules."
+    done = api.post("/api/v2/bots/support/onboarded", json={}, headers=who)       # the owner, above its manager
+    assert done.status_code == 200 and done.json()["onboarding_state"] == "onboarded" and done.json()["changed"] is True
+    assert call(attempt["token"]).json() == {"bot": "support", "onboarding_state": "onboarded", "stage": "active",
+                                             "changed": False}
+    assert api.get("/api/v2/bots/support", headers=who).json()["stage"] == "active"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
 
     # Parked bots do not count toward a member's limit until they are onboarded.

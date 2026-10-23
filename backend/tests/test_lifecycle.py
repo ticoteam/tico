@@ -1,0 +1,105 @@
+"""A bot's stages, Recruiting -> Onboarding -> Active (backend/lifecycle.py): bot-lifecycle-spec.md section 3,
+acceptance tests 5 and 10 to 14."""
+from backend import routines
+from backend.store import H
+from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
+from backend.tests.test_ceo_bot import as_bot as bot_headers
+
+
+def as_bot(api, slug):
+    return bot_headers(api, slug)["Authorization"].split()[-1]
+from backend.tests.test_routines import DEBRIEF, create, setup
+
+
+def onboarding(api, *slugs, manager="human:ben"):
+    with api.app.state.store.transaction() as c:
+        for slug in slugs:
+            c.execute("UPDATE bot_config SET onboarding_state='needs_setup',reports_to=? WHERE bot=?", (manager, slug))
+
+
+def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
+    seat = post(api, "seats", {"title": "Head of Support", "description": "Answers customers.", "reports_to": "coo"})
+    assert (seat["kind"], seat["stage"], seat["reports_to"]) == ("seat", "recruiting", "coo")
+    assert [s["id"] for s in get(api, "seats")["seats"]] == [seat["id"]]
+    shown = {s["id"]: s for s in get(api, "org")["seats"]}
+    assert shown[seat["id"]]["stage"] == "recruiting" and shown[seat["id"]]["reports_to"] == "coo"
+
+    refused = api.post("/api/v2/tasks", json={"owner": "seat:" + seat["id"], "title": "Answer the backlog", "body": "x"},
+                       headers=headers())
+    assert refused.status_code >= 400 and "still being recruited" in refused.text and "coo" in refused.text, refused.text
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner LIKE 'seat:%'").fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot LIKE 'seat:%'").fetchone()
+
+    # A person places a seat under themselves or below them; the owner anywhere.
+    as_member(api, "ben@acme.example")
+    post(api, "seats", {"title": "Analyst", "reports_to": "coo"}, token="cara-test", expected=403)
+    mine = post(api, "seats", {"title": "Analyst"}, token="cara-test")
+    assert mine["reports_to"] == "human:cara"
+    assert api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Support lead"}, headers=headers("cara-test")).status_code == 403
+    post(api, f"seats/{mine['id']}/close", {}, token="cara-test")
+    assert [s["id"] for s in get(api, "seats")["seats"]] == [seat["id"]]
+
+
+def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainly(api):
+    onboarding(api, "ops")
+    as_member(api, "ben@acme.example")
+    token = as_bot(api, "ops")
+
+    given = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Audit the queue", "body": "x"}, headers=headers())
+    assert given.status_code >= 400 and "still onboarding" in given.text, given.text
+    filed = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Help me", "body": "x"}, headers=headers(token))
+    assert filed.status_code >= 400 and "still onboarding" in filed.text, filed.text
+
+    # It talks with its manager, and nobody else.
+    assert api.post("/api/v2/messages", json={"to": "human:ben", "text": "What matters most?"},
+                    headers=headers(token)).status_code == 200
+    for to in ("human:cara", "finance"):
+        sent = api.post("/api/v2/messages", json={"to": to, "text": "Hello"}, headers=headers(token))
+        assert sent.status_code == 409 and "still onboarding" in sent.text, (to, sent.text)
+
+    task = post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "x"})
+    said = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "I can help"}, headers=headers(token))
+    assert said.status_code >= 400 and "still onboarding" in said.text, said.text
+
+    # Its mail is held for approval while it learns.
+    assert get(api, "bots/ops/mail-settings", token=token)["outbound_send"] is False
+
+
+def test_a_person_above_marks_onboarding_complete_and_its_routines_start(api):
+    setup(api)
+    create(api, "ops", DEBRIEF)
+    onboarding(api, "ops")
+    as_member(api, "ben@acme.example")
+    token = as_bot(api, "ops")
+
+    # Nobody outside its chain of command sees or uses Mark onboarding complete, the bot included.
+    assert get(api, "bots/ops", token="cara-test")["can_complete_onboarding"] is False
+    post(api, "bots/ops/onboarded", {}, token="cara-test", expected=403)
+    ready = post(api, "bots/ops/onboarded", {"summary": "I know the audit checklist."}, token=token)
+    assert ready["stage"] == "onboarding" and ready["ready"]["summary"] == "I know the audit checklist."
+    with api.app.state.store.transaction() as c:
+        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
+
+    shown = get(api, "bots/ops", token="ben-test")
+    assert shown["can_complete_onboarding"] is True and shown["onboarding_ready"]["summary"] == "I know the audit checklist."
+    assert get(api, "bots/ops")["can_complete_onboarding"] is True                    # the owner, above Ben
+    done = post(api, "bots/ops/onboarded", {}, token="ben-test")
+    assert done["stage"] == "active" and done["changed"] is True
+    assert get(api, "bots/ops")["stage"] == "active"
+    with api.app.state.store.transaction() as c:
+        assert len(routines.emit(c, "meeting.ready", "rec-2", title="Planning")) == 1
+
+
+def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api):
+    onboarding(api, "ops", "finance", "cpo")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")   # an older release's word
+        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='coo'")
+        c.execute("UPDATE bots SET state='planned' WHERE slug='doc-updater'")
+    stages = {b["slug"]: (b["stage"], b["state"]) for b in get(api, "bots")}
+    assert {slug for slug, (stage, _) in stages.items() if stage == "onboarding"} == {"ops", "finance", "cpo"}
+    assert stages["coo"] == ("active", "active") and stages["product-design"] == ("active", "active")
+    assert stages["doc-updater"] == ("active", "planned")       # a planned bot keeps working as today
+    with api.app.state.store.read() as c:
+        assert H.parked_bots(c) == {"ops", "finance", "cpo"}
