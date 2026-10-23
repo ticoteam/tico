@@ -684,7 +684,7 @@ def report(c, runner_id, lid, body, settings=None):
     # new one's, so its bots are freed and one probe turn tests it (execution.lift_after_login_switch).
     if settings is not None and terminal and state in ("signed_in", "done") and row["kind"] in ("switch", "to_subscription", "to_key", "use_key"):
         from .execution import lift_after_login_switch
-        lift_after_login_switch(c, settings, "runner:" + runner_id, runner_id, row["runtime"])
+        lift_after_login_switch(c, settings, H.KEEPER, runner_id, row["runtime"])
     return {"state": state}
 
 

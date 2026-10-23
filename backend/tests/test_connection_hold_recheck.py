@@ -49,3 +49,21 @@ def test_moving_a_limited_bot_to_a_computer_re_checks_the_hold_there(api, monkey
     signed_in(api, free, ["ops"], ("fake",))
     assert claim(api, free)["bot"] == "ops"
     assert H.now() < until
+
+
+def test_switching_a_computers_login_frees_the_bots_limited_on_it(api, monkeypatch):
+    from backend import execution
+    providers_on(api)
+    at(monkeypatch, "2026-10-19T17:00:00.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET capacity=16 WHERE id=?", (machine["runner_id"],))
+    signed_in(api, machine, ["ops"], ("fake",))
+    post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    assert status(api)["state"] == "limited"
+    # The actor model_login.report passes: a roster actor, so the status write is accepted.
+    with api.app.state.store.transaction() as c:
+        execution.lift_after_login_switch(c, api.app.state.store.settings, H.KEEPER, machine["runner_id"], "fake")
+    assert status(api)["state"] != "limited"
