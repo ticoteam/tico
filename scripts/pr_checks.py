@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -18,6 +19,34 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback"],
           "ui/app/visual-media.js": ["visual-media", "visual-media-app"]}
 CONFORMANCE = "runner/tests/test_conformance.py"
+CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
+                     "Remove your CHANGELOG.md changes.")
+RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
+
+
+def guard_changelog(base, head="HEAD", root=None):
+    """Refuse PR notes before test selection; allow the documented notes-only release cut.
+
+    Compare the PR diff, not the last commit or the working tree. A trailer on an
+    earlier commit cannot exempt a later ordinary notes edit. Direct release cuts
+    on main never enter this PR-only gate; shipped-section guards still run.
+    """
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=root or ROOT, text=True)
+
+    if not base:
+        raise RuntimeError("Cannot check CHANGELOG.md without the PR base commit")
+    ancestor = git("merge-base", base, head).strip()
+    changed = git("diff", "--name-only", "--no-renames", "-z", ancestor, head).rstrip("\0").split("\0")
+    if "CHANGELOG.md" not in changed:
+        return
+    # Release notes are a separate CHANGELOG-only cut. Do not exempt product PRs
+    # that happen to contain a release trailer or a commit from an older cut.
+    commits = git("log", "--no-merges", "--format=%H", f"{base}..{head}", "--", "CHANGELOG.md").splitlines()
+    if changed == ["CHANGELOG.md"] and commits and all(
+            RELEASE_TRAILER.search(git("show", "-s", "--format=%B", commit)) for commit in commits):
+        return
+    raise RuntimeError(CHANGELOG_REFUSAL)
 
 
 def selection(changed, event="pull_request", root=ROOT):
@@ -98,6 +127,8 @@ def groups(counts, timings, total=4):
 
 
 def prepare(event, base, output, timings_path=None):
+    if event == "pull_request":
+        guard_changelog(base)
     changed = changed_files(base) if base else []
     picked = selection(changed, event)
     counts = collect()
