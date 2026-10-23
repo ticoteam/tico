@@ -474,7 +474,7 @@ async function pageBot(slug, tab) {
     const tabButton = ev.target.closest('[data-bot-task-tab]');
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
     // The tab settings modal is Task-list tabs 2/3's; the icon shows only once it is there.
-    if (ev.target.closest('#bot-tasks-settings')) botTaskSettingsOpen(slug);
+    if (ev.target.closest('#bot-tasks-settings') && typeof botTaskSettingsOpen === 'function') botTaskSettingsOpen(slug);
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
 
