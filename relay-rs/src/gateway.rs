@@ -123,6 +123,7 @@ pub(super) fn routes(app: App) -> Router {
         .with_state(app)
 }
 
+// Dev 452 receipt only (never merged): this comment makes PR checks select relay-rs.
 #[cfg(test)]
 mod tests {
     use super::*;
