@@ -48,14 +48,19 @@ When the send finishes, the spinner and line disappear.
 If it times out, Tico says **Not confirmed** and **It may still arrive.** Your draft stays in the message box.
 
 1. Leave the draft unchanged.
-2. Within 48 hours of the original submission, choose **Retry** in the notification to try that send again.
+2. Within 48 hours of the first send attempt, choose **Retry** in the notification to try that send again.
 
-In the same tab, the unchanged draft keeps its original request ID until you edit or clear it.
+In the same tab, the unchanged draft keeps its original request ID and first-attempt time, including when you switch bots and return.
 Retry reuses that ID within the server's 48-hour replay window, so a message that reached the server is not saved twice.
-After that window expires, Retry does not send again automatically. Tico warns that the message may already have sent.
+Retrying does not restart that window.
+
+After that window expires, Tico keeps the draft, disables **Send**, and offers no **Retry** action.
+Pressing Enter or reconnecting does not send it either.
+The warning says **This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.**
 Check the chat before deciding whether to send it again.
 
-Editing or clearing the draft forgets the pending request ID. An identical message sent later can be a new send.
+Editing or clearing the text, or changing attachments, forgets the pending request ID. Tico also forgets it when the server confirms the send.
+An identical message sent later can be a new send.
 For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
 
 **Do file uploads have the same deadline?**
