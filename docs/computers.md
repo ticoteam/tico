@@ -204,7 +204,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
-  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. Not offered for Claude
+  not bring a key back; **Add key** or **Use the shared key** does. Bots keep the connection. After **Clear key** or
+  **Sign out** there is no key to keep, so a switch started from a page drawn before it is refused ("has no API key
+  to switch from … Sign in instead") rather than run as a plain sign-in whose cancel would leave no login. Not offered for Claude
   Code on a Mac (Keychain), and it needs a runner that knows it (`Update <computer> to switch to a subscription from
   here` otherwise).
 - **Switch to API key** is the way back: it sits on a Computer's own login on a subscription, next to **Switch
