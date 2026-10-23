@@ -3342,6 +3342,7 @@ def create_app(settings=None):
         (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
         who = request.state.identity
         def work(c):
+            mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
             from .task_review import comment_rights, check_ask
@@ -3368,8 +3369,8 @@ def create_app(settings=None):
                 extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
-            for person in people:
-                H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+            copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+                      for person in people]
             for item in attached:
                 c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)",
                           (item["id"], item["version"]))
@@ -3379,8 +3380,7 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             waits = bot_to_bot.held_reason(msg)
-            return {"comment": msg, "comments": comments,
-                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+            return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
                     **({"visuals": report} if report else {})}
         result = mutate(request, body, work)

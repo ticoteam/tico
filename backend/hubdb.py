@@ -4198,6 +4198,23 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     return msg
 
 
+def jobs_mark(conn):
+    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
+    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
+
+
+def comment_delivery(conn, msg, copies=(), *, since=0):
+    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
+    take a turn on it), counting the comment's own job and any the write caused elsewhere, such as the notice a
+    delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write. `delivered`
+    is true when it reached a person (its recipient or an @mentioned copy), who sees it in their own lists."""
+    ids = [msg["id"], *(m["id"] for m in copies)]
+    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id IN (%s)" % ",".join("?" * len(ids)),
+                          [since, *ids]).fetchone() is not None
+    return {"woke": queued,
+            "delivered": any(is_human(m.get("to_actor")) for m in (msg, *copies))}
+
+
 def comment_target(conn, actor, row):
     """Who `actor`'s plain comment on the task goes to: the first bot among its owner, requester and origin, else the
     first person among them, else no one."""

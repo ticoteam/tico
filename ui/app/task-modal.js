@@ -683,7 +683,7 @@ async function taskCommentSend(state) {
     if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
     // The composer said so before sending when no bot would get it; the server has the last word.
-    status.textContent = data.woke || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
+    status.textContent = data.woke || data.delivered || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
