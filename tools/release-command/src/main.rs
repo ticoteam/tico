@@ -1,4 +1,5 @@
-//! Release orchestration. The writer supplies a notes commit; validation and tagging use that object throughout.
+//! Release orchestration: freeze main, validate exactly that commit, tag it, then file one Technical Writer task
+//! for the release notes once the release is published.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -40,12 +41,6 @@ fn require(ok: bool, reason: &str) -> Result<()> {
         Err(reason.into())
     }
 }
-fn sha(value: &str) -> bool {
-    value.len() == 40
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
 fn version(value: &str) -> bool {
     value.strip_prefix('v').is_some_and(|v| {
         v.split('.').count() == 3
@@ -63,6 +58,12 @@ struct Freeze {
     candidate: Option<String>,
     dispatching: bool,
     run: Option<u64>,
+    #[serde(default)]
+    tagged: bool,
+    #[serde(default)]
+    writer_filing: bool,
+    #[serde(default)]
+    writer_task: Option<String>,
 }
 impl Freeze {
     fn save(&self, path: &PathBuf) -> Result<()> {
@@ -89,65 +90,15 @@ fn unchanged(expected: &str) -> Result<()> {
     )
 }
 fn runs(repo: &str) -> Result<Vec<Value>> {
-    // Recent runs suffice to find the latest gate; uncertainty refuses freeze instead of scanning unbounded history.
+    // A new dispatch is among the newest runs; an unseen one is reported rather than searched for in old history.
     let page = gh(&[
         "api",
-        &format!("repos/{repo}/actions/workflows/ci.yml/runs?branch=main&per_page=100"),
+        &format!("repos/{repo}/actions/workflows/ci.yml/runs?branch=main&event=workflow_dispatch&per_page=100"),
     ])?;
     Ok(page["workflow_runs"]
         .as_array()
         .ok_or("Missing workflow runs")?
         .clone())
-}
-fn full_gate_green(repo: &str) -> Result<()> {
-    let mut eligible = Vec::new();
-    for run in runs(repo)? {
-        if run["head_branch"] != "main" {
-            continue;
-        }
-        let title = run["display_title"].as_str().unwrap_or("");
-        let candidate = if run["event"] == "schedule" && title == "Nightly gate on main" {
-            run["head_sha"].as_str().unwrap_or("")
-        } else if run["event"] == "workflow_dispatch" {
-            title
-                .strip_prefix("Validate ")
-                .and_then(|s| s.split_once(" from "))
-                .map(|p| p.0)
-                .unwrap_or("")
-        } else {
-            continue;
-        };
-        // A validation of an off-main candidate cannot clear a failed nightly on main.
-        if run["event"] == "workflow_dispatch" && run["head_sha"] != candidate {
-            continue;
-        }
-        if !sha(candidate)
-            || Command::new("git")
-                .args([
-                    "merge-base",
-                    "--is-ancestor",
-                    candidate,
-                    "refs/remotes/origin/main",
-                ])
-                .status()
-                .map_err(|e| e.to_string())?
-                .success()
-                == false
-        {
-            continue;
-        }
-        eligible.push(run);
-    }
-    eligible.sort_by_key(|r| {
-        (
-            r["created_at"].as_str().unwrap_or("").to_owned(),
-            r["id"].as_u64().unwrap_or(0),
-        )
-    });
-    let latest = eligible
-        .last()
-        .ok_or("No full gate on main found; run Release validation before freezing")?;
-    require(latest["status"] == "completed" && latest["conclusion"] == "success", "Latest full gate on main is red or incomplete; a newer green full gate on main is required")
 }
 fn verify_run(state: &Freeze, candidate: &str, id: u64, completed: bool) -> Result<()> {
     let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
@@ -160,7 +111,7 @@ fn verify_run(state: &Freeze, candidate: &str, id: u64, completed: bool) -> Resu
     )?;
     require(
         run["display_title"] == state.title(candidate) && run["head_sha"] == candidate,
-        "Validation run title or candidate commit does not match the notes commit",
+        "Validation run title or candidate commit does not match the frozen commit",
     )?;
     if completed {
         require(
@@ -198,7 +149,6 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
             ".nameWithOwner",
         ],
     )?;
-    full_gate_green(&repo)?;
     let mut args = vec![
         "scripts/freeze_guard.py",
         "--head",
@@ -219,62 +169,35 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         candidate: None,
         dispatching: false,
         run: None,
+        tagged: false,
+        writer_filing: false,
+        writer_task: None,
     }
     .save(path)?;
-    println!("Frozen. Technical Writer: prepare a single CHANGELOG-only child commit with this version's notes. Then run publish --notes-commit <full SHA>.");
+    println!("Frozen. Run publish to validate and tag this commit; release notes are written after publication.");
     Ok(())
 }
 fn publish(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
     let mut state: Freeze = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let candidate = options
-        .get("notes-commit")
-        .ok_or("--notes-commit is required")?;
-    require(sha(candidate), "Notes commit must be a full lowercase SHA")?;
-    require(
-        state.candidate.as_ref().is_none_or(|c| c == candidate),
-        "Notes commit differs from the recorded candidate",
-    )?;
-    require(
-        git(&["show", "-s", "--format=%P", candidate])? == state.frozen,
-        "Notes commit must have exactly the frozen commit as its parent",
-    )?;
-    require(git(&["diff", "--name-only", &state.frozen, candidate])? == "CHANGELOG.md", "Only CHANGELOG.md may change after freeze; product changes require a fix PR and new freeze")?;
-    let notes = git(&["show", &format!("{candidate}:CHANGELOG.md")])?;
-    let heading = format!("## [{}] - ", state.version.trim_start_matches('v'));
-    require(
-        notes.lines().any(|l| l.starts_with(&heading)),
-        "Missing versioned CHANGELOG section",
-    )?;
-    // Reuse the release publisher's parser, on the immutable commit rather than this checkout's working file.
-    let mut parser = Command::new("python3").args(["-c", "import sys; from scripts.changelog_notes import section; assert section(sys.stdin.read(), sys.argv[1]), 'Empty release notes'", &state.version]).stdin(process::Stdio::piped()).spawn().map_err(|e| e.to_string())?;
-    use std::io::Write;
-    parser
-        .stdin
-        .take()
-        .ok_or("Missing parser stdin")?
-        .write_all(notes.as_bytes())
-        .map_err(|e| e.to_string())?;
-    require(
-        parser.wait().map_err(|e| e.to_string())?.success(),
-        "Empty release notes",
-    )?;
-    let head = main_head()?;
-    require(
-        head == *candidate && state.candidate.is_some()
-            || head == state.frozen && !state.dispatching,
-        "main moved after freeze; use a fix PR and freeze again for a new full gate",
-    )?;
-    if !state.dispatching {
-        full_gate_green(&state.repo)?;
+    let candidate = state.frozen.clone();
+    let candidate = &candidate;
+    if !state.tagged {
+        validate_and_tag(&mut state, candidate, options, path)?;
     }
-    if head == state.frozen {
-        // Record before pushing so a lost response can resume with main at either endpoint.
+    file_writer_task(&mut state, options, path)
+}
+fn validate_and_tag(
+    state: &mut Freeze,
+    candidate: &String,
+    options: &HashMap<String, String>,
+    path: &PathBuf,
+) -> Result<()> {
+    unchanged(candidate)?;
+    if state.candidate.is_none() {
         state.candidate = Some(candidate.clone());
         state.save(path)?;
-        git(&["push", "origin", &format!("{candidate}:refs/heads/main")])?;
     }
-    unchanged(candidate)?;
     if let Some(id) = options.get("run") {
         require(
             state.dispatching && state.run.is_none(),
@@ -358,19 +281,81 @@ fn publish(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
     )?;
     verify_run(&state, candidate, id, true)?;
     unchanged(candidate)?;
-    full_gate_green(&state.repo)?;
-    unchanged(candidate)?;
     git(&[
         "push",
         "origin",
         &format!("{candidate}:refs/tags/{}", state.version),
     ])?;
-    println!("Tagged {} at validated commit {candidate} (run {id}). Retain the freeze record as the release receipt.", state.version);
+    state.tagged = true;
+    state.save(path)?;
+    println!("Tagged {} at validated commit {candidate} (run {id}).", state.version);
     Ok(())
+}
+// The Release workflow publishes the tag a few minutes after it is pushed; the notes task waits for that.
+fn published(state: &Freeze) -> Result<()> {
+    for _ in 0..180 {
+        let view = Command::new("gh")
+            .args(["release", "view", &state.version, "--repo", &state.repo, "--json", "isDraft"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if view.status.success()
+            && serde_json::from_slice::<Value>(&view.stdout).is_ok_and(|v| v["isDraft"] == false)
+        {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_secs(10));
+    }
+    Err(format!("{} was not published within 30 minutes; check the Release workflow, then run publish again", state.version))
+}
+fn file_writer_task(state: &mut Freeze, options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
+    if let Some(task) = &state.writer_task {
+        println!("{} is published; its release notes task is {task}. Retain the freeze record as the release receipt.", state.version);
+        return Ok(());
+    }
+    require(
+        !state.writer_filing,
+        "The notes task may already have been filed; check the Technical Writer's tasks and record it in the freeze record as writer_task",
+    )?;
+    published(state)?;
+    let writer = options.get("writer").map(String::as_str).unwrap_or("docs-writer");
+    let range = format!("{}..{}", state.previous, state.version);
+    let body = format!(
+        "{version} is published. Write its section in CHANGELOG.md from the pull requests merged in {range} \
+         (https://github.com/{repo}/compare/{range}), moving their lines out of ## [Unreleased]. Land it as a \
+         CHANGELOG-only pull request whose commits carry the trailer `Changelog-Release: {version}`.",
+        version = state.version,
+        repo = state.repo,
+    );
+    // Recorded first, so a lost response is reported instead of filing a second task.
+    state.writer_filing = true;
+    state.save(path)?;
+    let filed = hub_json(&[
+        "task",
+        "create",
+        "--owner",
+        writer,
+        "--title",
+        &format!("Release notes for {}", state.version),
+        "--body",
+        &body,
+    ])?;
+    let task = ["short_id", "id"]
+        .iter()
+        .find_map(|key| filed["task"][key].as_str().or(filed[key].as_str()))
+        .ok_or("hub task create returned no task id")?
+        .to_owned();
+    state.writer_task = Some(task.clone());
+    state.writer_filing = false;
+    state.save(path)?;
+    println!("{} is published; filed release notes task {task} for {writer}. Retain the freeze record as the release receipt.", state.version);
+    Ok(())
+}
+fn hub_json(args: &[&str]) -> Result<Value> {
+    serde_json::from_str(&command("hub", args)?).map_err(|e| format!("Invalid hub response: {e}"))
 }
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
-    let mode = args.next().ok_or("Usage: tico-release freeze --version vX.Y.Z --previous vX.Y.Z [--receipts FILE] | publish --notes-commit SHA [--run ID]; optional --state FILE")?;
+    let mode = args.next().ok_or("Usage: tico-release freeze --version vX.Y.Z --previous vX.Y.Z [--receipts FILE] | publish [--run ID] [--writer BOT]; optional --state FILE")?;
     let mut options = HashMap::new();
     while let Some(key) = args.next() {
         require(
@@ -379,8 +364,8 @@ fn run() -> Result<()> {
                 "--previous",
                 "--receipts",
                 "--state",
-                "--notes-commit",
                 "--run",
+                "--writer",
             ]
             .contains(&key.as_str()),
             "Unknown option",

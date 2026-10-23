@@ -1,8 +1,10 @@
-# A pushed version tag becomes a GitHub release: the CHANGELOG section as notes and the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
+# A pushed version tag becomes a GitHub release: the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
 # The server release is published the moment the Docker workflow's images for the tag exist; it never waits for desktop builds.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. See docs/releasing.md.
+# Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
+# a release half-published. macOS builds stay on GitHub-hosted runners.
 name: Release
 
 on:
@@ -25,7 +27,7 @@ jobs:
   # A manual rebuild may reuse an already published release; an unpublished tag still needs exact-commit validation.
   # The job always runs (never skipped), because a skipped job would also skip every job after it.
   validated:
-    runs-on: ubuntu-24.04
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       actions: read   # lists Release validation runs
       contents: read  # verifies an existing release before allowing a manual rebuild
@@ -62,8 +64,8 @@ jobs:
         include:
           - {os: macos-latest, name: macos-arm64, target: aarch64-apple-darwin}
           - {os: macos-latest, name: macos-x86_64, target: x86_64-apple-darwin}
-          - {os: ubuntu-latest, name: linux-x86_64, target: x86_64-unknown-linux-musl}
-          - {os: ubuntu-24.04-arm, name: linux-arm64, target: aarch64-unknown-linux-musl}
+          - {os: 'runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/spot=false', name: linux-x86_64, target: x86_64-unknown-linux-musl}
+          - {os: 'runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/spot=false', name: linux-arm64, target: aarch64-unknown-linux-musl}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -101,7 +103,7 @@ jobs:
 
   release:
     needs: runner-binaries
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: write   # creates the GitHub release
     steps:
@@ -117,11 +119,6 @@ jobs:
         run: |
           (cd dist/runner && sha256sum tico-runner-*.gz > tico-runner-SHA256SUMS)
           (cd dist/runner && sha256sum tico-screen-relay-*.gz > tico-screen-relay-SHA256SUMS)
-      - name: Build the notes
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          python3 scripts/changelog_notes.py "$version" > dist/notes.md
       - name: Build the installer and its compose bundle
         run: |
           python3 scripts/build_install_bundle.py --version "$GITHUB_REF_NAME" --output dist/install
@@ -149,12 +146,12 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$GITHUB_REF_NAME.tar.gz" dist/install/SHA256SUMS \
             dist/runner/tico-runner-*.gz dist/runner/tico-runner-SHA256SUMS \
             dist/runner/tico-screen-relay-*.gz dist/runner/tico-screen-relay-SHA256SUMS \
-            --title "$GITHUB_REF_NAME" --notes-file dist/notes.md --verify-tag "${flags[@]}"
+            --title "$GITHUB_REF_NAME" --notes "" --verify-tag "${flags[@]}"
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
     needs: validated
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:
@@ -199,7 +196,7 @@ jobs:
   desktop-assets:
     needs: [release, desktop-changes, desktop]
     if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
@@ -245,7 +242,7 @@ jobs:
   company-matrix:
     needs: desktop-changes
     if: needs.desktop-changes.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:

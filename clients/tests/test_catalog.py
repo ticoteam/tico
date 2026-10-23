@@ -212,5 +212,34 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
                     self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
 
 
+class FundraisingManagerAsksForEveryInvestorMessage(unittest.TestCase):
+    """Turning mail sending on does not let the Fundraising Manager write to an investor: each message waits for a
+    person's yes on it, or the person sends it, and no draft carries terms."""
+
+    folder = catalog.ROOT / "templates/catalog/fundraising-manager"
+
+    def text(self, name):
+        return " ".join((self.folder / name).read_text().split())
+
+    def test_every_investor_message_needs_a_person_even_with_sending_on(self):
+        sending = self.text("AGENT.md").split("## Sending", 1)[1].split("##", 1)[0]
+        for rule in ("Every message to an investor or a prospective investor is a draft, even with mail sending on",
+                     "a reply on their own thread", "`hub approval request --kind send`",
+                     "Send it only after a person approves it, and only as approved",
+                     "a changed draft needs a new yes", "to send themselves",
+                     "Never state, offer or agree terms in any draft",
+                     "no valuation, amount, allocation or date for the round",
+                     "Draft messages to other outsiders until a person turns mail sending on"):
+            self.assertIn(rule, sending)
+        self.assertNotIn("Draft messages to outsiders until", sending)
+        card = yaml.safe_load((self.folder / "card.yaml").read_text())
+        self.assertTrue(any("investor" in line and "even with mail sending on" in line for line in card["never"]))
+        self.assertIn("in a message or a draft", " ".join(card["never"]))
+        prep = self.text("playbooks/meeting-prep.md")
+        self.assertIn("Leave terms out, even ones you have been given", prep)
+        for name in ("AGENT.md", "card.yaml", *(f"playbooks/{p.name}" for p in (self.folder / "playbooks").glob("*.md"))):
+            self.assertNotIn("I never send to an investor myself", self.text(name), name)
+
+
 if __name__ == "__main__":
     unittest.main()

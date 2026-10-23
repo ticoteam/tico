@@ -108,6 +108,10 @@ ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on t
 # changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)               # visible until a person reassigns or closes it
 LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not declined
+# No step has these statuses: a waiting task stays in the working step it is in (a Waiting tag shows it), and a declined
+# one goes to its type's closed step (`_task_state`, `retire_held_steps`). The Product roadmap keeps its public Declined.
+HELD_STATUSES = ("waiting", "declined")
+STEP_STATUSES = tuple(s for s in TASK_STATUSES if s not in HELD_STATUSES)
 OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set
 # `ready` is a fact the hub learns (the PR merged), not a claim a bot makes: movers and the
 # keeper set it, an owning bot does not.
@@ -582,7 +586,7 @@ INSERT OR IGNORE INTO task_types(id,name,created,updated)
 """ + "\n".join(
     f"INSERT OR IGNORE INTO task_steps(id,type_id,name,position,status) "
     f"VALUES('general-{status}','general','{status.title()}',{position},'{status}');"
-    for position, status in enumerate(TASK_STATUSES)
+    for position, status in enumerate(STEP_STATUSES)
 ) + """
 UPDATE tasks SET type_id='general', step_id=(SELECT id FROM task_steps
   WHERE type_id='general' AND status=tasks.status ORDER BY position,id LIMIT 1)
@@ -828,6 +832,15 @@ def token_hash(token):
 
 
 # ----------------------------------------------------------------------------- connection
+def synchronous(default):
+    """The PRAGMA synchronous a connection uses: `default`, or OFF when $TICO_SQLITE_SYNC is "off".
+
+    Only the test suite sets it (conftest.py). Each test builds its own database and throws it away, so a sync per
+    commit buys nothing there, while a shared host's disk paid for it: two pytest workers on the team runner wrote
+    ~30 MB/s, a quarter of the volume's throughput, and pushed the live server's pages out of the cache."""
+    return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -843,7 +856,7 @@ def connect(path=None, adopt_legacy=False):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
     try:
         migrate(conn, adopt_legacy=adopt_legacy)
     except Exception:
@@ -1079,6 +1092,8 @@ def migrate(conn, adopt_legacy=False):
     migrate_roadmaps(conn)
     from .roadmap_flow import ready_step as roadmap_ready_step
     roadmap_ready_step(conn)
+    # Waiting and Won't do are no longer board steps (`_task_state`): move their tasks off, then delete them.
+    retire_held_steps(conn)
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
@@ -1116,6 +1131,9 @@ def migrate(conn, adopt_legacy=False):
     # A task's history, and the Tasks page's stats: how many tasks reached each status, by day.
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_field_ts ON task_events(field, ts)")
+    # One task's history of one field (status, owner, waiting_on): without it, and without ANALYZE, SQLite picks
+    # task_events_field_ts and reads that field's changes on every task.
+    conn.execute("CREATE INDEX IF NOT EXISTS task_events_task_field ON task_events(task_id, field, ts)")
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
@@ -2914,7 +2932,10 @@ def _type_steps(conn, actor, type_id, steps):
         if raw.get("id") and ident not in existing:
             refuse(conn, actor, "not-found", "That step does not belong to this type")
         if status not in TASK_STATUSES:
-            refuse(conn, actor, "kind", f"A step status is {'|'.join(TASK_STATUSES)}")
+            refuse(conn, actor, "kind", f"A step status is {'|'.join(STEP_STATUSES)}")
+        if status in HELD_STATUSES and existing.get(ident, {}).get("status") != status:
+            refuse(conn, actor, "kind", f"A step can't be {status}: a waiting task keeps its step, and a declined one "
+                                        f"goes to the closed step. A step status is {'|'.join(STEP_STATUSES)}")
         names.add(name); ids.add(ident)
         clean.append({"id": ident, "type_id": type_id, "name": name,
                       "position": raw.get("position") if raw.get("position") is not None else position,
@@ -3020,6 +3041,12 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = current
     else:
         chosen = next((s for s in typ["steps"] if s["status"] == effective), None)
+        if not chosen and effective == "waiting":
+            # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
+            chosen = (current if current and current["status"] in ACTIVE_STATUSES
+                      else next((s for s in typ["steps"] if s["status"] in ("open", "doing")), None))
+        elif not chosen and effective == "declined":
+            chosen = next((s for s in typ["steps"] if s["status"] == "closed"), None)
     if effective not in TASK_STATUSES:
         refuse(conn, actor, "kind", f"A status is {'|'.join(TASK_STATUSES)}, not {effective}")
     # On a steps-only type a task is finished or brought back only by a step move: a bare close, decline,
@@ -3036,6 +3063,58 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
                                     f"({steps}), not by closing, declining, reopening or finishing it; move it, or delete it",
                context={"what": f"task {row.get('id')}"})
     return typ["id"], chosen["id"] if chosen else None, effective
+
+
+def retire_held_steps(conn):
+    """Take the Waiting and Declined (Won't do) steps off every type but the Product roadmap, whose Declined is public.
+    A task on a waiting step goes back to the working step it last left (its step history), else its type's first
+    open or doing step, and keeps status waiting; one on a declined step goes to its type's closed step, or no step
+    when there is none, and keeps status declined. Typed waiting or declined tasks with no step are placed the same
+    way. Runs at every start; once nothing is left to move it only reads."""
+    from .roadmap_flow import PRODUCT
+    held = _rows(conn.execute("SELECT s.id,s.type_id,s.status FROM task_steps s JOIN task_types ty ON ty.id=s.type_id "
+                              "WHERE s.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?", (PRODUCT,)))
+    loose = _rows(conn.execute("SELECT t.id,t.type_id,t.status FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+                               "WHERE t.step_id IS NULL AND t.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?",
+                               (PRODUCT,)))
+    if not held and not loose:
+        return
+    gone = {row["id"] for row in held}
+    version = "version" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    conn.execute("SAVEPOINT retire_held_steps")
+    try:
+        moving = [(t["id"], t["type_id"], t["status"]) for t in loose]
+        for step in held:
+            moving += [(r[0], step["type_id"], "waiting" if step["status"] == "waiting" else "declined")
+                       for r in conn.execute("SELECT id FROM tasks WHERE step_id=?", (step["id"],))]
+        steps = {}
+        for task_id, type_id, held_as in moving:
+            if type_id not in steps:
+                steps[type_id] = [s for s in _rows(conn.execute(
+                    "SELECT id,status FROM task_steps WHERE type_id=? ORDER BY position,id", (type_id,))) if s["id"] not in gone]
+            mine = steps[type_id]
+            if held_as == "waiting":
+                working = {s["id"] for s in mine if s["status"] in ACTIVE_STATUSES}
+                left = (r[0] for r in conn.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' "
+                                                   "ORDER BY ts DESC,rowid DESC", (task_id,)))
+                target = next((old for old in left if old in working), None) \
+                    or next((s["id"] for s in mine if s["status"] in ("open", "doing")), None)
+            else:
+                target = next((s["id"] for s in mine if s["status"] == "closed"), None)
+            current = conn.execute("SELECT step_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+            if target == current:
+                continue
+            conn.execute("UPDATE tasks SET step_id=?,step_rank=?" + (",version=version+1" if version else "") + " WHERE id=?",
+                         (target, _step_end(conn, target, task_id) if target else None, task_id))
+            _task_event(conn, task_id, KEEPER, "step", current, target,
+                        "Waiting is a tag now, not a step" if held_as == "waiting" else "Declined goes to Closed now, not a step")
+        for ident in gone:
+            conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
+    except BaseException:
+        conn.execute("ROLLBACK TO retire_held_steps")
+        raise
+    finally:
+        conn.execute("RELEASE retire_held_steps")
 
 
 def steps_only(conn, row):
@@ -4196,6 +4275,23 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
     return msg
+
+
+def jobs_mark(conn):
+    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
+    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
+
+
+def comment_delivery(conn, msg, copies=(), *, since=0):
+    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
+    take a turn on it), counting the comment's own job and any the write caused elsewhere, such as the notice a
+    delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write. `delivered`
+    is true when it reached a person (its recipient or an @mentioned copy), who sees it in their own lists."""
+    ids = [msg["id"], *(m["id"] for m in copies)]
+    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id IN (%s)" % ",".join("?" * len(ids)),
+                          [since, *ids]).fetchone() is not None
+    return {"woke": queued,
+            "delivered": any(is_human(m.get("to_actor")) for m in (msg, *copies))}
 
 
 def comment_target(conn, actor, row):

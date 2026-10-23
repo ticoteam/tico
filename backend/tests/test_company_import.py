@@ -31,7 +31,8 @@ def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", 
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
 
 
-def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment):
+def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment, monkeypatch):
+    monkeypatch.setattr(C.draft, "OPEN_SEATS", {"controller"})  # every model seat has a template now
     api = environment()
     text = company_text(keep=("coo", "botops", "finance-lead", "controller", "bookkeeping"))
     assert "no_bot_yet: true" in text
@@ -235,7 +236,7 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     seats = sum(b["template"] in {s["slug"] for s in C.SEATS} for b in draft["bots"])  # no bot yet: no employee
-    assert seats and len(preview.json()["employees"]) == 300 - seats
+    assert len(preview.json()["employees"]) == 300 - seats
     done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
                     headers=signed_in())
     assert done.status_code == 200, done.text

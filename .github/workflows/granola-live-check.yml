@@ -4,13 +4,13 @@
 name: Granola live check
 on:
   schedule:
-    - cron: '47 10 * * *'    # 10:47 UTC (03:47 PDT / 02:47 PST), after the nightly gate in ci.yml; UTC like ci.yml
+    - cron: '47 10 * * *'    # 10:47 UTC (03:47 PDT / 02:47 PST), off the top of the hour; no timezone: key, which stopped scheduled runs firing
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   shapes:
-    runs-on: ubuntu-24.04
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     continue-on-error: true
     timeout-minutes: 10
     env:

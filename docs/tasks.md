@@ -3,15 +3,16 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status.
+each standard status except waiting and declined: no step has those statuses (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
 other types. A type is always selected, and both the list and board show only its tasks. The board
-uses that type's steps as columns. Your selection is remembered, shared links carry it, and new
+uses that type's working steps as columns: steps whose status is done or closed are not columns, and
+a task that finishes leaves the board. Done tasks are under **Done**, closed ones under **Closed**.
+Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
-deleted types fall back to General. Finished work appears in the selected type's
-Done or Closed steps as well as under Done.
+deleted types fall back to General.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
@@ -20,6 +21,10 @@ existing scripts can keep setting `status`:
 - Otherwise Tico picks the first step with that status, in the type's step order.
 - If none matches, the step clears. The task keeps its status, and the UI shows that status until
   someone picks a step.
+- Waiting is not a step: a waiting task stays in its working step (or the type's first open or doing
+  step) and shows a **Waiting** tag on its card and row. A declined task goes to the type's closed
+  step. A step can't be given status waiting or declined; the Product roadmap keeps its public
+  Declined step.
 
 Changing a task's type preserves its status and finds a matching step in the new type. Use an
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
