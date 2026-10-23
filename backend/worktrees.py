@@ -125,6 +125,7 @@ class Update(Contract):
     snapshot_skipped: str | None = Field(default=None, max_length=300)
     restore_source: str | None = Field(default=None, max_length=100)
     skipped_files: list[str] | None = Field(default=None, max_length=100)
+    checkout_proof: str | None = Field(default=None, max_length=100)
 
 
 def relative(path):
@@ -809,6 +810,8 @@ def install(app, store, auth, mutate):
                     or not body.expected_head or not body.checkout_target or not body.expected_base) \
                     and not (legacy_restore_report or legacy_add_report or legacy_attach_report or legacy_confirm):
                 raise Problem('worktree_not_ready', 'Checkout and setup must complete before a worktree is reported present', 409)
+            if body.state == 'present' and body.checkout_state == 'ready' and who.role != 'runner' and not body.checkout_proof:
+                raise Problem('worktree_not_ready', 'Report the checkout proof', 409)
             if body.cleanup and who.role != 'runner':
                 raise Problem('forbidden', 'Only the computer reports cleanup', 403)
             if body.cleanup and body.state == 'removed':
@@ -850,7 +853,7 @@ def install(app, store, auth, mutate):
                 detail.pop('error', None)       # a successful setup supersedes the failed action before it
             if body.checkout_state is not None or body.state in ('present', 'removed'):
                 detail.pop('pending_expired', None)     # the retry is making progress again
-            fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
+            fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source', 'checkout_proof'})
             now = detail['record_changed'] = H.now()
             fields['detail_json'] = json.dumps(detail)
             if 'path' in fields:

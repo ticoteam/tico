@@ -678,7 +678,7 @@ def command(client, operation, value, task=None):
                 workspace, {**link, 'task_id': task}, repo, env)
         client.patch(f'tasks/{task}/links/{link["link_id"]}', {'state': 'present', 'path': link['path'],
                      'setup_pending': False, 'checkout_state': 'ready', 'expected_head': expected_head,
-                     'checkout_target': checkout_target, 'expected_base': expected_base})
+                     'checkout_target': checkout_target, 'expected_base': expected_base, 'checkout_proof': 'v1'})
         return {**link, 'workspace_path': str(path), **({'warning': repo['fetch_warning']} if repo.get('fetch_warning') else {})}
     except (ValueError, OSError, subprocess.SubprocessError):
         if operation == 'add' and 'link' in locals() and ('path' not in locals() or not (path / '.git').is_file()):
