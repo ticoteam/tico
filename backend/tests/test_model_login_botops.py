@@ -13,7 +13,7 @@ from backend.tests.test_model_logout import online, pending, report
 from backend.store import H, Problem
 
 ALIASES = ("runners", "computers")
-PROFILE = "work"                    # a named subscription: a queued request also invalidates its usage reading
+PROFILE = "work"                    # a named subscription left from before one login per computer: signed out only
 SWITCHES = (True, 1, "true", "1", "on", "yes")    # what the typed `switch: bool` reads as a switch
 NOTHING = {"logins": [], "cleared": [], "invalidated": False, "events": []}
 
@@ -51,7 +51,7 @@ def ask(api, attempt, alias, rid, route, body, how):
 def signs_in_for_her(api, attempt, rid, how, alias):
     """The control: in this same context an ordinary sign-in is BotOps' to start, as her, so a refusal next to it is the
     switch or sign-out rule and not a stale or wrong reference."""
-    for body in ({"runtime": "codex", "profile": PROFILE}, {"runtime": "codex", "profile": PROFILE, "switch": False}):
+    for body in ({"runtime": "codex"}, {"runtime": "codex", "switch": False}):
         done = ask(api, attempt, alias, rid, "logins", body, how)
         assert done.status_code == 200, (alias, how, body, done.text)
         assert done.json()["kind"] == "sign_in"
@@ -65,7 +65,7 @@ def signs_in_for_her(api, attempt, rid, how, alias):
 
 def refused(api, attempt, rid, how, alias):
     for value in SWITCHES:
-        r = ask(api, attempt, alias, rid, "logins", {"runtime": "codex", "profile": PROFILE, "switch": value}, how)
+        r = ask(api, attempt, alias, rid, "logins", {"runtime": "codex", "switch": value}, how)
         assert r.status_code == 403 and "BotOps cannot switch accounts" in r.json()["error"]["detail"], \
             (alias, how, value, r.text)
         assert effects(api, rid) == NOTHING, (alias, how, value)
@@ -179,7 +179,7 @@ def test_a_person_still_switches_and_signs_out_from_the_app(api, alias):
     cara = online(api)                                           # a computer Cara operates
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET operator='cara' WHERE id=?", (cara["runner_id"],))
-    for token, machine, profile in (("ana-test", r, ""), ("ben-test", r, PROFILE), ("cara-test", cara, PROFILE)):
+    for token, machine, profile in (("ana-test", r, ""), ("ben-test", r, ""), ("cara-test", cara, "")):
         mid = machine["runner_id"]
         switch = post(api, f"{alias}/{mid}/logins", {"runtime": "codex", "profile": profile, "switch": True}, token=token)
         assert switch["kind"] == "switch" and switch["state"] == "requested"

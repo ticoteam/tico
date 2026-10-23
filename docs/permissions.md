@@ -34,7 +34,7 @@ appear in the settings history, where the owner can undo them, like the humans a
 
 Who may edit a bot's access: its owners (see [Bot owners](#bot-owners)): the team owner, the admins, the bot's creator
 and other owners, and the humans it reports up to on the team chart (the same humans who may change the bot's other settings).
-The Assistant, BotOps, the Librarian and the Goal Manager can have their access edited too.
+The Assistant, BotOps, the Librarian and the CEO Bot can have their access edited too.
 
 ## Always full access
 
@@ -109,7 +109,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Admins see SQL** | Admins open the SQL page | the SQL page is the owner's |
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
-| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes still wait ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | every ask waits for its answer, until it expires after 14 days |
+| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's ask with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers-a-bots-ask)) | no ask goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 
@@ -119,9 +119,10 @@ group, or a group under another, can change who reads a bot. BotOps does this as
 on `/api/v2/groups` through `hub api`, or `hub group update`), with that person's own rights: an owner or an admin, at once; a member is
 refused. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian and the Goal Manager) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian and the CEO Bot) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
+The CEO Bot's level, regular checks and name, and the Company section on Goals, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
@@ -168,7 +169,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or Goal Manager);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian or CEO Bot);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
@@ -205,7 +206,7 @@ created by a member has Instructions the Team has not reviewed, so it does not g
 A computer still hosts its owner's bots and the team owner's; taking members' bots adds members' bots, it does not move anyone else's.
 
 Every person sees every working computer in Settings > Computers (`GET /api/v2/operations`): its connections and their
-sign-in state, its named subscriptions' usage, and the bots on it that they may see. Only an admin or the computer's
+sign-in state, and the bots on it that they may see. Only an admin or the computer's
 operator also sees the signed-in accounts and the usage of the computer's own login, sees revoked computers, and changes
 anything on it (sign in, rename, usage readings, screen, tools, performance, inbox-only, revoke); the API refuses anyone else.
 
@@ -258,7 +259,7 @@ against the session again.
 
 > **Beta**: behaviour replay and the computer Performance page work today and may still change. See [Beta features](support.md#beta-features).
 
-Every computer reports its CPU, memory, swap, disk and its busiest processes every 30 seconds, so a slow or overloaded
+Every computer reports its CPU, memory, swap, disk and its busiest processes every 60 seconds, so a slow or overloaded
 computer can be debugged afterwards. It is on by default. The computer's operator or an admin turns it off in
 **Performance diagnostics** in the computer's pop-up in Settings > Computers (`POST /api/v2/computers/<id>/performance {"mode": "off"}`); Off
 stops the reports, and what was recorded stays until it is 14 days old. **Delete history** on the page, or
@@ -270,9 +271,25 @@ or `GET /api/v2/computers/<id or label>/performance?hours=24` (1 to 336). A repo
 program's own name, never its arguments), and the turns shown are the server's own record of what ran. A bot the
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
 
-Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%; on a Mac, whose swap grows as it needs, memory alone) or under 5%
+`hub computer list` is readable by company bots, including computers closed to placement of members' bots.
+Computers a bot could not otherwise read expose only discovery fields and load, without operator identity,
+repositories or recent logs. Full detail, placement and change controls keep their existing permissions. Each row includes `latest_sample` (timestamp,
+`cpu_pct`, `mem_pct`, memory used/total, swap used/total and running turns) and a plain `overloaded` flag.
+CPU here is the one-minute load divided by available cores, times 100; it may exceed 100%. These minute
+samples are retained for 48 hours. Six consecutive readings spanning five minutes above 90% CPU or memory
+set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
+turning diagnostics off clears it and hides `latest_sample`. No automatic action or notification follows.
+
+Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
+`hub run list`. Current computers take a reading at start and completion; older computers use a recent
+sample with its original timestamp. Unavailable readings are null. A run's saved snapshots remain after
+rolling samples expire. Diagnostics off suppresses new readings and snapshots; deleting computer history
+also removes saved snapshots for that computer.
+
+Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%) or under 5%
 disk free record an overload: when, why, which bots' turns were running and the busiest processes. Health shows it as a
-warning for a day afterwards. An overload changes nothing on its own; it is there to explain a slow day.
+warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
+diagnostic swapping rule because its swap total grows with use. An overload changes nothing on its own; it is there to explain a slow day.
 
 ## BotOps uses the requester’s rights
 
@@ -357,8 +374,8 @@ it as one sentence and the link.
 
 **Checking the result.** A model change answers with `readiness` (`backend/readiness.py` `can_run`, the one check
 behind a prepared change, `POST bots/<slug>/model` and Health): whether **this bot** can run the new runtime on its
-computer, judged by its own subscription profile's sign-in, its own API-key Credential for the runtimes that take one
-per bot (Gemini CLI, Pi), and otherwise the computer's shared sign-in. Another bot's missing key never blocks it.
+computer, judged by its computer's login for that runtime, its own API-key Credential for the runtimes that take one
+per bot (Gemini CLI, Pi). Another bot's missing key never blocks it.
 `can_run` is true, false (with `fix` and `link`), or null when nothing says (offline, an older computer). A bot an
 external agent runs (Hermes, OpenClaw, Grok Bot) answers `applicable: false`: no computer check applies. A change is
 refused only on false. `reported` turns true once the bot's own readiness row reflects the new runtime, after the

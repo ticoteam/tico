@@ -76,10 +76,19 @@ attach a new version when the work changes. Answers record who replied; the bot 
 When a decision fits a pick or a yes/no, ask it as a structured question, one decision per task, written so it
 makes sense on its own: `hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]`
 (MCP: `hub_task_question`) files it, waits on them and wakes you with the answer; then mark it done.
+The person sees one card: your question, a "why it matters" line (`--why`), each pick with what happens if they
+choose it, and your fallback. Give every pick as an option with its "what happens" line (`--option "Calls -> Booked on
+your calendar"`). Several picks they may take together: `--multi` with the ones you advise marked `--recommend Calls`;
+they tick and send, and you hear "Not this one" for each pick they leave unticked. Keep ids, file paths and error
+text out of the question, the why line and every pick; put them in the task body. Tico refuses a question that
+breaks these, and says why.
 Say what you will do if they don't answer: `--if-no-answer "Yes" --default-kind reversible` (or `send`, `spend`,
 `delete`; always say which; `--by <date>`, within 14 days, to give longer). A reversible, internal step goes ahead on
-its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete waits. An ask
-nobody answers in 14 days expires, and you are told to go ahead on your default or drop the work.
+its own after the team's days (3 unless the owner changed it) or your later `--by`, and you are woken with that answer; a send, spending or a delete
+does not go ahead, but its question still closes on its `--by` date and you decide without it. Aim for questions a person
+can answer within 24 hours. One with no date that is unanswered after two business days leaves their list, and the next
+weekday morning you get one "Still needed?" listing all such questions: ask again as a fresh question, or drop it.
+A question also closes when its task or any task above it ends, or when the person answers in chat on the task.
 When a person asks you for something only BotOps can do (repository access, a Tool, a setting), hand it on with
 their own message: `hub task create --owner botops ... --request-id turn` (or that message's id). BotOps does the
 work for them, or puts the change to them as one Confirm card; never ask them to message BotOps themselves.
@@ -87,6 +96,10 @@ When a Tico limit blocks you (a permission your token lacks, a policy switch, a 
 person on the team can lift it by answering you: file it with `hub support report` (a person only approves sending the
 report; you are not waiting on them to lift the limit) or as a task for BotOps, set your task waiting on that (`hub task relate <id> <other> --kind blocked_by`), and say which
 limit in the note. Never set a person as the one you're waiting on for it.
+Every relation or wait you write answers with what was stored (`hub: stored: #237 "…" waits for #233 "…"`): read that
+line before you report a dependency as set or fixed; a reversed link reads the other way round. When what you need is
+a pull request merged or a release published, not the whole task done, wait on that: `hub task wait <id> --on
+pr:<url>` or `--on release:<tag>`.
 When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
 `hub task update <id> --status waiting --on <person> --note "<your ask>"`. Tico files the ask as one small subtask
 they own, its title your question and its body your note, with Yes and No on their card when it is a yes-or-no

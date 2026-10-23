@@ -12,7 +12,8 @@ returns or logs the key, and it keeps only the Gateway's code, never its text.
 
 The Gateway's error codes, the same on every endpoint, in `error.code` (nested, chat) or `error` (a flat string,
 decisions): 401 `revoked_key` and `unknown_key` (both read "key not recognised"), 429 `cap_reached` (no retry this UTC
-month, whatever Retry-After says) and 429 `rate_limited` (retry after Retry-After). `<base>/key` answers 6 times a
+month, whatever Retry-After says), 429 `rate_limited` (retry after Retry-After) and 429 `out_of_credit` (the company's
+credit is spent; asked again after Retry-After, a minute, since a credit lets the next call through at once). `<base>/key` answers 6 times a
 minute per key, so the server asks it gently (backend/gateway_connection.py `check_soon`).
 """
 
@@ -33,6 +34,13 @@ TIMEOUT = 8
 # The share of a key's monthly cap from which its holders are warned (Dev 183).
 WARN_AT = 0.8
 CAP_REACHED, RATE_LIMITED = "cap_reached", "rate_limited"
+# Tico HQ pauses a company's Tico models while its credit is at its minimum (Waitlist spec v3 test 12): the company's
+# wait, not a login's. The Gateway asks again after a minute (its Retry-After), and HQ sees new credit within one.
+OUT_OF_CREDIT, OUT_OF_CREDIT_WAIT = "out_of_credit", 60
+# How long a Tico login is held when the Gateway, not the login, refused a turn another model then finished: its
+# key's rate window is a minute, and no Retry-After reaches the server from a turn that ended on a fallback.
+GATEWAY_WAIT = OUT_OF_CREDIT_WAIT
+PAUSED_MESSAGE = "Tico models are paused: this company is out of credit"
 REVOKED_KEY, UNKNOWN_KEY = "revoked_key", "unknown_key"
 # States that say nothing about the key: the Gateway was down or asked to slow down. They never replace a real answer.
 TRANSIENT = ("unreachable", "busy")
@@ -70,8 +78,8 @@ NOT_ISOLATED = "not_isolated"
 FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused", "no_route", NOT_FOUND, NOT_ISOLATED)
 # Every code a bot's model call can end with, as the runner names it at the end of its error
 # (runner-rs/src/hosts/pi.rs `plain_error`).
-CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, "unknown_model", "unsupported_field", "bad_request",
-         "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
+CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, OUT_OF_CREDIT, "unknown_model", "unsupported_field",
+         "bad_request", "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
 TICO_MODELS = "Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0"
 # How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
 ENROLL, ROTATE = "/enroll", "/rotate"
@@ -243,6 +251,12 @@ def month_after(moment):
 def cap_reached(text):
     """Whether a model error a bot's turn ended with is the Gateway's cap (`cap_reached`), not a rate limit."""
     return CAP_REACHED in str(text or "")
+
+
+def out_of_credit(text):
+    """Whether a model error is the Gateway pausing the company's Tico models for want of credit (`out_of_credit`), in
+    the runner's plain words or, from an older runner, the Gateway's own JSON."""
+    return re.search(r'[("]' + OUT_OF_CREDIT + r'[")]', str(text or "")) is not None
 
 
 def run_code(text):

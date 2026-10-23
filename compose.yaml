@@ -35,10 +35,9 @@ services:
       TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
-      # Visuals in replies (backend/visuals.py): a separate site of their own; unset in production = file chips.
+      # Visuals in replies (backend/visuals.py): a separate site of their own; unset = pictures, video and audio only.
       TICO_VISUAL_ORIGIN:
       TICO_VISUAL_SECRET:
-      TICO_VISUAL_SAME_ORIGIN:
       # Local Caddy serving is a separate opt-in; a visual origin may belong to an external CDN.
       TICO_CADDY_VISUALS:
       TICO_RUNNER_URL:

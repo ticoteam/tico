@@ -275,11 +275,33 @@ pub fn server_keeps_holds() -> bool {
     SERVER_HOLDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the server takes a readiness row's `data_problem` (its config says `readiness_data_problem`): an older
+/// one refuses a field it does not know, and with it the whole heartbeat.
+static SERVER_DATA_PROBLEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+static SERVER_COMPUTER_LOGINS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_uses_computer_logins() -> bool {
+    SERVER_COMPUTER_LOGINS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn server_takes_data_problem() -> bool {
+    SERVER_DATA_PROBLEM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a config answer has been kept since start.
+pub fn config_seen() -> bool {
+    CHOICES.lock().unwrap().is_some()
+}
+
 /// Keep `fallback_models` from a GET /api/v2/config answer (the harness relay reads it once a minute).
 pub fn remember(config: &Value) {
     if config["login_holds"].is_array() {
         SERVER_HOLDS.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    // Each answer decides, so a server rolled back to one that refuses the field gets heartbeats without it again.
+    SERVER_DATA_PROBLEM.store(config["readiness_data_problem"] == true, std::sync::atomic::Ordering::Relaxed);
+    SERVER_COMPUTER_LOGINS.store(config["computer_logins_v1"] == true, std::sync::atomic::Ordering::Relaxed);
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
     // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
@@ -548,6 +570,12 @@ mod tests {
         let own = crate::profiles::Profile::new("solo", "/tmp/acme-solo", false);
         assert_eq!(login("claude", "", Some(&shared)).as_deref(), Some(""));
         assert_eq!(login("claude", "", Some(&own)).as_deref(), Some("solo"));
+        // A Muse Code data folder goes in readiness only while the latest config says the server takes it.
+        assert!(!server_takes_data_problem(), "this server's config did not offer it");
+        remember(&json!({"fallback_models": [], "readiness_data_problem": true}));
+        assert!(server_takes_data_problem());
+        remember(&json!({"fallback_models": []}));
+        assert!(!server_takes_data_problem(), "a server rolled back to one without it");
     }
 
     #[test]

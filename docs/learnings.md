@@ -8,7 +8,29 @@ button counts the updates since you last opened it.
 Each update shows its commit subject, who made it and when, a link to the commit on GitHub, the files it
 changed and, once the commit has been pushed, its diff. When the run that made it is known, the
 update links to its source: the task, or the message in the chat, that the bot was working on. Two
-more views show the current `learnings.md` and `decisions.md`.
+more views show the current `learnings.md` and `decisions.md`, its working rules first (a `## ` section whose
+heading says rules), then the newest entries: sections by the date in their heading, and dated `- ` entries by their
+`added:` or leading date. An undated part stays under the dated one above it.
+
+## One memory, in the repository
+
+What a bot remembers between turns is its repository's `memory/`, which you read here and can edit. Each turn's
+prompt tells the bot to read the working rules at the top of `memory/learnings.md`, follow them, save a rule it is
+given there, and add other learnings at the top of the log. The runner turns off each harness's own memory on the
+computer, so nothing steers a bot from outside its repository: Claude Code's auto memory
+(`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every turn, not only for bots with branches), Codex's memories
+(`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool; a GEMINI.md the CLI saved
+before is set aside before each turn, so no turn loads it.
+
+What a bot saved there before is not lost. Before each turn, in whichever checkout it runs (its own or a task's
+worktree), the runner copies what the checkout lacks of it into a "Working rules from Claude's memory on this
+computer" section near the top of `memory/learnings.md`: each Claude memory with its whole text, whatever
+`MEMORY.md` says beyond its links to them, and Gemini's saved memory. Each entry names its source, so a retry never
+copies twice, while a same-named memory with other text, from another computer the bot ran on, is still copied; if
+a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. A task turn's closing commit
+keeps the copy; in the bot's own checkout its next memory commit does. The move is finished once the repository's
+pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
+that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
 ## Where it comes from
 
@@ -42,7 +64,8 @@ branch's history and reaches their next run after the repository syncs.
 
 ## Nightly learning run
 
-Once a night, at or after 3:00 (Pacific, the same clock as daily updates), Tico reads the day's
+Once a night, at or after 3:00 (Pacific, the same clock as daily updates; an owner or admin moves the time or
+switches it off in Settings > Routines), Tico reads the day's
 activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
 Slack or mail for this itself.
 
@@ -65,7 +88,7 @@ reached, even partway through, the night sends nothing, shows "Skipped", and the
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
-highest first. Recipients are the active bots other than BotOps, the Assistant and the Goal Manager,
+highest first. Recipients are the active bots other than BotOps, the Assistant and the CEO Bot,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 
@@ -82,7 +105,7 @@ open) and Market (its market changes then), each change with its source and diff
 only to readers who may read that bot. A packet's text shows only when the reader may read the source
 today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
 
-- `POST /api/v2/learnings/run` (owner): tonight's run now; 409 when it is running or already ran.
+- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > Routines): tonight's run now; 409 when it is running or already ran.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.

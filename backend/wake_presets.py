@@ -1,8 +1,7 @@
 """Per-bot wake presets: how soon a bot's nonblocking notices and its enabled sweeps start a turn.
 
-A bot's `config_json.wake_preset` is `token_saver`, `performance` or absent. Absent is "current
-behaviour": every job is claimable the moment it is queued, as before presets existed, and a bot made
-before them keeps it until someone picks one. A new bot starts on NEW_BOT_PRESET.
+A bot's `config_json.wake_preset` is `token_saver` or `performance`. Existing bots without a preset,
+including the former `current` setting, use Performance. New bots start on NEW_BOT_PRESET.
 
 Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
 event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
@@ -42,8 +41,8 @@ PRESETS = {
     PERFORMANCE: {"label": "Performance", "batch_seconds": 60, "batch_scope": "conversation",
                   "sweep_seconds": 15 * 60},
 }
-CHOICES = (CURRENT, TOKEN_SAVER, PERFORMANCE)
-LABELS = {CURRENT: "Current behaviour", TOKEN_SAVER: "Token saver", PERFORMANCE: "Performance"}
+CHOICES = (CURRENT, TOKEN_SAVER, PERFORMANCE)  # Legacy runs remain identifiable in historical measures.
+LABELS = {CURRENT: "Immediate (legacy)", TOKEN_SAVER: "Token saver", PERFORMANCE: "Performance"}
 # An immediate wake not picked up within this long counts as a missed action in `measures`.
 MISSED_AFTER_SECONDS = 5 * 60
 # How long after a turn ends an identical event still counts as the same one (a retried webhook, a double send).
@@ -66,8 +65,8 @@ _SAME_EVENT = (f"om.rowid<m.rowid AND om.from_actor IS m.from_actor AND om.kind 
                f"AND (m.from_actor='{H.KEEPER}' OR NOT EXISTS("
                f"SELECT 1 FROM messages x WHERE x.conversation_id=m.conversation_id AND x.rowid>om.rowid AND x.rowid<m.rowid))")
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
- UPDATE jobs SET wake_preset=coalesce((SELECT json_extract(config_json,'$.wake_preset') FROM bot_config
-   WHERE bot=NEW.bot),'{CURRENT}') WHERE id=NEW.id;
+ UPDATE jobs SET wake_preset=CASE WHEN (SELECT json_extract(config_json,'$.wake_preset') FROM bot_config
+   WHERE bot=NEW.bot)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
  UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs_json,'$.wake_batch')
    ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
@@ -98,6 +97,10 @@ def ensure(c):
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")
         c.execute(HOLD_TRIGGER)
 
+    c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.wake_preset',?),revision=revision+1 "
+              "WHERE json_extract(config_json,'$.wake_preset') IS NULL "
+              "OR json_extract(config_json,'$.wake_preset')=?", (PERFORMANCE, CURRENT))
+
 
 def values():
     """PRESETS with this install's TICO_WAKE_PRESETS overrides: whole seconds from 0 to a week, and a known scope."""
@@ -118,19 +121,15 @@ def values():
 
 
 def preset_of(config):
-    """The preset a bot's configuration names; anything else is current behaviour."""
+    """Normalize older configurations to Performance; Token saver is always an explicit choice."""
     name = (config or {}).get("wake_preset")
-    return name if name in PRESETS else CURRENT
+    return name if name in PRESETS else PERFORMANCE
 
 
 def effective(config):
     """What the bot's settings and the API show: the preset and the values it runs on."""
     name = preset_of(config)
     spec = values().get(name)
-    if not spec:
-        return {"preset": CURRENT, "label": LABELS[CURRENT], "chosen": False,
-                "batch_seconds": None, "batch_scope": None, "sweep_seconds": None, "immediate": list(IMMEDIATE),
-                "summary": "Current behaviour: every wake starts a turn as soon as it arrives, as before presets."}
     batch = _duration(spec["batch_seconds"])
     summary = (f"{spec['label']}: finished requests, review comments and check results wait up to {batch}"
                + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
@@ -283,13 +282,10 @@ def _on_one_page(c, jobs):
 
 
 def replan(c, bot):
-    """A preset change: the bot's held jobs are planned again on the new values, or released for current behaviour."""
+    """A preset change: the bot's held jobs are planned again on the new values."""
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     name = preset_of(H._json(config[0], {}) if config else {})
-    if name == CURRENT:
-        c.execute("UPDATE jobs SET held=0,wake_preset=? WHERE bot=? AND held=1 AND state='queued'", (name, bot))
-    else:
-        c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot=? AND held=1 AND state='queued'", (name, bot))
+    c.execute("UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot=? AND held=1 AND state='queued'", (name, bot))
 
 
 def classify(message):
@@ -313,7 +309,7 @@ def classify(message):
     if body.startswith(("New task from", "Open:", "Next-run task:")):
         return "assignment", "An assignment"
     if body.startswith(("Unblocked:", "All subtasks done")) or refs.get("subtask") or refs.get("worktree_wait") \
-            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval"):
+            or wake in ("watcher", "watcher-done", "resume") or refs.get("approval") or refs.get("milestone"):
         return "dependency", "An awaited result"
     if body.startswith(("Stuck:", "Your task for")) or refs.get("setup_held") or wake == "stuck_cause":
         return "blocker", "A blocker"

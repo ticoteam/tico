@@ -40,7 +40,13 @@ environment. Every run sets `MUSE_NO_AUTO_UPDATE=1` so the launcher does not upd
 Muse also loads every MCP server in its own `settings.json` and refuses to switch those off per run, so bot runs
 never use the operator's `~/.config/muse`: they run with `XDG_CONFIG_HOME` set to a Muse folder of Tico's own (a
 subscription profile's `musecode/`, else the runner's host state), and any servers in it are removed before each
-run. A bot run gets only the hub, its bot.yaml servers and the repository's own MCP config.
+run. A bot run gets only the hub, its bot.yaml servers and the repository's own MCP config. Its sessions (and each session's
+lock and log) go to a data folder of Tico's own as well, `XDG_DATA_HOME` beside that config folder (`musecode/data`
+in the runner's host state, or `musecode/profiles/<profile>/data` there for a subscription profile, outside every
+folder handed to the bot user), never `~/.local/share/muse`: on a computer that runs
+bots as their own user, that folder may belong to another user. If the data folder is there but the bot user can't
+write it, readiness shows Muse Code as not ready and names the folder: Settings > Computers marks the Muse Code line
+and says which folder, without asking for a sign-in, since signing in again does not fix it.
 The download is about 340 MB. The sign-in is `muse/auth.json` in that folder (sign in from Settings; a
 profile signs in to its own); `META_API_KEY` wins over it, and a computer-wide key reaches the run. The CLI has no
 sign-in status command, so readiness reports the file being there. Version checks and sign-ins also set
@@ -172,6 +178,32 @@ are refused.
 Grok Build retains its catalog model and supported efforts through the
 [existing CLI integration](https://docs.x.ai/build/overview). Selecting a harness does not enable
 its provider, grant credentials or guarantee model access on a computer.
+
+### Run a bot's tasks on another model
+
+Use **Task model** to choose a harness, model and effort for a bot's task sessions. Chat keeps the bot's own model.
+
+1. Open **Settings > Bots** and click **Tasks** beside the bot's model.
+2. Choose the harness, model and effort in the row that opens.
+3. Click **Apply**.
+
+The **Tasks** mark gets an accent dot when a task model is set. For example, you can keep a bot on Sonnet 5.5
+and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot editor, then click **Apply** or
+**Save bot**. To clear the choice, pick **Same as bot** and apply it. Changing the bot's own model leaves its task model set.
+
+If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
+to the bot's own model and effort; the task history records why. A review or check subtask keeps its check model.
+
+#### A warning about a cheaper task model
+
+A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
+own repository, can show a warning under **Task model**. The warning compares models from the same provider
+using their listed output prices. Another provider's model, or one without a listed price, is not judged.
+
+For example: "This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and
+may word things badly." The warning names the risk and still lets you save. Tasks still run on that model;
+the run note and task history say it ran "below the minimum for this bot". The warning updates when the bot's
+own model changes. A requested tool grant that has not been added does not count, nor does access to the bot's own repository.
 
 ### Keeping the model list current
 
@@ -328,6 +360,10 @@ Computers), `paste_code` means it takes a pasted code, `logout` means Sign out a
 some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
 (`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).
 
+Codex bots on the same ChatGPT login run turns at the same time, as Claude bots do. All bots on the computer's
+login share its plan's usage allowance. Tico never copies a login into
+another bot's home; all turns use the original login in its own home.
+
 | Capability | Means | Absent |
 |---|---|---|
 | `terminal_login` | What a person runs on the computer to sign in (after the executable) | No interactive sign-in; keys only |
@@ -337,7 +373,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `api_key_check` | A command that asks the provider about the key in its environment, run in an empty home so no other login answers; it passes on exit 0 with no `"is_error": true` in its JSON. Switch to API key checks a key with it (or with `api_key_login`) before the subscription is signed out | Switch to API key is offered only with this or `api_key_login` |
 | `api_key_in_turn` | The computer's key is put in each turn's environment, which is the only place the CLI reads it, and wins over a stored login | Not put there |
 | `subscription_marker` | Text in the sign-in detail that means a plan, so turns bill as `subscription` | Every turn bills as `api` |
-| `subscription_profiles` | Runs on a named subscription's own login (`profile_home` is the variable pointed at the profile's folder; `profile_dirs` are made inside it) | Not covered by subscriptions |
+| `subscription_profiles` | Can run on a computer whose login is a profile folder (`default_profile`; `profile_home` is the variable pointed at the profile's folder; `profile_dirs` are made inside it) | Not covered by subscriptions |
 | `profile_home_overrides` | Variables the CLI reads ahead of `profile_home`; a profile's sign-in, sign-in check and runs never inherit them | Nothing dropped |
 | `own_config_home` | Bot runs use a config folder of Tico's own, never the operator's | The operator's (or the profile's) home |
 | `weekly_usage` | `refresh` (turns report it, and it can be refreshed on demand), `turns`, or `manual` (only a person's reading) | No weekly usage |
@@ -349,7 +385,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
-| `one_turn_per_login` | A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
+| `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
 | `resume_command` | The local command that resumes a session (the id follows) | `<executable> --resume` |
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |

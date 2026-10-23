@@ -1,4 +1,4 @@
-// Imported history is a snapshot, with no runtime credential actions; real agents retain them. A human's Grok Bots
+// Imported history has no runtime credential actions; real agents retain them in their Settings tab. A human's Grok Bots
 // are ordinary org-chart rows: source sections do not override their placement or ordering.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -70,9 +70,9 @@ const {unrouted} = require('./support/routes.cjs');
     return json(unrouted(p));
   });
   try {
-    await page.goto('https://tico-ui.test/#/bot/history-copy/more');
-    await page.locator('#pane-more:not([hidden])').waitFor();
-    assert.equal(await page.locator('#pane-more [data-agent-credential], #pane-more [data-agent-revoke]').count(),0,
+    await page.goto('https://tico-ui.test/#/bot/history-copy/settings');
+    await page.locator('#pane-settings:not([hidden]) #bot-editor form').waitFor();
+    assert.equal(await page.locator('#pane-settings [data-agent-credential], #pane-settings [data-agent-revoke]').count(),0,
       'an import has no runtime credential to rotate or revoke');
     assert.doesNotMatch(await page.locator('#bot-alert').innerText(),/Offline/);
     assert.match(await page.locator('#bot-alert').innerText(),/History.*sync/i);
@@ -86,15 +86,15 @@ const {unrouted} = require('./support/routes.cjs');
 
     fresh = true;
     await page.reload();
-    await page.locator('#pane-more:not([hidden])').waitFor();
+    await page.locator('#pane-settings:not([hidden]) #bot-editor form').waitFor();
     assert.equal(await page.locator('#bot-alert').innerText(),'');
-    assert.equal(await page.locator('#pane-more [data-agent-credential], #pane-more [data-agent-revoke]').count(),0);
+    assert.equal(await page.locator('#pane-settings [data-agent-credential], #pane-settings [data-agent-revoke]').count(),0);
     assert.equal(await page.evaluate(()=>settingsBotProblem(S.emps.find(e=>e.name==='history-copy'))),'');
 
-    await page.goto('https://tico-ui.test/#/bot/live-agent/more');
-    await page.locator('#pane-more:not([hidden])').waitFor();
+    await page.goto('https://tico-ui.test/#/bot/live-agent/settings');
+    await page.locator('#pane-settings:not([hidden]) #bot-editor form').waitFor();
     assert.match(await page.locator('#bot-alert').innerText(),/Offline with work waiting/);
-    assert.equal(await page.locator('#pane-more [data-agent-credential], #pane-more [data-agent-revoke]').count(),2,
+    assert.equal(await page.locator('#pane-settings [data-agent-credential], #pane-settings [data-agent-revoke]').count(),2,
       'a real external agent retains its credential controls');
     await page.locator('#bot-top [data-tip-bot]').focus();
     await page.locator('#bot-tip:not([hidden])').waitFor();

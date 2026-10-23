@@ -191,8 +191,9 @@ async function owner(browser) {
   assert.equal(await box.locator('[data-brepo="acme/api"] input[value=read]').isChecked(), true);
   assert.equal(await box.locator('[data-brepo="acme/mobile"] input[value=write]').isDisabled(), true, 'Read or Write waits for the tick');
   assert.match(await box.locator('.brepo-eff').innerText(), /acme\/bot-release-captain write.*acme\/web write.*acme\/api read/s);
-  // It opens with no control focused (no ring on the ✕), and Create bot repositories sits beside its words.
-  assert.equal(await page.evaluate(() => document.activeElement?.id), 'bot-editor-title');
+  // Repository permissions edit inline in Settings; Create bot repositories sits beside its words.
+  assert.equal(await page.locator('[data-bot-detail-tab=settings]').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('dialog#bot-editor').count(), 0);
   const [tick, words] = await box.locator('label:has([data-brepo-create])').evaluate(l => [l.querySelector('input'), l].map(el => el.getBoundingClientRect().height));
   assert.ok(words < tick * 2, 'the checkbox and its label share one line');
   await settled(page);

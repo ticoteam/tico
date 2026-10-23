@@ -535,7 +535,7 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the Goal Manager, the Health Monitor): they act for
+        """The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot, the Health Monitor): they act for
         the whole company, so only the company owner changes them. Admins manage every other bot."""
         return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor")
 
@@ -554,6 +554,22 @@ class Auth:
         if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])):
             return True
         return self.manages(c, who, "bot", slug)
+
+    def bot_above(self, c, who, slug):
+        """Whether the caller is a bot's own run that sits above this bot in the `reports_to` chain: a manager bot,
+        or one above its manager. It already has full access to the bot (`bot_accesses`); this is for the few reads
+        that check the caller's kind before access, like a bot's routines. Never true for a run acting for someone."""
+        if who.role != "bot" or who.via or not str(who.actor).startswith("bot:"):
+            return False
+        me = H.actor_id(who.actor)
+        parents = {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}
+        seen, parent = {slug}, parents.get(slug, "")
+        while parent and parent not in seen:
+            if parent == me:
+                return True
+            seen.add(parent)
+            parent = parents.get(parent, "")
+        return False
 
     def botops_manages(self, c, who, slug):
         """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages

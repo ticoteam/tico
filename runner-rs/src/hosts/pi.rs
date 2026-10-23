@@ -134,6 +134,7 @@ const GATEWAY_ERRORS: &[(&str, &str)] = &[
     ("revoked_key", "gateway key was revoked"),
     ("unknown_key", "unknown gateway key"),
     ("rate_limited", "too many refused keys"),
+    ("out_of_credit", "this company is out of credit"),
     ("unknown_model", "unknown model. tico models"),
     ("unsupported_field", "take text and tools only"),
     ("bad_request", "not a chat completion the gateway can send"),
@@ -161,8 +162,9 @@ fn gateway_said(text: &str) -> Option<String> {
 }
 
 /// A model error of a turn on the Tico AI Gateway in words a person reads, ending with the Gateway's code; anything
-/// that isn't the Gateway's as it came. The cap still reads as a spend limit, `rate_limited` as a rate limit and a
-/// refused key as an invalid API key, so the runner's limit and sign-in rules (hosts/mod.rs) classify them; the server
+/// that isn't the Gateway's as it came. The cap still reads as a spend limit, `rate_limited` as a rate limit,
+/// `out_of_credit` by its code (a limit, so the turn goes to its fallback) and a refused key as an invalid API key, so
+/// the runner's limit and sign-in rules (hosts/mod.rs) classify them; the server
 /// (backend/execution.py) decides from the code what is retried, when.
 pub fn plain_error(text: &str) -> String {
     let Some(code) = gateway_code(text) else { return text.to_string() };
@@ -171,6 +173,10 @@ pub fn plain_error(text: &str) -> String {
         // One plain message for both: a person can't tell a revoked key from a mistyped one, and needn't.
         "revoked_key" | "unknown_key" => format!("Tico AI Gateway: key not recognised (api key invalid: {code})"),
         "rate_limited" => "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)".into(),
+        // The company's credit is spent (Tico HQ's billing): bots run on their fallbacks and are back within a minute of a credit.
+        "out_of_credit" => {
+            "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)".into()
+        }
         "unknown_model" => {
             let names: Vec<&str> =
                 GATEWAY_MODELS.iter().filter(|(id, _)| !GATEWAY_RETIRED.contains(id)).map(|(_, name)| *name).collect();
@@ -511,6 +517,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_company_out_of_credit_reads_plainly_and_is_a_limit_so_the_bot_falls_back() {
+        // Tico HQ's billing stop (Waitlist spec v3 test 12): 429 out_of_credit, type insufficient_quota, Retry-After 60.
+        let (events, dir) = gateway_turn(&[
+            SESSION,
+            r#"{"type":"agent_start"}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","provider":"tico","model":"tico-mid-1.0","content":[],"stopReason":"error","usage":{"input":0,"output":0,"totalTokens":0},"errorMessage":"429: {\"code\":\"out_of_credit\",\"message\":\"Tico models are paused: this company is out of credit.\",\"type\":\"insufficient_quota\",\"param\":null}"}}"#,
+            r#"{"type":"turn_end","message":{"role":"assistant","content":[]}}"#,
+            r#"{"type":"agent_end"}"#,
+        ]).await;
+        // A person reads a sentence, not the Gateway's JSON; `limit` sends the turn to the bot's fallback.
+        assert_eq!(events, vec![
+            json!({"kind": "status", "state": "active"}),
+            json!({"kind": "turn_failed", "error": "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)", "limit": true}),
+            json!({"kind": "status", "state": "idle"}),
+        ]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_bot_still_on_retired_cheap_1_0_keeps_running_on_the_gateway() {
         let (_, dir) = gateway_turn_on("tico-cheap-1.0", &[SESSION, r#"{"type":"agent_start"}"#, r#"{"type":"agent_end"}"#]).await;
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
@@ -589,6 +614,7 @@ mod tests {
             (401, "revoked_key", "This gateway key was revoked.", "Tico AI Gateway: key not recognised (api key invalid: revoked_key)"),
             (401, "unknown_key", "Unknown gateway key.", "Tico AI Gateway: key not recognised (api key invalid: unknown_key)"),
             (429, "rate_limited", "Too many refused keys from this address. Try again later.", "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait (rate_limited)"),
+            (429, "out_of_credit", "Tico models are paused: this company is out of credit.", "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added (out_of_credit)"),
             (400, "unknown_model", "Unknown model. Tico models: tico-cheap-1.0, tico-mid-1.0, tico-power-1.0.", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0 (unknown_model)"),
             (400, "unsupported_field", "Tico models here take text and tools only: no images, audio, files or more than one choice.", "Tico AI Gateway refused the request as sent: Tico models here take text and tools only: no images, audio, files or more than one choice. (unsupported_field)"),
             (400, "bad_request", "The request is not a chat completion the gateway can send.", "Tico AI Gateway refused the request as sent: The request is not a chat completion the gateway can send. (bad_request)"),
@@ -602,7 +628,7 @@ mod tests {
             assert_eq!(gateway_code(message), Some(*code), "{code} inside a stream");
             // What the runner and server classify by: a cap or rate limit is a limit, a refused key a refused sign-in,
             // and nothing else is either.
-            assert_eq!(is_limit(&said), matches!(*code, "cap_reached" | "rate_limited"), "{code}");
+            assert_eq!(is_limit(&said), matches!(*code, "cap_reached" | "rate_limited" | "out_of_credit"), "{code}");
             assert_eq!(is_auth_rejected(&said), matches!(*code, "revoked_key" | "unknown_key"), "{code}");
             assert!(!crate::hosts::rejection_reason(&said).contains("[redacted]"), "{code}");
         }

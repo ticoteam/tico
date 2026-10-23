@@ -4,82 +4,26 @@ import json
 from backend.tests.test_api import api, assign, claim, get, post, put, ready, runner  # noqa: F401
 
 
-def test_bot_runs_on_its_own_connection_else_the_computers_and_groups_never_choose(api):
-    set_runtime(api, 'codex')
+def test_the_api_refuses_a_bot_its_own_sign_in(api):
     r = runner(api)
     assign(api, r, 'ops')
-    group = post(api, 'groups', {'name': 'Engineering', 'add': {'bots': ['ops']}})['id']
-    put(api, 'subscriptions', {'scope': 'group', 'target': group, 'profile': 'one'}, expected=422)
-    # A group default saved before groups stopped choosing is left in place and never read.
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES('group',?,'one',NULL,NULL)", (group,))
-    line = get(api, 'bots/ops/subscription')
-    assert (line['profile'], line['source'], line['runtime']) == (None, 'computer', 'codex')
-    assert all(row['scope'] == 'bot' for row in get(api, 'subscriptions')['assignments'])
-    post(api, 'chat/ops', {'text': 'Runs on the computer login'})
-    ready(api, r, ['ops'])
-    assert claim(api, r)['profile'] is None
-    put(api, 'subscriptions', {'target': 'ops', 'profile': 'three'})
-    assert get(api, 'bots/ops/subscription')['source'] == 'bot'
-    # The Computers pop-up reads the same answer for every bot on the computer.
-    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
-    assert [(row['bot'], row['profile'], row['source'], row['runtime'], row['display_name'])
-            for row in machine['bot_connections']] == [('ops', 'three', 'bot', 'codex', 'three')]
+    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'engineering'}, expected=405)
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM subscription_assignments').fetchone()
+    assert 'assignments' not in get(api, 'subscriptions')
+    # Nor a second, named login on the computer for a bot to run on: a different account means another computer.
+    refused = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'}, expected=422)
+    assert refused['error']['code'] == 'one_login'
 
 
-def test_heartbeat_profiles_claim_and_old_computer(api):
-    r = runner(api)
-    assign(api, r, 'ops')
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'engineering'})
-    set_runtime(api, 'codex')
-    ready(api, r, ['ops'])
-    assert get(api, 'bots/ops/subscription')['signed_in'] is None
-    assert get(api, 'bots/ops/subscription')['problem'] == 'Update Test Mac to use subscriptions'
-    post(api, 'chat/ops', {'text': 'Wait for the assigned subscription'})
-    assert claim(api, r) is None
-    body = {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
-            'profiles': [{'name': 'engineering', 'runtimes': {'codex': {'signed_in': True}}}]}
-    post(api, 'runners/heartbeat', body, token=r['token'])
-    listed = get(api, 'subscriptions')['profiles_by_computer']
-    assert listed[0]['profiles'][0]['name'] == 'engineering'
-    assert listed[0]['profiles'][0]['display_name'] == 'engineering'
-    assert listed[0]['profiles'][0]['runtimes']['codex']['signed_in'] is True
-    sub = get(api, 'bots/ops/subscription')
-    assert sub['signed_in'] is True and sub['computer']['runner_id'] == r['runner_id']
-    assignment = get(api, 'runners/assignments', r['token'])[0]
-    assert assignment['profile'] == 'engineering'
-    post(api, 'chat/ops', {'text': 'Check the current delivery'})
-    work = claim(api, r)
-    assert work['profile'] == 'engineering'
-    post(api, 'attempts/' + work['id'] + '/started', {'thread_id': 'thread'}, token=r['token'])
-    post(api, 'attempts/' + work['id'] + '/complete', {'outcome': 'completed', 'last_seq': 0}, token=r['token'])
-    post(api, 'chat/ops', {'text': 'Wait while this subscription is unavailable'})
-    # A complete replacement report removes profiles; a missing report from an old runner doesn't.
-    post(api, 'runners/heartbeat', {**body, 'profiles': []}, token=r['token'])
-    sub = get(api, 'bots/ops/subscription')
-    assert sub['signed_in'] is False and sub['problem'] == "Subscription engineering isn't on Test Mac"
-    assert claim(api, r) is None
-    signed_out = {**body, 'profiles': [{'name': 'engineering', 'runtimes': {'codex': {'signed_in': False}}}]}
-    post(api, 'runners/heartbeat', signed_out, token=r['token'])
-    assert claim(api, r) is None
-    assert get(api, 'bots/ops/subscription')['problem'] == "Subscription engineering isn't signed in on Test Mac"
-    health = get(api, 'health')
-    assert any(check['id'] == 'subscriptions' for check in health['checks'])
-    ready(api, r, ['ops'])
-    assert get(api, 'bots/ops/subscription')['signed_in'] is None
-    assert get(api, 'bots/ops/subscription')['problem'] == 'Update Test Mac to use subscriptions'
-
-
-def test_assignment_permissions_and_named_login(api):
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'one'}, token='cara-test', expected=403)
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'missing', 'profile': 'one'}, expected=404)
+def test_sign_in_permissions(api):
     r = runner(api)
     ready(api, r, [])
     # Neither an administrator nor its operator: sees the computer on Computers, but changes nothing on it.
     rid = r['runner_id']
     seen = next(m for m in get(api, 'operations', 'cara-test')['computers'] if m['id'] == rid)
     assert seen['may_manage'] is False
-    post(api, f"runners/{rid}/logins", {'runtime': 'codex', 'profile': 'x'}, token='cara-test', expected=403)
+    post(api, f"runners/{rid}/logins", {'runtime': 'codex'}, token='cara-test', expected=403)
     put(api, 'subscriptions/name', {'runner_id': rid, 'profile': 'x', 'display_name': 'X'}, token='cara-test', expected=403)
     put(api, 'subscriptions/weekly', {'runner_id': rid, 'profile': 'x', 'runtime': 'codex', 'used_percent': 10},
         token='cara-test', expected=403)
@@ -87,19 +31,19 @@ def test_assignment_permissions_and_named_login(api):
     for path, body in [('inbox-only', {'enabled': True}), ('screen', {'mode': 'view'}), ('performance', {'mode': 'on'}),
                        ('harness-choices', {'harness': 'codex', 'enabled': True}), ('restart', {}), ('revoke', {})]:
         post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
-    login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'})
-    assert login['profile'] == 'engineering'
+    login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex'})
+    assert login['profile'] == ''
     pending = get(api, 'runner-logins', r['token'])['logins']
-    assert pending[0]['profile'] == 'engineering'
+    assert pending[0]['profile'] == ''
     post(api, f"runners/{rid}/revoke", {})
     assert all(m['id'] != rid for m in get(api, 'operations', 'cara-test')['computers'])
     assert any(m['id'] == rid for m in get(api, 'operations')['computers'])
 
 
-def test_botops_assignment_and_signin_use_requester_rights_by_default():
+def test_botops_signin_uses_requester_rights_by_default():
     from backend.botops_act import default_delegable
-    assert default_delegable('PUT', 'subscriptions')
-    assert default_delegable('POST', 'runners/computer-a/logins', {'runtime': 'codex', 'profile': 'engineering'})
+    assert not default_delegable('PUT', 'subscriptions')
+    assert default_delegable('POST', 'runners/computer-a/logins', {'runtime': 'codex'})
     assert default_delegable('GET', 'runners/computer-a/logins/login-a')
     assert not default_delegable('GET', 'runner-logins')
 
@@ -124,9 +68,6 @@ def test_subscription_computers_use_computer_visibility(api):
     post(api, 'chat/ops', {'text': 'Inspect subscriptions'})
     token = claim(api, r)['token']
     assert [row['runner_id'] for row in get(api, 'subscriptions', token)['profiles_by_computer']] == [r['runner_id']]
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES('bot','missing','one',NULL,NULL)")
-    assert not get(api, 'subscriptions')['assignments']
 
 
 def test_server_rejection_blocks_only_matching_profile(api):
@@ -152,46 +93,21 @@ def set_runtime(api, runtime, harness=None, bot="ops"):
         c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
 
 
-def test_subscription_refusal_requeues_until_fresh_ready_report(api):
+def test_a_login_whose_turns_cannot_save_a_session_names_the_folder_not_a_sign_in(api):
+    """Muse Code signed in, but the bot user can't write its data folder (Dev 329): the runner says so apart from the
+    sign-in, and the bot's line names the folder instead of "Signed out"."""
+    set_runtime(api, 'musecode')
     r = runner(api)
     assign(api, r, 'ops')
-    set_runtime(api, 'codex')
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'one'})
-    heartbeat = {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
-                 'profiles': [{'name': 'one', 'runtimes': {'codex': {'signed_in': True}}}]}
-    post(api, 'runners/heartbeat', heartbeat, token=r['token'])
-    post(api, 'chat/ops', {'text': 'Wait for the assigned subscription'})
-    for problem in ["Subscription one isn't signed in on Test Mac", "Subscription one isn't on Test Mac"]:
-        work = claim(api, r)
-        assert work
-        post(api, 'attempts/' + work['id'] + '/started', {'thread_id': 'thread'}, token=r['token'])
-        refusal = {'profile': 'one', 'runtime': 'codex', 'problem': problem}
-        post(api, 'attempts/' + work['id'] + '/events', {'events': [
-            {'seq': 1, 'kind': 'diagnostic', 'payload': {'text': problem}}]}, token=r['token'])
-        post(api, 'attempts/' + work['id'] + '/complete', {'outcome': 'failed', 'text': problem,
-             'last_seq': 1, 'retryable': True, 'subscription_unavailable': refusal}, token=r['token'])
-        with api.app.state.store.read() as c:
-            assert c.execute('SELECT state FROM jobs WHERE attempt_id=?', (work['id'],)).fetchone()[0] == 'queued'
-            assert not c.execute("SELECT 1 FROM messages WHERE from_actor='bot:ops'").fetchone()
-        assert claim(api, r) is None
-        sub = get(api, 'bots/ops/subscription')
-        assert sub['problem'] == problem and sub['detail']['runtime'] == 'codex'
-        post(api, 'runners/heartbeat', {**heartbeat, 'profiles': [
-            {'name': 'one', 'runtimes': {'codex': {'signed_in': None}}}]}, token=r['token'])
-        assert claim(api, r) is None
-        post(api, 'runners/heartbeat', heartbeat, token=r['token'])
-
-
-def test_subscription_picker_and_claim_refuse_unmapped_runtimes(api):
-    r = runner(api)
-    assign(api, r, 'ops')
-    put(api, 'subscriptions', {'scope': 'bot', 'target': 'ops', 'profile': 'one'})
-    post(api, 'chat/ops', {'text': 'Wait for a covered runtime'})
-    for runtime, harness in [('cursor', 'cursor-agent')]:
-        set_runtime(api, runtime, harness)
-        post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
-             'profiles': [{'name': 'one', 'runtimes': {runtime: {'signed_in': True}}}]}, token=r['token'])
-        sub = get(api, 'bots/ops/subscription')
-        assert sub['problem'] == f"Subscription one doesn't cover {runtime}"
-        assert sub['signed_in'] is False
-        assert claim(api, r) is None
+    assert get(api, 'config', r['token'])['readiness_data_problem'] is True
+    problem = "Muse Code can't save sessions: the bot user can't write /home/x/musecode/data/muse/sessions (read-only)"
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'schema_version': 1,
+         'runtimes': {'musecode': {'installed': True, 'authenticated': 'failed', 'detail': problem, 'data_problem': problem,
+                                   'profiles': {'': {'installed': True, 'authenticated': 'failed', 'data_problem': problem}}}},
+         'bots': {'ops': {'ready': False, 'runtime': 'musecode', 'sign_in': 'failed', 'data_problem': problem,
+                          'problems': [problem]}}}}, token=r['token'])
+    line = get(api, 'bots/ops/subscription')
+    assert (line['signed_in'], line['problem'], line['source']) == (None, problem, 'computer')
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == r['runner_id'])
+    assert machine['readiness']['runtimes']['musecode']['data_problem'] == problem
+    assert [(row['bot'], row['signed_in'], row['problem']) for row in machine['bot_connections']] == [('ops', None, problem)]

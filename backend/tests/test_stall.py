@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from backend import milestone_waits as MW
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 
@@ -107,6 +108,7 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
     from backend.tests.test_api import headers, post
     room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
     with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
         lines = lambda: [(r[0], json.loads(r[1])) for r in c.execute(
             "SELECT body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
@@ -123,13 +125,20 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
         out = H.wake_stalled(c)
         assert out["checked"] == [task["id"]] and out["woke"] == [] and out["stuck"] == []
         assert H.wake_stalled(c)["checked"] == []                       # once per quiet stretch
-        # Half an hour after the check, still nothing: reported stuck in the main chat, and Ana is asked.
+        # Half an hour after the check, still nothing: its bot is retried once.
         c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        out = H.wake_stalled(c)
+        assert out["retried"] == [task["id"]] and out["stuck"] == []
+        assert H.wake_stalled(c)["retried"] == [] and H.wake_stalled(c)["stuck"] == []     # once, then it waits
+        # Half an hour after the retry, still nothing: reported stuck in the main chat, and BotOps (not Ana) finds why.
+        c.execute("UPDATE events SET ts=? WHERE action='task.stuck_retry' AND target=?",
                   (H.shift(H.now(), seconds=-1900), task["id"]))
         assert H.wake_stalled(c)["stuck"] == [task["id"]]
         assert lines()[-1][1]["task_report"] == "stuck" and lines()[-1][0].startswith("Recheck the cash warning: stuck.")
-        assert c.execute("SELECT count(*) FROM messages WHERE kind='ask' AND to_actor='human:ana' "
-                         "AND refs_json LIKE '%stuck%'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM messages WHERE kind='ask' AND to_actor LIKE 'human:%'").fetchone()[0] == 0
+        diagnostic = c.execute("SELECT owner,body FROM tasks WHERE requester='keeper' AND title LIKE 'Find why %'").fetchall()
+        assert [(d[0], task["id"] in d[1]) for d in diagnostic] == [("bot:botops", True)]
         assert H.wake_stalled(c)["stuck"] == []
         # Done: one report line; the same state is not reported twice.
         H.task_update(c, "bot:finance", task["id"], status="done", note="Cash is fine.")
@@ -188,3 +197,142 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     post(api, "bots/finance/onboarded", {})
     with store.read() as c:
         assert H.task(c, reminder[0]["id"])["status"] == "done"
+
+
+def test_a_task_held_only_by_its_own_quiet_subtask_is_flagged_woken_and_shown_stuck(api):
+    """A hold kept open until its parent's window is released, set as that parent's blocker, never clears. The
+    writer is warned, and once both are quiet the parent's bot is woken on it and BotOps sees it stuck, even
+    while it is `waiting`. A question for a person in a subtask still holds its task as before."""
+    from backend.tests.test_api import post
+    store = api.app.state.store
+    with store.transaction() as c:
+        window = H.task_create(c, H.human_actor("ana"), "Open the deploy window", "Post OPEN, then RELEASED.", "bot:ops")
+        hold = H.task_create(c, "bot:ops", "Hold merges until RELEASED", "Keep this open until RELEASED.",
+                             "bot:finance", parent_id=window["id"])
+        asked = H.task_create(c, H.human_actor("ana"), "Pick a vendor", "", "bot:ops")
+        card = H.task_create(c, "bot:ops", "Which vendor?", "", H.human_actor("ana"), parent_id=asked["id"], lint=False)
+        H.TR.relate(c, "bot:ops", asked["id"], card["id"], "blocked_by")
+    flagged = post(api, f"tasks/{window['id']}/relations", {"task": hold["id"], "kind": "blocked_by"})
+    assert hold["id"] in flagged["warning"] and "neither can ever move" in flagged["warning"]
+    with store.transaction() as c:
+        H.task_update(c, "bot:ops", window["id"], status="waiting", note="Waiting on the hold's ack.")
+        c.execute("UPDATE jobs SET state='completed'")
+        for t in (window, hold, asked, card):
+            aged(c, t["id"], 6)
+        woken = H.wake_stalled(c)["woke"]
+        assert window["id"] in woken and asked["id"] not in woken
+        woke = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE ? "
+                         "AND refs_json LIKE '%stalled%'", (f'%{window["id"]}%',)).fetchall()
+        assert len(woke) == 1 and "blocked only by its own subtask" in woke[0][0] and hold["id"] in woke[0][0]
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 1
+        # The question for a person is not a stuck block: its task is left alone.
+        stuck = {t["id"]: t for t in H.stuck_tasks(c)}
+        assert stuck[window["id"]]["own_blockers"] == [hold["id"]] and asked["id"] not in stuck
+
+
+def held_window(c, hold_parent=True):
+    """Today's shape: a waiting window task blocked by a bot's hold that stays open until RELEASED."""
+    window = H.task_create(c, H.human_actor("ana"), "Open the deploy window", "Post OPEN, then RELEASED.", "bot:ops")
+    hold = H.task_create(c, "bot:ops", "Hold merges until RELEASED", "Keep this open until RELEASED.",
+                         "bot:finance", parent_id=window["id"] if hold_parent else None)
+    H.TR.relate(c, "bot:ops", window["id"], hold["id"], "blocked_by")
+    H.task_update(c, "bot:ops", window["id"], status="waiting", note="Waiting on the hold's ack.")
+    return window, hold
+
+
+def flagged(c, window, *tasks, minutes=6):
+    """(parent woken, parent on BotOps's stuck list) once the parent has been quiet six minutes and `tasks` `minutes`."""
+    c.execute("UPDATE jobs SET state='completed'")
+    aged(c, window["id"], 6)
+    for t in tasks:
+        aged(c, t["id"], minutes)
+    return window["id"] in H.wake_stalled(c)["woke"], window["id"] in {t["id"] for t in H.stuck_tasks(c)}
+
+
+def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is_stuck(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        H.task_comment(c, "bot:finance", hold["id"], "Checkpoint: holding services merges until RELEASED.", wake=False)
+        row = H.task(c, hold["id"])
+        assert not row["due"] and not row["snoozed_until"] and not row["resume_json"]
+        assert flagged(c, window, hold) == (True, True)
+
+
+def _later(c, task_id, column, hours):
+    c.execute(f"UPDATE tasks SET {column}=? WHERE id=?", (H.shift(H.now(), seconds=hours * 3600), task_id))
+
+
+@pytest.mark.parametrize("wait", ["due", "snooze", "resume", "milestone"])
+def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_time_passes(api, wait):
+    column = {"due": "due", "snooze": "snoozed_until"}.get(wait)
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        if wait == "resume":
+            c.execute("UPDATE tasks SET resume_json=? WHERE id=?", (json.dumps({"after": "ci"}), hold["id"]))
+        elif wait == "milestone":    # Oct 22: a hold waiting for a release (or a PR merge) is woken by it
+            MW.add(c, "bot:finance", hold, "release:ticoteam/tico@v9.9.9")
+        else:
+            _later(c, hold["id"], column, 24)
+        assert flagged(c, window, hold) == (False, False)
+        if wait == "milestone":      # once it has woken the hold, the wait is no exemption
+            c.execute("UPDATE task_milestone_waits SET woke_at=? WHERE task_id=?", (H.now(), hold["id"]))
+            assert flagged(c, window, hold) == (True, True)
+        elif wait != "resume":       # a passed date or snooze is no exemption
+            _later(c, hold["id"], column, -1)
+            assert flagged(c, window, hold) == (True, True)
+
+
+@pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked"])
+def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c, hold_parent=case != "not_a_subtask")
+        other = H.task_create(c, "bot:ops", "Run the migration", "", "bot:finance")
+        if case == "mixed":
+            H.TR.relate(c, "bot:ops", window["id"], other["id"], "blocked_by")
+        if case == "hold_blocked":
+            H.TR.relate(c, "bot:finance", hold["id"], other["id"], "blocked_by")
+        if case == "hold_asked":
+            H.task_ask(c, "bot:finance", hold["id"], "Which window do you mean?")
+        assert flagged(c, window, hold, other, minutes=2 if case == "fresh" else 6) == (False, False)
+
+
+def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        second = H.task_create(c, "bot:ops", "Hold deploys until RELEASED", "", "bot:finance", parent_id=window["id"])
+        H.TR.relate(c, "bot:ops", window["id"], second["id"], "blocked_by")
+        assert flagged(c, window, hold, second) == (True, True)
+        assert {t["id"]: t for t in H.stuck_tasks(c)}[window["id"]]["own_blockers"] == [hold["id"], second["id"]]
+
+
+def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_counts_every_wake(api):
+    from backend.tests.test_api import post
+    room = post(api, "chat/finance", {"text": "Can you look at cash?"})["conversation_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
+                             conversation_id=room)
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
+        job = c.execute("SELECT id FROM jobs WHERE bot='finance' ORDER BY created DESC LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
+                  "VALUES('a1',?,'finance','r1',1,'a1','running',?,?,?)",
+                  (job, H.shift(H.now(), seconds=600), H.shift(H.now(), seconds=-2400), "task:" + task["id"]))
+        aged(c, task["id"], 40)
+        assert H.wake_stalled(c)["checked"] == [task["id"]]
+        c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        assert H.wake_stalled(c)["retried"] == [task["id"]]
+        # Its session ends without moving it, so it is stalled too: the retry is its wake until the report.
+        c.execute("UPDATE attempts SET state='completed', lease_until=? WHERE id='a1'", (H.shift(H.now(), seconds=-60),))
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        out = H.wake_stalled(c)
+        assert out["woke"] == [] and out["checked"] == [] and out["stuck"] == []
+        # An earlier stall wake today counts in the report with the status check and the retry.
+        c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+                  (H.new_id(), H.shift(H.now(), seconds=-7200), H.KEEPER, "task.stall_wake", task["id"], "{}"))
+        c.execute("UPDATE events SET ts=? WHERE action='task.stuck_retry' AND target=?",
+                  (H.shift(H.now(), seconds=-1900), task["id"]))
+        assert H.wake_stalled(c)["stuck"] == [task["id"]]
+        escalated = c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' AND target=?",
+                              (task["id"],)).fetchone()[0]
+        assert json.loads(escalated)["wakes"] == 3

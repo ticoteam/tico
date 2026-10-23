@@ -23,7 +23,7 @@ TAGS = {
     "Team": "This installation's names and settings.",
     "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
                     "and bot repository access.",
-    "Subscriptions": "Named provider logins on Computers and the one each bot runs on.",
+    "Subscriptions": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
@@ -35,7 +35,7 @@ TAGS = {
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
     "Assistant": "The signed-in person's own private Assistant chat (docs/assistant.md): ask, and confirm what it proposes.",
-    "Goals": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the Goal Manager works out from their KPIs, "
+    "Goals": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the CEO Bot works out from their KPIs, "
              "unless a person set one; check-ins in the owner's words; proposals the owner confirms.",
     "KPIs": "Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, "
             "evidence and a quality, never edited; a correction supersedes the old one.",
@@ -67,12 +67,11 @@ EVENTS_DESCRIPTION = (
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
-    ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Profiles and assignments", "SubscriptionList"),
-    ("/api/v2/subscriptions", "put", "Subscriptions", "assignSubscription", "Assign or clear a subscription", "SubscriptionAssignmentResult"),
+    ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"),
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
     ("/api/v2/subscriptions/refresh", "post", "Subscriptions", "refreshSubscriptionWeekly", "Request a bounded weekly allowance read on its computer", "SubscriptionRefreshResult"),
-    ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "Effective bot subscription", "BotSubscription"),
+    ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
     ("/api/v2/github/product-repos/preview", "get", "Repositories", "previewProductRepository", "Preview an empty private product repository", "ProductRepositoryPreview"),
@@ -365,18 +364,17 @@ STABLE = [
      "The Assistant only: post the list of approvals it is about to approve for you in your chat; only those may then "
      "be approved on your yes", None),
     # Goals and KPIs (docs/goals-and-kpis.md)
-    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBotSwitch",
-     "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), "
-     "how much it does (its level, with each level's sentence and who changed it when), and how many items it put in "
-     "each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own "
-     "for anyone else)", "CeoBotView"),
-    ("/api/v2/ceo-bot", "post", "Goals", "setCeoBotSwitch",
-     "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-     "CeoBotView"),
+    ("/api/v2/ceo-bot", "get", "Goals", "getCeoBot",
+     "The CEO Bot's name, whether its regular checks run, how much it does (its level, with each level's sentence and "
+     "who changed it when), and how many items it put in each person's Needs you today against its cap of 5 "
+     "(everyone's for the owner, admins and the CEO Bot; your own for anyone else)", "CeoBotView"),
     ("/api/v2/ceo-bot/level", "post", "Goals", "setCeoBotLevel",
-     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own "
-     "click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+     "Settings > CEO Bot, \"How much your CEO Bot does\": the owner picks Passive (1), Suggests actions (2) or Acts on "
+     "its own (3) on their own click, logged with who and when. No admin or bot may, the CEO Bot included",
      "CeoBotView"),
+    ("/api/v2/ceo-bot/checks", "post", "Goals", "setCeoBotChecks",
+     "Settings > CEO Bot, \"Regular checks\": the owner turns the KPI pass and the automatic goal colours on or off, "
+     "on their own click. Off, neither runs until they are turned back on. No admin or bot may", "CeoBotView"),
     ("/api/v2/ceo-bot/merge", "post", "Goals", "mergeCeoBotAsks",
      "The CEO Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 tasks where bots ask them the "
      "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
@@ -386,15 +384,15 @@ STABLE = [
      "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
      "CeoBotLevel3OfferResult"),
     ("/api/v2/company", "get", "Goals", "getCompany",
-     "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), "
+     "The company's Vision and Description (the Company section at the top of Goals), "
      "and whether the caller may edit them", "CompanyResult"),
     ("/api/v2/company", "post", "Goals", "updateCompany",
-     "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot "
+     "The owner, on their own click: change the Vision and/or the Description; never an admin or a bot, the CEO Bot "
      "included. Each change is kept with who and when", "CompanyResult"),
     ("/api/v2/company/history", "get", "Goals", "getCompanyHistory",
      "Every change to the Vision and the Description, newest first, with who made it and when", "CompanyHistory"),
     ("/api/v2/goal-manager/turn-on", "post", "Goals", "turnOnGoalManager",
-     "Owner only: add the Goal Manager from the catalog or restore it, and activate it", None),
+     "Owner only: add the CEO Bot from the catalog or restore it, and activate it", None),
     ("/api/v2/goals", "get", "Goals", "listGoals",
      "The caller's own goals, the chain above them and their reports' goals; ?all=true is every goal the caller may read "
      "(?status=red,gray filters); ?owner= names someone else", "GoalList"),
@@ -405,9 +403,9 @@ STABLE = [
      "what the Goals page draws", "GoalTree"),
     ("/api/v2/goals/needs-you", "get", "Goals", "getGoalsNeedsYou",
      "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person "
-     "each is a Goal Manager task (`task`), the one Tasks and Decide show", "GoalsNeedsYou"),
+     "each is a CEO Bot task (`task`), the one Tasks and Decide show", "GoalsNeedsYou"),
     ("/api/v2/goals/refresh", "post", "Goals", "refreshGoalStatuses",
-     "The Goal Manager's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
+     "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
      "GoalRefreshView"),
     ("/api/v2/goals/{gid}", "get", "Goals", "getGoal",
      "One goal with its KPIs, the goals under and above it, tasks, history, recent check-ins and pending proposals", "GoalResult"),
@@ -417,7 +415,7 @@ STABLE = [
      "Set the colour by hand with one sentence (red, yellow, green) or end the goal (done, dropped). It sticks, with the setter's "
      "name, until a person hands it back", "GoalResult"),
     ("/api/v2/goals/{gid}/status/auto", "post", "Goals", "handBackGoalStatus",
-     "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
+     "\"Let CEO Bot set it\": end a colour set by hand; the automatic colour is worked out at once", "GoalResult"),
     ("/api/v2/goals/{gid}/why", "post", "Goals", "setGoalWhy",
      "A person who may edit the goal writes its Why (one line tying it to the vision) or clears it; a bot proposes one "
      "instead (kind goal_why)", "GoalResult"),
@@ -463,15 +461,21 @@ STABLE = [
      "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
-     "The team default limit and each bot's daily and monthly limits with this period's spend, for the bots the caller may "
-     "see usage for", "UsageLimits"),
+     "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
+     "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits", "UsageLimits"),
     ("/api/v2/usage/limits", "put", "Usage", "setUsageDefault",
      "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs "
-     "count toward it (owner and bot administrators)", "UsageDefaultView"),
+     "count toward every limit (owner and bot administrators)", "UsageDefaultView"),
     ("/api/v2/usage/limits/{bot}", "put", "Usage", "setBotUsageLimit",
-     "A bot's own daily and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or "
-     "the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns "
-     "over or the limit is raised", "BotUsageLimit"),
+     "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and "
+     "administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until "
+     "the period turns over or the limit is raised", "BotUsageLimit"),
+    ("/api/v2/usage/pools/company", "put", "Usage", "setTeamUsageLimit",
+     "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot "
+     "takes a new job (owner and bot administrators)", "UsagePoolLimit"),
+    ("/api/v2/usage/pools/groups/{group}", "put", "Usage", "setGroupUsageLimit",
+     "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none "
+     "of them takes a new job (owner and bot administrators)", "UsagePoolLimit"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -502,6 +506,7 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
+PERIODS = ("hourly", "daily", "weekly", "monthly")   # the spend limit periods (backend/usage_limits.py)
 GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
                         "description": "Skipped items in the last attempt, by fixed code and step"}
 GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
@@ -524,14 +529,13 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
 
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
-        obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))})), "assignments": items(obj({"scope": "s", "target": "s", "profile": "s", "updated": "s", "updated_by": "s"}))}),
+        obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),
     "SubscriptionWeeklyResult": obj({"weekly": {"anyOf": [obj({"used_percent": {"type": ["number", "null"]}, "resets_at": "n", "reported_at": "s", "source": {"enum": ["manual"]}}), {"type": "null"}]}}),
     "SubscriptionRefreshResult": obj({"id": "s", "profile": "s", "runtime": "s",
         "state": {"enum": ["requested", "succeeded", "unavailable", "failed", "expired"]},
         "requested_at": "s", "updated_at": "s", "expires_at": "s"}),
-    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["bot"]}, "target": "s", "profile": "n"}),
-    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["bot", "computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
+    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
                             "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
@@ -648,6 +652,10 @@ SCHEMAS = {
                    "public_url": "s", "owner_email": "s", "version": "s",
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
                                      "when absent or invalid; grants no native IPC permission."},
+                   "visuals": {"type": "string", "enum": ["full", "media"],
+                               "description": "How visuals show, from the setup (no switch): full with a separate "
+                                              "visual address; media without one (pictures, video and audio inline, "
+                                              "pages and SVG open in the file viewer)."},
                    "s3_view_urls": {"type": "object", "additionalProperties": {"type": "string"},
                                     "description": "Signed-in callers: bucket -> https base an s3://bucket/key opens at "
                                                    "(base + '/' + key, each segment URL-encoded; TICO_S3_VIEW_URLS)"}},
@@ -708,7 +716,12 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
-    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "family": "n"})),
+    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "effort": "n",
+                                         "family": "n"})),
+                  "task_model": {"type": ["object", "null"], "description": "For a turn in a task's own session on a bot "
+                                 "with a task model: `source` is task (it ran on the task model), fallback (the task "
+                                 "model could not run, so the bot's own model did) or check (a check subtask kept its "
+                                 "check model), and `note` says it in plain words"},
                   "fallback": {"type": ["string", "null"], "description": "The fallback harness that ran the turn, if any"},
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
@@ -820,6 +833,9 @@ SCHEMAS = {
     "Storage": obj({"mode": {"type": "string", "enum": ["local", "s3"]}, "bucket": "s", "region": "s",
                     "files": "i", "bytes": "i", "copy": obj({"done": "i", "total": "i", "failed": "i"})}),
     "Health": obj({"audience": "s", "checks": "a", "attention": "i", "checked": "s"},
+                  stalled_runs=items(obj({"run": "s", "bot": "s", "stalled": "b", "stalled_at": "s",
+                                          "last_event": {"type": ["string", "null"]},
+                                          "last_event_at": {"type": ["string", "null"]}, "stall_minutes": "i"})),
                   required=["audience", "checks", "attention", "checked"],
                   storage={**ref("Storage"), "description": "Read-only file storage usage and copy progress; Team owners only"},
                   stuck={"type": "array", "items": {"type": "object"}, "description":
@@ -879,8 +895,8 @@ SCHEMAS = {
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
                  "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"},
                  "status_note": "s", "status_by": "n", "status_at": "n",
-                 "status_source": {"type": ["string", "null"], "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"},
-                 "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"},
+                 "status_source": {"type": ["string", "null"], "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"},
+                 "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"},
                  "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
                 required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
                           "rank", "created", "created_by", "updated"],
@@ -929,8 +945,7 @@ SCHEMAS = {
     "GoalResult": obj({"goal": {}}),
     "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
                                           "updated_by_name": "s"}),
-                          "on": {"type": "boolean", "description": "Whether the CEO Bot switch is on: the section shows only then"},
-                          "may_edit": {"type": "boolean", "description": "The owner or an admin, never a bot"}}),
+                          "may_edit": {"type": "boolean", "description": "The owner on their own click, never an admin or a bot"}}),
     "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
                                                 "field": {"enum": ["vision", "description"]}, "old": "s", "new": "s"}))}),
     "GoalList": obj({"goals": items(ref("Goal"))}, required=["goals"], owner={"type": "string"},
@@ -942,7 +957,7 @@ SCHEMAS = {
                      "unaligned": {"type": "object", "description": "{actor: open tasks that serve no goal}"},
                      "other_kpis": items(ref("Kpi")), "proposals": items(ref("GoalProposalView"))},
                     required=["goals", "owners", "unaligned", "other_kpis", "proposals"]),
-    "CeoBotView": obj({"on": "b", "name": "s", "changed_by": "s", "changed_at": "s",
+    "CeoBotView": obj({"name": "s", "regular_checks": {"type": "boolean", "description": "Whether the KPI pass and the automatic goal colours run"},
                        "level": {"type": "integer", "enum": [1, 2, 3]},
                        "levels": items(obj({"level": "i", "name": "s", "sentence": "s", "ready": "b"},
                                            required=["level", "name", "sentence", "ready"])),
@@ -952,7 +967,7 @@ SCHEMAS = {
                        "daily_cap": "i", "asked_today": {"type": "object", "additionalProperties": {"type": "integer"},
                                                          "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
                        "level3_offer": ref("CeoBotLevel3Offer")},
-                      required=["on", "name", "level", "levels", "daily_cap"]),
+                      required=["name", "regular_checks", "level", "levels", "daily_cap"]),
     "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
                              required=["streak", "needed", "due"]),
     "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),
@@ -1008,14 +1023,24 @@ SCHEMAS = {
                   "departments": items({"type": "string"}), "bot": "s", "name": "s", "daily": items({"type": "object", "additionalProperties": True}),
                   "routines": items({"type": "object", "additionalProperties": True})},
                  required=["from", "to", "prices_as_of", "totals"]),
-    "UsageLimitView": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "source": {"type": "object", "description": "Where each cap comes "
-                       "from: bot, company or null"}, "day_spent": NUM_N, "month_spent": NUM_N,
-                       "percent": {"type": "integer", "description": "The highest share of a limit reached"},
-                       "blocked": {"enum": ["daily", "monthly", None], "description": "Set while a limit is met: the bot takes no new job"},
-                       "own_daily_usd": NUM_N, "own_monthly_usd": NUM_N, "may_edit": "b"}),
-    "UsageDefaultView": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"})}),
-    "UsageLimits": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"}),
-                        "may_edit_default": "b", "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
+    "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
+                       "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                       "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
+                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
+                                   "the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
+                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                                      "administrators only)", "additionalProperties": True},
+                       **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
+    "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
+    "UsagePoolView": obj({**{p + "_usd": NUM_N for p in PERIODS}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                          "percent": "i", "blocked": {"enum": [*PERIODS, None]}}),
+    "UsagePoolLimit": obj({"scope": {"type": "string", "description": "company or group:<id>"}, "limit": ref("UsagePoolView")}),
+    "UsageLimits": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"}),
+                        "may_edit_default": "b",
+                        "pools": {"type": ["object", "null"], "description": "Owner and administrators: company (UsagePoolView) and "
+                                  "groups, {id: UsagePoolView with name and parent}", "additionalProperties": True},
+                        "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),

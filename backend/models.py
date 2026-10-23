@@ -269,10 +269,17 @@ class TaskTypeUpdate(Contract):
     steps_only: bool | None = None
 
 
+# What a pick says on a person's card (ui/app/question-card.js): `then` is its "what happens" line, under its button;
+# `recommended` pre-ticks it among several picks. A bot's pick to a person needs `then` (hubdb.lint_question).
+OptionThen = Annotated[StrictStr, Field(max_length=120)]
+
+
 class QuestionOption(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: Annotated[StrictStr, Field(pattern=r"^[^@]+@[1-9][0-9]*$")] | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class QuestionFile(Contract):
@@ -293,13 +300,19 @@ class QuestionChoice(Contract):
     label: Annotated[StrictStr, Field(min_length=1, max_length=60)]
     description: Annotated[StrictStr, Field(max_length=200)] = ""
     file: QuestionFile | None = None
+    then: OptionThen = ""
+    recommended: StrictBool = False
 
 
 class TaskQuestion(Contract):
     """One decision put to a person as its own task: created, asked and set waiting on them in one write."""
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
     on: ID
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionChoice] = Field(default_factory=list, max_length=6)
+    # Several picks: each a checkbox, answered with "Yes to all" or "Send ticked".
+    multi: StrictBool = False
     title: Annotated[StrictStr, Field(min_length=1, max_length=300)] | None = None
     body: Text | None = None
     parent: ID | None = None
@@ -323,6 +336,8 @@ class ReviewQuestion(Contract):
     id: Annotated[StrictStr, Field(min_length=1, max_length=40)]
     header: Annotated[StrictStr, Field(max_length=30)]
     question: Annotated[StrictStr, Field(min_length=1, max_length=300)]
+    # The card's one "why it matters" line, under the question.
+    why: Annotated[StrictStr, Field(max_length=200)] = ""
     options: list[QuestionOption] = Field(default_factory=list, max_length=6)
     multi: StrictBool = False
     other: StrictBool = True
@@ -397,6 +412,13 @@ class TaskLink(Contract):
     kind: Literal["session"] | None = None
     # A pull request link: true wakes the owner once when its checks finish, it is reviewed or it ships; false disarms.
     wake_once: bool | None = None
+
+
+class TaskWait(Contract):
+    """What the task waits on: `task:<id>` (blocked_by), `pr:<url>` or `pr:<task>` (until that pull request merges),
+    `release:<tag>` (until that release is published). `remove` takes it off."""
+    on: Annotated[str, Field(min_length=3, max_length=400)]
+    remove: bool = False
 
 
 class TaskRelation(Contract):
@@ -784,6 +806,11 @@ class SubscriptionWeekly(Contract):
 UsageWindow = Annotated[SubscriptionWeekly | None, WrapValidator(_account_or_none)]
 
 
+def _cut(limit):
+    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+
+
 class GoalReadiness(Contract):
     goals: bool = False
     commands: list[SlashCommand] = Field(default_factory=list, max_length=30)
@@ -812,6 +839,8 @@ class ProfileReadiness(GoalReadiness):
     # Its turns on this runtime use the computer's own login (a profile that shares the operator's): one login, held
     # once (backend/login_holds.py canonical).
     shared_login: bool | None = None
+    # Signed in, but its turns can't save a session (Muse Code's data folder): the folder and why, not a sign-in.
+    data_problem: Annotated[str, _cut(500)] = ""
 
 
 class HarnessReadiness(GoalReadiness):
@@ -853,6 +882,7 @@ class RuntimeReadiness(GoalReadiness):
     models: list[ID] = Field(default_factory=list, max_length=50)
     controls: list[Literal["interrupt", "new-session"]] = Field(default_factory=list)
     detail: str = Field(default="", max_length=500)
+    data_problem: Annotated[str, _cut(500)] = ""      # as ProfileReadiness
     # One machine may hold several subscriptions for the same runtime. The runtime row keeps
     # the profile that needs attention first; this is the per-profile breakdown behind it.
     profiles: dict[str, ProfileReadiness] = Field(default_factory=dict, max_length=50)
@@ -957,6 +987,7 @@ class BotReadiness(GoalReadiness):
     # The subscription profile this bot's turns run on, and that profile's own sign-in state.
     profile: str = Field(default="", max_length=100)
     sign_in: Literal["ready", "missing", "failed", "unknown"] = "unknown"
+    data_problem: Annotated[str, _cut(500)] = ""      # its runtime row's (ProfileReadiness): a folder, not a sign-in
     # The bot's declared `access:`, for the Tools row on its page. A runner from before it omits it.
     tools: list[ToolAccess] = Field(default_factory=list, max_length=30)
     # What bot.yaml asks for its mail sending; omitted when it asks for nothing.
@@ -991,11 +1022,6 @@ class ScreenReadiness(Contract):
     reason: Annotated[str, BeforeValidator(lambda v: v[:200] if isinstance(v, str) else v), Field(max_length=200)] = ""
 
 
-def _cut(limit):
-    """A reported string longer than `limit` is cut, never refused: a refused report would hide the computer."""
-    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
-
-
 AppState = Literal["ready", "no_permission", "not_installed", "not_signed_in", "needs_foreground", "ui_changed",
                    "no_driver", "error"]
 APP_STATES = AppState.__args__
@@ -1028,6 +1054,8 @@ class AppDriverReadiness(Contract):
 
 
 class StructuredReadiness(Contract):
+    # Physical home of the computer's one login; present only after the computer_logins_v1 handshake.
+    computer_profile: str | None = Field(default=None, max_length=80)
     worktrees: bool | None = None
     # Prepares a worktree reserved for a waiting task while its bot is idle (backend/worktree_waits.py).
     worktree_waits: bool | None = None
@@ -1100,13 +1128,6 @@ class ComputerProfile(Contract):
     runtimes: dict[str, SubscriptionRuntime] = Field(default_factory=dict, max_length=20)
 
 
-class SubscriptionAssignment(Contract):
-    # Only a bot chooses a subscription; a group no longer gives its bots one.
-    scope: Literal["bot"] = "bot"
-    target: str = Field(min_length=1, max_length=100)
-    profile: str | None = Field(default=None, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)
-
-
 class WorktreeStatus(Contract):
     repo: str | None = Field(default=None, max_length=200)
     last_activity: float | None = Field(default=None, ge=0)
@@ -1135,7 +1156,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1535,13 +1556,19 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotTaskModel(Contract):
+    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
+                                                 "null is the same as the bot")
+    expected_revision: int = Field(ge=1)
+
+
 class BotCompactAt(Contract):
     compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
 
 
 class BotWakePreset(Contract):
-    wake_preset: Literal["current", "token_saver", "performance"]
+    wake_preset: Literal["current", "token_saver", "performance"] = Field(description="Token saver or Performance; legacy current is accepted as an alias for Performance.")
     expected_revision: int = Field(ge=1)
 
 
@@ -1604,7 +1631,7 @@ class UsageCount(Contract):
     enabled: bool
 
 
-class CeoBotSwitch(Contract):
+class CeoBotChecks(Contract):
     on: bool
 
 
@@ -1783,8 +1810,20 @@ class Claim(Contract):
     next_run: bool = False
 
 
+class LoadSnapshot(Contract):
+    at: float = Field(ge=0, allow_inf_nan=False)
+    cpu_pct: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mem_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    running_turns: int = Field(ge=0, le=10_000)
+
+
 class Started(Contract):
     thread_id: ID
+    load_snapshot: LoadSnapshot | None = None
+
+
+class AttemptStderr(Contract):
+    tail: str = Field(max_length=65536)
 
 
 class Event(Contract):
@@ -1795,6 +1834,19 @@ class Event(Contract):
 
 class EventBatch(Contract):
     events: list[Event] = Field(min_length=1, max_length=100)
+
+
+class BackgroundCommand(Contract):
+    description: str = Field(default="", max_length=300)
+    exit: int | None = Field(default=None, ge=-255, le=255)
+    killed: bool = False
+    ci_watch: dict[str, int] | None = None
+    tail: str = Field(default="", max_length=2000)
+
+
+class BackgroundDone(Contract):
+    """The commands a Claude turn left running when it ended on its wait, all ended (runner-rs/src/afterwatch.rs)."""
+    commands: list[BackgroundCommand] = Field(min_length=1, max_length=20)
 
 
 class StreamCapture(Contract):
@@ -1839,12 +1891,14 @@ class RunUsage(RunUsagePart):
 
 
 class UsageLimit(Contract):
+    hourly_usd: float | None = None
     daily_usd: float | None = None
+    weekly_usd: float | None = None
     monthly_usd: float | None = None
 
 
 class UsageDefault(UsageLimit):
-    count_subscription: bool = False
+    count_subscription: bool = True
 
 
 class SubscriptionUnavailable(Contract):
@@ -1853,7 +1907,13 @@ class SubscriptionUnavailable(Contract):
     problem: str = Field(min_length=1, max_length=500)
 
 
+class RunPush(Contract):
+    path: str = Field(min_length=1, max_length=1000)  # the worktree, as its task link records it
+    count: int = Field(ge=1, le=1000)
+
+
 class Completion(Contract):
+    load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
@@ -1865,6 +1925,9 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
+    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
+    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    yielded: bool = False
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
@@ -1873,6 +1936,9 @@ class Completion(Contract):
     # Inputs this run took from `attempts/{aid}/inputs` but never gave the runtime (the turn ended between
     # the poll and the steer). They go back to the queue whatever the outcome, not settled with the run.
     undelivered: list[ID] = Field(default_factory=list, max_length=100)
+    # Git pushes the run made from its task's worktrees (runner-rs/src/worktrees.rs pushes): writes Tico sees no
+    # other way. Counted in its `writes` (backend/run_triggers.py).
+    pushes: list[RunPush] = Field(default_factory=list, max_length=50)
 
 
 class Retry(Contract):
@@ -1940,6 +2006,14 @@ class TaskDefer(Contract):
 
 class Empty(Contract):
     pass
+
+
+class SystemRoutineUpdate(Contract):
+    """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
+    changes."""
+    on: bool | None = None
+    preset: Literal["15m", "hourly", "4h", "daily"] | None = None
+    at: str | None = Field(default=None, max_length=5)
 
 
 class LimitRetry(Contract):
@@ -2013,6 +2087,7 @@ class PerformanceProcess(_Sampled):
 
 
 class PerformanceSample(_Sampled):
+    interval_s: Literal[30, 60] = 30  # old runners sample twice a minute
     at: float = Field(ge=0, allow_inf_nan=False)
     scope: Literal["host", "container"] = "host"
     # A container's memory is the host's when it has no memory limit; an older runner leaves this out.
@@ -2024,6 +2099,9 @@ class PerformanceSample(_Sampled):
     mem_used: Bytes | None = None
     swap_total: Bytes | None = None
     swap_used: Bytes | None = None
+    # Raw swap for the simple load reading; macOS omits diagnostic swap because its total grows with use.
+    load_swap_total: Bytes | None = None
+    load_swap_used: Bytes | None = None
     disk: list[PerformanceDisk] = Field(default_factory=list, max_length=4)
     active: int = Field(default=0, ge=0, le=10_000)
     procs: list[PerformanceProcess] = Field(default_factory=list, max_length=16)

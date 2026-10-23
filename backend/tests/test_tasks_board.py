@@ -53,7 +53,7 @@ def post(api, path, body, token="ana-test", expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == expected, r.text
     data = r.json()
-    return data["task"] if isinstance(data, dict) and set(data) == {"task"} else data
+    return data["task"] if isinstance(data, dict) and "task" in data and set(data) <= {"task", "readback"} else data
 
 
 def relate(api, tid, other, kind="related", token="ana-test", expected=200, remove=False):
@@ -236,6 +236,15 @@ def test_a_person_mentioned_in_a_comment_gets_it_as_a_question_in_needs_you(api)
     with api.app.state.store.read() as c:
         assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
         assert task["id"] not in {t["id"] for t in H.needs_you(c, "human:priya")["tasks"]}
+
+
+def test_a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
+    task = post(api, "tasks", {"owner": "ben", "title": "Book the venue", "body": "x"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you book it by Friday?"})
+    assert said["comment"]["kind"] == "ask" and said["comment"]["to_actor"] == "human:ben"
+    assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["@ben can you book it by Friday?"]
+    with api.app.state.store.read() as c:
+        assert task["id"] in {t["id"] for t in H.needs_you(c, "human:ben")["tasks"]}
 
 
 def test_mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):

@@ -436,6 +436,9 @@ def _waiting(c, online_ids, settings=None):
         if runner_id not in holding:
             holding[runner_id] = holding_turns(c, turns.get(runner_id, []))
         return holding[runner_id]
+    # A turn waiting for its shared login is busy, not stuck, unless what holds the login is no run Tico knows.
+    from .login_waits import unknown_holder
+    orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     for bot in c.execute("SELECT slug,display_name FROM bots WHERE state='active' ORDER BY slug"):
         slug = bot["slug"]
@@ -443,6 +446,9 @@ def _waiting(c, online_ids, settings=None):
         where = assigned.get(slug)
         row = {"bot": slug, "name": bot["display_name"] or slug, "queued": count, "oldest": oldest,
                "computer": where[1] if where else ""}
+        if slug in orphaned and where and where[0] in online_ids:
+            stuck.append({**row, "reason": "login_holder_unknown", "runner_id": where[0], "runtime": ""})
+            continue
         report = report_for(slug, where) if count else {}
         if where and where[0] not in online_ids:
             waiting.append({**row, "reason": "computer_offline"})
@@ -540,9 +546,14 @@ HELD = {
     "lane_held": ("{computer} still runs an earlier turn of this bot whose lease lapsed: the next starts when it ends",
                   RUNS),
     "uncertain": ("An interrupted run on the same task or chat waits for review in Runs", RUNS),
+    # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
+    "login_holder_unknown": ("Its turn waits for {computer}'s ChatGPT login, held by a run that is not running in "
+                             "Tico: restart the runner on {computer} to free it", COMPUTERS),
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
+                      COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
                      "model or computer", BOT_SETTINGS),
@@ -1256,6 +1267,17 @@ def view(c, who, settings, auth, github, config):
                     f"{H.actor_id(w['owner'])}: {w['repo']}, {'setting up' if w['state'] == 'reserved' else 'no room'} "
                     f"for {age(w['created'])} ({w['reason']})" for w in waits[:3])
                     + ('.' if len(waits) <= 3 else f'; and {len(waits) - 3} more.'), [_fix('Open tasks', '#/tasks')]))
+            # What freed a place lately, and why (backend/worktrees.py released_event): finished work releasing its
+            # tree is the normal way room comes back, so it is said, not warned about.
+            since = H.shift(H.now(), hours=-24)
+            reasons = {}
+            for (reason,) in c.execute("SELECT json_extract(detail_json,'$.reason') FROM events "
+                                       "WHERE action='worktree.released' AND ts>=?", (since,)):
+                reasons[reason or 'cleanup'] = reasons.get(reason or 'cleanup', 0) + 1
+            if reasons:
+                checks.append(_check('worktrees_released', 'Worktrees released (24 h)', 'info', '; '.join(
+                    f'worktree released: {reason} ({n})' for reason, n in sorted(reasons.items())) + '.',
+                    [_fix('Open tasks', '#/tasks')]))
     if full:
         from . import task_loops
         if loops := task_loops.looping(c):
@@ -1298,21 +1320,6 @@ def view(c, who, settings, auth, github, config):
                              + ("" if len(copies) <= 3 else f"; and {len(copies) - 3} more")
                              + ". Restart that computer's runner to retry now.",
                              [_fix("Open Computers", "#/settings", "devices")]))
-    from .subscriptions import bot_subscription, effective, context
-    subscription_context = context(c, settings)
-    subscription_problems = []
-    subscription_access = auth.bot_accesses(c, who)
-    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived'"):
-        if not full and not (subscription_access.get(row['bot']) or {}).get('see'):
-            continue
-        if effective(c, row['bot'], subscription_context)[0] is None:
-            continue
-        subscription = bot_subscription(c, row['bot'], settings, subscription_context)
-        if subscription['problem']:
-            subscription_problems.append(row['bot'] + ': ' + subscription['problem'])
-    if subscription_problems:
-        checks.append(_check("subscriptions", "Subscriptions", "warn", "; ".join(subscription_problems[:5]),
-                             [_fix("Open Computers", "#/settings", "devices")]))
     from .app_delivery import health_problems
     for key, summary in health_problems(c, who, auth, online_ids):
         checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
@@ -1330,6 +1337,14 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
+
+    from .performance import load_status
+    for computer in computers:
+        load = load_status(c, computer["id"])
+        if load["overloaded"]:
+            checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
+                                 f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
+                                 [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:
         for computer in computers:
@@ -1511,6 +1526,12 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    from . import run_diagnostics
+    stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
+    checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",
+                         f"{len(stalled_runs)} runs have no heartbeat or event for {run_diagnostics.STALL_MINUTES} minutes."
+                         if stalled_runs else "No stalled runs.",
+                         [_fix("Open Runs", "#/settings", "runs")] if stalled_runs else []))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
                          [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
@@ -1518,7 +1539,7 @@ def view(c, who, settings, auth, github, config):
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
             "on_fallback": on_fallback, "limited": limited,
-            "failures": failures if full or kind == "bot" else [], "checked": H.now(),
+            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs, "checked": H.now(),
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}
 

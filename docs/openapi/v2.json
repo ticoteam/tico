@@ -20,7 +20,7 @@
     },
     {
       "name": "Subscriptions",
-      "description": "Named provider logins on Computers and the one each bot runs on."
+      "description": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it."
     },
     {
       "name": "Team chart",
@@ -68,7 +68,7 @@
     },
     {
       "name": "Goals",
-      "description": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the Goal Manager works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms."
+      "description": "What every person and bot is for (docs/goals-and-kpis.md): goals with a colour the CEO Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms."
     },
     {
       "name": "KPIs",
@@ -1683,7 +1683,7 @@
     },
     "/api/v2/bots/{bot}/subscription": {
       "get": {
-        "summary": "Effective bot subscription",
+        "summary": "The Computer login a bot runs on",
         "operationId": "getBotSubscription",
         "parameters": [
           {
@@ -2136,8 +2136,8 @@
     },
     "/api/v2/ceo-bot": {
       "get": {
-        "summary": "Whether this install has the CEO Bot switch on (the Goal Manager shown as the CEO Bot, at the top of the chart), how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
-        "operationId": "getCeoBotSwitch",
+        "summary": "The CEO Bot's name, whether its regular checks run, how much it does (its level, with each level's sentence and who changed it when), and how many items it put in each person's Needs you today against its cap of 5 (everyone's for the owner, admins and the CEO Bot; your own for anyone else)",
+        "operationId": "getCeoBot",
         "responses": {
           "200": {
             "description": "OK",
@@ -2173,15 +2173,17 @@
         "tags": [
           "Goals"
         ]
-      },
+      }
+    },
+    "/api/v2/ceo-bot/checks": {
       "post": {
-        "summary": "Owners and admins: turn the CEO Bot switch on or off for this install; no bot may. Only names and the chart change",
-        "operationId": "setCeoBotSwitch",
+        "summary": "Settings > CEO Bot, \"Regular checks\": the owner turns the KPI pass and the automatic goal colours on or off, on their own click. Off, neither runs until they are turned back on. No admin or bot may",
+        "operationId": "setCeoBotChecks",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CeoBotSwitch"
+                "$ref": "#/components/schemas/CeoBotChecks"
               }
             }
           },
@@ -2237,7 +2239,7 @@
     },
     "/api/v2/ceo-bot/level": {
       "post": {
-        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner or an admin picks level 1, 2 or 3 on their own click, logged with who and when. No bot may, the CEO Bot included. 409 while the switch is off",
+        "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner picks Passive (1), Suggests actions (2) or Acts on its own (3) on their own click, logged with who and when. No admin or bot may, the CEO Bot included",
         "operationId": "setCeoBotLevel",
         "requestBody": {
           "content": {
@@ -2742,7 +2744,7 @@
     },
     "/api/v2/company": {
       "get": {
-        "summary": "The company's Vision and Description (the Company section at the top of Goals where the CEO Bot switch is on), and whether the caller may edit them",
+        "summary": "The company's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them",
         "operationId": "getCompany",
         "responses": {
           "200": {
@@ -2781,7 +2783,7 @@
         ]
       },
       "post": {
-        "summary": "The owner or an admin, on their own click: change the Vision and/or the Description; never a bot, the CEO Bot included. Each change is kept with who and when",
+        "summary": "The owner, on their own click: change the Vision and/or the Description; never an admin or a bot, the CEO Bot included. Each change is kept with who and when",
         "operationId": "updateCompany",
         "requestBody": {
           "content": {
@@ -5502,7 +5504,7 @@
     },
     "/api/v2/goal-manager/turn-on": {
       "post": {
-        "summary": "Owner only: add the Goal Manager from the catalog or restore it, and activate it",
+        "summary": "Owner only: add the CEO Bot from the catalog or restore it, and activate it",
         "operationId": "turnOnGoalManager",
         "requestBody": {
           "content": {
@@ -5707,7 +5709,7 @@
     },
     "/api/v2/goals/needs-you": {
       "get": {
-        "summary": "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person each is a Goal Manager task (`task`), the one Tasks and Decide show",
+        "summary": "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person each is a CEO Bot task (`task`), the one Tasks and Decide show",
         "operationId": "getGoalsNeedsYou",
         "responses": {
           "200": {
@@ -5748,7 +5750,7 @@
     },
     "/api/v2/goals/refresh": {
       "post": {
-        "summary": "The Goal Manager's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
+        "summary": "The CEO Bot's status pass (or the owner's): work automatic colours out again. A colour a person set only gets a suggestion",
         "operationId": "refreshGoalStatuses",
         "requestBody": {
           "content": {
@@ -6395,7 +6397,7 @@
     },
     "/api/v2/goals/{gid}/status/auto": {
       "post": {
-        "summary": "\"Let Goal Manager set it\": end a colour set by hand; the automatic colour is worked out at once",
+        "summary": "\"Let CEO Bot set it\": end a colour set by hand; the automatic colour is worked out at once",
         "operationId": "handBackGoalStatus",
         "parameters": [
           {
@@ -12357,7 +12359,7 @@
     },
     "/api/v2/subscriptions": {
       "get": {
-        "summary": "Profiles and assignments",
+        "summary": "Subscription logins reported by each Computer",
         "operationId": "listSubscriptions",
         "responses": {
           "200": {
@@ -12366,55 +12368,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SubscriptionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Subscriptions"
-        ]
-      },
-      "put": {
-        "summary": "Assign or clear a subscription",
-        "operationId": "assignSubscription",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscriptionAssignment"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubscriptionAssignmentResult"
                 }
               }
             }
@@ -14702,6 +14655,12 @@
                                   "title": "Question",
                                   "type": "string"
                                 },
+                                "why": {
+                                  "default": "",
+                                  "maxLength": 200,
+                                  "title": "Why",
+                                  "type": "string"
+                                },
                                 "options": {
                                   "items": {
                                     "additionalProperties": false,
@@ -14729,6 +14688,17 @@
                                           }
                                         ],
                                         "title": "File"
+                                      },
+                                      "then": {
+                                        "default": "",
+                                        "maxLength": 120,
+                                        "title": "Then",
+                                        "type": "string"
+                                      },
+                                      "recommended": {
+                                        "default": false,
+                                        "title": "Recommended",
+                                        "type": "boolean"
                                       }
                                     },
                                     "required": [
@@ -16155,7 +16125,7 @@
     },
     "/api/v2/usage/limits": {
       "get": {
-        "summary": "The team default limit and each bot's daily and monthly limits with this period's spend, for the bots the caller may see usage for",
+        "summary": "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits",
         "operationId": "getUsageLimits",
         "responses": {
           "200": {
@@ -16194,7 +16164,7 @@
         ]
       },
       "put": {
-        "summary": "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward it (owner and bot administrators)",
+        "summary": "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs count toward every limit (owner and bot administrators)",
         "operationId": "setUsageDefault",
         "requestBody": {
           "content": {
@@ -16245,7 +16215,7 @@
     },
     "/api/v2/usage/limits/{bot}": {
       "put": {
-        "summary": "A bot's own daily and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns over or the limit is raised",
+        "summary": "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns over or the limit is raised",
         "operationId": "setBotUsageLimit",
         "parameters": [
           {
@@ -16275,6 +16245,119 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotUsageLimit"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ]
+      }
+    },
+    "/api/v2/usage/pools/company": {
+      "put": {
+        "summary": "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot takes a new job (owner and bot administrators)",
+        "operationId": "setTeamUsageLimit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePoolLimit"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Usage"
+        ]
+      }
+    },
+    "/api/v2/usage/pools/groups/{group}": {
+      "put": {
+        "summary": "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none of them takes a new job (owner and bot administrators)",
+        "operationId": "setGroupUsageLimit",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Group"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePoolLimit"
                 }
               }
             }
@@ -18100,7 +18183,6 @@
           },
           "source": {
             "enum": [
-              "bot",
               "computer"
             ]
           },
@@ -18373,6 +18455,20 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotChecks": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "CeoBotChecks"
+      },
       "CeoBotLevel": {
         "properties": {
           "level": {
@@ -18513,34 +18609,15 @@
         ],
         "additionalProperties": true
       },
-      "CeoBotSwitch": {
-        "properties": {
-          "on": {
-            "type": "boolean",
-            "title": "On"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "on"
-        ],
-        "title": "CeoBotSwitch"
-      },
       "CeoBotView": {
         "type": "object",
         "properties": {
-          "on": {
-            "type": "boolean"
-          },
           "name": {
             "type": "string"
           },
-          "changed_by": {
-            "type": "string"
-          },
-          "changed_at": {
-            "type": "string"
+          "regular_checks": {
+            "type": "boolean",
+            "description": "Whether the KPI pass and the automatic goal colours run"
           },
           "level": {
             "type": "integer",
@@ -18635,7 +18712,7 @@
           "level",
           "levels",
           "name",
-          "on"
+          "regular_checks"
         ],
         "additionalProperties": true
       },
@@ -19046,19 +19123,14 @@
             ],
             "additionalProperties": true
           },
-          "on": {
-            "type": "boolean",
-            "description": "Whether the CEO Bot switch is on: the section shows only then"
-          },
           "may_edit": {
             "type": "boolean",
-            "description": "The owner or an admin, never a bot"
+            "description": "The owner on their own click, never an admin or a bot"
           }
         },
         "required": [
           "company",
-          "may_edit",
-          "on"
+          "may_edit"
         ],
         "additionalProperties": true
       },
@@ -19120,6 +19192,14 @@
           "visual_origin": {
             "type": "string",
             "description": "Configured non-secret visual origin, or empty when absent or invalid; grants no native IPC permission."
+          },
+          "visuals": {
+            "type": "string",
+            "enum": [
+              "full",
+              "media"
+            ],
+            "description": "How visuals show, from the setup (no switch): full with a separate visual address; media without one (pictures, video and audio inline, pages and SVG open in the file viewer)."
           },
           "s3_view_urls": {
             "type": "object",
@@ -20211,14 +20291,14 @@
               "string",
               "null"
             ],
-            "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+            "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
           },
           "suggest_status": {
             "type": [
               "string",
               "null"
             ],
-            "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+            "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
           },
           "suggest_note": {
             "type": [
@@ -21048,14 +21128,14 @@
                   "string",
                   "null"
                 ],
-                "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+                "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
               },
               "suggest_status": {
                 "type": [
                   "string",
                   "null"
                 ],
-                "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+                "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
               },
               "suggest_note": {
                 "type": [
@@ -21260,14 +21340,14 @@
                     "string",
                     "null"
                   ],
-                  "description": "auto: worked out by the Goal Manager; person: set by hand and kept until handed back"
+                  "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"
                 },
                 "suggest_status": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "On a colour set by hand: the colour the Goal Manager would choose, when it differs"
+                  "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"
                 },
                 "suggest_note": {
                   "type": [
@@ -22081,6 +22161,51 @@
           },
           "checked": {
             "type": "string"
+          },
+          "stalled_runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run": {
+                  "type": "string"
+                },
+                "bot": {
+                  "type": "string"
+                },
+                "stalled": {
+                  "type": "boolean"
+                },
+                "stalled_at": {
+                  "type": "string"
+                },
+                "last_event": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_event_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stall_minutes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bot",
+                "last_event",
+                "last_event_at",
+                "run",
+                "stall_minutes",
+                "stalled",
+                "stalled_at"
+              ],
+              "additionalProperties": true
+            }
           },
           "storage": {
             "$ref": "#/components/schemas/Storage",
@@ -25230,6 +25355,17 @@
               }
             ],
             "title": "File"
+          },
+          "then": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Then",
+            "default": ""
+          },
+          "recommended": {
+            "type": "boolean",
+            "title": "Recommended",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -25271,6 +25407,12 @@
                     "null"
                   ]
                 },
+                "effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "family": {
                   "type": [
                     "string",
@@ -25279,6 +25421,7 @@
                 }
               },
               "required": [
+                "effort",
                 "family",
                 "harness",
                 "model",
@@ -25287,6 +25430,13 @@
               ],
               "additionalProperties": true
             }
+          },
+          "task_model": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For a turn in a task's own session on a bot with a task model: `source` is task (it ran on the task model), fallback (the task model could not run, so the bot's own model did) or check (a check subtask kept its check model), and `note` says it in plain words"
           },
           "fallback": {
             "type": [
@@ -25306,7 +25456,8 @@
         "required": [
           "fallback",
           "family",
-          "segments"
+          "segments",
+          "task_model"
         ],
         "additionalProperties": true
       },
@@ -25920,6 +26071,12 @@
             "maxLength": 300,
             "minLength": 1,
             "title": "Question"
+          },
+          "why": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Why",
+            "default": ""
           },
           "options": {
             "items": {
@@ -26584,66 +26741,6 @@
         ],
         "additionalProperties": true
       },
-      "SubscriptionAssignment": {
-        "properties": {
-          "scope": {
-            "type": "string",
-            "const": "bot",
-            "title": "Scope",
-            "default": "bot"
-          },
-          "target": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Target"
-          },
-          "profile": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Profile"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "target"
-        ],
-        "title": "SubscriptionAssignment"
-      },
-      "SubscriptionAssignmentResult": {
-        "type": "object",
-        "properties": {
-          "scope": {
-            "enum": [
-              "bot"
-            ]
-          },
-          "target": {
-            "type": "string"
-          },
-          "profile": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "profile",
-          "scope",
-          "target"
-        ],
-        "additionalProperties": true
-      },
       "SubscriptionIdentity": {
         "type": "object",
         "properties": {
@@ -26709,41 +26806,9 @@
               ],
               "additionalProperties": true
             }
-          },
-          "assignments": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "scope": {
-                  "type": "string"
-                },
-                "target": {
-                  "type": "string"
-                },
-                "profile": {
-                  "type": "string"
-                },
-                "updated": {
-                  "type": "string"
-                },
-                "updated_by": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "profile",
-                "scope",
-                "target",
-                "updated",
-                "updated_by"
-              ],
-              "additionalProperties": true
-            }
           }
         },
         "required": [
-          "assignments",
           "profiles_by_computer"
         ],
         "additionalProperties": true
@@ -29529,6 +29594,17 @@
       },
       "UsageDefault": {
         "properties": {
+          "hourly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hourly Usd"
+          },
           "daily_usd": {
             "anyOf": [
               {
@@ -29539,6 +29615,17 @@
               }
             ],
             "title": "Daily Usd"
+          },
+          "weekly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Usd"
           },
           "monthly_usd": {
             "anyOf": [
@@ -29554,7 +29641,7 @@
           "count_subscription": {
             "type": "boolean",
             "title": "Count Subscription",
-            "default": false
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -29567,7 +29654,19 @@
           "default": {
             "type": "object",
             "properties": {
+              "hourly_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "daily_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "weekly_usd": {
                 "type": [
                   "number",
                   "null"
@@ -29586,7 +29685,9 @@
             "required": [
               "count_subscription",
               "daily_usd",
-              "monthly_usd"
+              "hourly_usd",
+              "monthly_usd",
+              "weekly_usd"
             ],
             "additionalProperties": true
           }
@@ -29647,6 +29748,17 @@
       },
       "UsageLimit": {
         "properties": {
+          "hourly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hourly Usd"
+          },
           "daily_usd": {
             "anyOf": [
               {
@@ -29657,6 +29769,17 @@
               }
             ],
             "title": "Daily Usd"
+          },
+          "weekly_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weekly Usd"
           },
           "monthly_usd": {
             "anyOf": [
@@ -29677,7 +29800,19 @@
       "UsageLimitView": {
         "type": "object",
         "properties": {
+          "hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "weekly_usd": {
             "type": [
               "number",
               "null"
@@ -29693,7 +29828,19 @@
             "type": "object",
             "description": "Where each cap comes from: bot, company or null"
           },
+          "hour_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "day_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week_spent": {
             "type": [
               "number",
               "null"
@@ -29707,17 +29854,39 @@
           },
           "percent": {
             "type": "integer",
-            "description": "The highest share of a limit reached"
+            "description": "The highest share of one of the bot's own limits reached"
           },
           "blocked": {
             "enum": [
+              "hourly",
               "daily",
+              "weekly",
               "monthly",
               null
             ],
-            "description": "Set while a limit is met: the bot takes no new job"
+            "description": "Set while a limit is met, the bot's own or a pool's: the bot takes no new job"
+          },
+          "blocked_by": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Whose limit holds the bot: scope (bot, company or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and administrators only)",
+            "additionalProperties": true
+          },
+          "own_hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "own_daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "own_weekly_usd": {
             "type": [
               "number",
               "null"
@@ -29735,15 +29904,22 @@
         },
         "required": [
           "blocked",
+          "blocked_by",
           "daily_usd",
           "day_spent",
+          "hour_spent",
+          "hourly_usd",
           "may_edit",
           "month_spent",
           "monthly_usd",
           "own_daily_usd",
+          "own_hourly_usd",
           "own_monthly_usd",
+          "own_weekly_usd",
           "percent",
-          "source"
+          "source",
+          "week_spent",
+          "weekly_usd"
         ],
         "additionalProperties": true
       },
@@ -29753,7 +29929,19 @@
           "default": {
             "type": "object",
             "properties": {
+              "hourly_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "daily_usd": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "weekly_usd": {
                 "type": [
                   "number",
                   "null"
@@ -29772,12 +29960,22 @@
             "required": [
               "count_subscription",
               "daily_usd",
-              "monthly_usd"
+              "hourly_usd",
+              "monthly_usd",
+              "weekly_usd"
             ],
             "additionalProperties": true
           },
           "may_edit_default": {
             "type": "boolean"
+          },
+          "pools": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Owner and administrators: company (UsagePoolView) and groups, {id: UsagePoolView with name and parent}",
+            "additionalProperties": true
           },
           "bots": {
             "type": "object",
@@ -29789,7 +29987,103 @@
         "required": [
           "bots",
           "default",
-          "may_edit_default"
+          "may_edit_default",
+          "pools"
+        ],
+        "additionalProperties": true
+      },
+      "UsagePoolLimit": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "company or group:<id>"
+          },
+          "limit": {
+            "$ref": "#/components/schemas/UsagePoolView"
+          }
+        },
+        "required": [
+          "limit",
+          "scope"
+        ],
+        "additionalProperties": true
+      },
+      "UsagePoolView": {
+        "type": "object",
+        "properties": {
+          "hourly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "daily_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "weekly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "monthly_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "hour_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "day_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "week_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "month_spent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "percent": {
+            "type": "integer"
+          },
+          "blocked": {
+            "enum": [
+              "hourly",
+              "daily",
+              "weekly",
+              "monthly",
+              null
+            ]
+          }
+        },
+        "required": [
+          "blocked",
+          "daily_usd",
+          "day_spent",
+          "hour_spent",
+          "hourly_usd",
+          "month_spent",
+          "monthly_usd",
+          "percent",
+          "week_spent",
+          "weekly_usd"
         ],
         "additionalProperties": true
       },

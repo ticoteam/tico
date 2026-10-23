@@ -33,7 +33,12 @@ def tick(api, when):
         # The creates above computed next_due from the real clock; the tests run at AT.
         c.execute("UPDATE schedules SET next_due=NULL, last_fired=? WHERE next_due IS NOT NULL",
                   (AT.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),))
-    return scheduler(api).tick(when)
+    result = scheduler(api).tick(when)
+    # A routine starts held under Performance. The next planner pass releases a first occurrence immediately.
+    from backend import wake_presets
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.now())
+    return result
 
 
 def setup(api):
@@ -102,6 +107,32 @@ def test_who_may_write_a_bots_routines(api):
     assert rows(api, "ops", token=attempt["token"])[0]["key"] == "weekly"
 
 
+def test_a_manager_bot_reads_its_reports_routines_and_no_other_bot_does(api):
+    # ops reports to cpo: cpo's own run reads ops's routines and their occurrences; finance, beside it, cannot.
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot IN ('cpo','finance')")
+    tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))
+    ben = runner(api, "ben", "Ben Mac")
+
+    def place(computer, bot):
+        with api.app.state.store.read() as c:
+            placed = c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()
+        assign(api, computer, bot, generation=placed[0] if placed else 0)
+        ready(api, computer, [bot])
+        post(api, "chat/" + bot, {"text": "How are your reports doing?"})
+        return claim(api, computer, bot=bot)
+
+    manager = place(ben, "cpo")
+    assert [row["key"] for row in rows(api, "ops", token=manager["token"])] == ["audit", "weekly"]
+    assert get(api, "routines/ops:audit/occurrences", token=manager["token"])["occurrences"]
+    create(api, "ops", DEBRIEF, token=manager["token"], expected=403)
+    other = place(r, "finance")
+    get(api, "bots/ops/routines", token=other["token"], expected=403)
+    get(api, "routines/ops:audit/occurrences", token=other["token"], expected=403)
+
+
 def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api):
     r = setup(api)
     fired = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"]
@@ -121,6 +152,10 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
     # A routine whose task a machine already holds is removed without touching that attempt.
     post(api, "routines/ops:weekly", {"enabled": False})
     assert len(tick(api, datetime(2026, 9, 21, 14, tzinfo=timezone.utc))["fired"]) == 1
+    # The occurrence clock moved a week; advance the wake planner too, beyond the earlier unclaimed sweep.
+    from backend import wake_presets
+    with api.app.state.store.transaction() as c:
+        wake_presets.tick(c, H.shift(H.now(), days=7))
     attempt = claim(api, r)
     post(api, "routines/ops:audit/delete", {})
     with api.app.state.store.read() as c:

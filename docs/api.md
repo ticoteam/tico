@@ -28,7 +28,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
 | Repositories | Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
-| Subscriptions | Named provider logins on Computers and the one each bot runs on. |
+| Subscriptions | Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
 | Conversations | Chats with bots: send, list, and stream replies. |
@@ -40,7 +40,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
 | Assistant | The signed-in person's own private Assistant chat ([guide](assistant.md)): ask, and confirm what it proposes. |
-| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Goal Manager works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
+| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the CEO Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
 | KPIs | Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, evidence and a quality, never edited; a correction supersedes the old one. |
 | Usage | Estimated model spend per bot ([guide](usage.md)): tokens counted by each run's computer, priced at list price. |
 | Health | Whether the installation is working. |

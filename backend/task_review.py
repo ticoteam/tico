@@ -89,11 +89,25 @@ def file_added(c, who, task_id, item, number, poster=None):
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
 
-def check_ask(c, task_id, ask, auth, who):
+def check_ask(c, task_id, ask, auth, who, lint=True):
+    """The ask a comment or file version puts, as stored, after its checks. A bot's ask to a person also keeps the
+    asking rules (hubdb.lint_question), unless the caller checked them already (`lint` false)."""
     if not ask:
         return None
     value = ask.model_dump(exclude_none=True)
     value["who"] = ask.who
+    for question in value["questions"]:
+        # The card fields a question leaves out are not stored, so refs read as before for an ask without them.
+        if not question.get("why"):
+            question.pop("why", None)
+        for option in question["options"]:
+            if not option.get("then"):
+                option.pop("then", None)
+            if not option.get("recommended"):
+                option.pop("recommended", None)
+    if lint and who.role == "bot":
+        row = H.task(c, task_id)
+        H.require_plain_question(c, who.actor, H.task_ask_recipient(c, who.actor, row, value), ask.questions)
     if ask.who:
         target = H.resolve_actor(c, ask.who)
         if not H.bot(c, H.actor_id(target)) and not H.human(c, H.actor_id(target)):
@@ -221,6 +235,10 @@ def answer_task(c, auth, who, task_id, body, wake):
         # Other text is allowed when at least one question offers a free-text answer.
         if body.other and not any(q["other"] for q in questions.values()):
             raise Problem("validation", "Other text is not allowed for this question", 422)
+    # Several picks answered with some left unticked: the bot hears each of those as "not this one" (the card's
+    # Send ticked), the note saying what instead.
+    passed = {} if body.dismiss else {qid: [o["label"] for o in q["options"] if o["label"] not in body.answers[qid]]
+                                      for qid, q in questions.items() if q.get("multi") and body.answers[qid]}
     by = H.human(c, H.actor_id(who.actor)) if H.is_human(who.actor) else H.bot(c, H.actor_id(who.actor))
     name = readable_text((by or {}).get("name") or H.actor_id(who.actor))
     subject = f'"{readable_text(version["name"])}" v{body.target.version}' if version else "the question"
@@ -230,13 +248,15 @@ def answer_task(c, auth, who, task_id, body, wake):
         text = f"{name} approved {subject}."
     else:
         text = " ".join(f'{name} answered "{readable_text(q["question"])}": {", ".join(readable_text(label) for label in body.answers[qid]) or "Other"}.'
+                        + (f' Not this one: {", ".join(readable_text(label) for label in passed[qid])}.' if passed.get(qid) else "")
                          for qid, q in questions.items())
         if version:
             text += f" File: {subject}."
     if body.other:
         text += " " + body.other
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
-             "by": who.actor, "at": H.now()}
+             "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
+                                                 if any(passed.values()) else {})}
     picked = still_wanted.choice(asked, body, who.actor)
     if picked == still_wanted.CLOSE:
         wake = False                 # the close itself tells the bot; the answer need not start a run too

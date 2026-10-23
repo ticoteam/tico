@@ -18,7 +18,7 @@ Start from what your team does, not from what a bot could do.
    and retention. Switch it off to use local suggestions.
 3. **Edit before you create.** On the finished chart, click a bot to rename it, choose who it reports to (each group's bots report
    to its head, and the heads to you), or remove it. To have one human's mail sorted and replies drafted, switch on the message bot
-   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and Goal Manager; Inbox Manager appears under **Message bots**. Nothing exists until **Create my team**.
+   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and CEO Bot; Inbox Manager appears under **Message bots**. Nothing exists until **Create my team**.
 4. **Connect tools when a bot asks.** Finish setup does not ask which tools you use and no bot is held back for a missing one. When you press
    **Set up** on a bot, it tells you what it needs (a mailbox, tickets, a repository, a CRM) and where to connect it.
 

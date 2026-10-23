@@ -72,9 +72,9 @@ SAW_WORDS = {"task": ("task", "tasks"), "chat": ("chat", "chats"), "slack": ("Sl
 
 LEARN_TEXT = """Tonight's packet: what people said and decided yesterday that scored as relevant to you. Turn the durable parts into memory.
 
-1. Read `MEMORY.md` (or `memory/learnings.md` if there is no MEMORY.md). Then, for each packet item, decide: write only an explicit human statement, a human correcting a bot, or a pattern seen 3+ times (check memory for earlier sightings). Skip one-off inferences and chit-chat.
+1. Read `memory/learnings.md`: its working rules come first, then the log, newest first. Then, for each packet item, decide: write only an explicit human statement, a human correcting a bot, or a pattern seen 3+ times (check memory for earlier sightings). Skip one-off inferences and chit-chat.
 2. Before writing, search your memory, knowledge and playbooks for a related entry and choose ONE action: update it (preferred), merge near-duplicates, replace it when a newer source contradicts it, add a new one-line entry, or skip if already known.
-3. Entry format: `- <claim> [source: <link or source label>; added: YYYY-MM-DD]`. Quote the source; never paraphrase a person's words into something stronger.
+3. Entry format: `- <claim> [source: <link or source label>; added: YYYY-MM-DD]`, a new one at the top of the log (a standing rule in the working rules section). Keep no memory outside the repository. Quote the source; never paraphrase a person's words into something stronger.
 4. Personal preferences of a specific human do NOT go into this repository (docs/conversation.md).
 5. If a learning needs a change to your instructions (AGENT.md) or settings, file it with `hub task create --owner botops --title "<one line>" --body "<the change and the packet item>"`; BotOps makes the change.
 6. Commit with a clear one-line subject per change and the trailer `Tico-Run: <run id>`, push, and finish this task with a one-line note: what changed, or "Nothing new"."""
@@ -278,13 +278,17 @@ class Tally:
     def __init__(self, engine):
         self.engine, self.lock = engine, threading.Lock()
         self.calls, self.fallbacks, self.models = 0, 0, Counter()
-        self.usage, self.cost = Counter(), 0.0
+        self.usage, self.cost, self.routes, self.fallback = Counter(), 0.0, Counter(), None
 
     def __call__(self, state, questions, label=None):
         result = self.engine(state, questions, label)
         with self.lock:
             self.calls += 1
             self.fallbacks += bool(result.get("fallback"))
+            from .stale_review import route_of
+            self.routes[route_of(result)] += 1
+            if result.get("fallback") and not self.fallback:
+                self.fallback = {"code": result["fallback"], "from": route_of({"provider": result.get("fallback_from")})}
             self.models[str(result.get("model") or "")] += 1
             self.usage.update({k: v for k, v in (result.get("usage") or {}).items()
                                if isinstance(v, int) and not isinstance(v, bool)})
@@ -477,7 +481,8 @@ def run(store, run_id):
             engine = Tally(engine)
             failed = route(engine, qset, items, team)
             chosen = packets(items, qset)
-            detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000)})
+            detail.update({"failed": failed, "route_ms": round((time.monotonic() - routed_at) * 1000),
+                           "routes": dict(engine.routes), "fallback": engine.fallback, "cost_usd": round(engine.cost, 6)})
         capped = bool(failed.get("spend_cap"))
         with store.transaction() as c:
             if c.execute("SELECT status FROM learning_runs WHERE id=?", (run_id,)).fetchone()["status"] != "running":
@@ -505,9 +510,36 @@ def run(store, run_id):
         finish(store, run_id, "failed", {**detail, "error": type(exc).__name__})
 
 
+RUN_WORDS = {"capped": "Skipped: Decide is at the team's monthly spend cap", "unconfigured": "Skipped: no decision model"}
+
+
+def recorded(store, run_id):
+    """`run`, then its System routines record (backend/system_routines.py): what was read and sent, the route, the cost."""
+    from . import system_routines as SR
+    record = SR.Run("learnings")
+    run(store, run_id)
+    with store.read() as c:
+        row = c.execute("SELECT status,started,read_count,routed_count,detail_json FROM learning_runs WHERE id=?",
+                        (run_id,)).fetchone()
+    if not row:
+        return
+    detail = json.loads(row["detail_json"] or "{}")
+    record.started = row["started"]
+    if row["status"] == "failed":
+        record.error = "Failed: " + SR.FAILURE_WORDS.get(detail.get("error") or "", "unexpected error")
+    elif row["status"] in RUN_WORDS:
+        record.did(RUN_WORDS[row["status"]])
+    else:
+        sent = detail.get("deliveries") or 0
+        record.did(f"{row['read_count']} read, {SR.count_words(sent, 'bot')} sent learnings")
+    if detail.get("routes"):
+        record.ai(detail["routes"], detail.get("fallback"), detail.get("cost_usd"))
+    SR.write(store, record)
+
+
 def start(store, run_id):
     """In the background: the decision model's calls take seconds, and nothing may wait on them."""
-    thread = threading.Thread(target=run, args=(store, run_id), name="learnings", daemon=True)
+    thread = threading.Thread(target=recorded, args=(store, run_id), name="learnings", daemon=True)
     thread.start()
     return thread
 
@@ -521,14 +553,45 @@ def claim(c, night):
     return run_id
 
 
+def starts_at(c, at):
+    """Tonight's start (company time) on Settings > Routines (03:00 by default), or None while the run is off there."""
+    from . import system_routines as SR
+    cfg = SR.config_of(c, "learnings")
+    if not cfg["on"]:
+        return None
+    hour, minute = (int(x) for x in (cfg["at"] or f"{HOUR:02d}:00").split(":"))
+    return local(at).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def claim_tonight(c):
+    """Run now (the Learnings page, Settings > Routines): tonight's run id, claimed now. 409 while it runs or once it
+    ran; an unconfigured, capped or failed night is tried again under the same key."""
+    night = night_of(datetime.now(timezone.utc))
+    found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
+    if found and found["status"] == "running":
+        raise Problem("conflict", "Tonight's learning run is still running", 409)
+    if found and found["status"] not in ("unconfigured", "capped", "failed"):
+        raise Problem("conflict", "Tonight's learning run already ran", 409)
+    if found:
+        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
+                  (H.now(), found["id"]))
+        return found["id"]
+    return claim(c, night)
+
+
 def nightly(store, at):
-    """From the scheduler's tick: once a night, at or after 03:00 local. Off in rehearsal and test servers."""
+    """From the scheduler's tick: once a night, at or after its time (03:00 local unless Settings > Routines says
+    otherwise), and not while switched off there. Off in rehearsal and test servers."""
     settings = store.settings
-    if settings.rehearsal or settings.test_identities or local(at).hour < HOUR:
+    if settings.rehearsal or settings.test_identities:
         return None
     night = night_of(at)
     # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
     if store.__dict__.get("learnings_night") == night:
+        return None
+    with store.read() as c:
+        start_at = starts_at(c, at)
+    if start_at is None or local(at) < start_at:
         return None
     with store.transaction() as c:
         run_id = claim(c, night)
@@ -678,23 +741,17 @@ def readable(c, auth, who, item, mailboxes):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
-        """Owner only: tonight's learning run, now. 409 when tonight's has already started."""
+        """Tonight's learning run, now: who may press Run now on Nightly learnings in Settings > Routines (an owner or
+        an admin), and refused, as there, while it is switched off. 409 when tonight's has already started."""
+        from . import system_routines
         who = request.state.identity
-        if who.role != "owner":
-            raise Problem("forbidden", "Only the owner starts the learning run", 403)
+        system_routines.may_change(auth, who, "learnings")
+        with store.read() as c:
+            if not system_routines.config_of(c, "learnings")["on"]:
+                raise Problem("conflict", "Nightly learnings is off. Switch it on to run it.", 409)
 
         def work(c):
-            night = night_of(datetime.now(timezone.utc))
-            found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
-            if found and found["status"] == "running":
-                raise Problem("conflict", "Tonight's learning run is still running", 409)
-            if found and found["status"] not in ("unconfigured", "capped", "failed"):
-                raise Problem("conflict", "Tonight's learning run already ran", 409)
-            if found:          # an unconfigured, capped or failed night is tried again under the same key
-                c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
-                          (H.now(), found["id"]))
-                return {"id": found["id"], "night": night}
-            return {"id": claim(c, night), "night": night}
+            return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}
         result = mutate(request, body, work)
         start(store, result["id"])
         return result
