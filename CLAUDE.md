@@ -23,7 +23,10 @@ default run (pytest plus core UI) under 2 minutes; `python scripts/release_check
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
 `scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py` and `ui-tests.cjs` do it
 themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
-"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. The scheduled nightly gate runs separately. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
+"waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
+shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
+`heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code.
+It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. The scheduled nightly gate runs separately. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
 privacy or permission boundary, migrations and data safety, or a core task/run flow, one or two per rule; no tests
 of wording or docs, no exhaustive parametrizations. Write tests freely while building, then keep only the highest-value ones. Real git, Docker, servers or long timers go behind

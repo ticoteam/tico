@@ -238,3 +238,18 @@ def test_a_milestone_wait_takes_the_blocker_gate_and_comes_back_with_a_restored_
         restore_tasks(c, [task["id"]])
         assert [r[0] for r in c.execute("SELECT target FROM task_milestone_waits WHERE task_id=?",
                                         (task["id"],))] == ["acme/tico@v1.2.0"]
+
+
+def test_a_deleted_task_whose_step_was_retired_still_comes_back(api):
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Fix the billing page", "body": "Imported."}, token="ben-test")
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET number=52 WHERE id=?", (ticket["id"],))
+        c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('gone','general','Gone',99,'review')")
+        c.execute("UPDATE tasks SET step_id='gone' WHERE id=?", (ticket["id"],))
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    with store.transaction() as c:
+        c.execute("DELETE FROM task_steps WHERE id='gone'")
+    assert post(api, "tasks/52/restore", {}, token="ben-test")["restored"] == ticket["id"]
+    with store.read() as c:
+        assert c.execute("SELECT number, step_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[:] == (52, None)

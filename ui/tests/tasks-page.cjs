@@ -231,7 +231,7 @@ async function listAndTabs(browser) {
   // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
   const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
   assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false']]);
+    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
   assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
   assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
@@ -893,17 +893,23 @@ async function views(browser) {
   assert.equal(await page.locator('.tl-group[data-group="a:human:sam"] .tl-gchat').count(), 0, 'no chat link for a person');
   await shot(page, 'needs-you-dark');
   await page.locator('#task-view [data-view="done"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 3);
-  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done', 'closed']);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
+  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Done /);
   assert.match(await page.locator('#task-body .tl-age').first().innerText(), /^\d+h$/, 'the same short ages as every other row');
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   await shot(page, 'done-dark');
+  // Closed, right after Done: only closed work, laid out the same.
+  await page.locator('#task-view [data-view="closed"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
+  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
+  assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
+  assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   await page.locator('#task-view [data-view="recurring"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.rrow').length === 2);
   assert.equal(await page.locator('#task-bar').isHidden(), true);
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Recurring: ok');
+  console.log('Needs you, Done, Closed, Recurring: ok');
   await page.close();
 }
 
@@ -1152,7 +1158,7 @@ async function recheckLists(browser) {
   // tasks), never the rest; its selection survives.
   await page.locator('#task-bulk [data-bulk="clear"]').click();
   await page.locator('#task-view [data-view="done"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 3);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   await page.locator('[data-task-key="tt-sso"] .tl-check').click();
   const doneAsks = [];
   page.on('request', r => { if (/status=done/.test(r.url())) doneAsks.push(new URL(r.url()).searchParams); });
@@ -1161,7 +1167,7 @@ async function recheckLists(browser) {
   await page.evaluate(() => refresh(false));
   await page.locator('#task-body [data-task-key="tt-flaky"]').waitFor();
   assert.ok(doneAsks.length >= 1 && doneAsks.every(q => q.get('offset') === '0' && q.get('limit') === '20'), 'only the first page');
-  assert.equal(await page.locator('#task-body .tl-row').count(), 4);
+  assert.equal(await page.locator('#task-body .tl-row').count(), 3);
   assert.equal(await page.locator('.tl-bulk-n').innerText(), '1 selected');
   assert.deepEqual(errors, []);
   await page.close();
