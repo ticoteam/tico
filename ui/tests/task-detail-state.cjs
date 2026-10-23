@@ -29,6 +29,64 @@ async function show(page) {
 (async () => {
  const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
  try {
+  // Native close() queues its close event. Keep the next opening in loadHarnessRows until that real event
+  // has reached every close listener, then let it render. No synthetic events or timing guesses.
+  for (const [peek, width] of [[false, 1440], [true, 1440], [true, 390]]) for (const sameTask of [true, false]) {
+   const {page, data, errors} = await open(browser, {at: peek ? '#/tasks' : '#/bot/eng', viewport: {width, height: 900}, rich: true});
+   await page.waitForFunction(peek => S.emps?.length && (!peek || TASKS_ST?.tasks?.length), peek);
+   await page.evaluate(async ({task, peek}) => {
+    const d = peek ? taskPeek() : taskModal();
+    if (peek) TASKS_ST.peek = 't' + task.id;
+    await taskModalShow(task, d);
+   }, {task: data.tasks[0], peek});
+   const id = peek ? '#task-peek' : '#task-modal';
+   await page.locator(id + ' textarea[aria-label="Message"]').waitFor();
+   await page.evaluate(({task, peek}) => {
+    const d = peek ? taskPeek() : taskModal(), original = loadHarnessRows;
+    window.taskCloseDelivered = new Promise(resolve => d.addEventListener('close', resolve, {once: true}));
+    loadHarnessRows = () => new Promise(resolve => { window.releaseRows = () => { loadHarnessRows = original; resolve(); }; });
+    d.close();
+    if (peek) TASKS_ST.peek = 't' + task.id;
+    window.reopening = taskModalShow(task, d);
+    window.openingState = {load: TASK_MODAL_LOAD, back: d.returnContext, peek: TASKS_ST?.peek};
+   }, {task: data.tasks[sameTask ? 0 : 1], peek});
+   await page.evaluate(() => taskCloseDelivered.then(() => true));
+   const kept = await page.evaluate(peek => {
+    const d = peek ? taskPeek() : taskModal();
+    return {closed: !d.open, load: TASK_MODAL_LOAD === openingState.load,
+     back: d.returnContext === openingState.back, peek: TASKS_ST?.peek === openingState.peek};
+   }, peek);
+   await page.evaluate(async () => { releaseRows(); await reopening; });
+   assert.equal(await page.locator(id).evaluate(d => d.open), true,
+    `queued native close must not cancel ${peek ? 'peek' : 'modal'} reopening (${sameTask ? 'same' : 'other'} task)`);
+   assert.deepEqual(kept, {closed: true, load: true, back: true, peek: true}, 'old close preserves the pending opening and navigation');
+   await page.locator(id + ' textarea[aria-label="Message"]').waitFor();
+   assert.equal(await page.locator(id).getAttribute('data-task'), data.tasks[sameTask ? 0 : 1].id);
+   // An ordinary close still invalidates this opening and discards its drafts.
+   assert.equal(await page.evaluate(async peek => {
+    const d = peek ? taskPeek() : taskModal(), opening = d.taskOpening;
+    d.askDrafts.set('test', 'draft');
+    const closed = new Promise(resolve => d.addEventListener('close', resolve, {once: true}));
+    d.close(); await closed;
+    return !d.open && d.taskOpening !== opening && d.askDrafts.size === 0 && (!peek || TASKS_ST.peek === '');
+   }, peek), true);
+   // Closing an already visible dialog while it switches tasks still cancels that pending draw.
+   await page.evaluate(async ({task, other, peek}) => {
+    const d = peek ? taskPeek() : taskModal();
+    if (peek) TASKS_ST.peek = 't' + task.id;
+    await taskModalShow(task, d);
+    const original = loadHarnessRows;
+    let release;
+    loadHarnessRows = () => new Promise(resolve => { release = resolve; });
+    if (peek) TASKS_ST.peek = 't' + other.id;
+    const switching = taskModalShow(other, d);
+    const closed = new Promise(resolve => d.addEventListener('close', resolve, {once: true}));
+    d.close(); await closed;
+    loadHarnessRows = original; release(); await switching;
+   }, {task: data.tasks[0], other: data.tasks[1], peek});
+   assert.equal(await page.locator(id).evaluate(d => d.open), false, 'a newer close cancels a pending task switch');
+   assert.deepEqual(errors, []); await page.close();
+  }
   {
    const {page, data, errors} = await visit(browser);
    data.comments[1].refs.target = {file: 'f-notes', version: 2};
@@ -103,6 +161,6 @@ async function show(page) {
    if (!remove) await shot(page, 'after-link-dismissal');
    assert.deepEqual(errors, []); await page.close();
   }
-  console.log('Task detail: drafts, comment failure, file ordering, phone preview and link opening ownership passed');
+  console.log('Task detail: queued close/reopen, drafts, comment failure, file ordering, phone preview and link opening ownership passed');
  } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

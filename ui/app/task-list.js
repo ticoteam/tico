@@ -803,8 +803,8 @@ function taskPeek() {
   d.id = 'task-peek'; d.className = 'tmodal task-peek'; d.dataset.peek = '1';
   d.setAttribute('aria-label', 'Task');
   taskDialogWire(d);
-  d.addEventListener('close', () => {           // the event lands a moment later: the peek may be open again
-    if (d.open) return;
+  d.addEventListener('close', () => {           // the event lands a moment later: the peek may be reopening
+    if (d.open || d.taskOpening?.pending) return;
     const lost = !document.activeElement || document.activeElement === document.body || d.contains(document.activeElement);
     taskPeekClosed();
     if (lost && TASKS_ST) tasksFocusCursor(TASKS_ST);
