@@ -5,16 +5,20 @@ from pathlib import Path
 
 
 def section(text, version):
-    """The lines under `## [version]` (or `## version`) up to the next version heading; empty when absent."""
+    """A version's notes; a missing prerelease section may use only its matching base release."""
     lines, out, on = text.splitlines(), [], False
     for line in lines:
         if line.startswith("## "):
             if on:
                 break
-            on = re.match(r"## \[?" + re.escape(version.lstrip("v")) + r"\b", line) is not None
+            on = re.match(r"## \[?" + re.escape(version.lstrip("v")) + r"(?=\]|\s|$)", line) is not None
             continue
         if on and not re.match(r"\[[^\]]+\]: ", line):
             out.append(line)
+    if not on:
+        base = re.fullmatch(r"(\d+\.\d+\.\d+)-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*", version.lstrip("v"))
+        if base:
+            return section(text, base.group(1))
     return "\n".join(out).strip()
 
 
