@@ -78,7 +78,6 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None):
     login a usage limit holds, or that another job is probing after one, is a reason too, so the task runs on the
     bot's model rather than wait on it."""
     from . import login_holds
-    from .subscriptions import effective
     row = providers.MODEL_BY_ID.get(choice["model"])
     if not row:
         return f"{choice['model']} is not a model Tico knows any more"
@@ -91,7 +90,7 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None):
     can = readiness(c, bot, choice, runner_id)
     if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
-    login = login_holds.canonical(c, runner_id, effective(c, bot)[0] or "", choice["runtime"])
+    login = login_holds.canonical(c, runner_id, "", choice["runtime"])
     held = login_holds.holding(c, runner_id, login, choice["runtime"], job_id)
     if held:
         until = str(login_holds.get(c, runner_id, login, choice["runtime"]).get("until") or "")

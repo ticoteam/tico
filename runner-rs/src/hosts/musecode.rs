@@ -30,6 +30,8 @@ pub const DEFAULT_MODEL: &str = "muse-spark-1.3";
 const EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const DEFAULT_EFFORT: &str = "medium";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a process may stay up after its run's terminal record before it is stopped.
+const AFTER_TERMINAL: Duration = Duration::from_secs(5);
 /// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself.
 pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1")];
 
@@ -599,11 +601,29 @@ impl MuseCodeHost {
                 if let Ok(ev) = serde_json::from_str::<Value>(line.trim()) {
                     self.on_event(&ev, &tid, &turn, &mut state);
                 }
+                // The run's terminal record is its last word. A process, or a child that inherited its stdout, that
+                // stays up after it would otherwise hold the turn and the attempt's lease open with the run over.
+                if !state.terminal.is_empty() {
+                    break;
+                }
             }
         }
-        let rc = match exited.await {
-            Ok(status) => super::return_code(&status),
-            Err(_) => -1,
+        let mut exited = exited;
+        let rc = if state.terminal.is_empty() {
+            exited.await.map_or(-1, |s| super::return_code(&s))
+        } else {
+            match tokio::time::timeout(AFTER_TERMINAL, &mut exited).await {
+                Ok(status) => status.map_or(-1, |s| super::return_code(&s)),
+                Err(_) => {
+                    log(&format!("muse[{}]: run ended {} but the process stayed up; stopping it", self.0.bot, state.terminal));
+                    let stopper = self.inner().stopper.clone();
+                    if let Some(s) = stopper {
+                        s.terminate(STOP_TIMEOUT);
+                    }
+                    let _ = exited.await;
+                    0 // the run had already ended on its own terms; the stop is ours, not its outcome
+                }
+            }
         };
         let _ = std::fs::remove_file(&prompt);
         if state.usage.is_none() {
@@ -908,6 +928,32 @@ mod tests {
         let got = until_idle(&mut rx, 15).await;
         assert!(got.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "interrupted"), "{got:?}");
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A quota failure whose process (and a child holding its stdout) stays up still settles the turn as a limit
+    /// failure, so the attempt ends, the quota hold is kept and nothing is retried on its own.
+    #[tokio::test]
+    async fn a_terminal_failure_settles_the_turn_while_the_process_stays_up() {
+        let dir = temp("fake-muse");
+        let limit = crate::hosts::fixtures::dir("musecode").join("limit.jsonl");
+        let cmd = script(&dir, "muse", "#!/bin/sh\ncat \"$FIXTURE\"\nsleep 20 &\nexec sleep 30\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        host.start();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings.env.insert("FIXTURE".into(), limit.display().to_string());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "x", None).unwrap();
+        let got = until_idle(&mut rx, 15).await;
+        let failed: Vec<&Value> = got.iter().filter(|e| e["kind"] == "turn_failed").collect();
+        assert_eq!(failed.len(), 1, "{got:?}");
+        assert_eq!(failed[0]["limit"], true);
+        assert_eq!(failed[0]["error"], "provider error: rate limit exceeded (status 429)");
+        assert!(failed[0].get("auth_retry").is_none());
+        assert!(got.last().is_some_and(|e| e["kind"] == "status" && e["state"] == "idle"), "{got:?}");
+        assert!(host.inner().turn.is_none() && host.inner().stopper.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

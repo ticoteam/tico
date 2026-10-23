@@ -17,12 +17,14 @@ side by side; two release checks must not run at once, since the journey's candi
 
 `--part product|python|browser` runs one slice of the same gate so the hosted Release validation workflow can
 spread it over several VMs: `product` is the journey, image builds, smoke, side-jobs and Docker isolation; `python`
-is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by test count); `browser` is every browser
+is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by recorded time); `browser` is every browser
 test. Without `--part` the whole gate runs on this machine, as before.
 
 `--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
 checks run), balanced the same way, so the PR-check Python job can spread over several VMs. The N groups together run
-every file the single default run collects, each once.
+every file the single default run collects, each once. Groups balance by each file's recorded seconds in
+scripts/test-timings.json (a file with no record by its test count); refresh it with `--record-timings DEFAULT_XML
+SLOW_XML` from junit reports of a full run.
 
 Use the test environment's Python to invoke this script. The release gate defaults to half the CPU count in
 Python workers (at least one); the browser runner selects free-core concurrency and load-scaled timeouts.
@@ -34,6 +36,7 @@ runs at once on a box, the others waiting their turn. Hosted CI goes straight on
 """
 import argparse
 import ipaddress
+import json
 import os
 from pathlib import Path
 import socket
@@ -43,6 +46,7 @@ import sys
 import tempfile
 import threading
 import time
+from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,10 +199,18 @@ def parse_shard(text):
 RELEASE_SELECTION = ('-m', 'slow or not slow', f'--ignore={ISOLATION_FILE}')
 
 
+# Each test file's recorded seconds, per selection ('default' for PR checks, 'release' for the release Python step), so
+# shards balance by time. Refresh with --record-timings after a full run with junit output (see record_timings)
+# when the shard logs show many unrecorded files or shard times drift apart: a stale record never drops a test, it
+# only unbalances the shards.
+TIMINGS = ROOT / 'scripts' / 'test-timings.json'
+
+
 def shard_files(index, total, env, selection=RELEASE_SELECTION):
     """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
-    release Python step's), grouped so each shard holds about the same number of tests (largest file first, into the
-    lightest shard). Deterministic, so the N shards together cover each collected file exactly once."""
+    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
+    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
+    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -211,14 +223,64 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION):
             counts[name] = counts.get(name, 0) + 1
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
-    loads, groups = [0] * total, [[] for _ in range(total)]
-    for name in sorted(counts, key=lambda name: (-counts[name], name)):
+    weights, unrecorded = file_weights(counts, recorded_timings('release' if selection else 'default'))
+    loads, groups = [0.0] * total, [[] for _ in range(total)]
+    for name in sorted(counts, key=lambda name: (-weights[name], name)):
         lightest = min(range(total), key=lambda i: (loads[i], i))
-        loads[lightest] += counts[name]
+        loads[lightest] += weights[name]
         groups[lightest].append(name)
-    print(f'Python shard {index}/{total}: {len(groups[index - 1])} files, {loads[index - 1]} of '
-          f'{sum(loads)} tests', flush=True)
-    return sorted(groups[index - 1])
+    mine = groups[index - 1]
+    print(f'Python shard {index}/{total}: {len(mine)} files, {sum(counts[name] for name in mine)} of '
+          f'{sum(counts.values())} tests, about {loads[index - 1]:.0f} of {sum(loads):.0f} seconds, recorded or estimated '
+          f'({len(unrecorded)} of {len(counts)} files unrecorded, weighed by test count)', flush=True)
+    return sorted(mine)
+
+
+def recorded_timings(kind):
+    """{test file: seconds} recorded for `kind`; empty when the file or kind is missing (shards then balance by
+    test count)."""
+    try:
+        return json.loads(TIMINGS.read_text()).get(kind, {})
+    except FileNotFoundError:
+        return {}
+
+
+def file_weights(counts, timings):
+    """Each collected file's weight: its recorded seconds, or for a file with no record its test count times the
+    recorded files' seconds per test (1 when nothing is recorded). Also the unrecorded files."""
+    recorded = [name for name in counts if name in timings]   # a recorded 0.0 (a file under 5 ms) is a record
+    tests = sum(counts[name] for name in recorded)
+    per_test = sum(timings[name] for name in recorded) / tests if tests else 1.0
+    weights = {name: timings[name] if name in recorded else counts[name] * per_test for name in counts}
+    return weights, sorted(set(counts) - set(recorded))
+
+
+def junit_seconds(path):
+    """{test file: seconds} summed over the test cases of a junit report written with `-o junit_family=xunit1`
+    (each case names its file; its time covers setup, call and teardown)."""
+    seconds = {}
+    for case in ElementTree.parse(path).getroot().iter('testcase'):
+        name = case.get('file')
+        if not name:
+            raise RuntimeError(f'{path}: a test case has no file; write the report with -o junit_family=xunit1')
+        seconds[name] = seconds.get(name, 0.0) + float(case.get('time') or 0)
+    return seconds
+
+
+def record_timings(default_report, slow_report):
+    """Rewrite TIMINGS from two junit reports of one machine: the default suite (`pytest -o junit_family=xunit1
+    --junitxml=default.xml`) and the slow tests the release step adds (`pytest -m slow --ignore=<isolation file>
+    -o junit_family=xunit1 --junitxml=slow.xml`). 'default' is the first; 'release' is both, per file."""
+    default = junit_seconds(default_report)
+    release = dict(default)
+    for name, seconds in junit_seconds(slow_report).items():
+        release[name] = release.get(name, 0.0) + seconds
+    timings = {kind: {name: round(seconds, 2) for name, seconds in sorted(table.items())}
+               for kind, table in (('default', default), ('release', release))}
+    TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
+    print(f'Recorded {len(default)} default and {len(release)} release test files in {TIMINGS.name}: '
+          f'{sum(default.values()):.0f}s and {sum(release.values()):.0f}s', flush=True)
+    return 0
 
 
 def python_shard(index, total):
@@ -317,6 +379,8 @@ def main(argv=None):
     parser.add_argument('--release', action='store_true', help='every test and the whole-product checks (the release gate)')
     parser.add_argument('--previous', help='with --release: the release the journey upgrades from (default: newest tag)')
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
+    parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
+                        help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
     parser.add_argument('--shard', type=parse_shard,
                         help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
                              'with --release --part python, of the release set')
@@ -325,6 +389,8 @@ def main(argv=None):
         parser.error('--part needs --release')
     if args.shard and args.release and args.part != 'python':
         parser.error('--shard with --release needs --part python')
+    if args.record_timings:
+        return record_timings(*args.record_timings)
     if args.release:
         return release(args)
     return python_shard(*args.shard) if args.shard else full()
@@ -336,7 +402,7 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot():
+    if not in_slot() and '--record-timings' not in sys.argv:
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

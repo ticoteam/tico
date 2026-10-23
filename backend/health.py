@@ -552,6 +552,8 @@ HELD = {
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
+    "login_upgrade": ("Update {computer} to use one login per AI tool; its bots wait without changing accounts",
+                      COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": ("{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
                      "model or computer", BOT_SETTINGS),
@@ -1318,21 +1320,6 @@ def view(c, who, settings, auth, github, config):
                              + ("" if len(copies) <= 3 else f"; and {len(copies) - 3} more")
                              + ". Restart that computer's runner to retry now.",
                              [_fix("Open Computers", "#/settings", "devices")]))
-    from .subscriptions import bot_subscription, effective, context
-    subscription_context = context(c, settings)
-    subscription_problems = []
-    subscription_access = auth.bot_accesses(c, who)
-    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived'"):
-        if not full and not (subscription_access.get(row['bot']) or {}).get('see'):
-            continue
-        if effective(c, row['bot'], subscription_context)[0] is None:
-            continue
-        subscription = bot_subscription(c, row['bot'], settings, subscription_context)
-        if subscription['problem']:
-            subscription_problems.append(row['bot'] + ': ' + subscription['problem'])
-    if subscription_problems:
-        checks.append(_check("subscriptions", "Subscriptions", "warn", "; ".join(subscription_problems[:5]),
-                             [_fix("Open Computers", "#/settings", "devices")]))
     from .app_delivery import health_problems
     for key, summary in health_problems(c, who, auth, online_ids):
         checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
@@ -1350,6 +1337,14 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
     else:
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
+
+    from .performance import load_status
+    for computer in computers:
+        load = load_status(c, computer["id"])
+        if load["overloaded"]:
+            checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
+                                 f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
+                                 [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:
         for computer in computers:

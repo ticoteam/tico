@@ -18,3 +18,9 @@ relay-rs/target/
 # Behaviour replay cases hold customer text; only the made-up example lives here.
 evals/replay/cases/*
 !evals/replay/cases/example.yaml
+
+# Disposable CI plans and test timing receipts.
+/ci-plan.json
+/ci-results/
+/durations.json
+/previous-timings/

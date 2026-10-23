@@ -702,6 +702,12 @@ CREATE INDEX IF NOT EXISTS ceo_merges_original ON ceo_merges(original, state);
 CREATE INDEX IF NOT EXISTS ceo_merges_person ON ceo_merges(person, created);
 """
 
+# One login per AI tool per computer (backend/subscriptions.py): a bot's own subscription choice goes, and the bot
+# runs on its computer's login. The table and the computers' profile reports stay, unread, for one release.
+ONE_LOGIN_PER_COMPUTER_SCHEMA = """
+DELETE FROM subscription_assignments WHERE scope='bot';
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -712,7 +718,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
-              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA]
+              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA]
 
 
 class Refused(Exception):

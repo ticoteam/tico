@@ -71,6 +71,7 @@ function pageSettings() {
         <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
         <button type="button" data-settings-tab="history" role="tab">History</button>
+        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
       </div></details>
     </div>
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
@@ -106,6 +107,7 @@ function pageSettings() {
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-billing" role="tabpanel" hidden><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
       <section class="card" id="set-system-card"><header><h2>Routines</h2><span class="muted">What Tico runs on its own</span></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -181,10 +183,10 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), ceo: settingsCeoBotShown()};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
-  if (['health', 'history', 'recurring', 'triggers', 'inbound'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'recurring', 'triggers', 'inbound', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -217,6 +219,8 @@ function settingsShow(tab) {
   }
   const peoplePane = $('#settings-people');
   if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
+  const billingPane = $('#settings-billing');
+  if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const ceoPane = $('#settings-ceo');
   if (ceoPane) { ceoPane.hidden = SETTINGS_TAB !== 'ceo'; if (SETTINGS_TAB === 'ceo') void renderSettingsCeoBot(); }
   const healthPane = $('#settings-health');

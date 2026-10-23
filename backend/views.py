@@ -57,7 +57,8 @@ def attempt_details(c, turn):
     attempt = c.execute("SELECT state,result_json,finished FROM attempts WHERE id=?", (turn["id"],)).fetchone()
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
-    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"])}
+    from .performance import attempt_snapshots
+    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
             result = json.loads(attempt["result_json"] or "{}")
@@ -99,7 +100,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],
                      "exit": row["state"], "message_id": row["message_id"],
-                     "record_kind": "attempt", "failure_reason": str(reason), **attempt_details(c, dict(row))})
+                     "record_kind": "attempt", "failure_reason": str(reason),
+                     **attempt_details(c, {"id": row["id"], "finished": row["finished"]})})
     return rows
 
 
@@ -1577,7 +1579,8 @@ def install_views(app, store, auth, mutate, task_view):
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
                 "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
-                "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made}
+                "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made,
+                "load_start": turn.get("load_start"), "load_end": turn.get("load_end")}
 
     def employee_rows(c, who):
         people, configs = roster(c), entries(c, store.settings.github_owner)
@@ -1837,16 +1840,15 @@ def install_views(app, store, auth, mutate, task_view):
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
-                # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
-                # computer's own login is that subscription's account, so a member's page shows them as one too.
+                # Each named subscription it still reports from before one login per computer (unused, for one
+                # release), with its sign-in and usage windows; its account only for whoever may change the computer
+                # (`may_manage`).
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
                 from .model_login import cleared_logins, key_cleared_logins
                 from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
-                same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
                 keys = computer_key_listing(c, row["id"])
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
                 # name, whether it is the "Every computer" one, and every computer it serves.
@@ -1868,7 +1870,7 @@ def install_views(app, store, auth, mutate, task_view):
                         key.pop("name", None)
                         key.pop("id", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "may_manage": manage, "profiles": profiles, "same_account": same_account,
+                                 "may_manage": manage, "profiles": profiles,
                                  "bot_connections": [link for link in subscriptions.connections(
                                      c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
                                  "signed_out": cleared_logins(c, row["id"]),

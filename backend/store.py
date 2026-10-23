@@ -197,6 +197,8 @@ CREATE TABLE IF NOT EXISTS attempt_diagnostics(
  end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
+-- Bound history reads by time before evaluating their visibility gates.
+CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created TEXT NOT NULL,
@@ -1194,6 +1196,10 @@ class Store:
                     c.execute(H.TASKS_DUE_INDEX)
                     c.execute(H.TASKS_RESUME_INDEX)
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
+                    # A day of history must not authorize every older attempt first.
+                    c.execute("CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created)")
+                    c.execute("INSERT INTO cloud_migrations VALUES(62,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 H.ensure_market_reads(c)
