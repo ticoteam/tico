@@ -107,22 +107,6 @@ def test_a_cancelled_switch_keeps_the_mark_and_the_old_login(api):
     assert pending(api, r) == [] and cleared(api, rid) == [("codex", "")]
 
 
-def test_the_confirmation_names_the_bots_on_that_login(api):
-    r = online(api)
-    rid = r["runner_id"]
-    for bot, runtime in (("writer", "codex"), ("helper", "claude")):
-        add_bot(api, bot)
-        put_config(api, bot, runtime)
-        post(api, f"bots/{bot}/assignment", {"runner_id": rid, "expected_generation": 0})
-    add_bot(api, "sleeper", state="paused")
-    put_config(api, "sleeper", "codex")
-    post(api, "bots/sleeper/assignment", {"runner_id": rid, "expected_generation": 0})
-    assert [b["bot"] for b in get(api, f"runners/{rid}/logouts/bots?runtime=codex")["bots"]] == ["writer"]
-    assert [b["bot"] for b in get(api, f"runners/{rid}/logouts/bots?runtime=claude")["bots"]] == ["helper"]
-    # A named subscription's bots are the ones assigned to it.
-    assert get(api, f"runners/{rid}/logouts/bots?runtime=codex&profile=work")["bots"] == []
-
-
 def put_config(api, bot, runtime):
     import json
     with api.app.state.store.transaction() as c:
@@ -313,28 +297,13 @@ def with_profile(api, r, profile="work", runtimes=None):
     assert out.status_code == 200, out.text
 
 
-def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_bots_that_run_on_it(api):
-    """Remove (Computers part 3): a named subscription's line comes off the computer, but never while a bot runs on it,
-    paused bots too; the refusal names them so the person moves them on the Bots page first."""
+def test_remove_takes_a_leftover_subscription_off_the_computer(api):
+    """Remove: a named subscription left from before one login per computer (#1259) comes off the computer, with
+    nothing of it left behind. No bot runs on one any more."""
     r = online(api, REMOVES)
     rid = r["runner_id"]
     with_profile(api, r)
-    for bot, state in (("writer", "active"), ("sleeper", "paused")):
-        add_bot(api, bot, state=state)
-        put_config(api, bot, "codex")
-        post(api, f"bots/{bot}/assignment", {"runner_id": rid, "expected_generation": 0})
-        with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
-    refused = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
-    assert refused["error"]["code"] == "in_use"
-    assert "sleeper and writer run on it" in refused["error"]["detail"] and "Bots page" in refused["error"]["detail"]
-    assert [b["bot"] for b in refused["error"]["bots"]] == ["sleeper", "writer"], "the page names them from this"
-    assert pending(api, r) == []
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)  # sleeper still
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM subscription_assignments WHERE target='sleeper'")
         c.execute("INSERT INTO model_login_cleared(runner_id,runtime,profile,cleared_at,cleared_by) VALUES(?, 'codex', 'work', '2026-10-17T00:00:00+00:00', 'human:ana')", (rid,))
     put = api.put("/api/v2/subscriptions/weekly", json={"runner_id": rid, "profile": "work", "runtime": "codex",
                   "used_percent": 40, "resets_at": None}, headers={**headers("ana-test"), "Idempotency-Key": "w1"})
@@ -351,73 +320,6 @@ def test_remove_takes_a_subscription_off_the_computer_and_is_refused_naming_the_
     from backend.subscriptions import weekly_key
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (weekly_key(rid, "work", "codex"),)).fetchone()
-
-
-def test_a_bot_that_comes_onto_a_subscription_being_removed_stops_it_and_nothing_else_runs_on_it_meanwhile(api):
-    """The bots check holds from the ask to the deletion: no bot chooses the subscription while it is being removed,
-    and one that came onto it another way (moved here, or onto this tool) stops the removal at its commit point,
-    before the computer signs anything out. A removal runs alone on the subscription, every tool's sign-in included."""
-    import uuid
-    r = online(api, REMOVES)
-    rid = r["runner_id"]
-    with_profile(api, r, runtimes={"codex": {"signed_in": True}, "claude": {"signed_in": True}})
-    add_bot(api, "writer")
-    put_config(api, "writer", "codex")
-    post(api, "bots/writer/assignment", {"runner_id": rid, "expected_generation": 0})
-    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
-    choose = api.put("/api/v2/subscriptions", json={"target": "writer", "profile": "work"},
-                     headers={**headers("ana-test"), "Idempotency-Key": uuid.uuid4().hex})
-    assert choose.status_code == 409 and "work is being removed from" in choose.json()["error"]["detail"], choose.text
-    # Another tool on the same subscription waits for the removal, and a removal waits for its sign-in.
-    busy = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"}, expected=409)
-    assert "Something else is running on work" in busy["error"]["detail"]
-    # The bot comes onto it some other way before the computer gets to it: the commit point refuses, naming it.
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES('bot','writer','work',NULL,NULL)")
-    assert report(api, r, out["id"], state="finishing") == {"state": "failed"}
-    row = get(api, f"runners/{rid}/logins/{out['id']}")
-    assert row["state"] == "failed" and "writer run on it" in row["message"] and "Bots page" in row["message"]
-    assert pending(api, r) == []
-    # Moved off it, the next removal goes ahead from its commit point, which can't be cancelled.
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM subscription_assignments WHERE target='writer'")
-    sign_in = post(api, f"runners/{rid}/logins", {"runtime": "claude", "profile": "work"})
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
-    post(api, f"runners/{rid}/logins/{sign_in['id']}/cancel", {})
-    again = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
-    assert report(api, r, again["id"], state="finishing") == {"state": "finishing"}
-    refused = post(api, f"runners/{rid}/logins/{again['id']}/cancel", {}, expected=409)
-    assert "already being removed" in refused["error"]["detail"]
-    assert report(api, r, again["id"], state="done", message="Removed work") == {"state": "done"}
-
-
-def test_while_a_removal_runs_no_bot_is_placed_or_switched_onto_it(api):
-    """Past the commit point the computer signs out and deletes with no further check, so until the removal ends no
-    bot comes onto the subscription there: not placed on that computer, not switched onto that tool."""
-    r, elsewhere = online(api, REMOVES), online(api, REMOVES)
-    rid = r["runner_id"]
-    with_profile(api, r)
-    for bot, runtime, runner_id in (("mover", "codex", elsewhere["runner_id"]), ("switcher", "claude", rid)):
-        add_bot(api, bot)
-        put_config(api, bot, runtime)
-        post(api, f"bots/{bot}/assignment", {"runner_id": runner_id, "expected_generation": 0})
-        with api.app.state.store.transaction() as c:
-            c.execute("INSERT INTO subscription_assignments VALUES('bot',?,'work',NULL,NULL)", (bot,))
-    out = post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"})
-    assert report(api, r, out["id"], state="finishing") == {"state": "finishing"}
-    placed = post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1}, expected=409)
-    assert placed["error"]["code"] == "removing" and "mover would run on it" in placed["error"]["detail"]
-    with api.app.state.store.read() as c:
-        revision = c.execute("SELECT revision FROM bot_config WHERE bot='switcher'").fetchone()[0]
-    switched = post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision}, expected=409)
-    assert switched["error"]["code"] == "removing" and "switcher would run on it" in switched["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT runner_id FROM assignments WHERE bot='mover'").fetchone()[0] == elsewhere["runner_id"]
-        assert c.execute("SELECT runtime FROM bots WHERE slug='switcher'").fetchone()[0] != "codex"
-    # Once it has ended, both go ahead.
-    assert report(api, r, out["id"], state="done", message="Removed work") == {"state": "done"}
-    post(api, "bots/mover/assignment", {"runner_id": rid, "expected_generation": 1})
-    post(api, "bots/switcher/model", {"model": "gpt-6.1-sol", "expected_revision": revision})
 
 
 def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):

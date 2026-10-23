@@ -10,8 +10,10 @@ then the Release Manager tags it once the release checks are green. Keep those v
 after publishing a tag, so later builds retain the complete history and do not announce already shipped work again.
 The existing CHANGELOG checks still guard the release commit and shipped history.
 The release cut normally lands as a direct, CHANGELOG-only commit on `main` before validation and tagging.
-If the cut lands by pull request instead, it needs review at its final head and a `Changelog-Release: vX.Y.Z`
-commit trailer for each version section it changes; preserve the trailers in the merged commit. A pull request
+If the cut lands by pull request instead, it must change only `CHANGELOG.md`, needs review at its final head,
+and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes;
+preserve the trailers in the merged commit. PR checks reject ordinary changelog edits before selecting tests.
+A pull request
 that merges notes back to `main` or corrects a shipped section needs the same trailers. Once the notes are on
 `main`, a released section that differs from its tag fails the tests.
 
@@ -24,14 +26,87 @@ only marks the merged PR links the running release contains as Shipped (backend/
 ## The fast path
 
 1. **While building a PR**, run the focused tests for its changes; CI selects affected tests conservatively (below).
-2. **Write release notes.** The Technical Writer writes the version section in `CHANGELOG.md` at the cut.
-3. **Before you tag**, the release candidate must pass the full suite: the default suites, the opt-in tests and a short whole-product
-   check: the manually dispatched Release validation workflow across fresh GitHub-hosted Linux VMs, or
-   `python scripts/release_checks.py --release` on a suitable local machine. The 8-minute target is report-only.
-4. **Tag and push.** The Release Manager tags the release with its notes committed and release checks green.
+2. **Freeze main.** The Release Manager runs the release command's freeze guard, including the latest full gate on main.
+3. **Commit the notes.** The Technical Writer prepares the versioned `CHANGELOG.md` section as a single child of the frozen commit.
+4. **Validate that exact notes commit.** The release command puts it on main, dispatches the full hosted Release validation,
+   waits for that run, and checks its title and candidate commit. The 8-minute target is report-only.
+5. **Tag that commit.** The command checks main again and pushes the version tag at the validated notes commit.
    The GitHub release is published about 2 minutes later, as soon as the Docker images exist.
-5. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
-6. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
+6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
+7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
+
+## The release command
+
+The Release Manager uses the Rust `tico-release` command through `scripts/release` for each approved release.
+Build it once from the reviewed controls with `scripts/heavy.sh cargo build --locked --manifest-path tools/release-command/Cargo.toml`.
+Start from a clean checkout at current main:
+
+```sh
+scripts/release freeze --version vX.Y.Z --previous vA.B.C --receipts receipts.json
+# Technical Writer now prepares, but does not push, one CHANGELOG-only commit on the frozen head.
+scripts/release publish --notes-commit <full-40-character-notes-commit-SHA>
+```
+
+`freeze` checks the latest full gate on main, runs `freeze_guard.py`, checks main again, and records the frozen SHA,
+version and previous release in this checkout's Git metadata. `publish` accepts exactly one CHANGELOG-only child of
+that freeze with nonempty notes under `## [X.Y.Z] - YYYY-MM-DD`. It pushes that notes commit to main, dispatches
+Release validation with its full SHA, waits, verifies the workflow, main branch, exact run title, candidate SHA and
+successful conclusion, and tags that same commit. Main moving at any checkpoint refuses the release.
+The command does not replace the release's publishing approval, evidence checklist or rollout.
+
+Run `publish` in the background while validation runs. Its freeze record retains the candidate and run ID, so the
+same invocation resumes that run after interruption instead of dispatching another gate. If interrupted during
+dispatch before the run ID was saved, inspect Actions and pass `--run <id>` to recover it; mismatched runs refuse.
+Retain the record as the release receipt. To start a new freeze after a fix, archive/remove that record explicitly
+(`git rev-parse --git-path tico-release.json` shows it), then freeze current main again. `--state <file>` selects an
+explicit record for either phase. No command resets a freeze or falls back to a different validation automatically.
+
+### After freeze
+
+The notes-only commit above completes the freeze before validation. Any subsequent change, however small, requires
+a fix pull request, a new freeze and a new **full** gate on the new notes-inclusive commit. This includes test fixes,
+main re-merges and docs edits: a green run for the old commit cannot be reused. An admin merge is allowed only on
+that fix-PR/new-full-gate path; it does not waive review, notes or exact-commit validation. Do not move the tag to a
+new commit to borrow an old run. Roll back this tooling change by reverting it; the manual steps below still work.
+
+### A failed nightly stops the next freeze
+
+A failed, cancelled or otherwise unsuccessful scheduled Release validation on main immediately triggers **Report failed nightly gate**.
+It sends one `POST /api/v2/inbound/tasks` to file a **Dev tickets / On Deck** task for the Builder, labelled
+`nightly-red`, with the failed run and candidate attached. The per-run key `nightly-gate:<run_id>` makes reruns
+with the same service key update the same task. The inbound route does not set queue rank; Engineering ranks it.
+Replaying a report can move an advanced ticket back to On Deck or reopen a fixed one; check its existing task first.
+The release command refuses a freeze while the latest full gate on main is red or incomplete. Only a newer green
+full gate on main clears it; a PR check or a validation of a commit outside main cannot clear it.
+
+Merging the source does not activate reporting. The owner first creates a dedicated **tasks service key** labelled
+`GitHub Actions nightly gate reporter (<owner>/<repo>)` (for example, `GitHub Actions nightly gate reporter (acme/product)`)
+while signed in, as described in [Service keys](service-keys.md).
+Do not derive it from a personal token: that key would stop when the personal token expires. A tasks key can only
+file, update or close its own inbound tasks; it cannot read, cannot be restricted to Builder and has no automatic
+expiry. The trusted script fixes the owner to `bot:pr-reviewer`. Do not use a personal API token, bot agent or
+per-turn credential, reuse a broader grant, or put the key in a task, commit, command argument or log.
+
+The owner sets the existing private Actions secrets `TICO_NIGHTLY_HUB_API_URL` (the HTTPS Tico origin, no path) and
+`TICO_NIGHTLY_HUB_TOKEN` (the tasks key). Rotate every 90 days, or immediately on suspected exposure: make a new key,
+replace the secret, verify the dry run, then revoke the old key. First close any open tasks the old key filed;
+the new key cannot find them. Record only the key ID, label, owner and creation/rotation dates.
+
+After owner setup, manually run **Report failed nightly gate** on **main** with `dry_run=true`. It posts only
+`{"key":"nightly-dry-run-<manual Actions run ID>","close":true}`, expecting HTTP 200 and
+`{"task":null,"created":false,"changed":false}`. It then tries `GET /api/v2/bots/pr-reviewer` with the same header,
+expecting HTTP 403 with the service-key-only refusal. HTTP 401 means invalid authentication; HTTP 200 on that read
+means the credential is too broad. The dry run creates no task; an unexpected write result or read response fails
+visibly. Logs contain status codes and response bodies, with any echoed token redacted, never request headers.
+Check the key's last use/revocation metadata through the owner's normal service-key view; never disclose its value.
+Manual runs with `dry_run=false` do nothing. Do not fake a failed nightly to test reporting.
+
+Reporting runs separately on trusted main controls with `contents: read`; validation VMs have no Tico credential,
+and the reporter downloads no candidate artifacts. It makes no Builder-state precheck, follows no redirects,
+uses a bounded HTTP timeout and has no retry or fallback route. Missing credentials, an inactive Builder or a
+refused write fail visibly with the response; an operator must recover the report. Revoking the key stops reporting
+immediately; removing both Actions secrets disables its configuration. Neither action clears the red full gate's
+freeze block. Owner setup and verification remain separate from the source merge.
 
 ## Tests on a PR
 
@@ -83,7 +158,8 @@ slow tests and every browser script. Both release candidate validation and the s
 
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
 interactive work. Its five gate jobs run in parallel on standard ephemeral native Ubuntu24.04 x64 VMs for this public repository, with read-only
-repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy.
+repository permissions and no production, AWS or provider credentials. It cannot tag, publish or deploy. The separate
+nightly reporter alone receives its task-filing credential.
 
 ```sh
 gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48
@@ -232,13 +308,13 @@ Attach `replay.md` to the release task. A regression is rerun once with `--only 
 named in the release task as accepted, with why. It needs real model turns, so it is not part of the PR tests or the
 hosted gate.
 
-## Tag
+## Manual fallback: notes, validation and tag
 
-1. The Technical Writer writes the release's notes in `CHANGELOG.md` under
+1. Freeze current main with the guard and latest-full-gate check above. The Technical Writer writes the release's notes in `CHANGELOG.md` under
    `## [X.Y.Z] - YYYY-MM-DD` at the cut, leaves a fresh empty `## [Unreleased]` above it,
    and updates the link references at the bottom.
 2. Commit those notes to `main`, then run the release check on that exact candidate commit.
-3. Once the check is green, the Release Manager tags that validated commit and pushes:
+3. Once the exact-commit hosted validation is green, check main still equals that commit, then the Release Manager tags it and pushes:
    `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
 
 The workflow then:
@@ -252,8 +328,9 @@ The workflow then:
 - waits until `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z` exist (the Docker workflow builds them from the
   same tag, in about 2 minutes), so no release is published whose installer would fail on `docker compose pull`;
 - uses the `[X.Y.Z]` section of the changelog, unchanged, as the release notes, and fails if the
-  section is missing or empty. A tag with a suffix such as `v0.2.0-rc.1` is marked a prerelease,
-  which the update check ignores;
+  section is missing or empty. A tag with a suffix such as `v0.2.0-rc.1` uses its own section when
+  present (an empty one fails), otherwise only its matching `[0.2.0]` section. It is marked a
+  prerelease, which the update check ignores;
 - publishes the release with those four files, the runner binaries and the notes. That is everything the installer, the server's update
   check and the updater read (`install.sh`, the bundle and `SHA256SUMS`), so the server rollout can start at once.
 

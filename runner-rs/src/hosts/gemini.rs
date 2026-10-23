@@ -4,7 +4,6 @@
 //! sign-in apart from the operator's own Gemini login.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,7 +23,6 @@ pub const MODELS: &[&str] = &["gemini-3.8-flash"];
 /// Where the host's saved Gemini memory goes, in its home's `.gemini`, once no turn reads it (set_aside_memory).
 pub const MEMORY_UNREAD: &str = "GEMINI.unread.md";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const STDERR_TAIL: usize = 2000;
 const RESTORING: &str = "Saved provider session is unavailable; restoring this conversation's context.";
 
 /// Gemini's thinking level for an effort: LOW, MEDIUM or HIGH, HIGH when unset or unknown.
@@ -274,14 +272,13 @@ impl GeminiHost {
         written
     }
 
-    fn launch(&self, thread_id: &str, t: &Thread) -> std::io::Result<(Child, std::fs::File)> {
-        // stderr goes to an unlinked file: read back for the error text, never a pipe that could fill.
-        let path = std::env::temp_dir().join(format!("tico-gemini-stderr-{}", uuid::Uuid::new_v4().simple()));
-        let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-        let _ = std::fs::remove_file(&path);
+    fn launch(&self, thread_id: &str, t: &Thread) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
+        // Drain stderr independently so a noisy harness cannot block its own exit.
         let mut command = self.command(thread_id, t);
-        command.stderr(Stdio::from(stderr.try_clone()?));
-        Ok((command.spawn()?, stderr))
+        command.stderr(Stdio::piped());
+        let mut child = command.spawn()?;
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &t.settings.env);
+        Ok((child, stderr))
     }
 
     fn command(&self, thread_id: &str, t: &Thread) -> Command {
@@ -328,7 +325,7 @@ impl GeminiHost {
         Ok(turn)
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: std::fs::File, tid: String, turn: String, text: String) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String) {
         let mut recovered = false;
         loop {
             let stdout = child.stdout.take();
@@ -362,6 +359,7 @@ impl GeminiHost {
                 Ok(status) => super::return_code(&status),
                 Err(_) => -1,
             };
+            stderr.drained().await;
             let error = stderr_tail(&mut stderr);
             // The CLI checks --resume before it calls the model, so a missing session restarts once from this
             // conversation's own history, with no tool effect replayed. Never after an event.
@@ -475,7 +473,9 @@ impl GeminiHost {
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
             let error = if mismatch { format!("Gemini CLI used {} instead of {requested}", actual.join(", ")) } else { error_text(result.as_ref(), rc, stderr) };
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)})));
+            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": is_limit(&error)}));
+            if rc < 0 || result.is_none() && rc != 0 { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -492,16 +492,7 @@ impl GeminiHost {
     }
 }
 
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut bytes = vec![];
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = file.read_to_end(&mut bytes);
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let t = text.trim();
-    let skip = t.chars().count().saturating_sub(STDERR_TAIL);
-    t.chars().skip(skip).collect()
-}
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     if let Some(r) = result {
@@ -517,7 +508,7 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
         }
     }
     if !stderr.is_empty() {
-        return stderr.into();
+        return crate::run_diagnostics::process_reason(rc, stderr);
     }
     format!("gemini exited {rc}")
 }
@@ -560,6 +551,7 @@ mod tests {
     async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
         let mut got = vec![];
         while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            if ev.get("stderr_tail").is_some() { continue; }
             let idle = ev["kind"] == "status" && ev["state"] == "idle";
             ev.as_object_mut().unwrap().retain(|k, _| k != "thread_id" && k != "turn_id");
             got.push(ev);

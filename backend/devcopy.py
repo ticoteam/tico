@@ -57,7 +57,7 @@ EMPTY = (
     "inbound_inboxes", "inbound_messages", "inbound_sync",
     "usage_alerts", "task_requesters", "roadmap_actions",
     # raw provider streams: customer text, and whatever the secret scrub missed
-    "attempt_captures", "attempt_capture_drops",
+    "attempt_captures", "attempt_capture_drops", "attempt_diagnostics",
     # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
     # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
     "feed_walks", "feed_cursors", "feed_deliveries",
