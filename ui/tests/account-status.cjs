@@ -117,14 +117,22 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     await settle();
     assert.equal(await dot.getAttribute('data-level'), 'warn', 'a short offline spell is never red');
     assert.deepEqual(await page.locator('#account-status-pop .account-status-text').allInnerTexts(),
-      ['Computers: Every computer is offline', 'GitHub: GitHub refused the app'], 'bots waiting on it are the same cause');
+      ['Computers: Every computer is offline. 1 bot cannot run because their computer is offline: Builder', 'GitHub: GitHub refused the app'], 'bots waiting on it are the same cause');
     assert.equal(await page.locator('#account-status-pop .account-status-line').nth(1).locator('a').getAttribute('target'), '_blank',
       'a fix outside Tico opens in its own tab');
     // Past thirty minutes the server asks its owner: now it is red.
     status = {...status, health_issues: [{...machine, title: 'Studio Mac stopped checking in', severity: 'error', needs_person: true,
+      detail: 'No word from it for 31 minutes. Builder cannot run until it reconnects. 2 saved requests are waiting.',
       action: 'Wake Studio Mac and check that Tico runs there.'}]};
     await settle();
     assert.equal(await dot.getAttribute('data-level'), 'bad');
+    assert.deepEqual(await page.locator('#account-status-pop .account-status-text').allInnerTexts(),
+      ['Studio Mac stopped checking in: No word from it for 31 minutes. Builder cannot run until it reconnects. 2 saved requests are waiting',
+        'GitHub: GitHub refused the app'], 'one line for the offline computer, retaining bots and queued work');
+    // A different offline computer without its own issue keeps the aggregate warning visible.
+    health = {...offlineHealth, computers: [...offlineHealth.computers, {id: 'r2', label: 'Acme laptop', online: false}]};
+    await settle();
+    assert.equal(await page.locator('#account-status-pop .account-status-text').count(), 3, 'do not hide another computer outage');
     // No computer set up at all clears nothing: red.
     status = {cloud: true, keeper_alive: true, health_issues: []};
     health = {...offlineHealth, computers: [], checks: [{id: 'computers', label: 'Computers', status: 'bad', summary: 'No computer is set up. Bots need one to run.', fixes: []}]};
@@ -138,6 +146,10 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     await settle();
     assert.equal(await dot.getAttribute('data-level'), 'warn');
     assert.equal(await dots(), 1);
+
+    const restart = page.locator('#account-status-pop [data-account-needs-you]');
+    assert.equal(await restart.innerText(), 'Open', 'the action opens the restart panel rather than restarting');
+    assert.equal(await restart.getAttribute('title'), 'Open Needs you to restart this computer');
 
     // Lost connection clears by itself: amber, with Retry.
     failStatus = true;

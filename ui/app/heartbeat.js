@@ -16,9 +16,10 @@ const ACCOUNT_HEALTH = '<a class="ghost" href="#/settings" data-gs-tab="health" 
 const firstSentence = text => { const s = String(text || '').trim(); const m = s.match(/^.*?[.!?](?=\s|$)/); return (m ? m[0] : s).replace(/[.]$/, ''); };
 function accountIssueFix(issue) {
   if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
-  if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you>Restart</button>';
+  if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you to restart this computer">Open</button>';
+  if (issue.kind === 'machine' && issue.machine) return '<a class="ghost" href="#/settings" data-gs-tab="devices">Fix</a>';
   if (issue.bot) return `<a class="ghost" href="#/bot/${esc(issue.bot)}/more" title="Open the bot">Fix</a>`;
-  return '<button class="ghost" type="button" data-account-needs-you>Fix</button>';
+  return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you">Open</button>';
 }
 function accountStatusLines() {
   const st = S.status, lines = [];
@@ -29,24 +30,31 @@ function accountStatusLines() {
     lines.push({level: 'bad', text: st.cloud ? "Bots aren't running: the cloud scheduler stopped" : "Tico stopped on this computer, so bots aren't running", fix: ACCOUNT_HEALTH});
   }
   for (const issue of (st?.health_issues || []).filter(needsPerson)) {
-    lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
+    lines.push({level: issue.severity === 'warning' ? 'warn' : 'bad', text: [issue.title, issue.kind === 'machine' ? String(issue.detail || '').replace(/[.]$/, '') : firstSentence(issue.detail)].filter(Boolean).join(': '), fix: accountIssueFix(issue)});
   }
   // A computer offline for a moment (asleep, a restart) comes back by itself: Health calls it bad at once, but the
   // server asks a person only after NEEDS_YOU_MINUTES (backend/views.py, "stopped checking in"). Until a machine issue
   // needs this person, the offline checks are amber; with no computer set up at all, nothing clears, so red stays.
   const attention = window.hlAttention?.() || [];
   const machineNeedsYou = (st?.health_issues || []).some(issue => issue.kind === 'machine' && needsPerson(issue));
-  const noComputer = Array.isArray(window.hlComputers?.()) && !window.hlComputers().length;
+  const computers = window.hlComputers?.();
+  const noComputer = Array.isArray(computers) && !computers.length;
+  const offlineComputers = (computers || []).filter(computer => !computer.online);
+  const namedOutages = new Set((st?.health_issues || []).filter(issue => issue.kind === 'machine' && needsPerson(issue)).map(issue => issue.machine));
+  // Omit the aggregate only when every offline computer has its own actionable line.
+  const allOutagesNamed = offlineComputers.length > 0 && offlineComputers.every(computer => namedOutages.has(computer.id));
   const offline = new Set(['computers', 'waiting']);
-  // One cause, one line: bots waiting on an offline computer are that computer's line.
+  // The aggregate keeps the affected bot names when no per-computer action covers them.
   const computersLine = attention.some(check => check.id === 'computers');
+  const waiting = attention.find(check => check.id === 'waiting');
   for (const check of attention) {
+    if ((check.id === 'computers' || check.id === 'waiting') && allOutagesNamed) continue;
     if (check.id === 'waiting' && computersLine) continue;
     const fix = check.fixes?.[0];
     const level = check.status !== 'bad' ? 'warn' : offline.has(check.id) && !machineNeedsYou && !noComputer ? 'warn' : 'bad';
     // A fix that leaves Tico (GitHub's settings, a provider's docs) opens in its own tab.
     const away = /^https?:/.test(fix?.href || '') ? ' target="_blank" rel="noopener"' : '';
-    lines.push({level, text: [check.label, firstSentence(check.summary)].filter(Boolean).join(': '),
+    lines.push({level, text: [check.label, [firstSentence(check.summary), check.id === 'computers' && waiting ? firstSentence(waiting.summary) : ''].filter(Boolean).join('. ')].filter(Boolean).join(': '),
       fix: fix ? window.hlFixHtml({...fix, label: 'Fix'}).replace(/^<(a|button) /, `<$1 title="${esc(fix.label)}"${away} `) : ACCOUNT_HEALTH});
   }
   return lines.sort((a, b) => (a.level === 'bad' ? 0 : 1) - (b.level === 'bad' ? 0 : 1));
