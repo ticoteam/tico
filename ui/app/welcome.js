@@ -200,7 +200,7 @@ function onbStepHTML(state, key) {
 function onbSampleHTML(state, done) {
   if (done || state.step !== 0 || state.record.completed) return '';
   return `<div class="onb-sample" id="onb-sample-box"><p><strong>Just trying Tico?</strong>
-    <span class="muted">Start with a made-up company: five bots, each with a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
+    <span class="muted">Start with a made-up company: five bots plus the built-in helpers. Each of the five has a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
@@ -329,16 +329,24 @@ function onbDoneHTML(state) {
   return `<div class="onb-next" id="onb-next-step">${frNextStepHTML(state)}</div>
     <div id="onb-bots">${onbBotRowsHTML(state)}</div>
     <div id="onb-after">${frNextHTML(state)}</div>
-    ${window.talkLineHTML?.() || ''}
     <div class="onb-actions"><button class="${frWaiting(state) ? 'ghost' : 'primary'}" type="button" id="onb-tasks">Open Tasks</button>
-      <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
+      <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button></div>`;
 }
 function onbBotRowsHTML(state) {
   const botOps = onbBotOpsName(state);
   const chosen = new Set(Object.keys(state.record.selected || {}));
   const groups = frBotGroups((state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)));
-  return groups.map(group => `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}
-    ${group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('')}</section>`).join('') || '<div class="empty">No bots were created.</div>';
+  const sample = state.record.sample;
+  const tasks = sample?.tasks || [];
+  const starter = sample ? `<p class="fr-sample-created">Five bots plus the built-in helpers.</p>${tasks.length ?
+    `<details class="fr-starter-tasks"><summary>${tasks.length} starter ${tasks.length === 1 ? 'task' : 'tasks'} created</summary><ul>${tasks.map((id, i) =>
+      `<li><a href="#/task/${esc(id)}">Starter task ${i + 1}</a></li>`).join('')}</ul></details>` : ''}` : '';
+  const rows = groups.map(group => {
+    const content = group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('');
+    return group.id === 'built-in' ? `<details class="onb-group onb-builtins" data-onb-group="built-in"><summary>Built-in helpers: ${group.bots.map(bot => esc(bot.display_name || bot.slug)).join(', ')}</summary>${content}</details>`
+      : `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}${content}</section>`;
+  }).join('');
+  return starter + (rows || '<div class="empty">No bots were created.</div>');
 }
 // The poll redraws only the progress rows: the forms below them keep what was typed.
 function onbRenderDone(state) {
@@ -346,7 +354,9 @@ function onbRenderDone(state) {
   if (!host || host.dataset.onbStep !== 'done') return;
   const rows = $('#onb-bots');
   if (!rows) { host.innerHTML = onbDoneHTML(state); onbWire(state, 'done'); return; }
+  const open = [...rows.querySelectorAll('details')].map(el => el.open);
   rows.innerHTML = onbBotRowsHTML(state);
+  rows.querySelectorAll('details').forEach((el, i) => { el.open = open[i] || false; });
   // The next step is redrawn only when it changes, so keyboard focus on its button survives a poll.
   const next = $('#onb-next-step'), step = document.createElement('div');
   step.innerHTML = frNextStepHTML(state);
@@ -546,6 +556,8 @@ async function onbCompleted(state, record) {
   if (ONB !== state) return;
   applyConfig(done(config || S.config));
   if (!config) void fresh.then(late => { if (late && ONB === state) applyConfig(done(late)); });
+  const providers = await get('/v2/providers').catch(() => null);
+  if (providers && Array.isArray(providers.providers)) state.providers = providers;
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;

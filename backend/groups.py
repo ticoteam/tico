@@ -71,8 +71,8 @@ def rows(roster, employees, archived=(), can_see=None):
         if team:
             bots.setdefault(team, []).append(slug)
     return [{"id": gid, "name": g["name"], "parent": g["parent"], "people": people.get(gid, []),
-             "bots": sorted(bots.get(gid, [])), "order": i}
-            for i, (gid, g) in enumerate(roster["org_groups"].items())]
+             "bots": sorted(bots.get(gid, [])), "order": g.get("order", i)}
+            for i, (gid, g) in sorted(enumerate(roster["org_groups"].items()), key=lambda row: row[1][1].get("order", row[0]))]
 
 
 def refresh_teams(c, roster=None):
@@ -253,7 +253,7 @@ def ensure(roster, gid, name):
     return gid
 
 
-def place(c, settings, slugs):
+def place(c, settings, slugs, group_order=()):
     """The team builder made these bots: each one goes in the group of its template (the group its card is in), which
     is made when the team has none yet. A bot that already has a group of its own keeps it."""
     from . import recruit
@@ -264,10 +264,19 @@ def place(c, settings, slugs):
     homes = recruit.template_groups(settings)
     roster = _roster(c)
     made = set(roster["org_groups"])
+    # Stored JSON sorts object keys, so bot creation order cannot preserve the wizard's chart order.
+    # Only newly made groups take this order; an existing team's groups keep their positions.
+    rank = {gid: i for i, gid in enumerate(group_order)}
+    todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
+    next_order = max((g.get("order", i) for i, g in enumerate(roster["org_groups"].values())), default=-1) + 1
     for slug in todo:
         home = homes.get(str(configs[slug].get("template") or ""))
         if home and not outside(settings, slug, configs[slug]):
-            _set_bot(c, slug, ensure(roster, home["id"], home["name"]))
+            gid = ensure(roster, home["id"], home["name"])
+            if gid not in made and "order" not in roster["org_groups"][gid]:
+                roster["org_groups"][gid]["order"] = next_order
+                next_order += 1
+            _set_bot(c, slug, gid)
     if set(roster["org_groups"]) != made:
         _save(c, roster)
     refresh_teams(c, roster)

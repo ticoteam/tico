@@ -151,3 +151,22 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 
+
+
+def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(environment):
+    """Stored selected keys are alphabetical; groups still follow the chart, including on repeated Create."""
+    api = environment(seed={}, catalog_dir=CATALOG)
+    who = signed_in()
+    departments = ["sales", "marketing", "support", "finance", "operations"]
+    templates = ["sales-lead", "marketing-lead", "support-lead", "finance-lead", "ops-manager"]
+    selected = {slug: {"template": slug, "display_name": slug, "instructions": ""} for slug in templates}
+    body = {"names": {"company_name": "Fresh Synthetic Co"},
+            "answers": {"departments": departments}, "selected": selected}
+    assert api.put("/api/v2/setup", json=body, headers=who).status_code == 200
+    # This fresh read exercises encode(sort_keys=True), the source of the original mismatch.
+    saved = api.get("/api/v2/setup", headers=who).json()
+    assert list(saved["selected"]) == sorted(templates)
+    for _ in range(2):
+        assert api.post("/api/v2/setup/complete", json={}, headers=who).status_code == 200
+        groups = api.get("/api/v2/groups", headers=who).json()
+        assert [group["id"] for group in groups] == departments

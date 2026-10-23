@@ -122,6 +122,8 @@ def load(doc, owner=None):
         groups[gid] = {"id": gid, "name": _clean(body.get("name")) or gid.replace("-", " ").title(),
                        "reports_to": _clean(body.get("reports_to")), "parent": _clean(body.get("parent")),
                        "root": _clean(body.get("root"))}
+        if isinstance(body.get("order"), int):
+            groups[gid]["order"] = body["order"]
     for gid, root in roots.items():             # a roster written before groups: each team is a group
         group = groups.setdefault(gid, {"id": gid, "name": gid.replace("-", " ").title(), "reports_to": "",
                                         "parent": "", "root": ""})
@@ -448,7 +450,7 @@ def org_view(roster, employees, archived=(), person_id="", team=""):
         boss = person(g.get("reports_to"), roster)
         parent = ("g:" + g["parent"]) if g.get("parent") else ("p:" + boss["id"]) if boss and not boss.get("hidden") else ""
         group_rows.append({"id": gid, "name": g.get("name") or gid, "reports_to": g.get("reports_to") or "",
-                           "parent": g.get("parent") or "", "org_parent": parent, "order": i})
+                           "parent": g.get("parent") or "", "org_parent": parent, "order": g.get("order", i)})
     if wanted:
         keep = {"p:" + wanted}
         changed = True

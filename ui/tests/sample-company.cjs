@@ -79,7 +79,7 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     await page.locator('#onb-company').waitFor();
     // The first screen offers it, in plain words.
     assert.equal(await page.locator('#onb-sample').textContent(), 'Start with a sample company');
-    assert.match(await page.locator('#onb-sample-box').textContent(), /five bots.*approve it\. Nothing is sent outside\./s);
+    assert.match(await page.locator('#onb-sample-box').textContent(), /five bots plus the built-in helpers.*approve it\. Nothing is sent outside\./s);
     // One click: the Next buttons wait, a second click does nothing, and the post is made once with no draft saved.
     samplesHeld = new Promise(resolve => { releaseSample = resolve; });
     await page.locator('#onb-sample').click();
@@ -94,6 +94,10 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     assert.equal(await page.evaluate(() => [S.config.company_name, S.config.onboarding_needed, S.config.providers_configured].join('|')),
                  'Sample Co|false|true');
     assert.equal(await page.locator('[data-onb-bot=builder]').count(), 1);
+    assert.match(await page.locator('.fr-sample-created').textContent(), /Five bots plus the built-in helpers/);
+    assert.equal(await page.locator('.fr-starter-tasks summary').textContent(), '1 starter task created');
+    assert.equal(await page.locator('.fr-starter-tasks a').getAttribute('href'), '#/task/t1');
+    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 6 bots. Change');
 
     // A company that has begun the wizard is past the offer: it shows on the first screen only.
     const later = await context.newPage();
