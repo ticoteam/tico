@@ -5,7 +5,7 @@ How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in
 
 ![Tasks in the demo team](images/tasks-desktop-light.png)
 
-Every picture in these docs is a screenshot of [demo mode](demo.md), which you can run yourself.
+The screenshots use demo mode or synthetic examples. You can run [demo mode](demo.md) yourself.
 
 **How do I give work to a bot or a human?**
 On **Tasks**, press **New task** and pick who it is for — any human or bot. On a human's profile,
@@ -32,6 +32,34 @@ Work on a task happens in that task's own thread: tap the task's row in the chat
 The chat itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
 For anything across the team, ask your own external agent: **Connect an external agent** (the plug button beside
 your email) gives it a token and Tico's MCP ([Connect an external agent](connect-an-agent.md)).
+
+**Why is Chat still sending?**
+**Unreleased.** While your message is sending, **Send** shows a spinner and stays disabled to prevent another press.
+After about five seconds, **Still sending…** appears by the message box.
+If Tico retries on a slow connection, the line says **Still sending… the connection is slow, trying again.**
+When the send finishes, the spinner and line disappear.
+
+![Send shows a spinner while the slow-send line says Still sending…](images/chat-still-sending.png)
+
+*Slow-send example with synthetic message text.*
+
+**What should I do if Chat says Not confirmed?**
+**Unreleased.** A text send without attachments has a 30-second deadline, including connection retries.
+If it times out, Tico says **Not confirmed** and **It may still arrive.** Your draft stays in the message box.
+
+1. Leave the draft unchanged.
+2. Choose **Retry** in the notification to try the original send again.
+
+Retry reuses the pending request ID, so a message that reached the server is not saved twice.
+This protection lasts for five minutes after the timeout, in the same tab with the same draft.
+Editing or clearing the draft, or letting those five minutes pass, forgets the pending request ID.
+An identical message sent later can be a new send.
+For example, retry an unchanged “Please review the Acme draft” within five minutes to avoid saving it twice.
+
+**Do file uploads have the same deadline?**
+**Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
+The slow-send line says **Still sending… uploading the file.** or gives the file count.
+If Tico retries the upload, the line adds **trying again**.
 
 **How do I know my bot ran?**
 The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks
