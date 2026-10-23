@@ -336,7 +336,7 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
     from backend import assistant
     from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call
+    from backend.tests.test_mcp import call, rpc
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
@@ -359,8 +359,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert stats.status_code == 200 and stats.json()["tools"][0]["tool"] == "hub_task_show"
     # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
     for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
-        failed, _ = call(api, name)
-        assert failed
+        assert rpc(api, "tools/call", {"name": name, "arguments": {}})["error"]["code"] == -32601
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
         ["hub_task_show", 1], ["other", 2]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
@@ -390,7 +389,8 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
 
 
 def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
-    from backend import assistant
+    import sqlite3
+    from backend import assistant, sql as S
     from backend.tests.test_assistant import assistant_turn
 
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
@@ -414,6 +414,18 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     delegated = attempt["token"]
     assert api.put("/api/v2/outcome-stats/readers/coo", json={"read": True},
                    headers=headers(delegated)).status_code == 403
-    assert "no such table" in error(api, "SELECT * FROM assistant_action_weekly", delegated)
-    assert "no such table" in error(api, "SELECT * FROM mcp_call_weekly", delegated)
+    # The HTTP Assistant policy refuses SQL first; also exercise the database boundary itself.
+    for view in ("assistant_action_weekly", "mcp_call_weekly"):
+        assert query(api, "SELECT * FROM " + view, delegated, expected=403)["error"]["code"] == "confirm_required"
+    auth, store = api.app.state.auth, api.app.state.store
+    who = auth.authenticate(headers(delegated), "/api/v2/sql", "POST")
+    assert who.role == "owner" and who.via == "assistant" and who.task_actor
+    with store.read() as c:
+        conn = S.connect(store.settings.db_path, c, auth, who)
+        try:
+            for view in ("assistant_action_weekly", "mcp_call_weekly"):
+                with pytest.raises(sqlite3.DatabaseError, match="no such table"):
+                    conn.execute("SELECT * FROM " + view).fetchall()
+        finally:
+            conn.close()
     assert api.get("/api/v2/live/stats", headers=headers(delegated)).status_code == 403
