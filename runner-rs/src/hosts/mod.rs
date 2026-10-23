@@ -205,6 +205,20 @@ pub fn event(kind: &str, thread: Option<&str>, turn: Option<&str>, fields: Value
     Value::Object(ev)
 }
 
+/// Adds one streamed piece to a turn's reply and returns the text its `delta` carries. Pieces of one message join
+/// with nothing between them; the first piece of a new message after earlier text starts a paragraph of its own,
+/// as Claude's separate answers do, so two messages never read as one ("...recovers.No change...").
+pub fn add_piece(reply: &mut String, new_message: bool, text: &str) -> String {
+    if !new_message || reply.trim().is_empty() {
+        reply.push_str(text);
+        return text.to_string();
+    }
+    reply.truncate(reply.trim_end().len());
+    let piece = format!("\n\n{}", text.trim_start());
+    reply.push_str(&piece);
+    piece
+}
+
 /// The longest input summary a `tool` event carries. The drive loop scrubs it with the rest of the event.
 pub const TOOL_SUMMARY_CHARS: usize = 120;
 
@@ -661,6 +675,15 @@ mod tests {
         assert_eq!(tool_summary(&json!({"file_path": "/work/note.txt", "content": "secret body"})), "/work/note.txt");
         assert_eq!(tool_summary(&json!({"description": "count words", "prompt": "Count the words", "subagent_type": "general-purpose"})), "");
         assert_eq!(tool_summary(&json!({"query": "private question", "url": "https://x.example/?token=1"})), "");
+    }
+
+    #[test]
+    fn a_new_message_starts_a_paragraph_and_pieces_of_one_message_join_with_nothing() {
+        let mut reply = String::new();
+        assert_eq!(add_piece(&mut reply, true, "Holding until "), "Holding until ");
+        assert_eq!(add_piece(&mut reply, false, "it recovers. "), "it recovers. ");
+        assert_eq!(add_piece(&mut reply, true, "No change."), "\n\nNo change.");
+        assert_eq!(reply, "Holding until it recovers.\n\nNo change.");
     }
 
     #[test]
