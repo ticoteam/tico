@@ -448,9 +448,13 @@ mod tests {
         state.save_session("ops", "bot", "claude", "thread-1").unwrap();
         state.interrupted("a2", "Runner restarted during execution").unwrap();
         drop(state);
-        let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(len(c.execute(\"select name from sqlite_master where type='table'\").fetchall()))";
+        let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(','.join(r[0] for r in c.execute(\"select name from sqlite_master where type='table' order by name\")))";
         let out = std::process::Command::new("python3").args(["-c", script]).arg(dir.join("runner.sqlite")).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", "12"]);
+        // Every table SCHEMA declares, by name, so a new table can't leave a stale count behind (#1244 did).
+        let mut tables: Vec<&str> = SCHEMA.split("CREATE TABLE IF NOT EXISTS ").skip(1).map(|t| t.split('(').next().unwrap().trim()).collect();
+        tables.sort();
+        let tables = tables.join(",");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", tables.as_str()]);
         std::fs::remove_dir_all(dir).ok();
     }
 }
