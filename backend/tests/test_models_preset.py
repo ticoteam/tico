@@ -76,6 +76,41 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
     assert models_preset.main_config(record, ready, providers.fill(record, CLAUDE))["model"] == CLAUDE["model"]
 
 
+def test_a_new_computer_prepares_the_gateway_before_its_first_subscription_turn(api, monkeypatch):
+    from backend.tests.test_api import get
+    from backend.tests.test_gateway_connection import delete
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    # Before-sign-in main work still needs its runtime when quota fallback is switched off.
+    with api.app.state.store.transaction() as c:
+        record = providers.load(c, api.app.state.store.settings)
+        providers.save(c, "human:ana", {"auto_fallback": False, "expected_revision": record["revision"]},
+                       "2026-10-19T00:00:00Z")
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    config = get(api, "config", machine["token"])
+    assert config["gateway_runtime"] == "pi" and config["fallback_models"] == []
+    waiting_heartbeat(api, machine, "no pi")
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    # The managed installer can now request Pi. Once installed, missing subscription sign-in no longer
+    # holds the work, and a normal runner can claim and complete it without changing the bot's model.
+    waiting_heartbeat(api, machine, "only the sign-in")
+    attempt = claim(api, machine, "ops")
+    assert attempt["config"]["runtime"] == config["gateway_runtime"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
+         machine["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "completed"
+    choose(api, "subscriptions")
+    assert get(api, "config", machine["token"])["gateway_runtime"] == ""
+    choose(api, models_preset.RECOMMENDED)
+    delete(api, "providers/gateway")
+    assert get(api, "config", machine["token"])["gateway_runtime"] == ""
+
+
 @pytest.mark.parametrize("preset", models_preset.PRESETS + ("",))
 def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api, monkeypatch, preset):
     connected(api, monkeypatch)
@@ -353,3 +388,50 @@ def test_the_owner_saves_the_choice_through_the_api_and_reads_it_back(api):
     assert again["preset"] == models_preset.RECOMMENDED
     put(api, "providers", {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": again["revision"]},
         expected=422)
+
+
+@pytest.mark.parametrize("gateway", ["connected", "connected, no pi", "connected, no repository",
+                                     "connected, invalid settings", "none"])
+def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_login(api, monkeypatch, gateway):
+    """Dev 326: with no Claude login and the Gateway connected under the recommended choice, the bot's own state, its
+    model check and its chat say what runs it, never "Claude login required"; with no Gateway either, they still do.
+    A computer without the Gateway's runtime, or a bot without its checkout or with settings that differ, holds the
+    turn (the claim's rule), so the bot's row stays as reported."""
+    from backend import readiness, views
+    if gateway != "none":
+        connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    report = {"ready": False, "runtime": "claude", "model": CLAUDE["model"], "repository_present": True,
+              "configuration_valid": True, "problems": ["Claude login required"], "sign_in": "missing"}
+    if gateway == "connected, no repository":
+        report = {**report, "repository_present": False, "problems": [*report["problems"], "Missing bot repository"]}
+    elif gateway == "connected, invalid settings":
+        report = {**report, "configuration_valid": False,
+                  "problems": [*report["problems"], "Configuration differs from server"]}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "isolated": True, "bots": {"ops": report},
+        "runtimes": {"claude": {"installed": True, "authenticated": "missing", "detail": "Claude login required"},
+                     "pi": {"installed": gateway != "connected, no pi", "authenticated": "missing"}}}},
+         token=machine["token"])
+    with api.app.state.store.read() as c:
+        location = views.machine(c, "ops")
+        can = readiness.can_run(c, "ops", "claude", model=CLAUDE["model"])
+        label = views.queued_label(c, "ops", location, api.app.state.store.settings, human=True)
+    said = json.dumps([location, can, label])
+    if gateway == "connected":
+        assert location["ready"] is True and location["readiness"]["problems"] == [], location
+        assert location["readiness"]["gateway"] == "Using Tico AI Gateway; sign in to Claude to use your subscription"
+        assert can["can_run"] is True and can["bot_ready"] is True and not can.get("sign_in"), can
+        assert "login required" not in said, said
+    elif gateway in ("connected, no repository", "connected, invalid settings"):
+        assert location["ready"] is False and location["readiness"]["problems"] == report["problems"], location
+        assert "gateway" not in location["readiness"]
+        assert can["can_run"] is True and can["gateway"], can     # the model is fine; the bot's own setup is not
+    else:
+        assert location["ready"] is False and location["readiness"]["problems"] == ["Claude login required"]
+        assert "gateway" not in location["readiness"]
+        assert can["can_run"] is False and can["sign_in"] is True and can["problem"] == "Claude login required", can
+        assert label == ("Saved — Claude login required", "model_sign_in"), label

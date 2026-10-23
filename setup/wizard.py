@@ -459,7 +459,9 @@ def run(args, io: IO, deps: Deps) -> int:
     gather_runner_host(io, args, s, zone, dry)
     st.gather_runtime(args, s, final=True)
     if s.target == "aws" and s.company_file_data and len(envfile.render(s.to_env()).encode()) > 8000:
-        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit; shorten the plan or import it in the app")
+        from backend.company_file import starter
+        raise MissingInput("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
+                           + starter.IMPORT_IN_APP)
     if s.target == "ssh" and s.front_door == "caddy":
         default_ip = ""
         try:
@@ -544,9 +546,10 @@ def run(args, io: IO, deps: Deps) -> int:
             io.say("\nDNS")
             live = ensure_dns(io, s, deps, zone, records, timeout=timeout, skip_wait=args.skip_dns_wait, cf=cf)
     elif s.target == "aws":
-        runner = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
-        if runner is None:
+        res = _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout)
+        if res is None:
             return 1
+        runner, records = res
     elif s.target in cloudmod.PROVIDERS:
         res = _cloud(io, args, s, deps, zone, cf, env_text, timeout)
         if isinstance(res, int):
@@ -599,7 +602,7 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
-def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> remote.Shell | None:
+def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
     ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
@@ -641,7 +644,7 @@ def _aws(io, args, s, deps, zone, records, cf, env_text, compose, url, timeout) 
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None
-    return runner
+    return runner, records
 
 
 def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeout: float):
@@ -740,7 +743,8 @@ def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None
                             wait_https=HTTPS_WAIT_SECONDS, sleep=deps.sleep, say=io.say)
     show(io, checks)
     if all(c.ok for c in checks):
-        computer = s.preset == "recommended" and hosted.add_server_computer(io, s, runner)
+        computer = (s.preset == "recommended" and getattr(args, 'server_computer', 'same') == 'same'
+                    and hosted.add_server_computer(io, s, runner))
         if s.auth == st.OWNER_LINK:
             io.say(f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
                    "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one.")

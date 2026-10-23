@@ -17,7 +17,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import update_feeds, wake_presets
+from . import task_models, update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -199,6 +199,8 @@ class SettingsAdmin:
                 "subtask_session": effective.get("subtask_session"),
                 "task_goal": effective.get("task_goal"),
                 "review_model": effective.get("review_model"),
+                # What the bot's tasks run on; null is the same as the bot (backend/task_models.py).
+                "task_model": task_models.of(effective),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
@@ -275,7 +277,9 @@ class SettingsAdmin:
         if not choice:
             raise Problem("model", "Choose a Team default in Settings > Computers" if not body.model
                           else "Choose one of the supported models", 422)
-        self.refuse_retired(choice)
+        if body.model:
+            # A Team default saved before its model retired still makes bots: only a fresh pick is refused.
+            self.refuse_retired(choice)
         effort = self._effort(choice, body.effort or default.get("effort") or None)
         harness = self._harness(choice, getattr(body, "harness", None))
         self._parent(c, body.slug, body.reports_to)
@@ -452,7 +456,7 @@ class SettingsAdmin:
         return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
-        # The assistant, BotOps, the Librarian and the Goal Manager are built in: nobody archives them, the owner included.
+        # The assistant, BotOps, the Librarian and the CEO Bot are built in: nobody archives them, the owner included.
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
@@ -647,6 +651,8 @@ class SettingsAdmin:
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == "fallback":
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
+        if field == "task_model":
+            return task_models.of(_json(config["config_json"], {}) or {})
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
         if field == "wake_preset":
@@ -787,14 +793,20 @@ class SettingsAdmin:
         if config["revision"] != transition["expected_revision"]:
             raise Problem("version_conflict", "Bot settings changed while the checkpoint was being prepared", 409)
         self.execution.expire(c)
-        if c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')", (transition["bot"],)).fetchone():
-            raise Problem("busy", "Wait for the current bot turn to finish", 409)
         target, bot, field = _json(transition["target_json"], {}), transition["bot"], transition["kind"]
         field = "model" if field == "model" else "placement"
+        # A move takes the bot's turns off their computer, so it waits for them. A model change does not: a turn that
+        # is out finishes on the model its claim handed it, and the next turn runs on the new one. A person must be
+        # able to move a rate-limited bot off its spent model while a retry is running (Dev 334).
+        if field == "placement" and c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')",
+                                              (bot,)).fetchone():
+            raise Problem("busy", "Wait for the current bot turn to finish", 409)
         before = self.snapshot(c, bot, field)
         c.execute("SAVEPOINT apply_bot_transition")
         try:
             if field == "model":
+                from .execution import lift_after_model_change, model_choice
+                was = model_choice(c, self.settings, bot)
                 declared = _json(config["config_json"], {})
                 # A Settings choice is the live authority. The checked-in manifest remains
                 # the bootstrap default, but must not make the runner reject an intentional
@@ -808,6 +820,9 @@ class SettingsAdmin:
                           (target["model"], target["runtime"], target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
+                # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
+                # same spent login or Gateway key.
+                lift_after_model_change(c, self.settings, who.actor, bot, was)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:
@@ -926,7 +941,7 @@ class SettingsAdmin:
         if change["undone_at"] or self.snapshot(c, change["bot"], change["field"]) != after:
             raise Problem("not_latest", "A newer change replaced this value, so it cannot be undone directly", 409)
         self.execution.expire(c)
-        if change["field"] in ("model", "placement") and c.execute(
+        if change["field"] == "placement" and c.execute(
                 "SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running')", (change["bot"],)).fetchone():
             raise Problem("busy", "Wait for the current bot turn to finish before undoing", 409)
         bot = change["bot"]
@@ -974,6 +989,11 @@ class SettingsAdmin:
         if change["field"] == "fallback":
             return self.set_fallback(c, who, bot, SimpleNamespace(
                 fallback=SimpleNamespace(**before) if before else None,
+                expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == "task_model":
+            return self.set_task_model(c, who, bot, SimpleNamespace(
+                task_model=SimpleNamespace(effort=before.get("reasoning_effort"), **{
+                    k: before[k] for k in ("harness", "model")}) if before else None,
                 expected_revision=body.expected_revision), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
@@ -1062,6 +1082,47 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.fallback_changed", bot, {"before": before, "after": after})
         return {"bot": bot, "fallback": after, "revision": config["revision"] + 1}
 
+    def set_task_model(self, c, who, bot, body, undo_change_id=None):
+        """The harness, model and effort the bot's tasks run on (backend/task_models.py); None clears it to the same
+        as the bot. Only the one key changes: the bot's own model, and so its sessions, stay as they are. A model the
+        bot's computer cannot run is saved all the same, and its tasks run on the bot's model until it can: the
+        answer's `readiness` says so now."""
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        if body.task_model is None:
+            target = None
+        else:
+            choice = self.models.get(body.task_model.model)
+            if not choice:
+                raise Problem("model", "Choose one of the supported models", 422)
+            self.refuse_retired(choice)
+            harness = self._harness(choice, body.task_model.harness)
+            target = {"harness": harness, "model": choice["id"],
+                      "reasoning_effort": self._effort(choice, body.task_model.effort),
+                      "runtime": runtime_of(harness) or choice["runtime"]}
+        before = self.snapshot(c, bot, "task_model")
+        if before == target:
+            raise Problem("unchanged", "That task model is already selected", 409)
+        declared = _json(config["config_json"], {}) or {}
+        if target is None:
+            declared.pop(task_models.KEY, None)
+        else:
+            declared[task_models.KEY] = target
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        after = self.snapshot(c, bot, "task_model")
+        self.record(c, who.actor, bot, "task_model", before, after)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
+        readiness = task_models.readiness(c, bot, after) if after else None
+        warning = task_models.warning(c, self.settings, bot, declared, after) if after else ""
+        return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness,
+                "warning": warning}
+
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
         session is kept: the next turn simply compacts at the new size."""
@@ -1088,15 +1149,14 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         before = self.snapshot(c, bot, "wake_preset")
         declared = _json(config["config_json"], {}) or {}
-        if body.wake_preset == wake_presets.CURRENT:
-            declared.pop("wake_preset", None)
-        else:
-            declared["wake_preset"] = body.wake_preset
+        # Old clients may still send `current`; it now selects Performance.
+        chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
+        declared["wake_preset"] = chosen
         c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
         wake_presets.replan(c, bot)
-        self.record(c, who.actor, bot, "wake_preset", before, body.wake_preset)
-        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": body.wake_preset})
-        return {"bot": bot, "wake_preset": body.wake_preset, "wake": wake_presets.effective(declared),
+        self.record(c, who.actor, bot, "wake_preset", before, chosen)
+        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
+        return {"bot": bot, "wake_preset": chosen, "wake": wake_presets.effective(declared),
                 "revision": config["revision"] + 1}
 
 

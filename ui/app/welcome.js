@@ -204,7 +204,8 @@ function onbSampleHTML(state, done) {
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
-  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines'}[field] || field)).join(', ');
+  first_jobs: 'first jobs', model_choices: 'model choices', routines: 'routines',
+  open_seats: 'open seats', coworkers: 'coworkers'}[field] || field)).join(', ');
 function onbCompanyFileHTML(state, done) {
   if (done) {
     const imported = state.record.company_import;
@@ -229,7 +230,7 @@ async function onbReadCompanyFile(state, file) {
   state.companyImport = null;
   state.companyImportError = '';
   try {
-    if (file.size > 131072) throw new Error('Choose a company YAML file smaller than 128 KB.');
+    if (file.size > 524288) throw new Error('Choose a company YAML file smaller than 512 KB.');
     const text = await file.text();
     const preview = await post('/v2/setup/company/preview', {company_yaml: text});
     if (ONB !== state || generation !== state.companyImportGeneration) return;

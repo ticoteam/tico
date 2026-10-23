@@ -3,7 +3,7 @@
 A company starts with four built-in bots: the assistant, which is each person's private Assistant
 chat (backend/assistant.py) and works in the background (Slack routing, meetings' Auto delivery),
 BotOps, which builds every other bot, the Librarian, which answers questions from the company's
-docs (backend/librarian.py), and the Goal Manager, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
+docs (backend/librarian.py), and the CEO Bot, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
 created at once, `needs_onboarding`, and its repository is materialized by the computer; every other template is
@@ -310,12 +310,21 @@ def config_view(c, settings, who=None):
         # Where a runner sends a turn whose subscription hit its limit, when the bot names no fallback.
         value["fallback_models"] = providers.default_fallbacks(chosen)
         if getattr(who, "runner_id", None):
+            # The Gateway also runs turns before subscription sign-in under the recommended choice,
+            # even when automatic quota fallback is off. Its harness must be installed before a claim
+            # can pass readiness; it is an optional computer default, not the bot's saved runtime.
+            from . import models_preset
+            value["gateway_runtime"] = (models_preset.fallback_row(chosen) or {}).get("runtime", "")
             # This computer's logins a usage limit holds (backend/login_holds.py): a runner that restarted, and so
             # forgot the limits it met, still skips them in its fallback choice until they end.
             from . import login_holds
             from .store import H
             value["login_holds"] = [{"profile": h["profile"], "runtime": h["runtime"], "until": h["until"]}
                                     for h in login_holds.on_runner(c, who.runner_id) if (h.get("until") or "") > H.now()]
+        # A runner names a folder its turns can't write (Muse Code's sessions) apart from its sign-in only to a server
+        # that takes the field (runner-rs/src/fallback.rs server_takes_data_problem).
+        value["readiness_data_problem"] = True
+        value["computer_logins_v1"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one
@@ -331,7 +340,6 @@ def config_view(c, settings, who=None):
     value["backup"] = replication.status()
     value["runner_compat"] = runner_versions.desired()
     value["beta"] = beta.listing()      # the Beta pill and Help's Beta list (ui/app/state.js betaPill)
-    value["ceo_bot"] = ceo_bot.on(c)    # the CEO Bot switch: its name and place on the chart (ui/app/state.js ceoBotOn)
     from . import update_feeds
     value["update_feeds"] = update_feeds.status()   # what Subscribe to updates can send (settings-bot-editor.js)
     return value
@@ -684,7 +692,7 @@ class Onboarding:
         return self._turn_on(c, who, SLUG, SLUG, NAME, "health_monitor.turned_on")
 
     def turn_on_goal_manager(self, c, who):
-        """The same for the built-in Goal Manager (docs/goals-and-kpis.md)."""
+        """The same for the built-in CEO Bot (docs/ceo-bot.md)."""
         return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def ensure_librarian(self, c):
@@ -696,7 +704,7 @@ class Onboarding:
         return self._ensure_builtin(c, LIBRARIAN, "Librarian", "librarian.turned_on")
 
     def ensure_goal_manager(self, c):
-        """The same for the Goal Manager: a company from before it was built in gets it once it can run it."""
+        """The same for the CEO Bot: a company from before it was built in gets it once it can run it."""
         return self._ensure_builtin(c, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
@@ -957,8 +965,8 @@ class Onboarding:
         """Create the bot, or bring an existing definition up to the chosen name. A bot that
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
-        if slug == GOAL_MANAGER and ceo_bot.on(c):
-            choice = {**choice, "display_name": ceo_bot.NAME}      # a plan run again never names it back
+        if slug == GOAL_MANAGER:
+            choice = {**choice, "display_name": ceo_bot.name(c)}   # "CEO Bot", or the owner's name for it: never back
         existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not existing:
             picked = self._runtime(c, card)

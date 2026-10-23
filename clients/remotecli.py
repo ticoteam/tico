@@ -435,6 +435,10 @@ def run(args, who=None):
                 body["ask"] = ask
             if getattr(args, "needs_action", False):
                 body["needs_action"] = True
+            if getattr(args, "public", None):
+                body["public"] = True
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
@@ -442,6 +446,8 @@ def run(args, who=None):
             return client.get(f"tasks/{args.id}/answers")
         if sub == "comment-edit":
             body = {"text": args.text}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
@@ -462,6 +468,8 @@ def run(args, who=None):
                         delegate=asked)
         if sub == "relate":
             return post(f"tasks/{args.id}/relations", {"task": args.task, "kind": args.kind, "remove": args.remove})
+        if sub == "wait":
+            return post(f"tasks/{args.id}/waits", {"on": args.wait_on, "remove": args.remove})
         if sub == "label":
             current = client.get("tasks/" + args.id)["task"]
             labels = [x for x in current.get("labels") or []]
@@ -472,7 +480,10 @@ def run(args, who=None):
                 for x in one.split(","):
                     if x.strip() and x.strip().lower() not in labels:
                         labels.append(x.strip().lower())
-            return post("tasks/" + args.id, {"version": current["version"], "labels": labels}, delegate=asked)
+            body = {"version": current["version"], "labels": labels}
+            if getattr(args, "approval_id", None):
+                body["approval_id"] = args.approval_id
+            return post("tasks/" + args.id, body, delegate=asked)
         if sub == "attach":
             path = Path(args.file)
             from clients.task_review import ask_from_args
@@ -1014,8 +1025,13 @@ def main(args, who=None):
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
             print(json.dumps(result, indent=2))
+        if isinstance(result, dict) and result.get("readback"):    # what a relation write stored, direction and all
+            for line in result["readback"]:
+                print("hub: stored: " + str(line), file=sys.stderr)
         if isinstance(result, dict) and result.get("warning"):     # saved, but a person should know why it waits
             print("hub: " + str(result["warning"]), file=sys.stderr)
+        if isinstance(result, dict) and result.get("held"):        # a bot's message to a bot waits for its next run
+            print("hub: " + str(result["held"]), file=sys.stderr)
         return 0
     except APIError as exc:
         if exc.code == "worktree_limit" and isinstance(exc.extra.get("wait"), dict):

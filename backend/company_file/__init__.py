@@ -10,14 +10,14 @@ No model and no transport: functions over the draft dict the page keeps. Whateve
 
 Standard library only, except that `from_yaml` needs PyYAML. Self-contained so it can be copied as is: Tico HQ
 (ticoteam/tico-services) serves the setup page from a copy taken from a published Tico release
-(`scripts/build_catalog_json.py --out DIR`), with the actions, catalogue and starter pack for the page's browser planner.
+(`scripts/build_catalog_json.py --out DIR`), with the actions, catalogue and company models for the page's browser planner.
 """
 from .actions import Refusal, Turn, apply_action, undo
-from .draft import LIMITS, PACK, ROLES, SPEC, DraftError, blank
+from .draft import LIMITS, MODELS, ROLES, SEATS, SPEC, DraftError, blank
 from .keys import scrub, scrub_all
 from .yamlfile import FORMAT, from_yaml, to_yaml
 
-__all__ = ["DraftError", "FORMAT", "LIMITS", "PACK", "ROLES", "Refusal", "SPEC", "Turn", "apply_action", "blank",
+__all__ = ["DraftError", "FORMAT", "LIMITS", "MODELS", "ROLES", "Refusal", "SEATS", "SPEC", "Turn", "apply_action", "blank",
            "from_yaml", "scrub", "scrub_all", "to_yaml", "undo", "validate"]
 
 

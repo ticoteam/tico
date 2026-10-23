@@ -81,6 +81,10 @@ def to_yaml(draft, created=None):
             L.append("    tools: [%s]" % ", ".join(word(t) for t in b["tools"]))
         if b.get("first_job"):
             L.append("    first_job: %s" % q(b["first_job"]))
+        if b["template"] in D.OPEN_SEATS:
+            L.append("    no_bot_yet: true  # Tico has no template for this seat yet")
+        if b.get("person"):
+            L.append("    held_by: %s" % word(b["person"]))
     L.append("existing_agents:" + ("" if any(b["existing"] for b in draft["bots"]) else " []"))
     for b in (b for b in draft["bots"] if b["existing"]):
         L += ["  - id: %s" % word(b["id"]), "    runtime: %s" % b["runtime"], "    title: %s" % q(b["title"]),
@@ -141,7 +145,8 @@ def from_yaml(text):
                         "dept": D.dept_of(_str(p.get("role"))), "owner": p.get("owner") is True} for p in people]
     chosen = {}
     for b in _rows(doc, "employees"):
-        role = next((r for r in D.ROLES if r["slug"] == b.get("template")), None)
+        role = next((r for r in D.ROLES if r["slug"] == b.get("template")), None) \
+            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == b.get("template")), None)
         if not role:
             raise D.DraftError("employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40])
         bot = {"id": _str(b.get("id")), "template": role["slug"], "title": _str(b.get("title")), "dept": b.get("department"),
@@ -151,6 +156,8 @@ def from_yaml(text):
                "existing": False}
         if b.get("first_job"):
             bot["first_job"] = _str(b["first_job"])
+        if b.get("held_by"):
+            bot["person"] = _str(b["held_by"])
         chosen[bot["id"]] = _str(b.get("reports_to"))
         draft["bots"].append(bot)
     for b in _rows(doc, "existing_agents"):

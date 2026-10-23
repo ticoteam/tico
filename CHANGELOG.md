@@ -8,6 +8,308 @@ All notable changes to Tico are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Settings › Billing.** Owners and admins see the company's balance in dollars and cents with one status line
+  (Active; Low balance; Tico models paused; or Hosting's grace period with when servers stop, UTC), credits with what is
+  left and when each ends (used-up and expired ones under Show past credits, with what expired), usage by day opening
+  into hours split by product and model ("<$0.01" under a cent), and each month's statement with a CSV download.
+  "Talk to us to add credit" opens Tico's booking link; there is no card form. It is read from Tico HQ with the
+  install's Tico AI Gateway key (`GET /api/v2/billing`, `/billing/usage?day=`, `/billing/statements/YYYY-MM.csv`);
+  other members don't see the page and its API refuses them. Needs Tico HQ with company billing reads.
+- **Choose a task model in Settings.** In **Settings > Bots**, click **Tasks** beside a bot's model to choose a harness, model and effort for its tasks. The bot editor also has a **Task model** row. Choose **Same as bot** to clear it. Chat keeps the bot's own model ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Cheaper task models show a warning for sensitive work.** A bot with send, spend or publish approval history, or write access beyond its own repository, warns when its task model costs less than its own model from the same provider. You can still save and run it; the run note records the warning ([Warning rules](docs/harnesses.md#a-warning-about-a-cheaper-task-model)).
+
+### Fixed
+- **A Muse Code run that ends in a quota failure ends its task attempt.** When Muse Code reported its run over (a
+  quota or other terminal failure) but its process, or a child process still holding its output, stayed up, the
+  runner kept the turn open and renewed the attempt's lease, so the bot showed rate limited and busy at once and its
+  model could not be changed. The run's terminal record now ends the turn: the process gets five seconds to exit
+  and is then stopped, and the attempt finishes failed with the quota hold kept. Nothing is retried on its own.
+- **Task updates point to the closing command.** The CLI no longer offers `closed` on `hub task update --status`. Trying it tells you to use `hub task close <id>`. MCP also directs requesters to `hub_task_close`; filtering a task list by `closed` still works ([Tasks](docs/tasks.md)).
+
+### Changed
+- **One sign-in per AI tool per computer.** Every bot runs its tool on its computer's login for it; a bot can no longer
+  have a sign-in of its own. The bot editor's Connection picker is gone (its line now reads "Runs on *tool* ·
+  Computer's login on *computer*"), the computer pop-up shows one line per tool, and Add connection signs in the
+  computer's login or adds a key. To run bots on a different account, add another computer, which can be on the same
+  machine. `PUT /api/v2/subscriptions` is gone (405), `POST /api/v2/runners/{runner_id}/logins` with a `profile` is
+  refused (422 `one_login`), and a runner ignores `bot_profiles`, drops `profile assign` and refuses `profile login`
+  for any profile but its default. Upgrading deletes each bot's saved choice, so a bot that ran on a named
+  subscription runs on its computer's login, which must be signed in. Named subscriptions on a computer stay on disk
+  and in its reports for one release, unused and unshown.
+
+## [0.3.75] - 2026-10-23
+
+### Fixed
+- **A Docker runner at high capacity starts its turns and signs in.** The runner container allowed 2048 processes
+  and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
+  unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
+  stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+- **A question's Needs you card shows when you open its task right after answering another.** A refresh that started
+  while an earlier read was still on its way reused that read and kept the old list, so the task page opened without
+  its card until the task was drawn again.
+
+## [0.3.74] - 2026-10-22
+
+### Added
+- **Hourly and weekly spend limits, and limits for a group and the whole team.** Beside daily and monthly, a bot's limit
+  and the team default can now cap an hour (the UTC clock hour) and a week (from Monday 00:00 UTC). New pooled limits cap
+  the combined spend of every bot (Usage > **Team and group limits**) or of a group's bots, nested groups included; over
+  one, every bot it covers takes no new job until the period turns over or the limit is raised, and reads "Paused: the
+  team is over its hourly limit". The owner and administrators set them; 80% and 100% notices go to the team owner.
+  `PUT /api/v2/usage/pools/company`, `PUT /api/v2/usage/pools/groups/{group}`; `GET /api/v2/usage/limits` adds the
+  hourly and weekly fields and, for administrators, `pools`. A bot's limit saved from an older page clears its hourly
+  and weekly caps, as any field left out does.
+- **System routines in Settings > Routines**: a read-only System section above the bot routines lists every job Tico
+  runs on its own timers, in four groups (Checks that suggest, Learning, Reminders and deadlines, Housekeeping), each
+  with what it does, its schedule, its last run in words ("9 checked, 2 suggestions", or "Failed: <reason>" in red) and
+  its next run. Stale ticket review and nightly learnings also show which route answered Decide (Gateway, company key or
+  company AI), "Ran on your own key: Gateway unavailable" when the Gateway did not answer, and this month's AI spend.
+  Housekeeping rows say Tico needs them. `GET /api/v2/system-routines`; the Decide fallback order is unchanged.
+- **Five company models for the setup org chart** replace the one 22-bot starter pack: Everything (73 seats), Software
+  company (51), Services firm (38), Local service business (41) and Online store (39), with Legal, People, Operations
+  and Leadership and bigger Finance, Sales, Marketing and Support teams. The first chart starts from the model the
+  company's signals point to (new signals: sells services, on-site jobs, sells products; none of them is Everything),
+  adds every department head it lacks and the roles that fit what the visitor said, and drops nothing. New setup
+  actions switch the chart to a model (`model_use`; "show me everything" is Everything) and put a person in a seat
+  (`seat_fill`, "Ana runs our cap table"). Controller, Equity Manager, Fundraising Manager, Scheduling & Bookings and
+  Quality & Inspections are seats with no bot yet: a person can hold one, and importing the company file makes no bot
+  for it or for any seat a person holds (the coworkers who hold seats stay in the saved plan; they join in Tico). The
+  cap table moves from the Corporate Secretary's description to the Equity Manager's. A whole model chart is over the
+  8 KB the installer can carry today, so `setup` refuses it before anything is set up and names the step: run setup
+  without `--company-file`, then import the file on Tico's first Welcome step (**Already chose your team?**).
+- **Visuals show without a visual address.** A company with no separate visual address now sees pictures, video and
+  audio inline in chat and task conversations, served from the app's own address as media only. A visual page or an
+  SVG is a card with its title, a still preview when there is one, and **Open**, which shows it in the file viewer;
+  pages and SVG are never served inline from the app's own address. There is no switch: Settings › General shows one
+  read-only line, "Visuals: full" or "Visuals: pictures, video and audio only (no separate visual address)".
+  `TICO_VISUAL_SAME_ORIGIN` is no longer read, and a local install uses the same fallback. A `TICO_VISUAL_ORIGIN` on
+  the app's own hostname, with any scheme or port, now stops the server; without it such a setup gets the fallback.
+- **A Claude bot's turn no longer waits an hour on its own background commands**: once the bot has answered and the
+  turn is only waiting on background shells (a test suite, `gh pr checks --watch`, `gh run watch`) for 5 minutes
+  (`background_wait_s` in bot.yaml, 0 for off), the runner ends the turn as completed and the commands keep running.
+  When the last one ends, the bot gets one message on the same task with each command's exit code and the end of
+  its output; one still running at the run's time limit is killed and says so. A new turn on that session meanwhile
+  is told which commands still run. The run's events record "Turn ended: background wait" with the minutes saved,
+  and the wake counts as `background_done` in `hub sql`. On a Mac the exit code reads "unknown". A turn still
+  working, or running a subagent, waits as before.
+- **One question card** in Decide and in a task's Needs you box: who asked (the bot, or Tico), how long ago and what
+  it holds up; the question and why it matters; every pick with what happens; several picks as ticked boxes with
+  **Yes to all** and **Send ticked** (the bot hears "Not this one" for the rest); the fallback small at the foot.
+  Tico refuses a bot's question to a person that lists picks without options, leaves out what happens, has no
+  recommended pick among several, or puts ids, paths or errors in the question or its picks. Decide shows cards due
+  within 2 working days first, then those holding up a roadmap item at Approved or Building, then newest first.
+- **Wait for a milestone, not the whole task**: `hub task wait <id> --on pr:<url>` waits until that pull request
+  merges, `--on release:v0.3.64` until that release is published (`task:<id>` is blocked_by). The owner gets one wake
+  when it happens, while the task it came from keeps its own step (In QA, a release watch). A wait made after the
+  merge, or a merge that arrived while the server was down, is woken once by the minute sweep; a replayed webhook
+  never wakes it twice. The task page shows it under Related ("Waits for PR #943 to merge"). MCP `hub_task_wait`.
+  A bot's subtask with a pending milestone wait is not a stuck hold: the task it blocks is not woken as stalled.
+- **Relation writes read back their direction**: `hub task relate`, `hub_task_relate`, task create with relations and
+  `hub task wait` answer with what was stored, from both ends ("#237 waits for #233" / "#233 blocks #237"), so a
+  reversed link is visible in the reply. `hub task wait --on task:<subtask>` warns about blocking a task on its own
+  subtask, as `relate` and create do.
+- **A bot's tasks can run on another model.** A bot now has a task model (harness, model and effort) beside its own,
+  set with `POST /api/v2/bots/{bot}/task-model` (null clears it back to "same as the bot"). A turn in a task's own
+  session runs on it; chat with the bot stays on the bot's model, and changing the bot's model leaves the task model
+  alone. A review or check subtask keeps its check model. When the task model can't run (retired, its provider off,
+  not installed or not signed in on the bot's computer), the task runs on the bot's own model and effort instead of waiting, and the
+  task's history says so and why. A task's Runs now show the effort beside each model, and the note on what ran.
+- **Optional login queue (dormant for Codex).** A harness that opts in can show who holds a login, on what, since when and
+  its place, on the run, the task, the bot's status and in Health (waiting, not stuck). Release-blocking work goes
+  first, then reviews and a person's own chat, with no waiter passed over more than twice. A turn that holds the login
+  20 minutes while another waits pauses at a safe point and continues right after; a waiter whose task is closed is skipped,
+  unless a person's own message started it.
+- **Routines: one flat, searchable list you can tune.** Settings > Routines now shows Tico's own jobs as one list with no
+  group headings and a search box that matches name, trigger, action and department ("done" finds what touches done
+  tasks). Each row reads "WHEN every hour THEN check stale tickets", with one department tag (Engineering for built-ins,
+  from the org chart). An owner or admin switches the six jobs that use AI or reach people (stale ticket review, Still
+  wanted?, KPI stale asks, nightly learnings, Health scan, ask go-ahead) on or off, picks every 15 minutes, hourly, every
+  4 hours or daily at a time (AI jobs are never offered every 15 minutes; nightly learnings picks its time), and runs
+  them now under the same caps (a stale review still makes at most 30 Decide calls an hour). Health scan stays
+  owner-only; members see the list without controls; the server enforces both. Nightly learnings gets an off switch, on
+  by default. The Stale ticket review and Start fresh when the topic changes switches moved here from Settings >
+  General > Team with their values unchanged; the old spot links here. `PUT /api/v2/system-routines/{key}`,
+  `POST /api/v2/system-routines/{key}/run`.
+
+### Changed
+- **Bot details have Info, Instructions, History and Settings tabs.** Settings, access, owners and mail controls edit
+  inline, drafts stay when switching tabs, and instruction changes still go to BotOps. Screen access has an on/off
+  switch with setup help when needed, keeping View/Control and the computer's operator/admin permissions.
+  Existing bots without a wake preset, including legacy Current behaviour, move to **Performance**: nonblocking
+  notices batch for 1 minute per conversation and enabled sweeps run at most every 15 minutes. New bots still start
+  on **Token saver**; direct requests, assignments, blockers and awaited results remain immediate.
+- **The stopped-run card is now just the decision.** Each stopped run shows one line on what stopped ("Stopped 8:12
+  AM after using Bash."), one recommendation, and two buttons with the recommended one first: **Try again** leads
+  only for a run Tico's own retry rule calls safe (it only read, on a host that reports every call, first stop);
+  **Don't retry** leads for one that may have changed something, used an approval, left no full record or stopped
+  more than once. The request, saved output, tool calls and the optional note are folded under **Details**. The Needs you line is
+  shorter: what stopped and what waits on it. The review API adds `stopped` (`changed`, `read`, `twice` or `unknown`) and
+  `acted` to each run.
+- **A bot's tasks are one Tasks section with four tabs.** The right rail's Needs you, Active and Done sections become
+  tabs, each with its count: **Needs You** (what the bot needs from you), **Doing** (every open task it holds, of every
+  type, newest first), **Blocked** (each task saying who or what it waits on) and **Done Recently** (the last 14 days).
+  Assigned to others, Updates, Files and Routines stay below.
+- **Long runs of task updates in a bot's chat fold.** Four or more task status rows in a row show the oldest, a
+  "...N more..." line with the exact number hidden, and the newest. Three or fewer show as before; a message starts a new run.
+- **The CEO Bot is on every install, Passive by default, and only the owner sets it up**: the Goal Manager is the CEO
+  Bot everywhere, at the top of the org chart, with its KPI history and old messages kept; there is no On/Off switch
+  any more. At the new default level, **Passive**, it keeps the **regular checks** running (KPI readings and the
+  automatic goal colours) and otherwise acts only when you talk to it: no vision or Why asks, no asks to goal owners,
+  no Monday note. **Suggests actions** and **Acts on its own** work as before. Settings > CEO Bot, its level, its
+  regular checks (which the owner can now turn off), its name and the Company section are the owner's only; an admin
+  no longer changes them. An install at level 1 lands on Passive at upgrade
+  ([Your CEO Bot](docs/ceo-bot.md)).
+- **One memory per bot, the one you can see.** Bots no longer keep a hidden memory on the computer they run on
+  (Claude Code's auto memory, Codex memories, the Gemini CLI's saved memories): each turn tells the bot to read and
+  follow the working rules at the top of its `memory/learnings.md` and to save what it learns there, so what steers it
+  shows in its Learnings panel and an edit there reaches its next turn. The panel's Learnings and Decisions views open
+  on the working rules, then the newest entries ([Learnings](docs/learnings.md#one-memory-in-the-repository)).
+- **Questions close on their own** (Decide cards part 1). A bot's question to a person closes when its task or any task
+  above it is done, closed or declined (pick questions too; a done task keeps only the "accept this?" question it asks
+  its requester once done), when the person replies to it or writes on its task to that bot (the reply is the answer),
+  and on its "if you don't answer by" date even when its fallback is a send, a spend or a delete (the bot is told nothing
+  went ahead). One with no date that waits two business days (Mon-Fri, Pacific) goes back to its bot: each weekday
+  morning a bot gets one "Still needed?" wake listing all of them, and asks again or drops them; until then it stays in
+  Needs you, marked stale, rather than moving to Older questions. A stuck check never asks a person: the bot is retried
+  once, then BotOps gets a task to find why, and open "no progress" questions to people close at the next hourly sweep.
+- **Subscription runs count toward spend limits by default.** Runs on a ChatGPT or Claude sign-in now count their
+  API-equivalent toward every limit unless the team turns off "Count subscription runs" (Usage > **Default limit**). A
+  team that saved the default with the box off keeps it off.
+- **Updates: per-update reader check for assistant-drafted updates.** Each drafted update is checked against its
+  reader on every read, so some drafts show to fewer readers than before.
+- **A bot with read access to a repository can read its pull requests, their comments and its deployments**
+  (`gh pr view`, `gh pr diff`, a preview's link), still without changing any of them. Deployments need the GitHub
+  App's Deployments permission set to Read-only and accepted on the installation; until then tokens leave it out
+  ([GitHub App](docs/github-app.md#permissions-and-why)).
+
+### Fixed
+- **Stop holds for a turn whose computer slept.** A Stop pressed after Tico had marked a sleeping computer's turn
+  as lapsed was refused ("not running"), and the answer the model went on to finish was posted anyway. The Stop is
+  now recorded, the late answer is kept on its run instead of posted, and the request ends stopped ("Stopped by …")
+  rather than being run again by automatic recovery. A stopped turn whose computer never reports back is let go
+  with "Stopped by …; not resumed" instead of being resumed.
+- **Milestone waits follow the blocked_by rules.** Adding or removing a wait for a pull request or release needs
+  the same permission as a blocked_by: the task's owner, or a person on a team that moves tasks. A deleted task
+  keeps its waits and gets them back when restored; a message held by a milestone says what it waits for.
+- **Questions that close on their own leave every count right.** The hourly sweep closes each leftover question on
+  its own, so one that fails stays for the next sweep instead of undoing the rest. When questions close in bulk (a
+  task above ends, the hourly sweep, the weekday "Still needed?" batch), the bot that asked them has its "needs a
+  person" count updated at once, and "Still needed?" keeps a task waiting on a person while another question to them
+  is still open on it. A stuck task gets no extra stall wake between its retry and its report to BotOps, and BotOps's
+  "Find why" task says how many wake-ups it really got that day.
+- **The scheduler no longer blocks the server for seconds at a time on a busy hub.** Its 10-second pass used to run
+  in one write transaction and read every task to find due dates, so on a hub with many tasks and routines requests
+  waited behind it and runners saw 503s. Each step, routine and batch of due-date reminders now commits on its own,
+  the due-date and deferred-task lookups use new indexes (migration 61), and Health's scheduler entry shows the
+  pass's longest single hold (`hold_ms`, with `hold_step`) and its longest wait behind other writers (`wait_ms`)
+  next to `tick_ms`. These cover the 10-second pass; the minute and hourly sweeps take their own transactions.
+- **A run whose only work was a git push counts as acting.** The computer reports the pushes a run made from its
+  task's worktrees with its result, so in `hub sql` the run reads `acted` with `did_nothing` 0 instead of
+  `no_change`. Pushes from another task's worktree are not counted, and older runs read as before.
+- **No more rare empty 502s from the server.** About once in a few hundred API requests, a request reused a connection
+  to the backend just as the backend closed it for being idle, and the app or a bot got a bare 502. The server's front
+  door now drops idle connections before the backend does.
+- **A company out of Tico credit no longer holds its bots off Tico models for 30 minutes**: when Tico HQ's Gateway
+  pauses Tico models for want of credit (`out_of_credit`), the bot says "Tico models are paused: this company is out
+  of credit. Your bots use their other models until credit is added", runs on its fallback meanwhile, and asks the
+  Gateway again after a minute, so it is back on Tico models within about a minute of credit being added. It used to
+  show the Gateway's raw 429 JSON and hold the Tico login like a provider's usage limit.
+- **A resumed Claude session keeps reading follow-ups**: Claude answers a resumed session with an empty result
+  before it reads the new prompt. The runner took that as the turn's answer and stopped reading follow-up
+  messages for the rest of the turn; it now waits for the answer to the prompt. This applies to every resumed
+  Claude turn.
+- **A bot's answer that finished while its computer slept now arrives.** When a computer was asleep or paused past a
+  turn's lease, the runner woke to the hub refusing the lease and dropped the answer the model had already finished,
+  so the person saw "No reply" and the run ended interrupted. The runner now reads out what the model already said
+  for up to ten seconds after that refusal and hands it in completed; the hub settles it as before (Dev 242). A model
+  still working is not waited for, and nothing new starts in that window. A person's Stop still stands: a late answer
+  from a stopped turn is kept on its run, not posted.
+- **A task blocked only by its own quiet subtask no longer waits silently.** Relating a subtask as its parent's
+  blocker returns a warning, and when that subtask (a bot's hold or acknowledgement) goes quiet waiting on nothing
+  else, the parent counts as stalled even while waiting: its bot is woken with the way out, and BotOps sees it stuck.
+- **Muse Code turns work again on a Docker computer that runs bots as their own user.** Each Muse login now keeps
+  its sessions in a folder of Tico's own (per subscription profile too), so a turn, including an automatic fallback
+  to Muse, no longer fails at once with "failed to create session lock directory ... Permission denied". If that
+  folder is there but the bot user can't write it, Settings > Computers marks Muse Code and names the folder, rather
+  than asking you to sign in. Muse sessions from before this change start fresh.
+- **Worktrees start only for work that can run, and stuck or obsolete ones free themselves.** A new task worktree is
+  refused, with the reason, for a task not started yet, one blocked by an open task (named) or a finished one; a task
+  waiting for room is checked again before its tree is reserved or prepared. A `pending` worktree whose pull requests
+  all finished or whose task closed is cancelled (at once when nothing was checked out); one whose setup makes no
+  progress for 6 hours fails visibly, tells its owner once and retries on the same worktree. A fix-forward after a merge
+  keeps its tree while its bot's turn runs or its branch has commits past the merged head ("held: ..."). Each release
+  records why, and Health lists them ([Task worktrees](docs/worktrees.md)).
+- **A rate-limited bot can be moved to another model.** Settings > Bots refused the change with "Wait for the
+  current bot turn to finish" whenever a retry was running, so the bot stayed stuck on its spent model. The change now
+  applies at once and takes effect from the next turn; the limit lifts, and a turn still running on the old model no
+  longer puts the limit back on the new one.
+- **Codex bots share a ChatGPT login concurrently.** Bots on one login run turns at the same time, with no login queue or waiting label; they share the plan’s usage allowance.
+- **The hub and MCP model change also moves a rate-limited bot while a turn runs.** `hub bot model` and the MCP
+  model tool refused with "Wait for the current run to finish before changing models"; they now follow the Settings
+  rule: the change applies at once, from the next turn, and lifts the old model's limit. A move onto a model that uses
+  the same spent login, or another Tico model after the Gateway key's limit, keeps Rate limited and says why instead of
+  "queued work resumes". A turn now records the model it was handed, so an effort-only change or a move away and back
+  while it runs keeps that model's real limit.
+- **Worktree release follow-ups.** A stuck `pending` worktree whose pull requests finished is released without first
+  telling its bot to retry setup; only the turns of the bot that owns the task hold a finished tree; a fault reading
+  turns is raised instead of read as "no live turn"; and a new push clears the earlier "stale push cleared" note, so a
+  release no longer names an old push.
+- **A manager bot reads its reports' routines**: a bot above another in the `reports_to` chain now reads that bot's
+  routines and their occurrences in its own run, as the permissions page already said. It was refused ("Only people
+  and the bot itself read its routines"), so a manager bot reviewing its reports could not see what each one runs.
+  It still cannot change them ([Routines](docs/routines.md)).
+- **An @mention on a task with no bot on it shows once.** The comment itself is the mentioned person's question,
+  as on any task where it wakes no bot; it no longer also saves a second copy that showed the comment twice.
+
+## [0.3.73] - 2026-10-21
+
+### Added
+- **Hosted bot computers.** Hosting can run bots on a separate computer, keeping their work away from the Tico
+  server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
+  bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
+  HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
+
+### Changed
+- **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
+  with a Switch account message, including while the first sign-in is pending. Different tools and computers stay
+  independent; existing connections and API keys are kept.
+- **Tico AI Gateway: Tico Cheap 1.1 replaces Cheap 1.0** in every model list. It costs the same for a prompt up to
+  100,000 tokens; above that the whole request is $0.75 per 1M input, $0.075 cached and $3.75 output, and Usage
+  estimates it that way. Cheap 1.0 is retired: bots and a default model already on it keep it and keep running at its
+  old price, and Settings > Computers > Models still saves a default left on it, but nothing new can pick it
+  ([Tico AI Gateway](docs/ai-gateway.md)). The web app's Add bot form preselects a current model when the team
+  default is Cheap 1.0, since a new bot is a new pick. The pi runner now reports each model request, so Usage prices
+  each one at its own rate.
+
+### Fixed
+- Choosing a bot's model connection refreshes its computer's readiness and queued work immediately, including
+  when the previous connection is signed out.
+- **Recovering an AWS bot computer waits for Systems Manager.** Resuming an interrupted install waits up to five
+  minutes for its agent before sending recovery, tolerates a registration race and keeps the same computer on
+  failure. An accepted recovery command is never sent again by that wait.
+- **A bot's message to a bot says when it was held.** A plain message or task comment from one bot to another waits
+  for that bot's next run; the send now answers `woke: false` with a `held` reason, and `hub` prints it: held for
+  that bot's next run, add `--needs-action` to wake it now. Before, a held escalation read as delivered.
+- **Goals from a setup company file land on Goals.** Importing the file from tico.team/setup (in the app or from a
+  Hosted install) no longer sets its goals aside: the owner's goals and any goal for a built-in bot such as the
+  Assistant become company goals, each other bot's goal sits under that bot, and a goal's measure becomes a KPI with
+  the file's baseline and target. The file carries no readings, so a new KPI starts with no history.
+- **No "Claude login required" while the Tico AI Gateway runs the bot.** Under the recommended choice a bot whose
+  Claude or ChatGPT is not signed in yet shows as ready, its card says "Using Tico AI Gateway; sign in to Claude to use
+  your subscription", and its model check and chat no longer ask for a login. With no Gateway either, it still does.
+
+## [0.3.71] - 2026-10-21
+
+### Fixed
+- **Gateway turns retry when their rate window resets.** The computer carries the Gateway's requested wait back to
+  the server, so a busy minute does not hold starter bots for an hour or claim their address sent refused keys.
+
+## [0.3.70] - 2026-10-21
+
+### Added
+- **A menu button left of Search in a chat's bot switcher on a phone.** In a bot's chat the bottom bar is hidden;
+  tapping the bot's icon by the chat bar now shows a round menu button beside Search that opens the side menu in one
+  tap, the same menu More opens, and it closes the same way.
 - **How bots get their models**, at the top of Settings > AI providers and the first setup step: **Your Claude and
   ChatGPT subscriptions, plus Tico Gateway** (recommended, and what Tico's installer sets with
   `TICO_MODELS_PRESET=subscriptions-gateway`), subscriptions only, Tico Gateway only, or your company's plans or API
@@ -21,12 +323,46 @@ All notable changes to Tico are recorded here. The format follows
   paid, never the key. The other three choices, and a team that never picks one, keep working
   as before ([Tico AI Gateway](docs/ai-gateway.md#choose-how-bots-get-their-models)).
 
+### Fixed
+- **Recommended starter bots install their Gateway runtime before subscription sign-in.** An isolated computer
+  now prepares the Gateway runtime chosen in AI providers even when automatic quota fallback is off, so starter
+  jobs can run before Claude and ChatGPT are signed in. An explicit owner opt-out stays effective.
+- **A bot is no longer handed a picture link for a chat's file that never opens.** The visual route checks a bot's
+  link as the bot without its run, which cannot see a chat's files, so those links always answered "not found". A bot
+  reading a chat visual now gets the file itself (its file link, no picture address); people's links and a bot's
+  links for task files are unchanged.
+
+## [0.3.69] - 2026-10-21
+
+### Added
+- **Bots read the runs of the bots that report to them.** A bot above another in `reports_to` (at any depth) now
+  sees that bot's chat-room runs too, such as the wake-ups the hub posts there, in `hub_run_list` and their steps, so
+  a manager like a Product Manager can score its monitors' cost per catch. A human's own chat with a report stays
+  theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
+
 ### Changed
-- A bot's Slack DM about a task names the task and links to it in its last line: `(sent from Ops on #19332 …)`.
+- The key scrubber (setup chat, company file, setup support tickets) also removes 32 or more letters and digits in a
+  row, however regular and whether alone or inside a longer token, as Tico HQ's copy now does (Dev 285).
+- **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
+  company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
+  with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
+  that guard is there only against abuse. A company YAML file may be up to 512 KB (was 128 KB). A plan carried by
+  `tico setup --company-file` into a cloud install still has to fit AWS Parameter Store's 8 KB, about 40 bots; a
+  larger one is imported on the first setup screen instead.
 
 ### Fixed
+- **Questions the CEO Bot merged no longer show again in Tasks > Needs you.** The merged item names the questions it
+  stands for, and the Tasks page leaves them out, as the server's Needs you already did.
+- `hub task comment --public --approval-id` and `hub task comment-edit --approval-id` now send the public flag
+  and the approval, so a bot can post or edit a public reply once a person approves its publish request. Before, the
+  command dropped both: the reply went out as an internal comment, and an edit of a public reply was refused.
+- `hub task label --approval-id` now sends the approval with the label change, so a bot can add a public roadmap
+  label once a person approves its publish request. Before, the command dropped the approval and was refused.
 - A goal's automatic colour follows its worst KPI: red takes priority over yellow and green, and yellow over green.
   The note explains that KPI; a colour set by a person stays in place until handed back to the Goal Manager.
+- **Company file: numbered bot ids are no longer blanked as keys**: a long id made from a numbered title, such as
+  `accounts-receivable-specialist-2`, read as a random key once it carried a number, was replaced with `[removed]` and
+  the draft was refused. Lowercase ids of words and numbers now pass; real key shapes are still removed.
 
 ## [0.3.68] - 2026-10-20
 
@@ -3981,7 +4317,13 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.68...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.75...HEAD
+[0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
+[0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
+[0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
+[0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71
+[0.3.70]: https://github.com/ticoteam/tico/compare/v0.3.69...v0.3.70
+[0.3.69]: https://github.com/ticoteam/tico/compare/v0.3.68...v0.3.69
 [0.3.68]: https://github.com/ticoteam/tico/compare/v0.3.67...v0.3.68
 [0.3.67]: https://github.com/ticoteam/tico/compare/v0.3.66...v0.3.67
 [0.3.66]: https://github.com/ticoteam/tico/compare/v0.3.65...v0.3.66

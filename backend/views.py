@@ -56,7 +56,9 @@ def since_time(value):
 def attempt_details(c, turn):
     attempt = c.execute("SELECT state,result_json,finished FROM attempts WHERE id=?", (turn["id"],)).fetchone()
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
-    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"]}
+    from .run_diagnostics import metadata
+    from .performance import attempt_snapshots
+    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
             result = json.loads(attempt["result_json"] or "{}")
@@ -65,7 +67,7 @@ def attempt_details(c, turn):
         reason = result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
         details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
-                       failure_reason=str(reason))
+                       failure_reason=details["end_reason"] or str(reason))
     return details
 
 
@@ -84,7 +86,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         if not message:
             continue
         try:
-            auth.conversation(c, who, message["conversation_id"])
+            auth.run_conversation(c, who, row["bot"], message)
             privacy.require_message(c, who, message)
             privacy.require_attempt(c, who, row["id"])
         except Problem:
@@ -98,7 +100,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],
                      "exit": row["state"], "message_id": row["message_id"],
-                     "record_kind": "attempt", "failure_reason": str(reason)})
+                     "record_kind": "attempt", "failure_reason": str(reason),
+                     **attempt_details(c, {"id": row["id"], "finished": row["finished"]})})
     return rows
 
 
@@ -137,7 +140,8 @@ def subscription_login(runtime, detail):
 
 def shared_logins(c, runner_id, readiness, assigned, access):
     """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
-    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). One row per login: its
+    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
+    omitted: its bots run concurrently on one ChatGPT login. One row per login: its
     runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
     it and the ones this reader may see. A key login runs its bots side by side and is left out."""
     from .harnesses import harness_caps
@@ -311,8 +315,11 @@ def machine(c, bot):
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
-    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py).
+    # The declared access has its own route, behind the bot's visibility (backend/bot_tools.py). A missing
+    # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
+    from .models_preset import as_served
     detail = {k: v for k, v in bot_readiness(row["readiness_json"], bot).items() if k != "tools"}
+    detail = as_served(c, bot, readiness_document(row["readiness_json"]), detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
             "readiness": detail,
             "machine": {**{k: row[k] for k in ("runner_id", "generation", "label", "operator", "last_seen",
@@ -454,8 +461,14 @@ def operation_issues(c, who, auth):
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
             from .execution import held_back, held_runs, isolation_refused, left_by_keeper
-            named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in held_runs(c, who, auth, slug))
+            runs = held_runs(c, who, auth, slug)
+            named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
+            # Needs you says only what stopped and what it holds up; the review card says what to do (Chris, Oct 22).
+            # Names stop at three and skip runs this reader may not read, so the rest are counted.
+            more = uncertain - len(runs)
+            what = (named + (f" and {more} more" if more > 0 else "") if named
+                    else "A run" if uncertain == 1 else f"{uncertain} runs")
             waiting, waiting_on = held_back(c, who, auth, slug)
             left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
@@ -470,11 +483,10 @@ def operation_issues(c, who, auth):
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
                 wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
                 on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
-                behind = (f" {wakes}{on} until it is reviewed." if waiting else
-                          " Tico settled the rest of that run but could not decide this safely.")
+                behind = (f" {wakes}{on} until you decide." if waiting else
+                          " Tico can't safely decide it on its own.")
                 add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
-                    f"The bot stopped before returning an answer, so Tico will not repeat it on its own.{held_note}"
-                    f"{behind} Review it to let the work run.",
+                    f"{what} stopped partway.{behind} Choose Try again or Don't retry.",
                     bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
@@ -1245,14 +1257,92 @@ def approval_files(c, auth, who, payload):
     return out
 
 
+# The roadmap steps at which a question that holds up an item comes before the rest in Decide.
+ROADMAP_LIVE_STEPS = ("Approved", "Building")
+SOON_BUSINESS_DAYS = 2
+
+
+def business_days_ahead(start, days):
+    """`start` (ISO text) moved forward by `days` working days, Saturday and Sunday skipped, as ISO text."""
+    from datetime import timedelta
+    at = H.parse_ts(start)
+    while days > 0:
+        at += timedelta(days=1)
+        if at.weekday() < 5:
+            days -= 1
+    return H.shift(at.astimezone(timezone.utc).isoformat())
+
+
+def holds_up(c, row, readable):
+    """What answering a card on task `row` lets move, for its header: the roadmap item its task works toward (the task,
+    an ancestor, or a task either of them blocks), else its parent task. {id, title, kind: "roadmap" or "task", step,
+    due, soonest}, or None. `soonest` is the nearest due date of any open work it holds up, whichever title the header
+    names, so a dated task under an undated roadmap item keeps its urgency. Only a task `readable(id)` says the person
+    may read is named or dated."""
+    from . import roadmap_flow
+    product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    chain = [row["id"], *TR.ancestors(c, row["id"])]
+    seen, roadmap, dues = set(), None, []
+    for tid in [*chain, *(b for t in chain for b in TR.blocked_ids(c, t))]:
+        if tid in seen:
+            continue
+        seen.add(tid)
+        t = H.task(c, tid) if tid != row["id"] else row
+        if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
+            continue
+        if t.get("due"):
+            dues.append(t["due"])
+        if roadmap is None and product and t.get("type_id") == product:
+            step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
+            roadmap = {"id": tid, "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
+                       "due": t.get("due")}
+    held = roadmap
+    parent = H.task(c, chain[1]) if len(chain) > 1 else None
+    if held is None and parent and readable(parent["id"]):
+        held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
+    if held is not None:
+        held["soonest"] = min(dues) if dues else None
+    return held
+
+
+def decide_tier(item, now=None):
+    """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
+    own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
+    newest first. How old a card is never moves it up."""
+    soon = business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS)
+    ask, held = item.get("ask") or {}, item.get("holds_up") or {}
+    dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
+             held.get("soonest"), deadline(item)]
+    if any(d and str(d) <= soon for d in dates):
+        return 0
+    return 1 if held.get("kind") == "roadmap" and held.get("step") in ROADMAP_LIVE_STEPS else 2
+
+
+def card_why(item):
+    """The one "why it matters" line a question card shows under the question: the question's own `why`, else the
+    first paragraph of its task's body when that is a plain line (hubdb.lint_plain). What else the body says, and
+    anything with ids, paths or error output, stays under Details."""
+    q = next(iter(((item.get("ask") or {}).get("refs") or {}).get("questions") or []), None) or {}
+    if str(q.get("why") or "").strip():
+        return str(q["why"]).strip()
+    line = H.person_ask_of_body(item.get("body"), item.get("title"))
+    said = " ".join(line.split()).casefold()
+    if (not line or "\n" in line or len(line) > 200 or H.lint_plain(line)
+            or said in {" ".join(str(x or "").split()).casefold() for x in (q.get("question"), item.get("title"))}):
+        return ""
+    return line
+
+
 def needs_items(c, auth, who, task_view, older=None):
-    """The person's queue. A task there only for a question older than H.ASK_OLDER_DAYS goes to `older` instead
-    (a list the caller passes), out of the queue and its count."""
+    """The person's queue. A question unanswered for two business days stays, marked stale, until the weekday-morning
+    batch sends it back to its bot (backend/still_needed.py); `older`, a list the caller passes, stays empty."""
     raw = H.needs_you(c, who.actor)
     visible = auth.task_sql(c, who)
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
+    from . import ceo_merge
+    merged = ceo_merge.hidden_by_item(c, who.actor)
     items = []
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
@@ -1272,12 +1362,9 @@ def needs_items(c, auth, who, task_view, older=None):
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
-            if (item["kind"] == "question" and row["owner"] != who.actor and H.ask_older(ask)
-                    and not any(a["to_actor"] == who.actor and not H.ask_older(a) for a in open_asks)):
-                ask["older"] = True
-                if older is not None:
-                    older.append(item)
-                continue
+            if row["id"] in merged:
+                # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.
+                item["merged"] = [t for t in merged[row["id"]] if _readable(auth, c, who, t)]
             if ask and ask.get("to_actor") == who.actor and H.ask_older(ask):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
@@ -1293,10 +1380,7 @@ def needs_items(c, auth, who, task_view, older=None):
                 "from_person": msg["from_actor"] if H.is_human(msg["from_actor"]) else None,
                 "recommend": recommendation(ask, who.actor)}
         if H.ask_older(msg):
-            ask["older"] = True
-            if older is not None:
-                older.append(item)
-            continue
+            ask["stale"] = True
         items.append(item)
     for row in raw["approvals"]:
         msg = H.message(c, row["message_id"])
@@ -1336,6 +1420,11 @@ def needs_items(c, auth, who, task_view, older=None):
     for item in items:
         item["pressing"] = pressing(item, at)
         item["need"] = need_of(item)
+        if item["kind"] in ("question", "waiting", "task", "declined"):
+            item["holds_up"] = holds_up(c, H.task(c, item["id"]) or item, lambda tid: _readable(auth, c, who, tid))
+        if item["kind"] in ("question", "ask"):
+            item["why"] = card_why(item)
+        item["tier"] = decide_tier(item, at)
     return sorted(items, key=needs_key)
 
 
@@ -1486,10 +1575,12 @@ def install_views(app, store, auth, mutate, task_view):
         return {"run": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
                 "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
                 "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
+                **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
                 "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
-                "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made}
+                "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made,
+                "load_start": turn.get("load_start"), "load_end": turn.get("load_end")}
 
     def employee_rows(c, who):
         people, configs = roster(c), entries(c, store.settings.github_owner)
@@ -1749,16 +1840,15 @@ def install_views(app, store, auth, mutate, task_view):
                 # A computer installs only what its bots run on, so only those are its business; with no bot yet,
                 # the company's one default, which it installs for its first sign-in (config_view default_runtime).
                 # `bot_runtimes` adds the bots' fallbacks: what it installs for them, so their on/off stays locked.
-                # Each named subscription on it, with its sign-in and usage windows; its account only for whoever
-                # may change the computer (`may_manage`). `same_account`: {runtime: subscription} where the
-                # computer's own login is that subscription's account, so a member's page shows them as one too.
+                # Each named subscription it still reports from before one login per computer (unused, for one
+                # release), with its sign-in and usage windows; its account only for whoever may change the computer
+                # (`may_manage`).
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
                 from .model_login import cleared_logins, key_cleared_logins
                 from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
-                same_account = subscriptions.same_account(value["readiness"].get("runtimes") or {}, profiles)
                 keys = computer_key_listing(c, row["id"])
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
                 # name, whether it is the "Every computer" one, and every computer it serves.
@@ -1780,7 +1870,7 @@ def install_views(app, store, auth, mutate, task_view):
                         key.pop("name", None)
                         key.pop("id", None)
                 machines.append({**value, "bots": bots, "needed_runtimes": sorted(assigned.get(row["id"]) or default),
-                                 "may_manage": manage, "profiles": profiles, "same_account": same_account,
+                                 "may_manage": manage, "profiles": profiles,
                                  "bot_connections": [link for link in subscriptions.connections(
                                      c, row["id"], store.settings, subscription_context) if link["bot"] not in hidden],
                                  "signed_out": cleared_logins(c, row["id"]),

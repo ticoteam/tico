@@ -66,6 +66,20 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command 
     }
 }
 
+/// `command` run by `parent` (a program and its first arguments), which execs the rest: the bot-user switch, when
+/// isolation is on, happens below the parent, and kills the program when the parent dies (setpriv `--pdeathsig`).
+pub fn command_under(parent: &[std::ffi::OsString], program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(&parent[0]);
+    cmd.args(&parent[1..]);
+    if let Some(p) = prefix() {
+        cmd.args(&p).args(["--pdeathsig", "KILL"]);
+        // SAFETY: the closure only calls umask.
+        unsafe { cmd.pre_exec(umask_group) };
+    }
+    cmd.arg(program);
+    cmd
+}
+
 /// `command` for std's blocking Command.
 pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     use std::os::unix::process::CommandExt;

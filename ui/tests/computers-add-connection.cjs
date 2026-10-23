@@ -1,7 +1,7 @@
-// Settings > Computers, part 3: Add connection (the tool, Subscription or API key, a name, then the provider's sign-in in
-// the same pop-up; the chip appears once the computer reports, with no restart), Rename a subscription, and Remove one:
-// refused while bots run on it, naming them and offering the Bots page (by the page's own list or the server's), and
-// otherwise taken off the computer. Every request is intercepted.
+// Settings > Computers, part 3: Add connection (the tool, Subscription or API key, then the provider's sign-in of the
+// computer's one login for that tool in the same pop-up; the chip appears once the computer reports, with no restart).
+// Each computer has one login per AI tool (#1259): named subscriptions a runner still reports are not shown, and a
+// tool already signed in has no second sign-in. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,14 +22,12 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'},
         grok: {installed: false}},
         harnesses: {codex: tool('Codex', 'codex'), claude: tool('Claude Code', 'claude')}},
-      profiles: [
-        {name: 'acme', id: 'p-acme', display_name: 'Acme Pro', runtimes: {codex: {signed_in: true}}},
-        {name: 'beta', id: 'p-beta', display_name: 'beta', runtimes: {codex: {signed_in: true}}},
-        {name: 'spare', id: 'p-spare', display_name: 'Spare', runtimes: {codex: {signed_in: true}}}],
-      bot_connections: [{bot: 'writer', profile: 'beta', display_name: 'beta', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''}]};
+      // Named subscriptions from before one login per computer: still reported, never shown.
+      profiles: [{name: 'acme', id: 'p-acme', display_name: 'Acme Pro', runtimes: {codex: {signed_in: true}}}],
+      bot_connections: [{bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: false, problem: ''}]};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes = [];
-    let login = null, removal = null, refuseRemoval = true;
+    let login = null;
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -47,17 +45,9 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
             created: new Date().toISOString(), updated: new Date().toISOString()};
           return json(login);
         }
-        if (p === '/api/v2/computers/box/removals') {
-          if (refuseRemoval) return json({error: {code: 'in_use', detail: 'Sleeper run on it. Move them to another connection on the Bots page first',
-            bots: [{bot: 'sleeper', name: 'Sleeper'}]}}, 409);
-          removal = {id: 'r1', kind: 'remove', runner_id: 'box', runtime: body.runtime, profile: body.profile, state: 'requested',
-            created: new Date().toISOString(), updated: new Date().toISOString(), lines: []};
-          return json(removal);
-        }
         return json({});
       }
       if (p === '/api/v2/computers/box/logins/l1') return json(login);
-      if (p === '/api/v2/computers/box/logins/r1') return json(removal);
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
@@ -70,10 +60,9 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines: [box], services: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: [
-        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, subscription_profiles: true, sign_out: true}},
-        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, subscription_profiles: true, sign_out: true}},
+        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, sign_out: true}},
+        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, sign_out: true}},
         {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual'}}]});
-      if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -85,7 +74,11 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     const openDetail = async () => { await row.locator('.machine-name').click(); await detail.waitFor(); };
     await openDetail();
 
-    // 15. Add connection → Codex → Subscription → name → sign in, all in one pop-up.
+    // The computer's one Codex login, and no line for the named subscription it still reports.
+    assert.deepEqual(await detail.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)), ['own:codex']);
+    assert.doesNotMatch(await detail.innerText(), /Acme|Rename|Remove/);
+
+    // 15. Add connection → Codex → Subscription → the computer's login signs in, all in one pop-up.
     await detail.locator('[data-add-connection=box]').click();
     const add = page.locator('dialog.computer-add-dialog[open]');
     await add.waitFor();
@@ -96,106 +89,58 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await add.locator('[data-add-tool=codex]').click();
     await shot(add, 'add-2-kind');
     assert.match(await add.locator('h2').innerText(), /Add Codex/);
-    assert.equal(await add.locator('[data-add-kind=subscription]').isEnabled(), true);
     // API key, for a tool whose key is not the computer's own: the way there, and Back (ui/tests/model-keys.cjs: Add key).
     await add.locator('[data-add-kind=api_key]').click();
     assert.match(await add.innerText(), /Codex takes its key from Credentials/);
     assert.equal(await add.locator('a[href="#/credentials"]').count(), 1);
     await add.locator('[data-add-back=kind]').click();
-    await add.locator('[data-add-kind=subscription]').click();
-    const name = add.locator('[name=profile]');
-    await name.fill('Team ChatGPT');
-    assert.equal(await add.locator('[data-add-msg]').innerText(), 'Saved as team-chatgpt');
-    await shot(add, 'add-3-name');
-    await add.locator('button[type=submit]').click();
+    assert.equal(await add.locator('input[name=profile]').count(), 0, 'no name: the computer has one login per tool');
+    await add.locator('[data-add-own]').click();
     const signIn = page.locator('dialog[data-marker=same][open]');
     await signIn.locator('[data-code]').waitFor();
     assert.equal(await page.locator('dialog[open]:not(.computer-detail)').count(), 1, 'the sign-in carries on in the same pop-up');
-    assert.match(await signIn.locator('h2').innerText(), /Sign in to Codex \(ChatGPT\) · team-chatgpt on Team box/);
+    assert.match(await signIn.locator('h2').innerText(), /Sign in to Codex \(ChatGPT\) on Team box/);
     assert.equal(await signIn.locator('[data-code]').innerText(), 'ABCD-1234');
-    await shot(signIn, 'add-4-sign-in');
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/logins').body, {runtime: 'codex', profile: 'team-chatgpt'});
-    // Signed in, and the computer reports it: the chip appears on the row with no restart.
-    assert.equal(await row.locator('[data-chip="profile:team-chatgpt:codex"]').count(), 0);
+    await shot(signIn, 'add-3-sign-in');
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/computers/box/logins').body.profile || '', '');
+    // Signed in, and the computer reports it: the line reads signed in with no restart.
     login = {...login, state: 'signed_in', url: '', code: '', updated: new Date().toISOString()};
-    box.profiles.push({name: 'team-chatgpt', id: 'p-team', display_name: 'Team ChatGPT', runtimes: {codex: {signed_in: true}}});
+    box.readiness.runtimes.codex.authenticated = 'ready';
+    box.bot_connections[0].signed_in = true;
     box.readiness_at = at(60000);
     await signIn.locator('[data-status][data-state=signed_in]').waitFor({timeout: 10000});
-    assert.match(await signIn.locator('[data-status]').innerText(), /Signed in\. Codex \(ChatGPT\) · team-chatgpt is ready on Team box/);
-    await row.locator('[data-chip="profile:team-chatgpt:codex"]').waitFor({timeout: 15000});
     await signIn.locator('[data-close]').last().click();
     // Close clears [open] before its close-event handler removes the node.
     await page.locator('dialog[data-marker=same]').waitFor({state: 'detached'});
-    assert.equal(await page.locator('dialog[data-marker=same]').count(), 0);
+    // Signed in now: Add connection offers no second Codex sign-in; a different account means another computer.
+    await detail.locator('[data-connection="own:codex"]', {hasText: 'Signed in'}).waitFor({timeout: 15000});
+    await detail.locator('[data-add-connection=box]').click();
+    await add.locator('[data-add-tool=codex]').click();
+    assert.equal(await add.locator('[data-add-own]').isDisabled(), true);
+    assert.match(await add.locator('[data-add-own]').innerText(), /add another computer/);
+    await page.keyboard.press('Escape');
+    await add.waitFor({state: 'detached'});
 
-    // Rename a subscription: its name only; login and bots stay.
-    const acme = detail.locator('[data-connection="profile:acme:codex"]');
-    await acme.locator('.computer-conn-rename summary').click();
-    await acme.locator('[data-subs-rename] [name=display_name]').fill('Acme Team');
-    await shot(detail, 'detail-rename');
-    await acme.locator('[data-subs-rename] button[type=submit]').click();
-    for (let i = 0; i < 100 && !writes.some(w => w.p === '/api/v2/subscriptions/name'); i++) await page.waitForTimeout(20);
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/subscriptions/name').body, {runner_id: 'box', profile: 'acme', display_name: 'Acme Team'});
-    // The computer's own login has no Rename or Remove (Sign out is its way off).
-    assert.equal(await detail.locator('[data-connection^="own:"] .computer-conn-rename, [data-connection^="own:"] [data-connection-remove]').count(), 0);
-
-    // 18. Remove with bots on it: it names them and sends the person to the Bots page first; no Remove button.
-    await detail.locator('[data-connection="profile:beta:codex"] [data-connection-remove]').click();
-    const remove = page.locator('dialog.model-remove[open]');
-    await remove.waitFor();
-    assert.match(await remove.locator('[data-remove-bots]').innerText(), /^Writer runs on it\. Move it to another connection on the Bots page first/);
-    assert.equal(await remove.locator('[data-remove]').count(), 0);
-    await shot(remove, 'remove-bots');
-    await remove.locator('[data-remove-bots-page]').click();
-    assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.computer), 'box');
-    assert.equal(writes.filter(w => w.p === '/api/v2/computers/box/removals').length, 0);
-
-    // A bot the page did not list (paused, or moved here since): the server's refusal names it the same way.
-    await page.locator('[data-settings-tab=devices]').click();
-    await openDetail();
-    await detail.locator('[data-connection="profile:spare:codex"] [data-connection-remove]').click();
-    await remove.waitFor();
-    assert.match(await remove.innerText(), /No bot runs on it/);
-    await remove.locator('[data-remove]').click();
-    await remove.locator('[data-remove-bots]').waitFor();
-    assert.match(await remove.locator('[data-remove-bots]').innerText(), /^Sleeper runs on it\. Move it to another connection on the Bots page first/);
-    await remove.locator('[data-close]').first().click();
-
-    // A bot that came onto it after the ask stops it at the computer, before anything goes: the Bots page again.
-    refuseRemoval = false;
-    await detail.locator('[data-connection="profile:spare:codex"] [data-connection-remove]').click();
-    await remove.waitFor();
-    await remove.locator('[data-remove]').click();
-    removal = {...removal, state: 'failed', message: 'Writer run on it. Move them to another connection on the Bots page first',
-      updated: new Date().toISOString()};
-    await remove.locator('[data-status][data-state=failed]').waitFor({timeout: 10000});
-    assert.match(await remove.locator('[data-status]').innerText(), /^Writer run on it\. Move them/);
-    assert.equal(await remove.locator('[data-remove-bots-page]').count(), 1);
-    await remove.locator('[data-close]').last().click();
-
-    // With no bots on it, it comes off the computer.
-    await detail.locator('[data-connection="profile:spare:codex"] [data-connection-remove]').click();
-    await remove.waitFor();
-    await remove.locator('[data-remove]').click();
-    assert.deepEqual(writes.filter(w => w.p === '/api/v2/computers/box/removals').at(-1).body, {runtime: 'codex', profile: 'spare'});
-    removal = {...removal, state: 'done', updated: new Date().toISOString()};
-    box.profiles = box.profiles.filter(p => p.name !== 'spare');
-    box.readiness_at = at(120000);
-    await remove.locator('[data-status][data-state=done]').waitFor({timeout: 10000});
-    assert.match(await remove.locator('[data-status]').innerText(), /Removed\. Codex \(ChatGPT\) · Spare is no longer on Team box/);
-    await remove.locator('[data-close]').last().click();
-    for (let i = 0; i < 150 && await row.locator('[data-chip="profile:spare:codex"]').count(); i++) await page.waitForTimeout(100);
-    assert.equal(await row.locator('[data-chip="profile:spare:codex"]').count(), 0);
-
-    // Offline: Add connection, Rename and Remove wait for the computer.
+    // Offline: Add connection waits for the computer.
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await detail.locator('[data-computer-offline]').waitFor();
-    assert.equal(await detail.locator('[data-add-connection]:enabled, [data-connection-remove]:enabled, .computer-conn-rename').count(), 0);
-    assert.equal(await detail.locator('[data-connection="profile:acme:codex"] [data-connection-remove]').getAttribute('title'), 'Computer is offline');
+    assert.equal(await detail.locator('[data-add-connection]:enabled').count(), 0);
 
+    await page.keyboard.press('Escape');
+    // Hosted enrollment leaves the browser with no code or installer command.
+    assert.equal(await page.locator('#machine-kind option[value="hosted"]').count(), 0);
+    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('.machine-enroll').remove(); return loadSettings(); });
+    await page.evaluate(() => { window.hostedOpened = []; window.open = (...args) => window.hostedOpened.push(args); });
+    await page.locator('#machine-kind').selectOption('hosted');
+    assert.equal(await page.locator('#machine-label').isVisible(), false);
+    const beforeHosted = writes.length;
+    await page.locator('#register-machine').click();
+    const opened = await page.evaluate(() => window.hostedOpened);
+    assert.match(opened[0][0], /^https:\/\/app\.tico\.dev\/hosting\?workspace=/);
+    assert.equal(opened[0][2], 'noopener');
+    assert.equal(writes.length, beforeHosted);
     assert.deepEqual(errors, []);
-    console.log('PASS: Add connection (tool, subscription, name, sign-in in one pop-up, chip without restart), Rename, Remove (bots first, server refusal, removed), offline');
+    console.log('PASS: Add connection (tool, the computer\'s one login signed in in one pop-up, no second sign-in), offline');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

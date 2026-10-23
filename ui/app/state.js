@@ -47,11 +47,14 @@ const assistantName = () => {
     ? CONFIG_DEFAULTS.assistant_name : name;
 };
 const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
-// The assistant, BotOps, the Librarian and the Goal Manager are built in to every team: pause and rename them, never archive or delete.
+// The assistant, BotOps, the Librarian and the CEO Bot are built in to every team: pause and rename them, never archive or delete.
 const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager';
-// The CEO Bot switch (backend/ceo_bot.py): on, the Goal Manager is the CEO Bot, by its display name, on the org chart.
-const ceoBotOn = () => !!S.config.ceo_bot;
-const goalManagerName = () => ceoBotOn() ? ((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || 'CEO Bot') : 'Goal Manager';
+// The CEO Bot (backend/ceo_bot.py, slug goal-manager) is on every install, at the top of the org chart, by the name the
+// owner gave it, else "CEO Bot". Its old name never shows: a roster read before the upgrade renamed it says "CEO Bot".
+const ceoBotName = () => {
+  const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
+  return name && name !== 'Goal Manager' ? name : 'CEO Bot';
+};
 const companyName = () => S.config.company_name || appName();
 // Tico's own wordmark, only while the app is called Tico; a team that named its app gets that name as text.
 const brandLogo = () => appName() === CONFIG_DEFAULTS.app_name
@@ -123,10 +126,7 @@ async function applyAuthenticatedConfig(config, expected = nativeVisualVersion()
 // A page reload is not evidence that the previous browser session is still valid.
 void clearNativeVisualOrigin();
 function applyConfig(config) {
-  const ceoBotWas = ceoBotOn();
   S.config = {...CONFIG_DEFAULTS, ...(config && typeof config === 'object' ? config : {})};
-  // The CEO Bot switch flipped since the page opened: the roster has the new name and chart; read it and redraw.
-  if (S.me && ceoBotWas !== ceoBotOn()) void refresh(true);
   document.title = (S.config.demo ? 'Demo · ' : S.config.rehearsal ? 'Rehearsal · ' : '') + appName();
   // The strip is shown by the server's say-so alone: only a demo's config carries `demo`, a rehearsal's `rehearsal`.
   const strip = !!(S.config.demo || S.config.rehearsal);

@@ -60,8 +60,9 @@ AI employees and reporting lines, adds its built-in roles once, and leaves emplo
 It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
 over the recommended sample company. AWS stores this plan with the encrypted install settings in an Advanced
 Parameter Store parameter (charges apply); settings and compressed plan must fit its 8 KB limit.
-See [Finish setup](onboarding.md) for file support and choices saved for later. For a larger file, import it on the
-app's first setup screen instead.
+See [Finish setup](onboarding.md) for file support and choices saved for later. A larger file, such as any whole
+company model, is refused before anything is set up: run setup without `--company-file`, then on the first Welcome step
+in Tico, under **Already chose your team?**, choose the file in **Company YAML file** and click **Use this team**.
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
 `http://127.0.0.1:8765`, and you sign in as the owner with a token kept on this computer. Add a domain and sign-in
@@ -86,7 +87,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 
 1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
    "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
-   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap, Mid and Power 1.0. The step starts with how bots get
+   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
    their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
@@ -113,9 +114,9 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
    in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
-   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
-   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+   Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
 2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
@@ -769,6 +770,10 @@ allowed, take control. The computer itself decides whether it offers one:
   override file a named or `--server-network` runner has, as every compose call for that runner must.
 - A Linux checkout: `sudo apt-get install xvfb x11vnc matchbox-window-manager`, then `scripts/tico screen on`
   (`screen off` and `screen status` too; a running runner follows within seconds).
+
+In **Bot → Settings → Screen**, use the switch to enable or disable screen access. If setup is needed, the switch
+reveals the command to run on the computer and shows **Waiting for computer setup** until it reports readiness.
+The same switch is in the computer’s details under **Settings → Computers**.
 
 The first time a new computer offers its screen, its **Screen** setting in **Settings > Computers** starts at
 **Control**, so its operator and admins can watch it and drive it: the screen opens in Control, with **View** one tap

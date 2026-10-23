@@ -29,8 +29,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task ask <id> "<question>"
     hub task update <id> --status waiting --on <person> --note "<plain ask>"
                                            ask a person on your task: one small subtask for them, yours stays blocked
-    hub task question "<question>" --on <person> [--option A=<file> --option B=<file>]
-                                           one decision under your task, waiting on them; none for Yes / No
+    hub task question "<question>" --on <person> [--why "<why it matters>"]
+                    [--option "A -> what happens" --option "B=<file> -> what happens"] [--multi --recommend A]
+                                           one decision under your task, waiting on them; none for Yes / No.
+                                           Every option says what happens (->); several picks (--multi) mark
+                                           the recommended ones; no ids, paths or errors above --body
                     [--if-no-answer "Yes" --default-kind reversible|send|spend|delete] [--by D]
                                            what you do if they don't answer: a reversible step goes ahead
                                            after the team's days (3); asks expire after 14 days
@@ -59,6 +62,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
     hub task close <id> [--note "..."]
+    hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
+                                           wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
     hub task attach <id> <file> [--name "..."]
@@ -108,14 +113,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            set a goal; a parent is optional. With one, whoever owns the parent gives its first colour
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
-    hub goal status <id> auto              let the Goal Manager set the colour again (ends a colour set by hand)
-    hub goal refresh [--goal ID ...]       the Goal Manager's status pass: work automatic colours out again
+    hub goal status <id> auto              let the CEO Bot set the colour again (ends a colour set by hand)
+    hub goal refresh [--goal ID ...]       the CEO Bot's status pass: work automatic colours out again
     hub goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     hub goal checkin-list <id>             a goal's check-ins, newest first
     hub goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     hub goal company                       the company's Vision and Description (read-only)
-    hub goal ceo-bot                       the CEO Bot switch, how much it does (level 1-3) and today's Needs you count
+    hub goal ceo-bot                       the CEO Bot: its level (1 Passive to 3), regular checks and today's Needs you count
     hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
                                            the CEO Bot at level 2+: one item for several bots' same ask of a person
     hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
@@ -357,6 +362,7 @@ if __package__ in (None, ""):                          # run as a script: python
 # Mirrors of the server's vocabulary (backend/hubdb.py), so a typo is refused by the parser
 # before a request is made. The server is the authority when they disagree.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
@@ -366,6 +372,12 @@ ASKED = ("Assistant: the person asked for exactly this in their own Assistant ch
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+def task_update_status(value):
+    if value == "closed":
+        raise argparse.ArgumentTypeError("use `hub task close <id>` to close a task")
+    return value
 
 
 # `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
@@ -867,7 +879,13 @@ def parser():
     s = task.add_parser("question", help="put one decision to a person as its own task: a pick or Yes / No")
     s.add_argument("question")
     s.add_argument("--on", required=True, help="the person who decides")
-    s.add_argument("--option", action="append", help="LABEL or LABEL=FILE (an image shows with it); repeat, 2 to 6; none for Yes / No")
+    s.add_argument("--option", action="append",
+                   help="\"LABEL -> WHAT HAPPENS\" or \"LABEL=FILE -> WHAT HAPPENS\" (an image shows with it); repeat, 2 to 6; "
+                        "none for Yes / No. The what-happens line is required")
+    s.add_argument("--why", help="one plain line on why it matters, shown under the question")
+    s.add_argument("--multi", action="store_true", default=None,
+                   help="several picks: the person ticks the ones they want; unticked ones come back as \"not this one\"")
+    s.add_argument("--recommend", action="append", metavar="LABEL", help="an option you recommend (pre-ticked); repeat")
     s.add_argument("--title")
     s.add_argument("--body")
     s.add_argument("--parent")
@@ -892,7 +910,7 @@ def parser():
     visibility.add_argument("--company", dest="private", action="store_false", help="human requester publishes the task")
     s.add_argument("id")
     s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--status", choices=list(TASK_STATUSES))
+    s.add_argument("--status", choices=list(TASK_UPDATE_STATUSES), type=task_update_status)
     s.add_argument("--note")
     s.add_argument("--owner")
     s.add_argument("--due")
@@ -924,7 +942,8 @@ def parser():
                    help="the caption for each --visual, in the same order")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated option labels")
+    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
+                                           "person needs the what-happens line)")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument("--needs-action", dest="needs_action", action="store_true", help="a bot's message to a bot waits for that bot's next run; this wakes it now")
     s.set_defaults(fn="task comment")
@@ -1004,6 +1023,14 @@ def parser():
                         "follow_up: it was split off or followed up from task")
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
+    s = task.add_parser("wait", help="make a task wait on another task, a pull request merging or a release being "
+                                     "published; prints what was stored")
+    s.add_argument("id")
+    s.add_argument("--on", dest="wait_on", required=True,
+                   help="task:<id> (blocked_by), pr:<url> or pr:<task> (until that pull request merges), "
+                        "release:<tag> (until that release is published). The task it waits on keeps its own step.")
+    s.add_argument("--remove", action="store_true", help="take the wait off instead")
+    s.set_defaults(fn="task wait")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
@@ -1024,7 +1051,8 @@ def parser():
     s.add_argument("--note", help="short note on this version (at most 500 characters)")
     choices = s.add_mutually_exclusive_group()
     choices.add_argument("--ask", help="JSON file containing structured questions")
-    choices.add_argument("--choices", help="comma-separated option labels")
+    choices.add_argument("--choices", help="comma-separated options, each \"LABEL -> WHAT HAPPENS\" (a question to a "
+                                           "person needs the what-happens line)")
     s.set_defaults(fn="task attach")
     s = task.add_parser("answers", help="list the task's structured answers, oldest first")
     s.add_argument("id")
@@ -1117,7 +1145,7 @@ def parser():
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
     s.set_defaults(fn="goal update")
-    s = goal.add_parser("refresh", help="the Goal Manager's status pass: work automatic colours out again")
+    s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
     s.set_defaults(fn="goal refresh")
     s = goal.add_parser("checkin", help="how the owner says the goal is going, in their words")
@@ -1134,7 +1162,7 @@ def parser():
     s.set_defaults(fn="goal needs-you")
     s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
     s.set_defaults(fn="goal company")
-    s = goal.add_parser("ceo-bot", help="the CEO Bot switch, its level and today's Needs you count per person")
+    s = goal.add_parser("ceo-bot", help="the CEO Bot: its level, regular checks and today's Needs you count per person")
     s.set_defaults(fn="goal ceo-bot")
     s = goal.add_parser("ceo-bot-merge", help="the CEO Bot at level 2+: one item for several bots' same ask of a person")
     s.add_argument("person", help="the person they all wait on (a person id)")

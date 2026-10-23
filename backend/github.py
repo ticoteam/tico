@@ -264,7 +264,26 @@ def pull_request(c, payload, review_role="", release_repo=""):
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
-    return {"pr": url, "action": action, "tasks": len(links)}
+    woken = []
+    if pr.get("merged"):
+        # Tasks waiting for this merge get their one wake; the PR's own task keeps its step (backend/milestone_waits.py).
+        from . import milestone_waits
+        target = milestone_waits.pr_target(url)
+        woken = milestone_waits.happened(c, "pr_merged", target[0], url) if target else []
+    return {"pr": url, "action": action, "tasks": len(links), **({"milestone_woken": woken} if woken else {})}
+
+
+def release(c, payload):
+    """A release published: tasks waiting for its tag get their one wake (backend/milestone_waits.py)."""
+    from . import milestone_waits
+    rel = payload.get("release") or {}
+    repo = str((payload.get("repository") or {}).get("full_name") or "")
+    tag = str(rel.get("tag_name") or "")
+    if payload.get("action") != "published" or rel.get("draft") or not repo or not tag:
+        return {"release": tag, "action": payload.get("action"), "woken": []}
+    target = milestone_waits.release_target(f"{repo}@{tag}")
+    woken = milestone_waits.happened(c, "release_published", target[0], str(rel.get("html_url") or "")) if target else []
+    return {"release": tag, "action": "published", "woken": woken}
 
 
 def _own_comment(c, task, payload, key, detail):
@@ -684,7 +703,8 @@ def push(c, payload):
         for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
                                        "AND branch=?", (repo.lower(), branch))):
             detail = H._json(link["detail_json"], {}) or {}
-            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now())
+            detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
+            detail.pop("stale_push_cleared", None)     # a release names only a stale push the newest push left behind
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}
@@ -957,6 +977,8 @@ def install_github(app, settings, store):
             elif event == "push":
                 result = push(c, payload)
                 result["shipped"] = ship_deployed(c, settings)
+            elif event == "release":
+                result = release(c, payload)
             else:
                 return Response(status_code=204)
         return {"ok": True, **result}

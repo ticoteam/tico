@@ -1350,3 +1350,30 @@ def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_r
         assert 'setup failed (exit 7)' in manager.reports[0]['error']
     finally:
         manager.close()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('phase', ['setup_running', 'setup_failed'])
+def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
+    """A setup that stopped part-way (the server's deadline then names `hub task worktree setup`): the registered setup
+    command re-runs setup in the same folder on the same branch, keeping its files and proof, and reports it ready."""
+    workspace, base, remote, row, client = trees
+    first = W.command(client, 'add', 'org/product')          # no folder yet: the checkout is made
+    path = Path(first['workspace_path'])
+    (path / 'notes.txt').write_text('kept')
+    (path / 'setup-ran').unlink()
+    marker = W._read_marker(workspace, row['id'])
+    W._write_marker(workspace, {**marker, 'phase': phase})
+    row.update(state='pending', checkout_state=phase, setup_pending=True)
+    detail = json.loads(row['detail_json'])
+    detail.update(checkout_state=phase, setup_pending=True)
+    row['detail_json'] = json.dumps(detail)
+    repo = client.get.return_value['repositories'][0]
+    client.get.side_effect = lambda route: ({'links': [{**row, 'kind': 'worktree'}]} if route.endswith('/links')
+                                            else {'repositories': [repo]})
+    W.command(client, 'setup', 'org/product')
+    fields = client.patch.call_args.args[1]
+    assert fields['state'] == 'present' and fields['checkout_state'] == 'ready' and fields['setup_pending'] is False
+    assert fields['expected_head'] == detail['expected_head'] and fields['expected_base'] == detail['expected_base']
+    assert (path / 'setup-ran').exists() and (path / 'notes.txt').read_text() == 'kept'
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']

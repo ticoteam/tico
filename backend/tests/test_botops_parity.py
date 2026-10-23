@@ -6,6 +6,7 @@ its turn: a member is refused what only an owner may do, an owner is not.
 """
 import json
 import time
+from uuid import uuid4
 
 import pytest
 
@@ -621,7 +622,7 @@ def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, l
 def _wake(api, machine):
     """A run the keeper starts with no task (a daily-update request): nobody's request is attached."""
     with api.app.state.store.transaction() as c:
-        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update"})
+        H.say(c, H.KEEPER, "bot:botops", "Time for your daily update.", kind="notice", refs={"wake": "update", "event": str(uuid4())})
     return claim(api, machine, "botops")
 
 

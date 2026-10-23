@@ -1,7 +1,7 @@
 """The edit actions: each takes a draft and its arguments and changes the draft, or refuses in plain words.
 
 `Turn` is one visitor turn. It takes the draft as the page sent it (the visitor's own edits stand), removes key-shaped
-strings, starts an empty chart from the starter pack, runs the actions one at a time (a refused action leaves the draft
+strings, starts an empty chart from the company model closest to the company's signals, runs the actions one at a time (a refused action leaves the draft
 as it was) and, when the plan changed, keeps the draft from before the turn in `undo`.
 """
 import calendar
@@ -14,8 +14,12 @@ from . import draft as D
 from .keys import scrub, scrub_all
 
 SPEC = {row["name"]: row for row in D.SPEC["actions"]}
-BY_SLUG = {role["slug"]: role for role in D.ROLES}
-BY_NAME = {role["name"].lower(): role for role in D.ROLES}
+# A seat with no template yet reads like a role with nothing to set up: no routine, no tools, never a lead.
+SEAT_ROLES = [{"slug": seat["slug"], "template": seat["slug"], "name": seat["name"], "department": seat["department"],
+               "lead": False, "core": False, "summary": seat["summary"], "first_routine": "", "tools": [],
+               "recommend_when": [], "open": True} for seat in D.SEATS]
+BY_SLUG = {role["slug"]: role for role in D.ROLES + SEAT_ROLES}
+BY_NAME = {role["name"].lower(): role for role in D.ROLES + SEAT_ROLES}
 NEVER_REMOVED = ("botops",)
 
 
@@ -76,6 +80,9 @@ ALIASES = {
     "technical writer": "docs-writer", "note taker": "meeting-notes", "meeting notes": "meeting-notes",
     "project manager": "meeting-notes", "goal manager": "goal-manager", "librarian": "librarian", "assistant": "coo",
     "botops": "botops", "cfo": "finance-lead", "cmo": "marketing-lead", "cto": "engineering-lead",
+    "cap table": "equity-manager", "equity": "equity-manager", "fundraising": "fundraising-manager",
+    "month-end close": "controller", "bookings": "scheduling-bookings", "scheduling": "scheduling-bookings",
+    "inspections": "quality-inspections", "quality": "quality-inspections",
 }
 
 
@@ -282,7 +289,7 @@ def add_person(draft, name, role, owner=False):
     me = name.strip().lower() in ("me", "myself", "i")
     name = "You" if me else re.sub(r"\b\w", lambda m: m.group(0).upper(), name.strip())
     if len(draft["people"]) >= D.LIMITS["people"]:
-        raise Refusal("The team has the most people a plan can hold (%d)." % D.LIMITS["people"])
+        raise Refusal("A chart can have at most %d people." % D.LIMITS["people"])
     if _person_named(draft, name):
         raise Refusal("%s is already on the team." % name)
     base = D.slugify(name)[:D.LIMITS["id"] - 8]
@@ -326,20 +333,88 @@ def _take_off(draft, gone):
     draft["removed"] = removed[-D.LIMITS["removed"]:]
 
 
-def seed(draft):
-    """Start an empty chart from the starter pack: the core bots, then each team, head first. A member whose department
-    differs from its head's reports to the head by name."""
-    for row in D.PACK["core"]:
+# What a model's name reads as in BotOps's line about it.
+MODEL_WORDS = {"everything": "everything Tico runs", "software": "a software company", "services": "a services firm",
+               "local": "a local service business", "store": "an online store"}
+# Signals that pick the model or say who the company sells to and how big it is: the model already answers them, so
+# they add no roles of their own. The rest ("has a support inbox", "uses GitHub") each add the roles that do that work.
+BROAD = {"sells_to_businesses", "sells_to_consumers", "small_team"} | {s for m in D.MODELS.values() for s in m["picks_when"]}
+
+
+def pick_model(signals):
+    """The model a company's signals point to: the first in D.MODEL_ORDER whose `picks_when` they hold, else Everything."""
+    return next((key for key in D.MODEL_ORDER if set(D.MODELS[key]["picks_when"]) & set(signals)), "everything")
+
+
+def _lay_out(draft, model, reason):
+    """A model's seats on the chart, each in its model team, head first; a seat `under` another reports to it by
+    title. A seat already there by title is left as it is."""
+    for row in model["seats"]:
         role = BY_SLUG[row["template"]]
-        draft["bots"].append(_make_bot(draft, role, row.get("title") or role["name"], role["summary"][:D.LIMITS["reason"]], True))
-    heads = {}
-    for row in D.PACK["bots"]:
-        role = BY_SLUG[row["template"]]
-        bot = _make_bot(draft, role, row.get("title") or role["name"], D.PACK["reason"], False)
+        title = row.get("title") or role["name"]
+        if _title_taken(draft, title):
+            continue
+        bot = _make_bot(draft, role, title, reason, False)
+        bot["dept"] = row["team"]  # a model may seat a role in another team: the store's Pricing Analyst is in Finance
         draft["bots"].append(bot)
-        head = heads.setdefault(row["team"], bot)
-        if head is not bot and D.manager_of(draft, bot) != head["id"]:
-            bot["reports_to"] = head["id"]
+    by_title = {b["title"].lower(): b for b in draft["bots"]}  # the same case-blind match as `_title_taken`
+    for row in model["seats"]:
+        boss = by_title.get(str(row.get("under", "")).lower())
+        bot = by_title.get((row.get("title") or BY_SLUG[row["template"]]["name"]).lower())
+        if boss and bot and bot is not boss:
+            bot.setdefault("reports_to", boss["id"])
+
+
+def _core(draft):
+    for row in D.MODELS["everything"]["core"]:
+        role = BY_SLUG[row["template"]]
+        if not any(b["template"] == role["slug"] for b in draft["bots"]):
+            draft["bots"].append(_make_bot(draft, role, row.get("title") or role["name"],
+                                           role["summary"][:D.LIMITS["reason"]], True))
+
+
+def seed(draft):
+    """Start an empty chart from the model closest to the company's signals, then add more ("close to their answers,
+    but err on the side of showing more"): the head of every department Everything has and the model lacks (Product
+    and Engineering only for a company that sells software), and every role whose `recommend_when` names one of the
+    company's own signals. Nothing the model has is dropped for a missing signal. Returns BotOps's one line about it."""
+    signals = set(draft["company"]["signals"])
+    key = pick_model(signals)
+    model = D.MODELS[key]
+    _core(draft)
+    _lay_out(draft, model, model["reason"])
+    software = "sells_software" in signals
+    gone = {r["title"].lower() for r in draft.get("removed", [])}
+    heads = []
+    for row in D.MODELS["everything"]["seats"]:
+        role = BY_SLUG[row["template"]]
+        if not role["lead"] or (role["department"] in ("product", "engineering") and not software):
+            continue
+        if any(b["dept"] == role["department"] and b["lead"] for b in draft["bots"]) or role["name"].lower() in gone:
+            continue
+        draft["bots"].append(_make_bot(draft, role, role["name"], "Every chart has a head for each department.", False))
+        heads.append(role["name"])
+    own = signals - BROAD
+    matched = []
+    for role in D.ROLES:
+        if role["core"] or not own & set(role["recommend_when"]) or _title_taken(draft, role["name"]):
+            continue
+        if (role["department"] in ("product", "engineering") and not software) or role["name"].lower() in gone:
+            continue
+        if any(b["template"] == role["slug"] for b in draft["bots"]):
+            continue
+        draft["bots"].append(_make_bot(draft, role, role["name"], "Fits what you said about how the company works.", False))
+        matched.append(role["name"])
+    if key == "everything":
+        line = "Nothing you said points to one kind of company, so we started from the Everything model"
+    else:
+        line = "This looks like %s, so we started from the %s model" % (MODEL_WORDS[key], model["name"])
+    added = (["the %s" % _join(heads)] if heads else []) + (["%s" % _join(matched)] if matched else [])
+    return line + (" and added %s." % " and ".join(added) if added else ".")
+
+
+def _join(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
 # ---------------------------------------------------------------------------------------------------- the actions
@@ -368,7 +443,7 @@ def bot_add(draft, args, today, notes):
     if _title_taken(draft, title):
         raise Refusal("There's already a %s on the chart. Give the new one another title, or change that one." % title)
     if len(draft["bots"]) >= D.LIMITS["bots"]:
-        raise Refusal("The chart has the most bots a plan can hold (%d)." % D.LIMITS["bots"])
+        raise Refusal("A chart can have at most %d bots." % D.LIMITS["bots"])
     reason = _text(args, "reason", D.LIMITS["reason"])
     bot = _make_bot(draft, role, title, reason, args.get("start") == "now" or role["core"])
     draft["bots"].append(bot)
@@ -556,7 +631,7 @@ def agent_set(draft, args, today, notes):
         agent.update(fields, isNew=True)
         return "Updated your %s." % agent["title"]
     if len(draft["bots"]) >= D.LIMITS["bots"]:
-        raise Refusal("The chart has the most bots a plan can hold (%d)." % D.LIMITS["bots"])
+        raise Refusal("A chart can have at most %d bots." % D.LIMITS["bots"])
     draft["bots"].append({"id": next_id(draft, runtime), "template": None, "lead": False, "core": False, "start": True,
                           "routine": "", "tools": [], "existing": True, "isNew": True, **fields})
     return "Added your %s, now on the chart with a manager." % fields["title"]
@@ -596,8 +671,41 @@ def _name(draft, ident):
     return found or ident
 
 
+def model_use(draft, args, today, notes):
+    """Switch the chart to one company model as it stands (the model chips; "show me everything" is Everything). The
+    people, the visitor's own agents and the seats people hold stay; every other bot gives way to the model's."""
+    model = D.MODELS[args["model"]]
+    kept = [b for b in draft["bots"] if b["core"] or b["existing"] or "person" in b]
+    _take_off(draft, [b for b in draft["bots"] if b not in kept])
+    _core(draft)
+    _lay_out(draft, model, model["reason"])
+    taken = {b["title"].lower() for b in draft["bots"]}
+    draft["removed"] = [r for r in draft.get("removed", []) if r["title"].lower() not in taken]
+    return "The chart is now the %s model (%d seats)." % (model["name"], len(draft["bots"]))
+
+
+def seat_fill(draft, args, today, notes):
+    """A person holds a seat ("Ana runs our cap table"): added to the team when new, with the seat's title as role."""
+    bot = find_bot(draft, args["seat"])
+    if bot["core"] or bot["existing"]:
+        raise Refusal("%s isn't a seat a person can hold." % bot["title"])
+    person = _person_named(draft, args["name"])
+    if not person:
+        if not draft["people"] and str(args["name"]).strip().lower() not in ("me", "myself", "i"):
+            # The visitor owns the company, not the first coworker who holds a seat.
+            add_person(draft, "me", "Owner", owner=True)
+        person = add_person(draft, args["name"], bot["title"])
+    if person["dept"] is None:
+        person["dept"] = bot["dept"]
+    for other in draft["bots"]:
+        if other.get("person") == person["id"] and other is not bot:
+            del other["person"]
+    bot["person"], bot["isNew"] = person["id"], True
+    return "%s holds the %s seat." % (person["name"], bot["title"])
+
+
 ACTIONS = {fn.__name__: fn for fn in (
-    company_set, bot_add, bot_remove, bot_rename, bot_set_reports_to, bot_set_start, bot_set_routine, bot_set_first_job,
+    company_set, model_use, seat_fill, bot_add, bot_remove, bot_rename, bot_set_reports_to, bot_set_start, bot_set_routine, bot_set_first_job,
     team_remove, goal_add, goal_edit, goal_remove, person_set, agent_set, rules_set_never, rules_set_review,
     rules_use_defaults, tools_set, step_go)}
 
@@ -611,7 +719,7 @@ class Turn:
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
-    empty chart was started from the starter pack.
+    empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
     """
 
     def __init__(self, raw, today=None):
@@ -619,10 +727,11 @@ class Turn:
         raw, self.keys_removed = scrub_all(raw)
         self.draft = D.check(raw)
         self.seeded = not any(b["template"] for b in self.draft["bots"])
+        self.started = ""
         if self.seeded:
-            seed(self.draft)
+            self.started = seed(self.draft)
             self.draft = D.check(self.draft)
-        # The starter pack is where the chart begins, not a change to undo.
+        # The model is where the chart begins, not a change to undo.
         self.before = D.content(self.draft)
 
     def apply(self, name, args):

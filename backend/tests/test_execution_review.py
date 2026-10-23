@@ -49,6 +49,7 @@ def test_review_is_private_and_exposes_saved_output_without_credentials(api):
     assert result['id'] == attempt['job_id']
     assert result['output'][0]['text'] == 'Saved report; email already sent.'
     assert result['reason'].startswith('The run stopped before it returned an answer.')
+    assert result['stopped'] == 'unknown' and result['acted'] == []             # the card leads with "don't retry"
     assert 'token_hash' not in result['attempt'] and 'token' not in result['attempt']
 
 
@@ -348,6 +349,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert review['output'][-1]['text'] == 'Archived both bots; telling Priya next.'
     assert [t['tool'] for t in review['tools']] == ['shell'] and 'shell' in review['reason']
+    assert review['stopped'] == 'changed' and review['acted'] == ['shell']      # named on the card's one line
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was archived yet; run it again.', 'acknowledge_uncertain_effects': True})
     ready(api, machine, ['ops'])
@@ -396,9 +398,10 @@ def test_a_run_that_says_it_reports_tool_calls_resumes_plainly_when_it_called_no
     assert 'recorded no tool call' in claim(api, machine)['message']['body']
 
 
-def restarted_mid_turn(api, calls, *, reported=True):
+def restarted_mid_turn(api, calls, *, reported=True, hop=False):
     """A Claude-style run that says it reports its tool calls, made `calls` ((name, parent) pairs) and was cut off:
-    by a runner restart that reported it interrupted, or by a lapsed lease."""
+    by a runner restart that reported it interrupted, or by a lapsed lease. `hop`: it then fell back to a host that
+    does not report its calls (`tool_events: false`, runner-rs execute.rs)."""
     machine, message, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'restarted'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
@@ -407,6 +410,8 @@ def restarted_mid_turn(api, calls, *, reported=True):
             events.append({'seq': len(events) + 1, 'kind': 'tool', 'payload': {
                 'tool': name, 'status': status, 'item_id': f'call-{n}', 'parent_id': parent,
                 **({'summary': f'notes/{n}.md'} if status == 'started' else {})}})
+    if hop:
+        events.append({'seq': len(events) + 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': False}})
     events.append({'seq': len(events) + 1, 'kind': 'message', 'payload': {'text': 'Reading the notes.'}})
     post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
     if reported:
@@ -432,6 +437,8 @@ def test_a_run_that_only_read_resumes_at_once_after_its_runner_restarted(api):
 def test_a_run_that_only_read_waits_out_a_lapsed_lease_for_the_runner_to_restore_it(api):
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)], reported=False)
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'read' and review['acted'] == []              # the card leads with "Try again"
     # Past the runner's restore window its finished result may still come in: no second run yet.
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
@@ -451,6 +458,7 @@ def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls
         ('Read', False, 'completed'), ('Agent', False, 'completed'), (writer[0], bool(writer[1]), 'completed')]
     assert review['tools'][0]['summary'] == 'notes/0.md'
     assert f'can change things ({writer[0]})' in review['reason']
+    assert review['stopped'] == 'changed' and review['acted'] == [writer[0]]
     from backend.store import H
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
@@ -473,6 +481,16 @@ def test_a_run_that_only_read_but_consumed_an_approval_is_held(api):
         c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), 'spend', message['id'], 'bot:ops', started, started))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]          # the card never says "only read" of it
+    assert review['stopped'] == 'changed' and review['acted'] == [] and 'approval' in review['reason']
+
+
+def test_a_run_that_read_then_hopped_to_a_silent_host_is_held_and_never_called_read_only(api):
+    """Its Read was recorded; what the fallback host did was not. The sweep holds it, and the card agrees."""
+    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], hop=True)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'unknown' and [t['tool'] for t in review['tools']] == ['Read']
 
 
 def test_a_read_only_run_that_stops_again_after_its_resume_is_not_resumed_early(api):
@@ -486,6 +504,7 @@ def test_a_read_only_run_that_stops_again_after_its_resume_is_not_resumed_early(
     post(api, f"attempts/{again['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
          'text': 'Runner restarted during execution'}, machine['token'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+    assert get(api, 'bots/ops/execution-review')['jobs'][0]['stopped'] == 'twice'    # not "Try again" first
     aged(api, again['id'])
     assert [d['state'] for d in sweep(api)] == ['cancelled']
 
@@ -667,7 +686,7 @@ def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_p
 # A finished turn whose runner stalled before handing it in (Dev 242; Oct 17-18, results 15 to 76 minutes after the
 # lease lapsed). Each shape: the model finished, the lease lapsed, something decided the job, then the result came.
 
-def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.', task=False):
+def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize the current work.', task=False, stopped=False):
     """A run that read, wrote its answer and went idle; then its lease lapsed before the result reached the hub.
     With `task`, a person filed the request as a task in its own room, and the run starts from the hub's notice."""
     from backend.tests.test_api import runner
@@ -692,8 +711,11 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
         {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}},
         {'seq': 2, 'kind': 'message', 'payload': {'text': 'Done: the summary is in the room.', 'final': True}},
         {'seq': 3, 'kind': 'status', 'payload': {'state': 'idle'}}]}, machine['token'])
+    if stopped:
+        post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
-    assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
+    assert claim(api, machine) is None
+    assert job_state(api, attempt['job_id']) == ('cancelled' if stopped else 'uncertain')
     return machine, message, attempt
 
 
@@ -823,6 +845,147 @@ def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run
     assert bot_replies(api, message) == []
 
 
+def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_late(api):
+    """Dev 242 R1: a person pressed Stop while the computer was asleep, before the hub marked the lease lapsed. No
+    renewal carried it, the lease lapsed, the model finished anyway and the woken runner handed the answer in as
+    completed. It is filed on its run, not posted, and the job ends stopped (cancelled), not completed, whether it was
+    still uncertain or the person had dismissed it first."""
+    from backend.tests.test_api import runner
+    machine = runner(api, 'ana')
+    for bot, dismissed in (('ops', False), ('finance', True)):
+        assign(api, machine, bot)
+        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=not dismissed)
+        aged(api, attempt['id'])
+        if dismissed:
+            post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})
+            post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+                 'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
+        filed = hand_in(api, machine, attempt)
+        assert filed['filed'] is True and filed['message'] is None
+        assert settled(api, attempt) == ('expired', 'cancelled')
+        assert bot_replies(api, message, bot) == []
+
+
+def stopped_notices(api, message, attempt):
+    with api.app.state.store.read() as c:
+        events = c.execute("SELECT count(*) FROM events WHERE action='attempt.stopped' AND target=?",
+                           (attempt['id'],)).fetchone()[0]
+    notices = [m['body'] for m in get(api, f"conversations/{message['conversation_id']}/messages")
+               if m['kind'] == 'notice' and m['body'].startswith('Stopped by ')]
+    return events, notices
+
+
+def test_a_stop_pressed_after_the_lease_lapsed_is_recorded_and_the_late_answer_is_filed(api):
+    """Dev 242 R2: the hub had already marked the sleeping turn's lease lapsed when the person pressed Stop on it. The
+    Stop used to be refused ("not running") and the answer the model went on to finish was posted. Now it is recorded
+    on the lapsed turn it names, and the late answer is filed on its run; the job ends as a stopped one does."""
+    from backend.store import H
+    machine, message, attempt = finished_then_lapsed(api)
+    stopping = post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    assert stopping == {'attempt_id': attempt['id'], 'stopping': True}
+    # Nothing the runner reports brings the stopped turn back, within STALL_MAX or not.
+    post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'], expected=409)
+    filed = hand_in(api, machine, attempt)
+    assert filed['filed'] is True and filed['message'] is None
+    assert settled(api, attempt) == ('expired', 'cancelled')
+    assert bot_replies(api, message) == []
+    assert stopped_notices(api, message, attempt) == (1, ['Stopped by Ana'])
+    with api.app.state.store.read() as c:
+        assert H.status(c, 'ops')['state'] == 'idle'
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []
+    # Never run again: not by the sweep past RESULT_GRACE, not by the next claim.
+    aged(api, attempt['id'], grace=True)
+    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'cancelled'
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+
+
+def test_a_stop_after_the_lease_lapsed_takes_the_turns_id_and_a_job_still_on_it(api):
+    """Only a lapsed turn named by its id takes a Stop, while its job is still on it, uncertain or let go. A Stop
+    without an id never reaches an older lapsed run, one held for review included; a job queued to run again, or
+    taken by a later run, is not the lapsed turn's to stop."""
+    machine, message, held = interrupted(api)                          # acted on a host that can't say what it did
+    aged(api, held['id'])
+    assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
+    post(api, 'bots/ops/stop', {}, expected=409)
+    post(api, 'bots/ops/stop', {'attempt_id': held['id']}, expected=409)  # left to its review
+    assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
+    post(api, f"jobs/{held['job_id']}/reconcile", {'attempt_id': held['id'], 'decision': 'dismiss',
+         'note': 'Checked what it did; nothing left to send here.', 'acknowledge_uncertain_effects': True})
+    post(api, 'bots/ops/stop', {'attempt_id': held['id']})             # reviewed and let go: a Stop files its answer
+    machine, message, attempt = finished_then_lapsed(api, machine)
+    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']}, token='cara-test', expected=403)
+    aged(api, attempt['id'])
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+         'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
+    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})          # let go: its late answer is filed, not posted
+    assert hand_in(api, machine, attempt)['filed'] is True and bot_replies(api, message) == []
+    assert settled(api, attempt) == ('expired', 'cancelled')
+    tool_reporting(api)
+    machine, message, first = finished_then_lapsed(api, machine, text='Another summary.')
+    aged(api, first['id'], grace=True)
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    post(api, 'bots/ops/stop', {'attempt_id': first['id']}, expected=409)  # queued to run again
+    ready(api, machine, ['ops'])
+    assert claim(api, machine)['job_id'] == first['job_id']
+    post(api, 'bots/ops/stop', {'attempt_id': first['id']}, expected=409)  # a later run took it
+
+
+def rival(api, machine, attempt, bot='ops'):
+    """Another run of the bot live in the lapsed turn's lane (a task turn moved into it)."""
+    from backend.store import H
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, 'human:ana', 'Something else', 'Do something else.', 'bot:' + bot)
+    ready(api, machine, [bot])
+    other = claim(api, machine)
+    assert other and other['id'] != attempt['id']
+    post(api, f"attempts/{other['id']}/started", {'thread_id': 'rival'}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lane=(SELECT lane FROM attempts WHERE id=?) WHERE id=?", (attempt['id'], other['id']))
+    return other
+
+
+@pytest.mark.parametrize('shape', ['transferred', 'resumed', 'rival'])
+def test_a_late_answer_filed_for_a_stop_leaves_a_job_this_run_no_longer_speaks_for(api, shape):
+    """The Stop ends the job only while this run still speaks for it: still uncertain on this attempt, on the computer
+    the bot is assigned to, with no other run live in its lane. A job moved to another computer, queued by a decision,
+    or behind a live run is left as it was."""
+    machine, message, attempt = finished_then_lapsed(api)
+    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    if shape == 'transferred':
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE assignments SET generation=generation+1 WHERE bot='ops'")
+    elif shape == 'resumed':
+        aged(api, attempt['id'])
+        post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+             'note': 'The run only read; run it again.', 'acknowledge_uncertain_effects': True})
+    else:
+        rival(api, machine, attempt)
+    before = job_state(api, attempt['job_id'])
+    assert before == ('queued' if shape == 'resumed' else 'uncertain')
+    filed = hand_in(api, machine, attempt)
+    assert filed['filed'] is True and bot_replies(api, message) == []
+    assert settled(api, attempt) == ('expired', before)
+    assert stopped_notices(api, message, attempt) == (0, [])
+
+
+def test_a_stopped_run_whose_computer_never_reported_back_is_dismissed_not_resumed(api):
+    """Stop pressed, and the computer never woke: no answer, no interruption, only the lapsed lease. A run that only
+    read would be resumed past RESULT_GRACE; a stopped one is let go by the person's choice instead."""
+    tool_reporting(api)
+    machine, message, attempt = finished_then_lapsed(api)
+    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    aged(api, attempt['id'], grace=True)
+    assert [d['state'] for d in sweep(api)] == ['cancelled']
+    with api.app.state.store.read() as c:
+        note = c.execute("SELECT note FROM job_recovery WHERE job_id=?", (attempt['job_id'],)).fetchone()[0]
+    assert note == 'Stopped by Ana; not resumed.'
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+    # Should the answer still come, it is filed on its run, not posted.
+    assert hand_in(api, machine, attempt)['filed'] is True and bot_replies(api, message) == []
+
+
 def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):
     """Only a finished turn settles a job that was let go: an interrupted one stays on its own run."""
     machine, message, attempt = finished_then_lapsed(api)
@@ -861,7 +1024,8 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert issue['needs_person'] is True and issue['action'] == 'review' and issue['severity'] == 'error'
     assert issue['title'].endswith('has 1 stopped run holding up work')
     assert issue['held_back'] == 2 and issue['held_tasks'] == ['Archive the old bots']
-    assert '2 queued requests wait on "Archive the old bots" until it is reviewed.' in issue['detail']
+    assert issue['detail'] == ('"Archive the old bots" (owner ops) stopped partway. 2 queued requests wait on '
+                               '"Archive the old bots" until you decide. Choose Try again or Don\'t retry.')
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
@@ -950,5 +1114,33 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
     assert carried == 'uncertain'                                       # the carried one: held, not safe to repeat
     issue = stopped_issue(api)
     assert issue['needs_person'] is True and issue['action'] == 'review' and not issue['held_back']
-    assert 'Tico settled the rest of that run but could not decide this safely.' in issue['detail']
+    assert issue['detail'].endswith(" stopped partway. Tico can't safely decide it on its own. Choose Try again or Don't retry.")
     assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']]
+
+
+@pytest.mark.parametrize('reported', [True, False])
+def test_a_stop_on_a_lapsed_turn_ends_only_its_request_not_a_message_folded_into_it(api, reported):
+    """A follow-up folded into the turn is not what the person stopped. Handed back by the late result as never given
+    to the runtime, it is queued for the next turn; with no result at all, the sweep lets the request go and judges
+    the folded message as before: a turn that only read is resumed for it."""
+    tool_reporting(api)
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'folded'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]}, machine['token'])
+    follow = post(api, 'chat/ops', {'text': 'Also include the weekly numbers'})
+    assert [m['id'] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']] == [follow['id']]
+    expire(api, attempt['id'])
+    assert claim(api, machine) is None
+    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    if reported:
+        filed = post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 1,
+                     'text': 'Done.', 'undelivered': [follow['id']]}, machine['token'])
+        assert filed['filed'] is True and job_state(api, attempt['job_id']) == 'cancelled'
+        assert job_state(api, follow['id']) == 'queued'
+        ready(api, machine, ['ops'])
+        assert claim(api, machine)['job_id'] == follow['id']
+    else:
+        aged(api, attempt['id'], grace=True)
+        assert sorted(d['state'] for d in sweep(api)) == ['cancelled', 'queued']
+        assert job_state(api, attempt['job_id']) == 'cancelled' and job_state(api, follow['id']) == 'queued'

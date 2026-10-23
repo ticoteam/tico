@@ -5,7 +5,8 @@ page, a video or an audio clip, with a title. This page is the reference: when a
 a conversation, how to attach one, what Tico does to a page when it is attached, the types and limits, who can see
 it, and what a reader sees outside Tico.
 
-Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card.
+Pictures, SVG and visual pages show inline as cards. Video and audio play inside their card. Without a separate
+visual address, pages and SVG are cards with **Open** instead ([details](#with-and-without-a-visual-address)).
 
 ## When a bot adds a visual
 
@@ -51,9 +52,25 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
 [Tasks](tasks.md#files-and-questions-on-the-page). In a chat they open the file viewer.
 
-A visual shows as a file chip instead of a card when its type or size isn't one that shows inline (see
-[Types and limits](#types-and-limits)), and on a self-hosted server without a visual address (see
-[Self-hosting](#self-hosting)).
+A visual shows as a file chip instead of a card only when its type or size isn't one that shows inline (see
+[Types and limits](#types-and-limits)).
+
+### With and without a visual address
+
+Visuals are always on. What a conversation shows depends on whether your Tico has a working separate visual address
+(see [Self-hosting](#self-hosting)). You don't turn anything on or off.
+
+| Visual | With a visual address | Without one |
+|---|---|---|
+| Picture (PNG, JPEG, GIF, WebP) | Inline card | Inline card |
+| Video, audio | Plays in its card | Plays in its card |
+| Visual page, SVG | Inline card, as above | Card with its title, a still preview when the file has one, and **Open**. **Open** shows it in the file viewer. |
+
+Without a visual address, Tico shows pictures, video and audio from the app's own address, as media only. It never
+shows a page or an SVG from there, so they open in the file viewer instead of in the conversation. The card's menu
+(**Open in file viewer**, **Download**) works as above; there is no **Expand** for a page or SVG. If the still
+preview can't load, the card keeps its title and **Open**. Set up a visual address and the same messages show
+inline: nothing is lost in between.
 
 ### Video and audio
 
@@ -190,12 +207,16 @@ passes them to the server, and `.env.example` lists them.
 
 | Setting | What it does |
 |---|---|
-| `TICO_VISUAL_ORIGIN` | The address visuals are shown from, for example `https://visuals.example.com`. It must be a separate site of its own: never the app's address (`TICO_PUBLIC_URL`), nor a subdomain that shares its cookies. The server refuses to start if it equals the app's address. Any other bad value never stops it: one that is not a URL at all counts as unset (file chips, with a warning in the server log), and with a Cloudflare Tunnel a value the tunnel config can't use (not https, a path, an IP address, the runner's hostname) leaves out the visuals route with a warning ([Cloudflare Tunnel](install.md#cloudflare-tunnel)). |
+| `TICO_VISUAL_ORIGIN` | The address visuals are shown from, for example `https://visuals.example.com`. It must be a separate site of its own: never the app's address (`TICO_PUBLIC_URL`), nor a subdomain that shares its cookies. The server refuses to start if it is on the app's own hostname, whatever the scheme or port (`http://`, `:8443`): leave it unset there and visuals use the fallback. Any other bad value never stops it: one that is not a URL at all counts as unset (pictures, video and audio only, with a warning in the server log), and with a Cloudflare Tunnel a value the tunnel config can't use (not https, a path, an IP address, the runner's hostname) leaves out the visuals route with a warning ([Cloudflare Tunnel](install.md#cloudflare-tunnel)). |
 | `TICO_VISUAL_SECRET` | Optional. The key that signs visual addresses, at least 32 characters. Unset, Tico makes one in a file next to the database on first use. |
-| `TICO_VISUAL_SAME_ORIGIN` | `1` serves visuals from the app's own address instead, with the page sandboxed. A local install always does this. |
 
-Without `TICO_VISUAL_ORIGIN`, a production server keeps running and shows visuals as file chips. Messages still keep
-their visuals, so they show once you set it.
+Without `TICO_VISUAL_ORIGIN` (a local install included), visuals use the fallback: the app's own address serves
+pictures (PNG, JPEG, GIF, WebP), video and audio as media only, each with its own type, `X-Content-Type-Options:
+nosniff` and a content policy that runs no script. Pages and SVG are never served inline from the app's own address;
+they show as cards that open in the file viewer. Set `TICO_VISUAL_ORIGIN` and they show inline too: messages keep
+their visuals. **Settings › General** shows admins which applies, as one read-only line: "Visuals: full" or "Visuals: pictures, video and audio
+only (no separate visual address)", with a link to this section. `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the visual route sets
+a cookie.
 
 `TICO_VISUAL_ORIGIN`'s host must reach the same Tico server as the app: visual addresses are
 `<TICO_VISUAL_ORIGIN>/visuals/<token>`, and the server answers that path.

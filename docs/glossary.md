@@ -10,9 +10,9 @@ The words Tico uses, and what each replaces.
 - **Teammate**: a human or a bot on the team.
 - **Human**: a human teammate. The **Humans** page lists them.
 - **Bot**: an AI teammate.
-- **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, Goal Manager. These four appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries; the Goal Manager is on Goals and the Librarian is on Docs and Market. They stay out of the team chart and goal owner list.
-- **CEO Bot**: the Goal Manager's name on an install with the CEO Bot switch on. It then sits under the owner on the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-ceo-bot-switch)). How much it does is a level the owner or an admin picks ([Your CEO Bot](ceo-bot.md)).
-- **Company section**: the Vision and Description at the top of Goals, shown only with the CEO Bot switch on ([Goals](goals-and-kpis.md#the-company-section)).
+- **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, CEO Bot. These four appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries; the CEO Bot is on Goals and the Librarian is on Docs and Market. The Assistant, BotOps and the Librarian stay out of the team chart and goal owner list; the CEO Bot is at the top of the chart.
+- **CEO Bot**: the built-in bot on every install that keeps KPIs and goal colours current. It sits under the owner at the top of the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-ceo-bot)). How much it does is a level only the owner picks, **Passive** by default ([Your CEO Bot](ceo-bot.md)).
+- **Company section**: the Vision and Description at the top of Goals, the owner writes it ([Goals](goals-and-kpis.md#the-company-section)).
 - **Why**: one line on a goal tying it to the company's Vision. The CEO Bot proposes it and a person accepts it ([Goals](goals-and-kpis.md#a-goals-why)).
 - **Message bot**: a bot that works a human's email or a Slack channel, such as Inbox Manager. These appear separately under **Message bots** in the sidebar, Goals and setup.
 - **External agent**: an agent outside the team connected to Tico (Codex, Claude, Grok), run by a human or a bot.
@@ -32,7 +32,7 @@ The words Tico uses, and what each replaces.
 ## Where bots run
 
 - **Computer**: what you register and add (Settings > Computers).
-- **Connection**: a login an AI tool on a computer runs on: a **subscription** (a named plan login), the **Computer's login**, or an API key. See [Computers](computers.md).
+- **Connection**: a login an AI tool on a computer runs on: the **Computer's login** (a plan login or an API key), one per tool per computer, used by all its bots. See [Computers](computers.md).
 - **Runner**: the software installed on a computer (install docs only).
 - **Health**: what is wrong. Each problem is an **issue**.
 

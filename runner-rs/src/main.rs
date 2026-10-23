@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err, clippy::type_complexity)]
 
 mod accounts;
+mod afterwatch;
 mod appdriver;
 mod backlog;
 mod capture;
@@ -29,6 +30,7 @@ mod gitrun;
 mod gittests;
 mod files_publish;
 mod gitcred;
+mod harness_memory;
 mod harness_tools;
 mod goals;
 mod hosts;
@@ -50,12 +52,14 @@ mod placement;
 mod playbook;
 mod product_files;
 mod prompt;
+mod reap;
 mod readiness;
 mod readiness_extra;
 mod redact;
 mod relays;
 mod repositories;
 mod worktrees;
+mod run_diagnostics;
 mod runner;
 mod sessions;
 mod safegit;
@@ -198,20 +202,17 @@ enum ProfileAction {
         #[arg(long)]
         share_operator: bool,
     },
-    /// Print the profiles, the default and each bot's.
+    /// Print the profiles and the default (the computer's login).
     List,
-    /// Sign a profile in to one runtime, interactively.
+    /// Sign the computer's login (its default profile) in to one runtime, interactively.
     Login { name: String, runtime: String },
-    /// Run a bot on a profile here.
-    Assign { bot: String, name: String },
 }
 
-/// `profile add|list|assign|login` (runner/__main__.py profile_command): local to this computer, no network.
+/// `profile add|list|login` (runner/__main__.py profile_command): local to this computer, no network.
 fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
     let result = match action {
-        ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator, None),
-        ProfileAction::List => profiles::command(config, "list", None, false, None),
-        ProfileAction::Assign { bot, name } => profiles::command(config, "assign", Some(&name), false, Some(&bot)),
+        ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator),
+        ProfileAction::List => profiles::command(config, "list", None, false),
         ProfileAction::Login { name, runtime } => {
             let choices = harness_tools::profile_runtimes();
             if !choices.contains(&runtime) {
@@ -219,6 +220,10 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             }
             let entry = config.data.get("profiles").and_then(|p| p.get(&name)).filter(|e| util::truthy(Some(e))).cloned();
             let Some(entry) = entry else { fail("No such profile on this registration; add it with `profile add`") };
+            // One login per tool per computer: only the computer's own (its default profile) signs in here.
+            if config.data.get("default_profile").map(util::text_of).as_deref() != Some(name.as_str()) {
+                fail(&format!("Profile {name} is not this computer's login: each computer has one login per AI tool, used by all its bots; for a different account, add another runner"));
+            }
             let profile = profiles::Profile::new(&name, &util::text_of(&entry["dir"]), util::truthy(entry.get("share_operator")));
             if profile.share_operator {
                 fail(&format!("Profile {name} shares the operator's own logins; sign in normally"));
@@ -271,6 +276,9 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     if argv.first().and_then(|a| std::path::Path::new(a).file_name()).is_some_and(|n| n == "gh") {
         std::process::exit(gitcred::gh_main(argv[1..].to_vec()));
+    }
+    if argv.get(1).is_some_and(|a| a == reap::FLAG) {
+        std::process::exit(reap::main(&argv[2..]));
     }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
         // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.

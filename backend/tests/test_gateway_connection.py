@@ -234,15 +234,62 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         assert view["default"] == {"runtime": "pi", "model": "tico-mid-1.0"} and "tico" in view["enabled"]
-        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico"}
+        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
         assert [(rows[m]["label"], rows[m]["description"]) for m in sorted(rows)] == [
-            ("Tico Cheap 1.0", "Claude Haiku 5.5 underneath"), ("Tico Mid 1.0", "Claude Sonnet 5.5 underneath"),
+            ("Tico Cheap 1.1", "Claude Haiku 5.5 underneath"), ("Tico Mid 1.0", "Claude Sonnet 5.5 underneath"),
             ("Tico Power 1.0", "Claude Opus 5.5 underneath")]
         delete(api, "providers/gateway")
         assert "tico" not in get(api, "providers")["enabled"]
         with api.app.state.store.read() as c:
             stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
         assert "tico" not in stored["enabled"]
+
+
+def new_bot(api, slug, expected=200, **choice):
+    return post(api, "bots", {"slug": slug, "display_name": slug.title(), "description": "A test bot.",
+                              "status": "active", "repo": "emp-" + slug, "thread_mode": "personal",
+                              "operator": "ana", "owners": ["ana"], "runner_id": None, **choice}, expected=expected)
+
+
+def test_cheap_1_1_replaces_1_0_and_a_default_or_bot_already_on_1_0_keeps_it(api, monkeypatch):
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        view = get(api, "providers")
+        refused = put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.0",
+                                         "expected_revision": view["revision"]}, expected=422)
+        assert "retired" in json.dumps(refused)
+        # A default saved as Cheap 1.0 before 1.1 shipped.
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
+        with api.app.state.store.transaction() as c:
+            stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
+            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+                      (json.dumps({**stored, "runtime": "pi", "model": "tico-cheap-1.0"}),))
+        # Saving something else keeps it, and a bot that names no model is made on it.
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic", "openai"], "model": "tico-cheap-1.0",
+                               "expected_revision": view["revision"]})
+        assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
+        new_bot(api, "scout")
+        with api.app.state.store.read() as c:
+            assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='scout'").fetchone()[0])[
+                "model"] == "tico-cheap-1.0"
+        # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
+        new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.1", "expected_revision": view["revision"]})
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
+            expected=422)
+        # A bot already on it still runs there.
+        put_bot_on(api, "ops", "tico-cheap-1.0")
+        machine = runner(api)
+        assign(api, machine, "ops")
+        ready(api, machine, ["ops"])
+        post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+        config = claim(api, machine, "ops")["config"]
+        assert (config["runtime"], config["model"]) == ("pi", "tico-cheap-1.0")
 
 
 def test_openrouter_never_serves_a_tico_model_and_no_default_fallback_spends_the_key(api, monkeypatch):
@@ -630,10 +677,12 @@ def ended(api, attempt):
         return H.status(c, "ops"), job
 
 
-def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch):
+@pytest.mark.parametrize("reported", [False, True])
+def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch, reported):
     machine, attempt = tico_run(api, monkeypatch)
     finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
-           "an hour (rate_limited)", limited=True)
+           "an hour (rate_limited)", limited=True,
+           **({"limit_resets_at": H.shift(H.now(), seconds=3600)} if reported else {}))
     status, job = ended(api, attempt)
     assert status["state"] == "limited" and job == "queued"
     assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]
@@ -642,6 +691,96 @@ def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(ap
         from backend.execution import limit_cooldown
         assert limit_cooldown(c, "ops") >= G.RETRY_AFTER
     assert claim(api, machine, "ops") is None
+
+
+def test_gateway_work_resumes_after_the_reported_rate_window(api, monkeypatch):
+    machine, attempt = tico_run(api, monkeypatch)
+    wait = 42
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    reset = H.shift(at, seconds=wait)
+    finish(api, machine, attempt, "Tico AI Gateway: rate limited; retrying after the Gateway's requested wait "
+           "(rate_limited)", limited=True, limit_resets_at=reset)
+    status, job = ended(api, attempt)
+    assert job == "queued" and "refused keys" not in status["focus"]
+    with api.app.state.store.read() as c:
+        from backend.execution import limit_cooldown
+        assert wait <= limit_cooldown(c, "ops") <= wait + 1
+    assert claim(api, machine, "ops") is None
+    at = H.shift(at, seconds=wait + 2)
+    ready(api, machine, ["ops"])
+    retried = claim(api, machine, "ops")
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["id"] != attempt["id"]
+
+
+# What a company out of credit ends a Tico run with: the runner's plain words (runner-rs/src/hosts/pi.rs `plain_error`),
+# or the Gateway's own 429 as an older runner passes it on (tico-services gateway/chat.py ERRORS).
+OUT_OF_CREDIT = [
+    "Tico models are paused: this company is out of credit. Your bots use their other models until credit is added "
+    "(out_of_credit)",
+    '429: {"code":"out_of_credit","message":"Tico models are paused: this company is out of credit.",'
+    '"type":"insufficient_quota","param":null}',
+]
+
+
+@pytest.mark.parametrize("reported", [False, True])
+@pytest.mark.parametrize("error", OUT_OF_CREDIT, ids=["plain", "older_runner"])
+def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_minute(api, monkeypatch, error, reported):
+    """Waitlist spec v3 tests 9 and 12 h (app side): a company out of credit is not a provider login's limit. No
+    login is held past the Gateway's minute; the bot asks the Gateway again after its Retry-After (a minute), so it is back on
+    Tico models within about a minute of credit landing, and says so plainly."""
+    from backend.execution import billing_limit, limit_cooldown
+    machine, attempt = tico_run(api, monkeypatch)
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    finish(api, machine, attempt, error, limited=True,
+           **({"limit_resets_at": H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT)} if reported else {}))
+    status, job = ended(api, attempt)
+    assert status["state"] == "limited" and job == "queued"
+    assert status["focus"].startswith(G.PAUSED_MESSAGE + " at "), status["focus"]
+    assert "{" not in status["focus"] and "usage limit" not in status["focus"] and "cap" not in status["focus"]
+    with api.app.state.store.read() as c:
+        # The Tico login waits only the Gateway's minute, never the 30-minute backoff.
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+        assert all(hold["until"] <= H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 1) for hold in holds), holds
+        assert G.OUT_OF_CREDIT_WAIT <= limit_cooldown(c, "ops") <= G.OUT_OF_CREDIT_WAIT + 1
+        # Not an API key's plan or billing: Health doesn't send the person to check one.
+        assert not billing_limit(c, "ops")
+    assert claim(api, machine, "ops") is None
+    at = H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 2)
+    with api.app.state.store.transaction() as c:
+        # The computer has been reporting in all along, not waking from a silence.
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+    ready(api, machine, ["ops"])
+    retried = claim(api, machine, "ops")
+    assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
+
+
+def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_after_a_minute(api, monkeypatch):
+    """Dev 351: the Gateway rate-limited the bot's Tico model and its other model finished the turn. The Tico login
+    is held only the Gateway's minute, not a provider login's 30 minutes, so the bot's next turn after it is on Tico
+    models again."""
+    machine, attempt = tico_run(api, monkeypatch)
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": "Tico AI Gateway: rate limited; retrying after the Gateway's "
+                                                         "requested wait (rate_limited)", "limit": True}},
+        {"seq": 2, "kind": "diagnostic", "payload": {"text": "pi hit its usage limit; running this turn on codex"}},
+    ]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 2, "text": "Done.",
+                                                     "fallback": "codex", "primary_limited": True}, machine["token"])
+    with api.app.state.store.read() as c:
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+    assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
+    at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
+    ready(api, machine, ["ops"])
+    again = claim(api, machine, "ops")
+    assert again and again["config"]["model"] == "tico-mid-1.0" and not again["config"].get("primary_held")
 
 
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
@@ -657,8 +796,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
 
 # What the runner ends a refused Tico run with (runner-rs/src/hosts/pi.rs `plain_error`), and what the bot says.
 @pytest.mark.parametrize("code,error,focus", [
-    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.0, Tico Mid 1.0, Tico "
-     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.0, Tico Mid "
+    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico "
+     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.1, Tico Mid "
      "1.0, Tico Power 1.0"),
     ("unsupported_field", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["unsupported_field"][1]),
     ("bad_request", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["bad_request"][1]),

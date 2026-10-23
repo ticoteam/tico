@@ -1,17 +1,19 @@
-"""How much the CEO Bot does, and what it does at level 1 (backend/ceo_bot.py, backend/goal_asks.py; spec: Head of
-Product, CEO Bot, tests 3, 4, 8, 14, 16 and 18). Every install starts at level 1; only the owner or an admin changes the
-level, on their own click, and each change is kept with who and when. Where the switch is on, the CEO Bot asks for the
-vision first, asks for its proposed Why lines as one item, starts its Monday note, and puts at most 5 items a day in a
-person's Needs you."""
+"""How much the CEO Bot does (backend/ceo_bot.py, backend/goal_asks.py; spec: Head of Product, CEO Bot, tests 3, 4, 8,
+14, 16 and 18; v3 10.11). Every install starts at Passive, which keeps only the regular checks (the KPI pass and the
+automatic goal colours); only the owner changes the level or turns the regular checks off, on their own click, and
+each change is kept with who and when. Above Passive the CEO Bot asks for the vision first, asks for its proposed Why
+lines as one item, starts its Monday note, and puts at most 5 items a day in a person's Needs you."""
 
-from backend import ceo_bot, routines
+from backend import ceo_bot, goals as G, routines
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_company import bot, propose_why, switched_on
-from backend.tests.test_goal_asks import asks, goal_manager, sync
+from backend.tests.test_company import bot, propose_why, with_ceo_bot
+from backend.tests.test_goal_asks import asks, goal_manager, raise_level, sync
+from backend.tests.test_kpis import goal_with_kpi, log
 
 OWNER = "human:ana"
+REVIEW = "goal-manager:goals-review"
 
 
 def level(api, n, token="ana-test", expected=200):
@@ -24,58 +26,93 @@ def via_assistant(api):
     return "ana-via"
 
 
-def test_every_install_starts_at_level_1_and_says_what_each_level_does(api):
-    """Spec test 16: after the upgrade, an install with the switch on is at level 1. Each level has its one sentence;
-    level 3, not arrived yet, says it does what level 2 does until then."""
-    switched_on(api)
+def review_routine(api):
+    """The Monday note as the bot declares it: paused until the server starts it."""
+    with api.app.state.store.transaction() as c:
+        routines.create(c, H.KEEPER, "goal-manager", {"title": "Weekly goals review", "cron": "0 9 * * 1",
+                                                      "timezone": "America/Los_Angeles", "enabled": False},
+                        key="goals-review")
+
+
+def review_enabled(api):
+    with api.app.state.store.read() as c:
+        return bool(c.execute("SELECT coalesce(enabled,1) FROM schedule_config WHERE schedule_id=?",
+                              (REVIEW,)).fetchone()[0])
+
+
+def test_every_install_starts_at_passive_and_says_what_each_level_does(api):
+    """Spec test 16 (v3): an install is at Passive, with its regular checks on. Each level has its one sentence; level
+    3, not arrived yet, says it does what level 2 does until then."""
+    with_ceo_bot(api)
     shown = get(api, "ceo-bot")
-    assert shown["on"] is True and shown["level"] == 1 and shown["level_history"] == []
+    assert "on" not in shown and shown["level"] == 1 and shown["level_history"] == []
+    assert shown["regular_checks"] is True and shown["name"] == "CEO Bot"
     assert [(lv["level"], lv["name"], lv["ready"]) for lv in shown["levels"]] == \
-        [(1, "Goals and tracking", True), (2, "Suggests actions", True), (3, "Acts on its own", False)]
-    assert "never changes anyone's tasks" in shown["levels"][0]["sentence"]
+        [(1, "Passive", True), (2, "Suggests actions", True), (3, "Acts on its own", False)]
+    assert "regular checks" in shown["levels"][0]["sentence"] and "changes nothing" in shown["levels"][0]["sentence"]
     assert shown["levels"][2]["sentence"].endswith(ceo_bot.NOT_YET)
     assert shown["daily_cap"] == 5 and get(api, "ceo-bot", token="cara-test")["level"] == 1    # everyone reads it
 
 
-def test_only_the_owner_or_an_admin_changes_the_level_and_each_change_is_logged(api):
-    """Spec test 18: the owner and admins pick a level and the change is kept with who and when. No bot changes it,
-    the CEO Bot included, nor the Assistant acting for the owner, nor a member."""
-    ceo = switched_on(api)
+def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
+    """Spec test 18 (v3): the owner picks a level and the change is kept with who and when. No admin or member changes
+    it, no bot, the CEO Bot included, nor the Assistant acting for the owner."""
+    ceo = with_ceo_bot(api)
     other = bot(api, "ops")
     changed = level(api, 2)
     assert changed["level"] == 2 and changed["level_changed_by"] == OWNER and changed["level_changed_at"]
     [entry] = changed["level_history"]
     assert (entry["level"], entry["was"], entry["by"]) == (2, 1, OWNER) and entry["by_name"]
-    assert level(api, 3, token="ben-test")["level"] == 3                                 # an admin
-    for token in (ceo, other, via_assistant(api), "cara-test"):
-        level(api, 1, token=token, expected=403)
+    for token in ("ben-test", "cara-test", ceo, other, via_assistant(api)):
+        refused = level(api, 3, token=token, expected=403)
+        assert "Only the owner" in str(refused)
+    assert level(api, 3)["level"] == 3
     shown = get(api, "ceo-bot")
-    assert shown["level"] == 3 and [(e["level"], e["by"]) for e in shown["level_history"]] == \
-        [(3, "human:ben"), (2, OWNER)]
+    assert shown["level"] == 3 and [(e["level"], e["by"]) for e in shown["level_history"]] == [(3, OWNER), (2, OWNER)]
     # The same level again changes nothing and logs nothing; a level outside 1-3 is refused.
     assert len(level(api, 3)["level_history"]) == 2
     level(api, 4, expected=422)
     level(api, 0, expected=422)
 
 
-def test_with_the_switch_off_there_is_no_level_to_change(api):
-    """Spec test 17's guard: off, the level can't be changed by anyone, and it reads 1."""
-    goal_manager(api)
-    ceo = bot(api, "goal-manager")
-    for token in ("ana-test", "ben-test"):
-        level(api, 2, token=token, expected=409)
-    for token in (ceo, "cara-test"):
-        level(api, 2, token=token, expected=403)
-    assert get(api, "ceo-bot")["level"] == 1 and get(api, "ceo-bot")["level_history"] == []
+def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api):
+    """v3: the regular checks are the KPI pass and the automatic goal colours. Only the owner turns them off, on their
+    own click. Off, a reading changes no colour and the KPI pass is skipped; back on, every colour is worked out again
+    at once."""
+    ceo = with_ceo_bot(api)
+    goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
+    log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
+    assert get(api, f"goals/{goal['id']}")["goal"]["status"] == "red"
+    for token in ("ben-test", "cara-test", ceo, bot(api, "ops"), via_assistant(api)):
+        post(api, "ceo-bot/checks", {"on": False}, token=token, expected=403)
+    off = post(api, "ceo-bot/checks", {"on": False})
+    assert off["regular_checks"] is False and off["level"] == 1
+    log(api, kpi["id"], 100, token="ben-test", period_end=H.now())
+    assert get(api, f"goals/{goal['id']}")["goal"]["status"] == "red"           # held still
+    with api.app.state.store.transaction() as c:
+        assert ceo_bot.held_routine(c, {"id": ceo_bot.PASS}) == "regular checks are off"
+        assert ceo_bot.held_routine(c, {"id": REVIEW}) is None
+        assert routines.no_input(c, api.app.state.store.settings, {"id": ceo_bot.PASS, "bot": "goal-manager",
+                                                                      "routine_key": "kpi-pass", "playbook": ""},
+                                 None) == "regular checks are off"
+        assert G.refresh(c)["changed"] == []
+    on = post(api, "ceo-bot/checks", {"on": True})
+    assert on["regular_checks"] is True
+    assert get(api, f"goals/{goal['id']}")["goal"]["status"] != "red"           # worked out again at once
+    with api.app.state.store.read() as c:
+        assert [r[0] for r in c.execute("SELECT actor FROM events WHERE action='ceo_bot.checks' ORDER BY ts")] == \
+            [OWNER, OWNER]
+        assert ceo_bot.held_routine(c, {"id": ceo_bot.PASS}) is None
 
 
-def test_no_vision_is_the_first_thing_it_asks_and_saving_one_closes_it(api):
-    """Spec test 3: with no vision, the CEO Bot's first item asks for it, at the top of the owner's list, and it
-    closes by itself once a vision is saved. Off, it is never asked (test 17)."""
+def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_closes_it(api):
+    """Spec test 3: with no vision, the CEO Bot's first item above Passive asks for it, at the top of the owner's list,
+    and it closes by itself once a vision is saved. At Passive it is never asked."""
     goal_manager(api)
     post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
-    assert [a["kind"] for a in asks(api, OWNER)] == ["kpi_stale"]          # off: as before, no vision ask
-    assert post(api, "ceo-bot", {"on": True})["on"] is True
+    sync(api)
+    assert asks(api, OWNER) == []                                           # Passive: nothing asked
+    raise_level(api, 2)
     sync(api)
     vision = [a for a in asks(api, OWNER) if a["kind"] == "vision"]
     assert [(a["title"], a["status"]) for a in vision] == [("Tell your CEO Bot what this company is for", "open")]
@@ -91,8 +128,8 @@ def test_no_vision_is_the_first_thing_it_asks_and_saving_one_closes_it(api):
 
 def test_why_proposals_reach_the_owner_as_one_item(api):
     """Spec tests 4 and 14: the CEO Bot's Why proposals for several goals are one "These goals need a Why line" item,
-    never one per goal; it closes once every one is settled."""
-    ceo = switched_on(api)
+    never one per goal, above Passive; it closes once every one is settled."""
+    ceo = with_ceo_bot(api, level=2)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
     goals = [post(api, "goals", {"title": title, "owner": "company"})["goal"]["id"] for title in ("Grow rentals", "Cut churn")]
     first = propose_why(api, goals[0], "More rentals is more landlords on Tico.", ceo)
@@ -113,10 +150,10 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
 
 
 def test_at_most_five_a_day_in_one_persons_needs_you_most_important_first(api):
-    """Spec test 14 at level 1: whatever it has to ask, the CEO Bot puts at most 5 items a day in one person's Needs
+    """Spec test 14 above Passive: whatever it has to ask, the CEO Bot puts at most 5 items a day in one person's Needs
     you, the vision first; the rest wait for the next day's room. The server refuses a sixth it files itself, for that
-    person only. Off, the Goal Manager asks as before (test 17)."""
-    ceo = switched_on(api)
+    person only."""
+    ceo = with_ceo_bot(api, level=2)
     for n in range(7):
         post(api, "kpis", {"name": f"Measure {n}", "owner": "me", "cadence": "weekly"})
     sync(api)
@@ -141,64 +178,145 @@ def test_at_most_five_a_day_in_one_persons_needs_you_most_important_first(api):
     assert get(api, "ceo-bot", token="cara-test")["asked_today"] == {}                 # a member: only their own
 
 
-def test_with_the_switch_off_the_goal_manager_asks_as_before(api):
+def test_raising_it_starts_the_monday_note_and_passive_pauses_only_what_it_started(api):
+    """The Monday note (goals-review, declared paused) runs once the owner raises the level from Passive. Back at
+    Passive it is paused again only if the server started it; a person's own choice stands."""
     goal_manager(api)
-    for n in range(7):
-        post(api, "kpis", {"name": f"Measure {n}", "owner": "me", "cadence": "weekly"})
-    assert [a["kind"] for a in asks(api, OWNER)] == ["kpi_stale"] * 7
+    review_routine(api)
+    assert not review_enabled(api)
+    level(api, 2)
+    assert review_enabled(api)
+    level(api, 3)                                                            # 2 to 3 leaves it as it is
+    assert review_enabled(api)
+    level(api, 1)
+    assert not review_enabled(api)
+    # Started by the raise, then paused and started again by a person: it is theirs now, and Passive leaves it.
+    level(api, 2)
+    with api.app.state.store.transaction() as c:
+        routines.update(c, OWNER, REVIEW, {"enabled": False})
+        routines.update(c, OWNER, REVIEW, {"enabled": True})
+    level(api, 1)
+    assert review_enabled(api)
+    with api.app.state.store.transaction() as c:
+        routines.update(c, OWNER, REVIEW, {"enabled": False})
+    # Started by a person at Passive: raising and lowering leaves it running.
+    with api.app.state.store.transaction() as c:
+        routines.update(c, OWNER, REVIEW, {"enabled": True})
+    level(api, 2)
+    level(api, 1)
+    assert review_enabled(api)
 
 
-def test_switching_on_starts_the_monday_note_and_off_pauses_only_what_it_started(api):
-    """The Monday note (goals-review, declared paused) runs once the switch is on. Off, it is paused again only if
-    the switch started it; a person's own choice stands."""
+def test_a_routine_that_appears_after_the_raise_starts_once(api):
+    """Above Passive, a Monday note whose routine appears later is started once by the hourly reconcile; a person who
+    pauses it after that stays paused. At Passive the reconcile never starts it."""
     goal_manager(api)
-    sid = "goal-manager:goals-review"
-    with api.app.state.store.transaction() as c:
-        routines.create(c, H.KEEPER, "goal-manager", {"title": "Weekly goals review", "cron": "0 9 * * 1",
-                                                      "timezone": "America/Los_Angeles", "enabled": False},
-                        key="goals-review")
-    enabled = lambda: bool(get(api, "ceo-bot") and api.app.state.store.read().__enter__().execute(
-        "SELECT coalesce(enabled,1) FROM schedule_config WHERE schedule_id=?", (sid,)).fetchone()[0])
-    assert not enabled()
-    assert post(api, "ceo-bot", {"on": True})["on"] is True
-    assert enabled()
-    assert post(api, "ceo-bot", {"on": False})["on"] is False
-    assert not enabled()
-    # Started by the switch, then paused and started again by a person: it is theirs now, and switching off leaves it.
-    post(api, "ceo-bot", {"on": True})
-    with api.app.state.store.transaction() as c:
-        routines.update(c, OWNER, sid, {"enabled": False})
-        routines.update(c, OWNER, sid, {"enabled": True})
-    post(api, "ceo-bot", {"on": False})
-    assert enabled()
-    with api.app.state.store.transaction() as c:
-        routines.update(c, OWNER, sid, {"enabled": False})
-    # Started by a person while the switch was off: switching on and off leaves it running.
-    with api.app.state.store.transaction() as c:
-        routines.update(c, OWNER, sid, {"enabled": True})
-    post(api, "ceo-bot", {"on": True})
-    post(api, "ceo-bot", {"on": False})
-    assert enabled()
+    store = api.app.state.store
+    level(api, 2)                                                             # no routine yet: nothing to start
+    with store.transaction() as c:
+        ceo_bot.reconcile(c)
+    review_routine(api)
+    with store.transaction() as c:
+        ceo_bot.reconcile(c)
+    assert review_enabled(api)
+    with store.transaction() as c:
+        routines.update(c, OWNER, REVIEW, {"enabled": False})
+        ceo_bot.reconcile(c)
+    assert not review_enabled(api)
 
 
-def test_an_install_already_on_starts_the_monday_note_once(api):
-    """An install whose switch was on before the Monday note started with it, or whose routine appears later, gets it
-    started once by the hourly reconcile; a person who pauses it after that stays paused."""
+def test_at_passive_the_reconcile_never_starts_the_monday_note(api):
+    goal_manager(api)
+    review_routine(api)
+    with api.app.state.store.transaction() as c:
+        ceo_bot.reconcile(c)
+    assert not review_enabled(api)
+
+
+def test_a_monday_note_the_old_level_1_started_is_paused_at_passive_once(api):
+    """Before v3, level 1 with the switch on started the Monday note. At upgrade that install is at Passive: the hourly
+    reconcile pauses the note it started, unless a person touched it since."""
     import json
     goal_manager(api)
-    sid = "goal-manager:goals-review"
+    review_routine(api)
     store = api.app.state.store
-    with store.transaction() as c:                                           # on, from before this release
-        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (ceo_bot.KEY, json.dumps({"on": True, "by": OWNER})))
-        ceo_bot.reconcile(c)                                                 # no routine yet: nothing to start
-        routines.create(c, H.KEEPER, "goal-manager", {"title": "Weekly goals review", "cron": "0 9 * * 1",
-                                                      "timezone": "America/Los_Angeles", "enabled": False},
-                        key="goals-review")
-        ceo_bot.reconcile(c)
-    enabled = lambda: bool(store.read().__enter__().execute(
-        "SELECT coalesce(enabled,1) FROM schedule_config WHERE schedule_id=?", (sid,)).fetchone()[0])
-    assert enabled()
     with store.transaction() as c:
-        routines.update(c, OWNER, sid, {"enabled": False})
+        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (ceo_bot.KEY, json.dumps(
+            {"on": True, "by": OWNER, "review_armed": H.now(), "review_settled": True})))
         ceo_bot.reconcile(c)
-    assert not enabled()
+    assert not review_enabled(api)
+    with store.transaction() as c:
+        routines.update(c, OWNER, REVIEW, {"enabled": True})                 # a person's own choice
+        ceo_bot.reconcile(c)
+    assert review_enabled(api)
+
+
+def test_lowering_to_passive_keeps_the_vision_and_why_asks_until_they_are_resolved(api):
+    """v3: at Passive nothing new is asked, but a vision or Why ask filed above it stays open and shown until its cause
+    is resolved; only then does it close."""
+    ceo = with_ceo_bot(api, level=2)
+    goal_id = post(api, "goals", {"title": "Grow rentals", "owner": "company"})["goal"]["id"]
+    why = propose_why(api, goal_id, "More rentals is more landlords on Tico.", ceo)
+    sync(api)
+    filed = {a["kind"]: a["id"] for a in asks(api, OWNER)}
+    assert set(filed) == {"vision", "why"}
+    level(api, 1)
+    sync(api)
+    assert {a["kind"]: a["id"] for a in asks(api, OWNER) if a["status"] == "open"} == filed
+    assert {"vision", "why"} <= {i["kind"] for i in get(api, "goals/needs-you")["items"]}
+    post(api, "goals", {"title": "Cut churn", "owner": "company"})
+    post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
+    sync(api)
+    assert {a["id"] for a in asks(api)} == set(filed.values())               # nothing new at Passive
+    post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
+    post(api, f"goal-proposals/{why['id']}/decide", {"decision": "confirm"})
+    sync(api)
+    with api.app.state.store.read() as c:
+        assert [H.task(c, t)["status"] for t in filed.values()] == ["closed", "closed"]
+
+
+def test_with_regular_checks_off_a_due_kpi_pass_neither_opens_nor_continues_a_run(api):
+    """Off, the next KPI pass occurrence is skipped even while an earlier run is still unfinished: no new task and no
+    notice to continue the old one."""
+    from datetime import datetime, timezone
+    from backend.scheduler import Scheduler
+    goal_manager(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        routines.create(c, H.KEEPER, "goal-manager", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"},
+                        key="kpi-pass")
+        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-14T00:00:00.000000Z' WHERE id=?",
+                  (ceo_bot.PASS,))
+    [first] = Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 8, tzinfo=timezone.utc))["fired"]
+    post(api, "ceo-bot/checks", {"on": False})
+    with store.read() as c:
+        said = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 15, 8, tzinfo=timezone.utc))
+    with store.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT task_id, outcome FROM schedule_occurrences WHERE schedule_id=? "
+                                            "ORDER BY occurrence", (ceo_bot.PASS,))] == \
+            [(first, "created"), (None, "skipped")]
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == said
+
+
+def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
+    """An install from before v3 at level 1 with its Monday note started and overdue: the startup migration pauses
+    it before the scheduler's first pass, so no weekly review opens at Passive."""
+    import json
+    from datetime import datetime, timezone
+    from backend.scheduler import Scheduler
+    goal_manager(api)
+    review_routine(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (ceo_bot.KEY, json.dumps(
+            {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
+        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        ceo_bot.migrate(c)                                                   # as the server does at startup
+    assert not review_enabled(api)
+    Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM schedule_occurrences WHERE schedule_id=? AND task_id IS NOT NULL",
+                         (REVIEW,)).fetchone()[0] == 0

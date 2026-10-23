@@ -2,7 +2,7 @@
 
 The first time the owner opens a new environment, the app is a wizard at `#/welcome`: name the
 team, say what it does, build its team chart group by group, add a computer (a Linux Docker runner or a Mac), optionally connect your own
-external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the Goal Manager, and none of them can be archived.
+external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the CEO Bot, and none of them can be archived.
 Creating defines the bots on the server and hands the rest to two places: a starter bot's repository is set up by the computer
 the moment it is placed, and BotOps sets up every other template.
 
@@ -30,8 +30,11 @@ team or setup tasks, and an import cannot replace a company whose setup is compl
 
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. Additional people, existing external agents and custom rules are
-refused with an explanation. Goals, first jobs, routines, model choices and tool connections are saved for later setup and
-listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
+refused with an explanation. The file's goals are imported onto [Goals](goals-and-kpis.md): the owner's goals become
+company goals, and so do goals the file gives a built-in bot such as the Assistant (Goals keeps the built-ins out of
+its tree). Each other bot's goal sits under that bot, with the goal's measure as a KPI carrying the file's baseline and
+target (the file holds no readings, so a new KPI starts with no history). First jobs, routines, model choices and tool
+connections are saved for later setup and listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
 computer-enrollment flow after import.
 
 The implementation is `backend/onboarding.py` (the record, creating the team), `backend/recruit.py` and `backend/recruit_rank.py`
@@ -137,7 +140,7 @@ it. The same answer always gives the same list.
 **Create my team** (`POST /api/v2/setup/complete`) writes to the server only, in one request (a chart of 25 bots takes a fraction of a
 second). It reaches no computer.
 
-- BotOps, the assistant, the Librarian and the Goal Manager first, so they exist before anything is addressed to them, then everything picked, each `planned`
+- BotOps, the assistant, the Librarian and the CEO Bot first, so they exist before anything is addressed to them, then everything picked, each `planned`
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
@@ -291,7 +294,7 @@ An unattended setup task prepares and checks the repository, then reports readin
 path and any missing Tool or Credential to the owner. It leaves activation to the owner in that case.
 An existing repository is checked and updated for the requested work, rather than overwritten.
 
-## The assistant, BotOps, the Librarian and the Goal Manager are built in
+## The assistant, BotOps, the Librarian and the CEO Bot are built in
 
 Every team gets all four, and none is a choice: their cards are `required: true` in the wizard, so the wizard
 builds them whatever else is ticked, and they become active once a computer is enrolled ([Activating](#activating)).
@@ -308,10 +311,10 @@ whatever it says.
 The third, the [Librarian](librarian.md#built-in), answers questions from the team's docs. A team from before it existed gets it on
 update, without a click, once a model is chosen and a computer is enrolled; until then its owner gets **Turn on the Librarian** in Ask the Librarian.
 
-The fourth, the [Goal Manager](goals-and-kpis.md#the-goal-manager), keeps the KPIs and sets goals' automatic colours. It is
+The fourth, the [CEO Bot](goals-and-kpis.md#the-ceo-bot), keeps the KPIs and sets goals' automatic colours. It is
 built the same way (a required, bootstrap card; a team from before it existed gets it on update once a model is chosen
 and a computer is enrolled). Its routines start paused: the server arms the daily KPI pass once the first KPI exists, and the
-weekly goals review stays paused until the Goal Manager arms it after the owner has read the first one.
+weekly goals review (the Monday note) stays paused until the owner raises the CEO Bot above **Passive** ([Your CEO Bot](ceo-bot.md)).
 
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
@@ -389,7 +392,7 @@ Tico ships 93 templates, by group, each with a card; [Starter bots](starter-bots
   text file before the first commit, and in the card's own words wherever a human reads it.
 - `required: true` means the wizard always includes it. `bootstrap: true` means the computer
   materializes it itself and no BotOps task is filed for it. Both are true for all four Built-in bots:
-  Assistant, BotOps, Librarian and Goal Manager.
+  Assistant, BotOps, Librarian and CEO Bot.
 - `recommend_when` says who a card is for. The team builder reads only `sells_to_businesses` and `sells_to_consumers` (a business-only card is suggested last to a team that sells only to consumers); the rest
   (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox` card (the message bot) needs a
   human's mailbox chosen whenever it is switched on.

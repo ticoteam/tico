@@ -279,6 +279,13 @@ RUNNER_TRIGGERS = [
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
     ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
+    # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
+    ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_update", "UPDATE", "subscription_assignments", f"NEW.scope='bot' AND {_changed('profile')}",
+     _bot_runner("assignments", "NEW.target") + _bot_runner("work", "NEW.target")),
+    ("changes_runner_subscription_delete", "DELETE", "subscription_assignments", "OLD.scope='bot'",
+     _bot_runner("assignments", "OLD.target") + _bot_runner("work", "OLD.target")),
     # The names of the credentials its bots are granted, and the one-time move of secrets files.
     ("changes_runner_credential_grants_insert", "INSERT", "credential_grants", None, _tell("credentials", _ALL_RUNNERS)),
     ("changes_runner_credential_grants_update", "UPDATE", "credential_grants", _changed("revoked", "subject"),
@@ -599,6 +606,13 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
         return None
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
+    # A turn waiting for its shared ChatGPT login is waiting, not stuck: the line says on whom and its place.
+    from .login_waits import waiting
+    live = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running') ORDER BY created DESC LIMIT 1",
+                     (row["bot"],)).fetchone()
+    line = waiting(c, live[0], row["bot"], who, auth) if live else None
+    if line:
+        row["waiting"] = row["focus"] = line
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])

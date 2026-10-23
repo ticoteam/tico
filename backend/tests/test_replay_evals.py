@@ -203,7 +203,7 @@ def test_replay_answers_the_bots_questions_the_way_the_server_asks_them(api):
     assert api.get(f"/api/v2/tasks/{tid}", headers=headers()).json()["task"]["open_asks"] == 0
 
     card = api.post("/api/v2/task-questions", headers=headers(attempt["token"]), json={
-        "question": "Which week?", "on": "ana", "parent": tid, "options": [{"label": "This week"}, {"label": "Last week"}]})
+        "question": "Which week?", "on": "ana", "parent": tid, "options": [{"label": "This week", "then": "Go with This week"}, {"label": "Last week", "then": "Go with Last week"}]})
     assert card.status_code == 200, card.text
     assert card.json()["task"]["owner"] == "bot:ops"
     now = live.outcome(server, "ana-test", tid, "ops")

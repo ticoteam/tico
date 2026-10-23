@@ -93,8 +93,7 @@ function convGroup(r, slug) {
     <span class="tnum" title="${esc(fmt(r.started))}">${r.finished ? ago(r.finished) : ago(r.started)}${r.duration_s != null ? ` · ${Math.round(r.duration_s / 60)}m` : ''}</span>
     ${r.local ? '' : `<a class="muted" href="${API}/runs/${esc(r.run)}/log" target="_blank" rel="noopener">log</a>`}</div>${
     live || r.local ? '' : `<div class="conv-replay">Replay of run <span class="mono">${esc(r.run)}</span> on ${
-      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}${
-      r.session_id ? ` · <a href="#" data-sess="${esc(r.session_id)}" data-sess-rt="${esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || '')}">open the session file</a>` : ''}</div>`}`;
+      esc(CONV?.session?.runtime || S.emps.find(e => e.name === slug)?.runtime || 'its runtime')}, ended ${esc(fmt(r.finished) || 'unknown')}</div>`}`;
   const ask = chat ? convChatAsk(r)
     : !r.issue_body ? ''
     : isRecurring(r) ? `<div class="bubble sched"><span class="who">Routine</span>${esc(r.issue_title || 'Routine')}
@@ -155,9 +154,6 @@ function convRender(state) {
   thread.querySelectorAll('details.conv-act[data-run]').forEach(d => d.addEventListener('toggle', () => {
     if (d.open) state.openWork.add(d.dataset.run); else state.openWork.delete(d.dataset.run);
   }));
-  thread.querySelectorAll('[data-sess]').forEach(a => a.onclick = ev => {      // replay -> the real file
-    ev.preventDefault(); sessionOpen(slug, a.dataset.sessRt || '', a.dataset.sess);
-  });
   $('#conv-older').innerHTML = state.older ? '<button class="ghost" type="button" id="conv-older-btn">Load older</button>' : '';
   const older = $('#conv-older-btn');
   if (older) older.onclick = async () => {
@@ -177,114 +173,20 @@ function convRender(state) {
   pillNeeds(BOT_PILL?.slug === slug ? BOT_PILL : null, last?.needs_human && last.issue ? last.issue : null);
 }
 
-// ----------------------------------------------------------------- session (the runtime's own file)
-// The Chat tab replays what the dispatcher logged, run by run. This tab reads the file the runtime
-// itself keeps for the thread the bot resumes — one source, so nothing on screen can drift from
-// what the agent actually has. Read fresh on every visit; it does not poll.
-let SESS_PICK = null;                    // a run row asked for one session instead of the current one
-function sessionOpen(slug, runtime, sid) {
-  SESS_PICK = {runtime, sid};
-  location.hash = `#/bot/${slug}/session`;
-}
-const SESS_WHO = {user: 'Prompt', reasoning: 'Thinking', tool: 'Tool', system: 'System prompt'};
-const sessTime = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'}); };
-function sessionTurn(t, slug) {
-  const when = t.ts ? `<span class="when" title="${esc(fmt(t.ts))}">${esc(sessTime(t.ts))}</span>` : '';
-  const who = t.role === 'assistant' ? empName(slug) : esc(SESS_WHO[t.role] || t.role);
-  if (t.role === 'tool') {
-    const line = t.command || (t.files || []).join(', ') || 'tool call';
-    const body = t.output ? `<pre>${esc(t.output)}</pre>`
-      : t.files?.length ? `<pre>${esc((t.files || []).join('\n'))}</pre>`
-      : '<pre class="muted">No output recorded in the session file.</pre>';
-    return `<div class="sess-turn tool">${when}<details><summary><code>${esc(line)}</code>${
-      t.exit ? ` <span class="pill fail">exit ${esc(t.exit)}</span>` : ''}</summary>${body}</details></div>`;
-  }
-  const body = t.role === 'assistant' ? `<div class="md">${md(t.text || '')}</div>`
-    : `<div class="body">${esc(t.text || '')}</div>`;
-  return `<div class="sess-turn ${esc(t.role)}">${when}<span class="who">${who}</span>${body}</div>`;
-}
 // The CLI's own resume command comes from its manifest (`resume_command`); a CLI without one gets `<name> --resume`.
 function botResumeCommand(runtime, sid, slug) {
   const r = String(runtime || '').toLowerCase();
   return `cd ~/tico-work/emp-${slug} && ${harnessCaps(r).resume_command || `${r} --resume`} ${sid}`;
 }
-function sessionHead(d, slug) {
-  const runs = (d.runs || []).map(r => r.issue ? `#${r.issue}` : 'chat');
-  const pointer = d.provider_session;
-  const sid = pointer?.thread_id || (d.session_id && d.session_id !== 'cloud' ? d.session_id : '');
-  const resumeCmd = sid ? botResumeCommand(d.runtime, sid, slug) : '';
-  const resumeBox = sid ? `
-    <div class="sess-resume" style="margin:8px 0;padding:10px 12px;background:var(--surface2);border-radius:var(--radius);display:flex;flex-direction:column;gap:8px">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div><span class="muted">Session ID:</span> <code class="mono" style="color:var(--ink);cursor:pointer" data-copy-sess-id="${esc(sid)}" title="Tap to copy">${esc(sid)}</code></div>
-        <button class="ghost" style="padding:3px 8px;font-size:11.5px" type="button" data-copy-sess-id="${esc(sid)}">Copy ID</button>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="overflow-wrap:anywhere"><span class="muted">Resume:</span> <code class="mono" style="color:var(--ink);cursor:pointer" data-copy-sess-cmd="${esc(resumeCmd)}" title="Tap to copy">${esc(resumeCmd)}</code></div>
-        <button class="primary" style="padding:3px 8px;font-size:11.5px" type="button" data-copy-sess-cmd="${esc(resumeCmd)}">Copy command</button>
-      </div>
-    </div>` : '';
-  const pointerLine = pointer
-    ? `Tico pointer: <span class="mono">${esc(pointer.thread_id)}</span>`
-      + (pointer.tokens_in != null ? ` · ${esc(String(pointer.tokens_in))} tokens in` : '')
-      + (pointer.updated ? ` · saved ${esc(ago(pointer.updated))}` : '')
-      + (pointer.runner_id ? ` · runner ${esc(pointer.runner_id)}` : '')
-    : 'Tico pointer: none yet';
-  return `${d.cloud ? 'Cloud session' : d.current ? 'Live session file' : 'Session file'}: <strong>${esc(harnessWords(d.runtime))}</strong>
-    ${d.model ? `<span class="muted">${esc(modelWords(d.model))}</span>` : ''}
-    <span class="mono">${esc(d.session_id)}</span>
-    ${pointerLine}
-    ${resumeBox}
-    ${d.first_ts ? `started ${esc(fmt(d.first_ts))}` : ''} · ${esc(String(d.turn_count))} runs${
-      d.shown < d.turn_count ? ` <span class="muted">(showing the last ${esc(String(d.shown))})</span>` : ''}
-    ${runs.length ? ` · covers runs ${esc(runs.join(', '))}` : ' · unused'}
-    ${d.last_ts ? ` · last written ${esc(ago(d.last_ts))}` : ''}
-    ${d.skipped ? ` · <span title="record types this reader does not know">${esc(String(d.skipped))} records skipped</span>` : ''}
-    ${d.current ? '' : ' · <a href="#" data-sess-current="1">back to the current session</a>'}
-    <span class="mono">${esc(d.path || '')}</span>`;
-}
-async function sessionLoad(slug, pick) {
-  const head = $('#sess-head'), body = $('#sess-turns');
-  if (!head || !body) return;
-  head.textContent = 'Reading the session file…'; body.innerHTML = '';
-  let d;
-  try {
-    [d] = await Promise.all([get(pick ? `/sessions/${encodeURIComponent(pick.runtime)}/${encodeURIComponent(pick.sid)}`
-                       : `/employees/${slug}/session`), loadHarnessRows()]);
-  } catch (err) {
-    if (!BOT || BOT.slug !== slug || !$('#sess-head')) return;
-    head.innerHTML = `<span class="muted">${esc(err.message)}</span>`;
-    body.innerHTML = `<div class="empty">Nothing here. See the Chat tab.</div>`;
-    return;
-  }
-  if (!BOT || BOT.slug !== slug || !$('#sess-head')) return;
-  head.innerHTML = sessionHead(d, slug);
-  head.querySelectorAll('[data-copy-sess-id]').forEach(el => {
-    el.onclick = ev => {
-      ev.preventDefault();
-      void copyText(el.dataset.copySessId).then(() => toast('Session ID copied'));
-    };
-  });
-  head.querySelectorAll('[data-copy-sess-cmd]').forEach(el => {
-    el.onclick = ev => {
-      ev.preventDefault();
-      void copyText(el.dataset.copySessCmd).then(() => toast('Resume command copied'));
-    };
-  });
-  const back = head.querySelector('[data-sess-current]');
-  if (back) back.onclick = ev => { ev.preventDefault(); sessionLoad(slug, null); };
-  body.innerHTML = (d.turns || []).map(t => sessionTurn(t, slug)).join('')
-    || '<div class="empty">No runs yet.</div>';
-  body.scrollTop = body.scrollHeight;                       // newest last, like the thread
-}
-
 async function loadBotIssues(slug) {
   try {
     const list = await get(`/employees/${slug}/issues`);
     const open = list.filter(i => i.state === 'OPEN').sort((a,b) => (a.needs_human ? 0 : 1) - (b.needs_human ? 0 : 1) || (a.priority||'p9').localeCompare(b.priority||'p9'));
-    const closed = list.filter(i => i.state === 'CLOSED').sort((a,b) => b.closedAt.localeCompare(a.closedAt)).slice(0, 10);
+    // Done Recently: closed in the last 14 days, as for a Tico bot's tasks.
+    const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
+    const closed = list.filter(i => i.state === 'CLOSED' && String(i.closedAt || '') >= since).sort((a,b) => b.closedAt.localeCompare(a.closedAt));
     if (!$('#t-open')) return;
-    $('#cnt-done').textContent = list.length - open.length || '';
+    $('#cnt-done').textContent = closed.length || '';
     const row = (i, when, label) => `<details class="trow"><summary>
         <span class="mono muted">#${i.number}</span><span class="ttl">${esc(i.title)}</span>
         <span class="tags">${i.state === 'OPEN' ? statusPill(i) : ''}${i.priority && i.priority !== 'p2' ? ' ' + prioPill(i) : ''}</span>
@@ -292,7 +194,10 @@ async function loadBotIssues(slug) {
       <div class="tbody">${i.last_comment ? `<div class="lbl">${label}</div><div class="q">${esc(i.last_comment)}</div>` : i.body ? `<div class="q">${esc(i.body)}</div>` : '<div class="muted">No details yet.</div>'}
         </div></details>`;
     $('#t-open').innerHTML = open.length ? open.map(i => row(i, i.updatedAt, 'Last comment')).join('') : '<div class="rail-empty">None</div>';
-    $('#t-done').innerHTML = closed.length ? closed.map(i => row(i, i.closedAt, 'Closing comment')).join('') : '<div class="rail-empty">None</div>';
+    $('#t-done').innerHTML = closed.length ? closed.map(i => row(i, i.closedAt, 'Closing comment')).join('') : '<div class="rail-empty">Nothing done in the last two weeks.</div>';
+    // An Issues bot has no questions or waits in Tico: those tabs are simply empty.
+    $('#t-needs').innerHTML = '<div class="rail-empty">Nothing needs you.</div>';
+    $('#t-blocked').innerHTML = '<div class="rail-empty">Nothing is blocked.</div>';
   } catch (e) { if ($('#t-open')) $('#t-open').innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
 // The bot page's Runs card, when /status came back without recent_runs: same cached /runs list.
@@ -300,12 +205,14 @@ async function fillBotRuns(slug) {
   if (!$('#bot-recent-runs[data-pending]')) return;
   let list = [];
   try { list = (await recentRuns()).filter(r => r.employee === slug).slice(0, 10); } catch { /* silent */ }
+  if (BOT?.slug !== slug) return;
   const el = $('#bot-recent-runs[data-pending]');
   if (el) { el.removeAttribute('data-pending'); el.innerHTML = runsTable(list, false); }
 }
 async function loadDocs(slug) {
   try {
     const f = await get(`/employees/${slug}/files`);
+    if (BOT?.slug !== slug) return;
     if ($('#agent')) $('#agent').innerHTML = f['AGENT.md'] ? md(f['AGENT.md'].replace(/^# .*\n/, '')) : '<div class="empty">Instructions have not been published by the computer yet.</div>';
     for (const [n, t] of Object.entries(f.playbooks || {})) { const el = document.getElementById('pb-' + n); if (el) el.innerHTML = md(t); }
     const tabs = [['Status note', f['state.md']], ['Learnings', f['memory/learnings.md']], ['Decisions', f['memory/decisions.md']]];

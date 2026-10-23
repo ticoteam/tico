@@ -197,7 +197,9 @@ def latest_task(c, sid):
 def no_input(c, settings, schedule, local):
     """Why a built-in routine's run would have nothing to work on, or None: such a run is skipped rather than
     opening a task its bot can only close."""
-    from . import market
+    from . import ceo_bot, market
+    if held := ceo_bot.held_routine(c, schedule):
+        return held                 # the CEO Bot's KPI pass, while the owner has its regular checks off
     # Only the routine as shipped: a team that changed its text may have given it other work.
     if (schedule["bot"] == market.CURATOR.split(":", 1)[1] and schedule["routine_key"] == "curate-the-market"
             and (schedule["playbook"] or "").strip() == market.CURATE_TEXT.strip()):

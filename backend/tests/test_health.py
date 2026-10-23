@@ -35,7 +35,7 @@ def test_all_good(environment, monkeypatch):
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
-        "github": "info", "backups": "ok", "failed": "ok"}
+        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
@@ -136,7 +136,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -154,7 +154,7 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
         "id", "label", "online", "last_seen", "platform", "disk", "update"}
-    assert body["failures"] == [] and set(checks) == {"computers", "waiting", "queue", "failed"}
+    assert body["failures"] == [] and set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 

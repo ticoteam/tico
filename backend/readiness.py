@@ -19,8 +19,8 @@ bot's missing key or another profile's sign-in never decides it.
 
 Callers refuse only on can_run False; None never blocks.
 """
-import json
 
+from . import models_preset
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
 
@@ -55,9 +55,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         return {"can_run": None, "applicable": False, "computer": None, "runtime": runtime,
                 "problem": "An external agent runs this bot outside Tico, so no computer check applies"}
     if runner:
-        row = c.execute("SELECT id,label,last_seen,revoked_at,readiness_json FROM runners WHERE id=?", (runner,)).fetchone()
+        row = c.execute("SELECT id,label,last_seen,revoked_at,readiness_json,capabilities_json FROM runners WHERE id=?", (runner,)).fetchone()
     else:
-        row = c.execute("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
+        row = c.execute("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
                         "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
     if not row or row["revoked_at"]:
         return {"can_run": None, "applicable": True, "computer": None, "runtime": runtime,
@@ -67,7 +67,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     online = bool(row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
     readiness = readiness_document(row["readiness_json"])
     detail = readiness.get("bots", {}).get(bot)
-    detail = detail if isinstance(detail, dict) else {}
+    detail = models_preset.as_served(c, bot, readiness, detail) if isinstance(detail, dict) else {}
     out = {"applicable": True, "computer": {"id": row["id"], "label": row["label"]}, "online": online, "runtime": runtime,
            "bot_ready": detail.get("ready") is True, "bot_problems": list(detail.get("problems") or [])[:5],
            "reported": (str(detail.get("runtime") or "") == str(runtime or "")
@@ -86,6 +86,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
 
     if not online:
         return verdict(None, label + " is offline, so it has not checked " + str(runtime))
+    from .subscriptions import login_upgrade
+    if problem := login_upgrade(row, readiness, bot=bot):
+        return verdict(False, problem, "Update the runner in Settings > Computers")
     # A harness the runner does not report on (`readiness = false`, Antigravity) has no row to judge.
     if readiness.get("schema_version") != 1 or harness_caps(harness, runtime).get("readiness") is False:
         return verdict(None, label + " does not report its AI tools; update it to check")
@@ -126,23 +129,15 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
                            " Credential in Credentials", "#/credentials")
         return verdict(True)
-    from .subscriptions import covers, effective
-    profile = effective(c, bot)[0]
-    if profile and covers({"runtime": runtime, "harness": harness}):
-        stored = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
-                           (row["id"], profile)).fetchone()
-        signed = (json.loads(stored[0] or "{}") if stored else {}).get(runtime, {}).get("signed_in")
-        if signed is None:
-            signed = {"ready": True, **{k: False for k in SIGNED_OUT}}.get(
-                ((state.get("profiles") or {}).get(profile) or {}).get("authenticated"))
-        if signed is None:
-            return verdict(None, "The " + profile + " subscription has not reported " + str(runtime) + " on " + label)
-        return verdict(True) if signed else verdict(
-            False, "The " + profile + " subscription is not signed in to " + str(runtime) + " on " + label,
-            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers", sign_in=True)
+    # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
     shared = (state.get("profiles") or {}).get("") or state
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
+        return verdict(True)
+    if signed in SIGNED_OUT and (line := models_preset.gateway_line(
+            c, bot, readiness, config={"runtime": runtime, "model": model or config.get("model")})):
+        # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
+        out["gateway"] = line
         return verdict(True)
     if signed in SIGNED_OUT:
         return verdict(False, shared.get("detail") or (str(runtime) + " is not signed in on " + label),

@@ -23,6 +23,14 @@ const TASKS = [
   base('t-deck', 'Review the launch deck', {requester: 'human:sam'}),
   base('t-call', 'Call Murphy back about the lease', {requester: 'bot:support'}),
   base('t-vendor', 'Switch the payroll vendor', {owner: 'bot:analyst', requester: 'human:ana', status: 'waiting', note: 'Waiting on Ana to pick the vendor.'}),
+  // A bot's question the CEO Bot merged into an item of its own: the server leaves it out of Needs you, so the page does.
+  base('t-merged', 'Which pricing page first?', {requester: 'bot:ops',
+    ask: {id: 'q-merged', body: 'Which pricing page launches first?', from_actor: 'bot:ops', to_actor: 'human:ana'}}),
+  // Bots' own tasks with a question to Ana over three days old: one merged, which stays out of Older questions too.
+  base('t-old-merged', 'Which launch day?', {owner: 'bot:coo', requester: 'bot:coo',
+    ask: {id: 'q-old-merged', body: 'Which day do we launch?', from_actor: 'bot:coo', to_actor: 'human:ana', older: true}}),
+  base('t-old', 'Which logo on the invoice?', {owner: 'bot:finance', requester: 'bot:finance',
+    ask: {id: 'q-old', body: 'Which logo goes on the invoice?', from_actor: 'bot:finance', to_actor: 'human:ana', older: true}}),
 ];
 const SEND = {id: 'ap-send', kind: 'approval', what: 'send', requester: 'bot:writer', requested_by: 'bot:writer', created: ago(30),
   title: "Send: '$200 for each rental owner you introduce' to Jennie Ooten", need: 'review',
@@ -33,13 +41,14 @@ const REC = {do: 'Gusto', ask: 'q-pick', option: 'Gusto', kind: 'reversible'};
 const card = (id, over) => ({...TASKS.find(x => x.id === id), kind: 'task', ...over});
 const NEEDS = [
   card('t-keys', {need: 'connect'}),
-  card('t-pick', {need: 'decide', recommend: REC,
+  // It holds up a roadmap item at Building, so Decide shows it first (backend/views.py decide_tier).
+  card('t-pick', {need: 'decide', recommend: REC, tier: 1, holds_up: {id: 'r-payroll', title: 'Payroll move', kind: 'roadmap', step: 'Building'},
     folded: [{id: 't-vendor', title: 'Switch the payroll vendor', owner: 'bot:analyst', kind: 'waiting', note: 'Waiting on Ana to pick the vendor.'}]}),
   SEND,
   SPEND,
   card('t-invoice', {need: 'pay'}),
   card('t-deck', {need: 'review'}),
-  card('t-call', {need: 'do'}),
+  card('t-call', {need: 'do', merged: ['t-merged', 't-old-merged']}),
 ];
 const WENT_AWAY = {expired: 3, withdrawn: 1, assistant: 2, total: 6, days: 7};
 
@@ -71,8 +80,8 @@ async function shot(target, name) {
       key: g.dataset.group, label: g.querySelector('.tl-gname, .tl-group-name, h3')?.textContent.trim(),
       count: g.querySelector('.tl-count, .tl-gcount, .count')?.textContent.trim()})));
     assert.deepEqual(groups.map(g => [g.key, g.count]),
-      [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1']], JSON.stringify(groups));
-    assert.deepEqual(groups.map(g => g.label), ['Decide', 'Pay', 'Sign in or connect', 'Review and send', 'Do']);
+      [['need:decide', '1'], ['need:pay', '2'], ['need:connect', '1'], ['need:review', '2'], ['need:do', '1'], ['older', '1']], JSON.stringify(groups));
+    assert.deepEqual(groups.map(g => g.label), ['Decide', 'Pay', 'Sign in or connect', 'Review and send', 'Do', 'Older questions']);
     const review = page.locator('#task-body [data-group="need:review"]');
     assert.ok((await review.textContent()).includes("Send: '$200 for each rental owner you introduce' to Jennie Ooten"));
     assert.ok((await page.locator('#task-body [data-group="need:pay"]').textContent()).includes('Pay $1,200: LinkedIn ads for October'));
@@ -83,6 +92,11 @@ async function shot(target, name) {
     assert.match(await page.locator('#task-body [data-group="need:connect"] .tl-row').first().textContent(), /Due (\w{3}|tomorrow|today)/);
     assert.equal((await pick.locator('.tl-folded').textContent()).trim(), '+1');
     assert.equal(await page.locator('#task-body .tl-row', {hasText: 'Switch the payroll vendor'}).count(), 0);
+    // Older questions, opened, holds the unmerged old question and not the merged one.
+    const older = page.locator('#task-body [data-group="older"]');
+    if ((await older.locator('[data-group-toggle]').getAttribute('aria-expanded')) !== 'true') await older.locator('[data-group-toggle]').click();
+    assert.deepEqual(await older.locator('.tl-row').evaluateAll(rs => rs.map(r => r.textContent.includes('Which logo on the invoice?')
+      ? 'control' : r.textContent.includes('Which launch day?') ? 'merged' : 'other')), ['control']);
     const rec = pick.locator('[data-recommend]');
     assert.equal((await rec.textContent()).trim(), 'Do what you recommend');
     await shot(page, 'needs-you-groups');

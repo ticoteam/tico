@@ -21,7 +21,7 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian and Goal Manager are the four Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian and CEO Bot are the four Built-in bots; they cannot be archived or deleted.
 
 The 93 templates, in nine groups with a Leadership extra and one message bot, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
@@ -33,9 +33,8 @@ are in [Finish setup](onboarding.md).
 
 ## Edit Instructions
 
-Open the bot's **More → Instructions → Edit Instructions**, or **Bot settings → Edit Instructions**.
-The Instructions card may be under **Docs** in an older app.
-Describe the change and choose **Ask BotOps to change**. BotOps receives your request in its chat and updates
+Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
+Describe the change and choose **Send changes to BotOps**. BotOps receives your request in its chat and updates
 `AGENT.md` on the bot's computer. Description is separate: it summarizes the bot on the roster.
 The app displays the Instructions from the latest repository snapshot; refresh after BotOps finishes.
 New repositories default to `bot-<slug>`.
@@ -45,7 +44,7 @@ New bots start with their own repository unless the team selected all ticked rep
 ## Subscribe to updates
 
 A bot can hear about changes that may matter to it, as information only. In the bot editor (**Settings → Bots →
-Edit**, or **Bot settings** on the bot's Setup card), under **Subscribe to updates**, people who manage the bot tick
+Edit**, which opens the bot’s **Settings** tab), under **Subscribe to updates**, people who manage the bot tick
 either, both or neither:
 
 - **Default employee settings**: changes to the template the bot was made from (its `template`), read from that
@@ -512,7 +511,7 @@ A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp
 
 Beside a bot's name at the top of its page, after the mark for the harness it runs on, is one small
 stack of up to three overlapping tool icons and "+N" for the rest (a phone leaves it out of its short top
-line). Clicking it lists the tools, one line each, and **Manage** opens **Tools** under the bot's **More**
+line). Clicking it lists the tools, one line each, and **Manage** opens **Tools** under the bot’s **Info**
 tab: every tool the bot uses, with its details. It is how a human learns what a bot can reach without opening its repository.
 
 - **Where it comes from.** The list starts with the model and harness the bot runs on (for example
@@ -527,7 +526,7 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
   Calendar, PostHog, MongoDB, PostgreSQL, MySQL, OpenAI, Anthropic, Notion, Linear, Stripe, AWS,
   Cloudflare, Zoom) and the first two letters of the name in a tinted circle for everything else.
   A red dot means the tool has a problem.
-- **The Tools list** under More is one line a tool: its icon, name, key values (the model and effort, who it
+- **The Tools list** under Info is one line a tool: its icon, name, key values (the model and effort, who it
   acts as and what it may do, or a problem in red) and its status, with the rest in the line's tooltip. Two
   or more GitHub repositories share one line, "GitHub · N repositories" with their access added up, which
   opens to a short line each. Opening a line gives the tool's details: the service's name, the identity it acts as
@@ -583,7 +582,7 @@ Levers set in **Settings → Bots**, not in the repository:
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
   Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
-  Tico Cheap, Mid and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
+  Tico Cheap 1.1, Mid 1.0 and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
@@ -593,9 +592,11 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
-- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
-  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
-  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+- **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
+  editor with **Apply** or **Save bot**, or click **Tasks** beside the model in the bots list.
+  Chat keeps the bot's own model. See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
+- A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
+  login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
@@ -603,13 +604,16 @@ Levers set in **Settings → Bots**, not in the repository:
   nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
   sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
-  every 15 minutes. **Current behaviour**, which every bot made before presets keeps until someone picks
-  one, wakes on each piece of news as it arrives. In every preset, these wake the bot at once, and only once
+  every 15 minutes. Existing bots without a preset, including the former Current behaviour setting,
+  move to Performance. In every preset, these wake the bot at once, and only once
   when the same event repeats before its run is over: a person's message, an assignment, a question, something it waits on
   resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
   permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
   in a task's **Runs** says what woke it. A branch picks its own.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`background_wait_s`** (Claude bots): how long an answered turn may wait only on its own background commands
+  before the runner ends it, in seconds; 300 when unset, 0 to wait for them as before. The commands keep running,
+  and the bot gets one message with their exit codes when they end, or when the run's time limit kills them.
 - **`hermes`** (and **`openclaw`**, [the same way](openclaw-agents.md)) is the one kind of harness that is not a
   CLI on a registered computer: the bot is a Hermes profile somewhere else, with its own model, reached through a credential minted in
   Settings and never dispatched to. Model, effort, fallback and computer do not apply to it.

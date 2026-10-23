@@ -130,6 +130,40 @@ def test_the_claim_puts_the_wake_on_the_run(api):
         assert c.execute("SELECT count(*) FROM turns WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
 
+def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
+    r = machine(api)
+    post(api, "chat/ops", {"text": "Summarize the week."})
+    attempt = claim(api, r)
+    assert turn(api, attempt)["purpose"] == "answer person message"
+    start(api, r, attempt)
+    finish(api, r, attempt)
+    with api.app.state.store.transaction() as c:
+        H.say(c, H.KEEPER, "bot:ops", "Sort the inbox.", kind="notice",
+              refs=RT.stamp({}, "schedule", "morning", purpose="  sort   inbox "))
+    assert turn(api, claim(api, r))["purpose"] == "sort inbox"
+    assert RT.purpose_for("pr-reviewer", "pr_checks") == "handle PR checks"
+    assert RT.purpose_for("pr-reviewer", "status_or_relation") == "react to task change"
+    assert RT.purpose_for("pr-reviewer-sol", "pr_checks") == "review PR"
+    assert RT.purpose_for("reviewer-2", "status_or_relation") == "review PR"
+    assert RT.purpose_for("ops", "other") == RT.purpose_for("ops", None) == "unknown"
+
+
+def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
+    with api.app.state.store.transaction() as c:
+        for i, (bot, kind) in enumerate([("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None),
+                                         ("ops", "other")]):
+            c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
+                      (f"old{i}", bot, H.now(), kind))
+        c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
+                  "'comment','mine')", (H.now(),))
+        RT.backfill(c)
+        got = dict(c.execute("SELECT id, purpose FROM turns WHERE id LIKE 'old%' OR id='named'").fetchall())
+    assert got == {"old0": "answer comment", "old1": "handle PR checks", "old2": "unknown", "old3": "unknown",
+                   "named": "mine"}
+    rows = {row["purpose"] for row in weekly(api, where="bot='ops'")}
+    assert {"answer comment", "unknown", "mine"} <= rows
+
+
 WRITES = ["task_update", "comment", "message", "pr_link", "file_publish", "reply_to_person"]
 NO_WRITES = {"no_writes": "no_change", "bookkeeping_only": "no_change", "task_finished": "nothing_to_do"}
 
@@ -190,6 +224,36 @@ def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
     api.post(f"/api/v2/attempts/{attempt['id']}/complete", headers=headers(r["token"]),
              json={"outcome": "completed", "last_seq": 0, "text": "Yes, it came in at six.", "usage": USAGE})
     assert turn(api, attempt)["writes"] == 1
+
+
+def worktree(api, task_id, attempt, path):
+    """A worktree of `task_id` on the computer that runs `attempt`."""
+    with api.app.state.store.transaction() as c:
+        computer = c.execute("SELECT runner_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,repo,branch,path,computer_id) "
+                  "VALUES(?,?,'worktree',?,'present','bot:ops',?,'acme/app','tico/x',?,?)",
+                  (path, task_id, "worktree:" + path, H.now(), path, computer))
+
+
+@pytest.mark.parametrize("case", ["own_task", "none", "other_task", "older_runner"])
+def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
+    """Tico never sees a git push; the runner reports the ones from the run's task worktrees with its result."""
+    r = machine(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Fix the export", "body": "Push the fix."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Tidy the docs", "body": "Later."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    worktree(api, task["id"], attempt, "tasks/fix/app")
+    worktree(api, other["id"], attempt, "tasks/docs/app")
+    pushes = {"own_task": [{"path": "tasks/fix/app", "count": 2}], "none": [],
+              "other_task": [{"path": "tasks/docs/app", "count": 1}, {"path": "tasks/elsewhere/app", "count": 1}]}
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    if case != "older_runner":
+        body["pushes"] = pushes[case]
+    post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
+    row = turn(api, attempt)
+    assert (row["writes"], row["outcome"], row["did_nothing"]) == (
+        (2, "acted", 0) if case == "own_task" else (0, "no_change", 1))
 
 
 def test_a_restore_ends_open_runs_with_an_outcome(api):

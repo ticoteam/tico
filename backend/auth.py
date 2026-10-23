@@ -165,6 +165,17 @@ def validate_identity(c, who):
             raise Problem("stale_lease", "Execution ownership expired; stop work and reconnect", 409)
 
 
+def above(parents, me, slug):
+    """Whether the bot `me` is above `slug` in the `reports_to` chain; `parents` is {bot: reports_to}."""
+    seen, parent = {slug}, parents.get(slug, "")
+    while parent and parent not in seen:
+        if parent == me:
+            return True
+        seen.add(parent)
+        parent = parents.get(parent, "")
+    return False
+
+
 def _own_ask_to_a_person(who, row):
     """A bot's own question to a person: reachable from whichever run it is in.
 
@@ -524,7 +535,7 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the Goal Manager, the Health Monitor): they act for
+        """The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot, the Health Monitor): they act for
         the whole company, so only the company owner changes them. Admins manage every other bot."""
         return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor")
 
@@ -543,6 +554,22 @@ class Auth:
         if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])):
             return True
         return self.manages(c, who, "bot", slug)
+
+    def bot_above(self, c, who, slug):
+        """Whether the caller is a bot's own run that sits above this bot in the `reports_to` chain: a manager bot,
+        or one above its manager. It already has full access to the bot (`bot_accesses`); this is for the few reads
+        that check the caller's kind before access, like a bot's routines. Never true for a run acting for someone."""
+        if who.role != "bot" or who.via or not str(who.actor).startswith("bot:"):
+            return False
+        me = H.actor_id(who.actor)
+        parents = {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}
+        seen, parent = {slug}, parents.get(slug, "")
+        while parent and parent not in seen:
+            if parent == me:
+                return True
+            seen.add(parent)
+            parent = parents.get(parent, "")
+        return False
 
     def botops_manages(self, c, who, slug):
         """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages
@@ -624,14 +651,7 @@ class Auth:
                 continue
             if who.role == "bot":
                 me = H.actor_id(who.actor)
-                above, seen, parent = False, {slug}, context()["parents"].get(slug, "")
-                while parent and parent not in seen:
-                    if parent == me:
-                        above = True
-                        break
-                    seen.add(parent)
-                    parent = shared["parents"].get(parent, "")
-                if me == slug or above:
+                if me == slug or above(context()["parents"], me, slug):
                     out[slug] = dict(self.FULL)
                     continue
                 levels = {level: A.names(doc[level], bot=me) for level in A.LEVELS}
@@ -852,6 +872,22 @@ class Auth:
         if actor.startswith("bot:"):
             self.require(c, who, H.actor_id(actor), need, missing="Unknown recipient")
         return actor
+
+    def run_conversation(self, c, who, bot, message):
+        """The conversation check for reading one of `bot`'s runs, started by `message`. A bot above `bot` in the
+        `reports_to` chain also reads its reports' work: a run on a task or a routine, or one a bot asked for. A run
+        a person started by chatting stays theirs, and peers and the bots above `bot` keep the conversation rule.
+        The task fence (backend/task_privacy.py) still applies on top."""
+        if who.role == "bot" and H.actor_id(who.actor) != bot and above(
+                {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}, H.actor_id(who.actor), bot):
+            from . import task_privacy
+            try:
+                if (not str(message.get("from_actor") or "").startswith("human:")
+                        or task_privacy.message_tasks(c, message, include_run=False)):
+                    return
+            except Problem:
+                pass
+        self.conversation(c, who, message["conversation_id"])
 
     def conversation(self, c, who, conversation_id):
         self.domain(who)

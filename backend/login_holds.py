@@ -15,6 +15,8 @@ import json
 import re
 from datetime import timedelta, timezone
 
+from clients import gateway
+
 from .store import H
 
 PREFIX = "login-hold:"
@@ -45,11 +47,18 @@ def key(runner_id, profile, runtime):
 def canonical(c, runner_id, profile, runtime):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
+    from .store import readiness_document
+    row = c.execute("SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness_json"]) if row else {}
+    from .subscriptions import computer_logins
+    current = row and computer_logins(row, ready)
+    if not profile and current:
+        # Keep the physical home as the identity: existing holds on a retained default profile still apply.
+        profile = ready['computer_profile']
+    if current and profile != ready['computer_profile']:
+        return profile     # an older in-flight turn on another home is never folded into the new default
     if not profile:
         return ""
-    from .store import readiness_document
-    row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (runner_id,)).fetchone()
-    ready = readiness_document(row["readiness_json"]) if row else {}
     report = ((ready.get("runtimes") or {}).get(runtime) or {})
     report = (report.get("profiles") or {}).get(profile) or report
     return "" if report.get("shared_login") is True else profile
@@ -297,6 +306,10 @@ def turn_steps(c, attempt_id, runtime, result):
 def window(notice):
     """Which kind of limit a notice is: an API key's quota or billing refusal, or the plan's usage window."""
     from .execution import BILLING_LIMIT_RE
+    if gateway.out_of_credit(notice):
+        return "Tico models paused, out of credit"
+    if gateway.rate_limited(notice):
+        return "Tico AI Gateway rate limit"
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
     if re.search(r"\bweekly\b", notice or "", re.I):
@@ -376,6 +389,10 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
     steps = turn_steps(c, attempt_id, runtime, body)
+    # The home is pinned across primary and fallback work. An older in-flight turn may finish on a retired home
+    # after the server's upgrade: its reported login, not the new default, owns that limit.
+    if body.profile_used is not None:
+        profile = body.profile_used
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
@@ -385,7 +402,17 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit):
         if limited:
             if n == 0 and body.primary_held:
                 continue                # never tried: its hold stands as it is
-            reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
+            if gateway.out_of_credit(notice) or gateway.rate_limited(notice):
+                # The Tico AI Gateway paused the company's Tico models for want of credit, or the key met its minute's
+                # rate limit: the Gateway's wait, not a spent login, so the login is held only for its Retry-After (or a
+                # minute), never the backoff. A turn that ended here waits that minute too, even while its primary's own
+                # hold is longer. A reset already past (a runner's clock behind) counts as none reported. With none, a
+                # minute, except a rate limit the turn ended on: that keeps execution.reset_cooldown's safe hour.
+                reported = believable(body.limit_resets_at, hit) if last else None
+                unsaid = last and not gateway.out_of_credit(notice)
+                reset = reported or H.shift(hit, seconds=gateway.RETRY_AFTER if unsaid else gateway.GATEWAY_WAIT)
+            else:
+                reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
             hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
             if last:
                 # The login the turn ended on: the one its bot waits for (for_attempt), when a turn held two.

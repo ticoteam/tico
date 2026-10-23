@@ -44,13 +44,13 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Goal Manager) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, CEO Bot) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
-product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the Goal Manager keeps the
+product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the CEO Bot keeps the
 KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
@@ -148,7 +148,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `shield_person` | `privacy` | Privacy Manager | DPA reviews against your position, a data subject request log run to each legal deadline with steps per system, the subprocessor list and records of processing, and a weekly privacy desk | common | Tico only; docs and a privacy mailbox optional |
 | `copyright` | `ip-paralegal` | IP Paralegal | A trademark and domain register with every declaration, renewal and expiry date, a monthly look-alike watch, clearance notes for proposed names, and the contractor IP assignment check | niche | Public web; docs optional |
 | `fact_check` | `legal-ops` | Legal Operations Manager | The matter list with budgets, a consistent brief per new matter, each law firm invoice checked line by line against its engagement letter and billing rules, and a monthly legal spend summary | niche | Invoices and engagement letters on tasks; docs and email optional |
-| `history_edu` | `corporate-secretary` | Corporate Secretary | Board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register, the minute book index and a cap table change log tying each grant to its approval | niche | Tico only; meetings, calendar and docs optional |
+| `history_edu` | `corporate-secretary` | Corporate Secretary | Board and shareholder meeting packs, draft minutes and written consents for counsel, the entity register and the minute book index | niche | Tico only; meetings, calendar and docs optional |
 
 ### HR
 
