@@ -75,20 +75,103 @@ def remind(c, row, at):
     return H.bot(c, H.actor_id(row["owner"]))["state"] == "active"
 
 
+# The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
+# manual run goes through the same code, so the same limits.
+def run_still_wanted(store, auth, at, failures=None):
+    # A task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
+    with SR.recording(store, "still_wanted", failures) as run:
+        from . import still_wanted
+        with store.transaction() as c:
+            asked = still_wanted.ask_idle(c, stamp(at))
+        run.did(SR.words_of(asked, "task asked about", "No idle tasks"))
+
+
+def run_kpi_asks(store, auth, at, failures=None):
+    # A KPI that went stale as time passed becomes its owner's task here (backend/goal_asks.py). Its own transaction: a
+    # failure here never undoes the goal colours.
+    with SR.recording(store, "kpi_asks", failures, "goal_asks") as run:
+        from . import goal_asks
+        with store.transaction() as c:
+            found = goal_asks.sync(c, auth.owner_id(c), at)
+        run.did(SR.words_of({"asked": (found or {}).get("created") or [],
+                             "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
+
+
+def run_health_scan(store, auth, at, failures=None):
+    # Only while the owner has the Health Monitor on (backend/health_monitor.py). Plain code; it wakes the bot only for a
+    # finding the last scan did not have.
+    with SR.recording(store, "health_scan", failures, "health_monitor") as run:
+        from . import health_monitor
+        with store.transaction() as c:
+            woke = health_monitor.scan(c, auth, store.settings)
+        run.did(SR.words_of(woke, "new finding", "No new findings"))
+
+
+def run_ask_deadlines(store, auth, at, failures=None):
+    # A bot's ask past its deadline goes ahead on its default, or expires (backend/ask_deadlines.py).
+    with SR.recording(store, "ask_deadlines", failures) as run:
+        from . import ask_deadlines
+        with store.transaction() as c:
+            done = ask_deadlines.sweep(c, stamp(at))
+        run.did(SR.words_of(done, "ask settled", "No asks past their deadline"))
+
+
+QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
+         "ask_deadlines": run_ask_deadlines}
+
+
+def run_now(store, auth, key, actor):
+    """Run now (Settings > Routines): one controlled job, once. A plain-code job runs here and its run record is on its
+    row when this returns (a failure is recorded, not raised); the stale ticket review and the learning run start on
+    their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
+    from .store import Problem
+    at = datetime.now(timezone.utc)
+    if key in QUICK:
+        QUICK[key](store, auth, at, [])
+        running = False
+    elif key == "stale_review":
+        from . import stale_review
+        if store.settings.rehearsal:
+            raise Problem("conflict", "A rehearsal server runs no stale ticket review", 409)
+        if stale_review.tick(store, stamp(at), force=True) is None:
+            raise Problem("conflict", "A stale ticket review is already running, or it was just switched off", 409)
+        running = True
+    elif key == "learnings":
+        from . import learnings
+        with store.transaction() as c:
+            run_id = learnings.claim_tonight(c)
+        learnings.start(store, run_id)
+        running = True
+    else:
+        raise Problem("invalid", "Nothing to run", 422)
+    with store.transaction() as c:
+        H.event(c, actor, "system_routines.run_now", key, {"running": running})
+    return running
+
+
 class Scheduler:
     def __init__(self, store, execution):
         self.store, self.execution = store, execution
         self.swept = None
         self.stranded = None
-        self.still_wanted = None
         self.asks_checked = None
         self.stall_checked = None
         self.goals_checked = None
         self.go_lives_checked = None
-        self.health_scanned = None
         self.gateway_checked = None
         self.billing_checked = None
         self.stale_checked = None
+        self.marks = {}             # a controlled job's last start in this process, if its record could not be written
+
+    def due(self, key, at, cfgs, last):
+        """Whether a controlled job (backend/system_routines.py CONTROLS) runs now: on, and due on its saved preset since
+        its last start. Marked first, so a failing job retries on its preset, not every tick."""
+        cfg = cfgs[key]
+        mark = max([t for t in (self.marks.get(key), last.get(key)) if t], default=None)
+        if not cfg["on"] or not SR.due(cfg, at, mark):
+            return False
+        self.marks[key] = at
+        return True
 
     def tick(self, at=None):
         at = at or datetime.now(timezone.utc)
@@ -244,7 +327,8 @@ class Scheduler:
                         try:
                             H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
-                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
+                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
+                                                           purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                         c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
@@ -267,6 +351,14 @@ class Scheduler:
         # transaction, so a failure here never holds back the routines above.
         # A person's draft is written by the company's model in a background thread, so the call never
         # holds the write lock; its row stays out until the thread posts it (or gives up on it).
+        try:
+            # The controlled jobs' saved settings; if they cannot be read, only those jobs wait for the next tick.
+            with self.store.read() as c:
+                cfgs = SR.config(c)
+                last = SR.last_started(c, list(SR.QUICK_KEYS))
+        except Exception as exc:
+            cfgs = None
+            failures.append({"system_routines": type(exc).__name__})
         with SR.recording(self.store, "updates", failures) as run:
             from . import updates
             settings = self.store.settings
@@ -313,14 +405,6 @@ class Scheduler:
                 with self.store.transaction() as c:
                     G.refresh(c)
                 run.did("Done")
-            with SR.recording(self.store, "kpi_asks", failures, "goal_asks") as run:
-                # A KPI that went stale as time passed becomes its owner's task here (backend/goal_asks.py). Its own
-                # transaction: a failure here never undoes the colours above.
-                from . import goal_asks
-                with self.store.transaction() as c:
-                    found = goal_asks.sync(c, self.execution.auth.owner_id(c), at)
-                run.did(SR.words_of({"asked": (found or {}).get("created") or [],
-                                     "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
             try:
                 # The CEO Bot's Monday note: started once above Passive, paused at Passive (backend/ceo_bot.py `reconcile`).
                 from . import ceo_bot
@@ -328,15 +412,11 @@ class Scheduler:
                     ceo_bot.reconcile(c)
             except Exception as exc:
                 failures.append({"ceo_bot": type(exc).__name__})
-        if self.health_scanned is None or at - self.health_scanned >= timedelta(hours=1):
-            # Every hour, only while the owner has it on: the Health Monitor's scan (backend/health_monitor.py). Plain
-            # code; it wakes the bot only for a finding the last scan did not have.
-            self.health_scanned = at
-            with SR.recording(self.store, "health_scan", failures, "health_monitor") as run:
-                from . import health_monitor
-                with self.store.transaction() as c:
-                    woke = health_monitor.scan(c, self.execution.auth, self.store.settings)
-                run.did(SR.words_of(woke, "new finding", "No new findings"))
+        # The controlled jobs, each on its saved preset (Settings > Routines): KPI stale asks, the Health Monitor's scan
+        # (hourly by default), Still wanted? (daily) and ask go-ahead.
+        for key, run in QUICK.items():
+            if cfgs and self.due(key, at, cfgs, last):
+                run(self.store, self.execution.auth, at, failures)
         if self.gateway_checked is None or at - self.gateway_checked >= timedelta(hours=1):
             # Every hour, while a gateway key or an invite is set: the Tico AI Gateway's word on it (revoked, 80% of the month's cap,
             # the cap reached), for Settings and Health. On its own thread: a tick never waits on the Gateway.
@@ -364,7 +444,8 @@ class Scheduler:
                     billing_check.read_later(self.store, self.store.settings)
                 run.did("Checked" if held else "Not used on this server")
         if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
-            # Stale ticket review (backend/stale_review.py), while the team has it on: the watermark makes it hourly;
+            # Stale ticket review (backend/stale_review.py), while the team has it on: its watermark and saved preset
+            # space the passes (hourly by default);
             # the Decide calls run on the pass's own thread, never under this lock.
             self.stale_checked = at
             try:
@@ -385,6 +466,8 @@ class Scheduler:
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
                 with self.store.transaction() as c:
+                    from . import run_diagnostics
+                    run_diagnostics.sweep(c, stamp(at))
                     woke = H.wake_stalled(c, stamp(at))
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}
@@ -417,23 +500,9 @@ class Scheduler:
                     restate_asks.ask_restate(c)
             except Exception as exc:
                 failures.append({"restate_asks": type(exc).__name__})
-        if self.still_wanted is None or at - self.still_wanted >= timedelta(days=1):
-            self.still_wanted = at
-            # Once a day: a task idle for a week gets one "Still wanted?" to its person (backend/still_wanted.py).
-            with SR.recording(self.store, "still_wanted", failures) as run:
-                from . import still_wanted
-                with self.store.transaction() as c:
-                    asked = still_wanted.ask_idle(c, stamp(at))
-                run.did(SR.words_of(asked, "task asked about", "No idle tasks"))
         if self.asks_checked is None or at - self.asks_checked >= timedelta(hours=1):
             self.asks_checked = at
-            # Every hour: a bot's ask past its deadline goes ahead on its default, or expires (backend/ask_deadlines.py).
-            with SR.recording(self.store, "ask_deadlines", failures) as run:
-                from . import ask_deadlines
-                with self.store.transaction() as c:
-                    done = ask_deadlines.sweep(c, stamp(at))
-                run.did(SR.words_of(done, "ask settled", "No asks past their deadline"))
-            # ...and approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
+            # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
             with SR.recording(self.store, "approval_expiry", failures) as run:
                 from . import approval_expiry
                 with self.store.transaction() as c:

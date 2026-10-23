@@ -13,8 +13,8 @@ privacy policy, browser engine or release check changes. The removed coverage is
 | agent-chips.cjs | team-groups.cjs covers the Team chart and management; connect-agent.cjs covers token creation, first-call detection and revocation | Chip overflow labels, chip-versus-row representation, history display and chart Connect-button placement |
 | page-layouts.cjs | docs.cjs, meetings.cjs, goals.cjs, assistant.cjs and bot-tools.cjs cover those feature paths | Cross-route layout-class cleanup, precise alignment, full-height rails, whole-page overflow and the extended tooltip keyboard/wording matrix |
 | rails.cjs | tasks-page.cjs keeps saved-view preference persistence | Sidebar drag width, arrow-key/end limits, device/account width restore, double-click reset and hidden phone edge; these rail-specific assertions have no remaining equivalent |
-| subscriptions-weekly.cjs | subscription-identity.cjs keeps manual weekly writes, escaped names, immutable routing and nonoperator controls; backend/tests/test_subscription_refresh.py covers refresh state and access | Pure wording/state rendering matrix and exact JavaScript polling schedule/stop assertion |
-| subscriptions-refresh.cjs | Keyboard refresh and its exact request are consolidated into subscription-identity.cjs; backend/tests/test_subscription_refresh.py keeps the server contract | Repeated weekly-copy assertions and phone overflow measurement |
+| subscriptions-weekly.cjs | None: named subscriptions left the page with one login per AI tool per computer (#1259), and subscription-identity.cjs with them; backend/tests/test_subscription_refresh.py covers refresh state and access | Pure wording/state rendering matrix and exact JavaScript polling schedule/stop assertion |
+| subscriptions-refresh.cjs | None, as above (#1259); backend/tests/test_subscription_refresh.py keeps the server contract | Repeated weekly-copy assertions and phone overflow measurement |
 | sweep-fixes.cjs | getting-started.cjs and docs.cjs keep Market paths; bot-tools.cjs, assistant.cjs and meetings.cjs keep their feature paths | Light-theme pixel colors, exact display-name/credential wording, tag-row alignment and filter clipping |
 
 Within retained scripts:
@@ -33,8 +33,6 @@ Within retained scripts:
   confirmations, evidence, escaped live Markdown and read-only controls remain.
 - team-icon.cjs and changelog.cjs remove phone overflow assertions; owner controls, retries,
   persisted read state and content escaping remain.
-- subscription-identity.cjs removes phone form width; keyboard refresh moves here from the removed
-  script and waits for the completed component render.
 - task-detail-state.cjs removes the exact 390px dialog width; pending drafts, version ordering,
   failed-write preservation and dialog ownership remain.
 - usage-count.cjs removes exact notice wording; owner-only notice, persisted dismissal, toggle and

@@ -74,7 +74,7 @@ const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue
 const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = body => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
-async function v2Get(path) { try { return await get(path); } catch { return null; } }
+async function v2Get(path, opts) { try { return await get(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
   const [st, needs] = await Promise.all([v2Get('/v2/status'), v2NeedsRead()]);
@@ -86,11 +86,16 @@ async function v2Refresh() {
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
 }
 // Needs you as the page holds it: the list and its version. A read names the version held; an unchanged list comes
-// back without its items.
+// back without its items. Each read is its own request: one already on its way may have been answered before the
+// change this read was asked for (an answer sent, a live event), and sharing it would keep the old list. An older
+// read that lands after a newer one is not kept.
+let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {
-  const held = S.v2.needsVersion;
-  const needs = await v2Get('/v2/needs-you' + (held ? `?version=${encodeURIComponent(held)}` : ''));
+  const held = S.v2.needsVersion, seq = ++NEEDS_READ;
+  const needs = await v2Get('/v2/needs-you' + (held ? `?version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
+  if (seq < NEEDS_KEPT) return needs;
+  NEEDS_KEPT = seq;
   if (!needs.unchanged) { S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null; }
   S.v2.wentAway = needs.went_away || null;
   return needs;
@@ -220,7 +225,8 @@ function pausedRender() {
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.
 const overLimit = slug => v2StatusOf(slug)?.limit || null;
-const overLimitWord = limit => `Over its ${limit.period} limit`;
+// A hold by the team's or a group's limit names it: raising the bot's own limit would not lift it.
+const overLimitWord = limit => limit.scope && limit.scope !== 'bot' ? `Waiting: ${limit.name} is over its ${limit.period} limit` : `Over its ${limit.period} limit`;
 function v2StatePill(slug) {
   const s = v2StatusOf(slug);
   if (!s) return botStatePill(slug);

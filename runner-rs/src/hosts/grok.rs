@@ -117,16 +117,21 @@ impl GrokHost {
         let mut command = crate::isolation::command(&cmd[0]);
         let mut full = env.clone();
         full.extend(NO_OPERATOR_MCP.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-        command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_clear().envs(&full);
+        command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
+        let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
         let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
         log(&format!("grok[{}]: agent started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
         let (stopper, exited) = super::own(child);
         let gone = Arc::new(AtomicBool::new(false));
         let flag = gone.clone();
+        let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
-            let _ = exited.await;
+            let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("grok reaper ended")));
+            _stderr.drained().await;
+            let code = super::return_code(&status);
+            let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
             flag.store(true, Ordering::SeqCst);
         });
         *self.0.child.lock().unwrap() = Some((cmd, env, stopper, gone.clone()));

@@ -685,6 +685,11 @@ ALTER TABLE turns ADD COLUMN outcome TEXT;
 ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
 """
 
+# What a run is for (backend/run_triggers.py); the migration fills it on every run already recorded.
+RUN_PURPOSE_SCHEMA = """
+ALTER TABLE turns ADD COLUMN purpose TEXT;
+"""
+
 # The one person a private task with no person on it may reach (hubdb.task_reach): see "a private task's guest".
 TASK_GUEST_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN guest TEXT;
@@ -702,6 +707,12 @@ CREATE INDEX IF NOT EXISTS ceo_merges_original ON ceo_merges(original, state);
 CREATE INDEX IF NOT EXISTS ceo_merges_person ON ceo_merges(person, created);
 """
 
+# One login per AI tool per computer (backend/subscriptions.py): a bot's own subscription choice goes, and the bot
+# runs on its computer's login. The table and the computers' profile reports stay, unread, for one release.
+ONE_LOGIN_PER_COMPUTER_SCHEMA = """
+DELETE FROM subscription_assignments WHERE scope='bot';
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -712,7 +723,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
-              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA]
+              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA]
 
 
 class Refused(Exception):
@@ -942,6 +953,9 @@ def migrate(conn, adopt_legacy=False):
                 migrate_task_privacy(conn)
             elif i == 30:
                 TR.migrate(conn)
+            elif i == 39:
+                _apply(conn, MIGRATIONS[i])
+                RT.backfill(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -967,6 +981,9 @@ def migrate(conn, adopt_legacy=False):
     # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
     from .milestone_waits import ensure as ensure_milestone_waits
     ensure_milestone_waits(conn)
+    # Hourly and weekly spend limits, and limits on a group's or the whole team's combined spend (backend/usage_limits.py).
+    from .usage_limits import ensure as ensure_usage_limits
+    ensure_usage_limits(conn)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
                  "ON conversations(owner_actor,room_key) WHERE scope='personal' AND closed_at IS NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
@@ -6700,9 +6717,10 @@ def rate_limits(conn):
 
 
 def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message_id=None,
-               task_id=None, trigger_kind=None, trigger_source=None):
+               task_id=None, trigger_kind=None, trigger_source=None, purpose=None):
     """A turn on a bot's thread. Replaces the legacy dispatcher's `runs.jsonl` record.
-    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did."""
+    `trigger_kind` is what woke it (backend/run_triggers.py TRIGGERS) and `trigger_source` the event that did.
+    `purpose` is what the run is for; the caller names it, or the bot and trigger map in run_triggers does."""
     _writer(conn, actor)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
     if is_bot(actor) and actor_id(actor) != slug:
@@ -6710,12 +6728,14 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
     row = {"id": new_id(), "bot": slug, "thread_id": thread_id, "started": now(),
            "finished": None, "trigger": trigger, "message_id": message_id, "task_id": task_id,
            "exit": None, "tokens_in": None, "tokens_out": None, "cost": None, "summary": None,
-           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source}
+           "trigger_kind": trigger_kind or "other", "trigger_source": trigger_source,
+           "purpose": RT.clean_purpose(purpose) or RT.purpose_for(slug, trigger_kind or "other")}
     conn.execute("INSERT INTO turns (id, bot, thread_id, started, finished, trigger, message_id, "
-                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, writes) "
+                 "task_id, exit, tokens_in, tokens_out, cost, summary, trigger_kind, trigger_source, purpose, writes) "
                  "VALUES (:id, :bot, :thread_id, :started, :finished, :trigger, :message_id, :task_id, :exit, "
-                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, 0)", row)
-    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"]})
+                 ":tokens_in, :tokens_out, :cost, :summary, :trigger_kind, :trigger_source, :purpose, 0)", row)
+    event(conn, actor, "turn.start", row["id"], {"bot": slug, "trigger": trigger, "trigger_kind": row["trigger_kind"],
+                                              "purpose": row["purpose"]})
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 
@@ -6753,6 +6773,9 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
+    from . import run_diagnostics
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
+        run_diagnostics.finish(conn, turn_id, exit_code, summary)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "cost": cost})
     return row
 

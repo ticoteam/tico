@@ -3,6 +3,7 @@ the background shells and monitors still running, and the checkpoint. Nothing fr
 import json
 
 from backend.store import H
+from backend.tests.test_shared_logins import queued_login  # noqa: F401
 from backend.tests.test_api import api, assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.test_execution_review import aged, sweep
 
@@ -90,7 +91,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     assert claim(api, machine) is None
     view = get(api, f"tasks/{tid}/run-view")
     assert view["attempts"][0]["next"]["kind"] == "waiting"
-    assert view["attempts"][0]["reason"] == "Lease expired before completion"
+    assert view["attempts"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     aged(api, first["id"], grace=True)
     assert [d["state"] for d in sweep(api)] == ["queued"]
     ready(api, machine, ["ops"])
@@ -259,7 +260,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
-def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_to_who_may_see_it(api):
+def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
     from backend.tests.test_api import as_member, restrict
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:      # finance is Ana's alone: Ben may not even learn it is busy
@@ -275,19 +276,52 @@ def test_a_run_waiting_for_its_chatgpt_login_says_so_and_names_the_holder_only_t
     assert (run["state"], run["waiting"], run["moved"]) == ("running", line, None)
     [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login to be free (busy with another bot)"
+    # A runner that knows the queue names the holder's run, since when, and the place. The holder's task is looked up
+    # from its run, only for a reader who may read that run, and is never stored with the wait: every event goes out
+    # raw to whoever reads the waiting run (the changes feed, the run's events), so neither the task an old runner
+    # sends nor its worded line is kept. A holder that is no live run is flagged for Health.
+    from backend import login_waits
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET title='Close the books', number=12 WHERE id=?", (tid,))
+    held = "#12 Close the books"
+    worded = f"Waiting for this computer's ChatGPT login (held by finance on {held} since 19:06Z; position 2)"
+    place = {"waiting": worded, "login": "this computer's ChatGPT login", "holder": "finance", "holder_attempt": aid,
+             "holder_task": held, "since": 1_760_900_760, "position": 2}
+    events(api, machine, aid, [("status", place)], first=2)
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert run["waiting"] == worded
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
+    with api.app.state.store.read() as c:
+        kept = " ".join(r[0] for r in c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=?", (aid,)))
+    assert "Close the books" not in kept and "held by" not in kept
+    # Held by another turn of the same bot: a reader who may see that run still learns its task.
+    events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert run["waiting"] == worded.replace("held by finance", "held by another turn of this bot")
+    events(api, machine, aid, [("status", place)], first=4)
+    with api.app.state.store.read() as c:
+        assert not login_waits.unknown_holder(c, aid)
+    # The bot's status says it waits and on whom; Health counts it as busy, not stuck.
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
+    assert status["focus"] == status["waiting"] == worded
+    assert not [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
+    events(api, machine, aid, [("status", {**place, "holder_attempt": "gone"})], first=5)
+    [row] = [r for r in get(api, "health")["stuck"] if r["bot"] == "ops"]
+    assert row["reason"] == "login_holder_unknown"
     # Once the login is its own the wait is over; a turn that ran on its fallback instead says where and why.
     events(api, machine, aid, [("status", {"waiting": ""}),
                                ("diagnostic", {"text": "ChatGPT login busy with finance; running this turn on claude",
                                                "fallback": "claude",
                                                "busy": {"login": "this computer's ChatGPT login", "holder": "finance"}})],
-           first=2)
+           first=6)
     [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
     assert (run["waiting"], run["moved"]) == (None, "ChatGPT login busy with finance; ran this turn on claude")
     [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
     assert run["moved"] == "ChatGPT login busy with another bot; ran this turn on claude"
 
 
-def test_a_chat_turn_waiting_for_its_login_shows_the_wait_as_its_label_not_a_failure(api):
+def test_an_opt_in_login_queue_shows_the_wait_as_the_chat_label_not_a_failure(api, queued_login):
     machine = runner(api, "ana")
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -302,3 +336,30 @@ def test_a_chat_turn_waiting_for_its_login_shows_the_wait_as_its_label_not_a_fai
     events(api, machine, attempt["id"], [("status", {"waiting": ""})], first=2)
     execution = get(api, f"conversations/{msg['conversation_id']}/snapshot")["execution"]
     assert "waiting" not in execution and execution["label"] != line
+
+
+def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api):
+    from backend import login_waits
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    tid, attempt = task_attempt(api, machine)
+    aid = attempt["id"]
+    # An old runner's final wait must not survive as a current label after the queue is disabled.
+    events(api, machine, aid, [("status", {
+        "waiting": 'Waiting for ChatGPT login "work" to be free', "login": 'ChatGPT login "work"',
+        "holder": "finance", "holder_attempt": "gone", "position": 1})])
+    with api.app.state.store.read() as c:
+        assert login_waits.wait(c, aid) is None
+        assert not login_waits.unknown_holder(c, aid)
+    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    assert run["waiting"] is None and run["state"] == "running"
+    execution = get(api, f"tasks/{tid}")["execution"]
+    assert "waiting" not in execution and "Waiting for" not in execution["label"]
+    conversation = attempt["conversation"]["id"]
+    execution = get(api, f"conversations/{conversation}/snapshot")["execution"]
+    assert "waiting" not in execution and "Waiting for" not in execution["label"]
+    [status] = [s for s in get(api, "status")["bots"] if s and s["bot"] == "ops"]
+    assert not status.get("waiting") and "Waiting for" not in status["focus"]
+    assert not [row for row in get(api, "health")["stuck"]
+                if row["bot"] == "ops" and row.get("reason") == "login_holder_unknown"]

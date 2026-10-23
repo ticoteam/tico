@@ -41,7 +41,9 @@ Three doors, one table (`schedules`, `backend/routines.py`):
   `GET /api/v2/routines/{id}/occurrences` what each firing did.
 
 Who may write a bot's routines: the environment owner, the bot's owner, the bot itself, and
-BotOps.
+BotOps. Who may read them, with their text and occurrences: the people who may read the bot, the bot
+itself, and a bot above it in the `reports_to` chain, in its own run (a manager bot reviewing the
+bots that report to it).
 
 A routine's text says which step waits when something is missing, not that the whole run stops: a
 missing setup answer, credential or access blocks only the step that needs it (publishing, sending,

@@ -72,6 +72,23 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
     assert hubtools.SHELL_ONLY <= names
 
 
+def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
+    from typing import Literal, get_args, get_origin
+
+    from backend.hubdb import OWNER_STATUSES
+    from backend.models import TaskUpdate
+
+    literal = next(arg for arg in get_args(TaskUpdate.model_fields["status"].annotation)
+                   if get_origin(arg) is Literal)
+    statuses = get_args(literal)
+    assert hubcli.TASK_UPDATE_STATUSES == statuses
+    assert hubtools.TASK_UPDATE_STATUSES == tuple(status for status in statuses if status != "ready")
+    schema = hubtools.BY_NAME["hub_task_update"]["inputSchema"]
+    assert schema["properties"]["status"]["enum"] == list(hubtools.TASK_UPDATE_STATUSES)
+    assert "ready" not in OWNER_STATUSES
+    assert set(OWNER_STATUSES) <= set(hubtools.TASK_UPDATE_STATUSES)
+
+
 def test_tools_write_through_the_same_rules_as_http(api):
     r, msg, attempt = setup_attempt(api)
     token = attempt["token"]

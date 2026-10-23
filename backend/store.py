@@ -192,6 +192,13 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
  created TEXT NOT NULL, started TEXT, finished TEXT, thread_id TEXT,
  result_json TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS attempt_diagnostics(
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
+-- Bound history reads by time before evaluating their visibility gates.
+CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created TEXT NOT NULL,
@@ -1189,6 +1196,10 @@ class Store:
                     c.execute(H.TASKS_DUE_INDEX)
                     c.execute(H.TASKS_RESUME_INDEX)
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
+                    # A day of history must not authorize every older attempt first.
+                    c.execute("CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created)")
+                    c.execute("INSERT INTO cloud_migrations VALUES(62,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 H.ensure_market_reads(c)
@@ -1223,6 +1234,11 @@ class Store:
                 # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
                 # NULL with none handed. Unversioned like stop_requested.
                 H.add_column(c, "attempts", "gateway_key_id", "TEXT")
+                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
+                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
+                # stop_requested.
+                H.add_column(c, "attempts", "handed_runtime", "TEXT")
+                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
@@ -1239,6 +1255,9 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
+                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
+                # (backend/task_models.py). Unversioned: an older release never reads it.
+                H.add_column(c, "attempts", "model_json", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)

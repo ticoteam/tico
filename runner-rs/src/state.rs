@@ -13,6 +13,9 @@ pub const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS attempts(
       id TEXT PRIMARY KEY, payload TEXT NOT NULL, phase TEXT NOT NULL,
       completion TEXT, ack INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS attempt_stderr(
+      attempt_id TEXT PRIMARY KEY, tail TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+      uploaded INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS events(
       attempt_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
       payload TEXT NOT NULL, PRIMARY KEY(attempt_id,seq));
@@ -112,6 +115,26 @@ impl State {
 
     pub fn phase(&self, aid: &str, phase: &str) -> Result<(), String> {
         self.with(|c| c.execute("UPDATE attempts SET phase=? WHERE id=?", params![phase, aid]).map(|_| ()))
+    }
+
+    pub fn stderr(&self, aid: &str, tail: &str) -> Result<(), String> {
+        self.with(|c| {
+            c.execute("DELETE FROM attempt_stderr WHERE updated < datetime('now','-7 days')", [])?;
+            c.execute("INSERT INTO attempt_stderr(attempt_id,tail) VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET tail=excluded.tail,revision=revision+1,updated=CURRENT_TIMESTAMP WHERE tail<>excluded.tail", params![aid, tail])?;
+            Ok(())
+        })
+    }
+
+    pub fn pending_stderr(&self, aid: Option<&str>) -> Result<Vec<(String, String, i64)>, String> {
+        self.with(|c| {
+            let mut q = c.prepare("SELECT attempt_id,tail,revision FROM attempt_stderr WHERE uploaded<revision AND (? IS NULL OR attempt_id=?) ORDER BY updated,attempt_id LIMIT 100")?;
+            let rows = q.query_map(params![aid, aid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect()
+        })
+    }
+
+    pub fn stderr_sent(&self, aid: &str, revision: i64) -> Result<(), String> {
+        self.with(|c| c.execute("UPDATE attempt_stderr SET uploaded=max(uploaded,?) WHERE attempt_id=?", params![revision, aid]).map(|_| ()))
     }
 
     pub fn append(&self, aid: &str, kind: &str, payload: &Value) -> Result<i64, String> {

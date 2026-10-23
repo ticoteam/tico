@@ -130,6 +130,40 @@ def test_the_claim_puts_the_wake_on_the_run(api):
         assert c.execute("SELECT count(*) FROM turns WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
 
+def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
+    r = machine(api)
+    post(api, "chat/ops", {"text": "Summarize the week."})
+    attempt = claim(api, r)
+    assert turn(api, attempt)["purpose"] == "answer person message"
+    start(api, r, attempt)
+    finish(api, r, attempt)
+    with api.app.state.store.transaction() as c:
+        H.say(c, H.KEEPER, "bot:ops", "Sort the inbox.", kind="notice",
+              refs=RT.stamp({}, "schedule", "morning", purpose="  sort   inbox "))
+    assert turn(api, claim(api, r))["purpose"] == "sort inbox"
+    assert RT.purpose_for("pr-reviewer", "pr_checks") == "handle PR checks"
+    assert RT.purpose_for("pr-reviewer", "status_or_relation") == "react to task change"
+    assert RT.purpose_for("pr-reviewer-sol", "pr_checks") == "review PR"
+    assert RT.purpose_for("reviewer-2", "status_or_relation") == "review PR"
+    assert RT.purpose_for("ops", "other") == RT.purpose_for("ops", None) == "unknown"
+
+
+def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
+    with api.app.state.store.transaction() as c:
+        for i, (bot, kind) in enumerate([("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None),
+                                         ("ops", "other")]):
+            c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
+                      (f"old{i}", bot, H.now(), kind))
+        c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
+                  "'comment','mine')", (H.now(),))
+        RT.backfill(c)
+        got = dict(c.execute("SELECT id, purpose FROM turns WHERE id LIKE 'old%' OR id='named'").fetchall())
+    assert got == {"old0": "answer comment", "old1": "handle PR checks", "old2": "unknown", "old3": "unknown",
+                   "named": "mine"}
+    rows = {row["purpose"] for row in weekly(api, where="bot='ops'")}
+    assert {"answer comment", "unknown", "mine"} <= rows
+
+
 WRITES = ["task_update", "comment", "message", "pr_link", "file_publish", "reply_to_person"]
 NO_WRITES = {"no_writes": "no_change", "bookkeeping_only": "no_change", "task_finished": "nothing_to_do"}
 

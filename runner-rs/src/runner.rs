@@ -191,6 +191,40 @@ impl Runner {
         self.assignments.lock().unwrap().clone()
     }
 
+    /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
+    pub(crate) fn attempt_events(&self, aid: &str, redactor: Option<Arc<crate::redact::Redactor>>) ->
+        (crate::hosts::Events, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (input, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (out, events) = tokio::sync::mpsc::unbounded_channel();
+        let state = self.state.clone();
+        let aid = aid.to_string();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
+                    let text = crate::util::text_of(&ev["stderr_tail"]);
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = crate::redact::scrub_credentials(&text, &[]);
+                    let id = aid.clone();
+                    let _ = state.off(move |s| s.stderr(&id, &text)).await;
+                } else { let _ = out.send(ev); }
+            }
+        });
+        (input, events)
+    }
+
+    async fn upload_stderr(&self, aid: Option<&str>) {
+        if !crate::follow::feature("run_diagnostics") { return; }
+        let filter = aid.map(str::to_string);
+        let pending = self.state.off(move |s| s.pending_stderr(filter.as_deref())).await.unwrap_or_default();
+        for (id, tail, revision) in pending.into_iter().take(10) {
+            // Diagnostics never hold up a run result through network retries. The capped row retries on maintenance.
+            let sent = tokio::time::timeout(Duration::from_secs(2), self.client.post(&format!("attempts/{id}/diagnostics"), &json!({"tail": tail}), None)).await;
+            if matches!(sent, Ok(Ok(_))) || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408) {
+                let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
+            }
+        }
+    }
+
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
     pub async fn flush(&self, aid: &str) -> Result<(), ApiError> {
         let lock = self.flush_locks.lock().unwrap().entry(aid.to_string()).or_default().clone();
@@ -230,6 +264,7 @@ impl Runner {
 
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
+        self.upload_stderr(None).await;
         crate::files_publish::drain(&self.state, &self.client).await; // files a restart or an outage left queued
         let rows = match self.state.unfinished() {
             Ok(rows) => rows,
@@ -311,9 +346,11 @@ impl Runner {
         self.fetch_missing(&with_repositories).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
-        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates).await;
+        let computer_logins = crate::fallback::server_uses_computer_logins()
+            && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
+        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&config, &candidates, &runtimes).await;
+        let mut checks = readiness::preflight(&config, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -321,6 +358,11 @@ impl Runner {
         let published = self.published.lock().unwrap().clone();
         let (agent_instructions, versions) = readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
+        let mut capabilities = crate::lanes::capabilities();
+        if computer_logins {
+            readiness_doc["computer_profile"] = json!(crate::profiles::computer_login(&config.data).map(|p| p.name).unwrap_or_default());
+            capabilities.push("computer_logins_v1");
+        }
         if crate::mail_key::status(&self.config) == Some("exposed") {
             readiness_doc["mail_key"] = json!("exposed"); // Health warns while bots can read the company's mail key
         }
@@ -333,7 +375,7 @@ impl Runner {
         let mut body = json!({
             "version": RUNNER_VERSION,
             "platform": platform(),
-            "capabilities": crate::lanes::capabilities(),
+            "capabilities": capabilities,
             "capacity": self.capacity,
             "readiness": readiness_doc,
             "mail_agent_instructions": readiness::mail_agent_instructions(&self.config, &assignments),
@@ -350,7 +392,7 @@ impl Runner {
         }
         if !crate::lanes::held_back("profiles") {
             let rejected = |runtime: &str, name: &str| {
-                let profile = crate::profiles::select(&config.data, None, Some(name));
+                let profile = crate::profiles::select(&config.data, Some(name));
                 profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
             };
             body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
@@ -934,10 +976,10 @@ mod tests {
         let client = Client::new(&config.url(), &config.token(), 1, 0).unwrap();
         let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
         assert!(crate::profiles::configured(&runner.config_now().data).is_empty());
-        // A browser sign-in for a new named subscription writes it to runner.json (login.rs begin).
+        // A profile written to runner.json while running (`profile add`, or a hand edit).
         crate::profiles::add_profile(&runner.config, "chris-chatgpt").unwrap();
         let now = runner.config_now();
-        assert_eq!(crate::profiles::select(&now.data, Some("ops"), Some("chris-chatgpt")).unwrap().name, "chris-chatgpt");
+        assert_eq!(crate::profiles::select(&now.data, Some("chris-chatgpt")).unwrap().name, "chris-chatgpt");
         assert!(crate::profiles::configured(&runner.config.data).is_empty(), "the start-up copy is unchanged");
         // A file caught unreadable keeps the profiles last read.
         let written = std::fs::read_to_string(&path).unwrap();

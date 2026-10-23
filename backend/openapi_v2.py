@@ -23,7 +23,7 @@ TAGS = {
     "Team": "This installation's names and settings.",
     "Repositories": "Team repositories, product-repository creation (the Owner, or a bot with Create product repositories), "
                     "and bot repository access.",
-    "Subscriptions": "Named provider logins on Computers and the one each bot runs on.",
+    "Subscriptions": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
     "Conversations": "Chats with bots: send, list, and stream replies.",
@@ -67,12 +67,11 @@ EVENTS_DESCRIPTION = (
 
 # Path, method, tag, operationId, summary, name of the 200 answer in ANSWERS.
 STABLE = [
-    ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Profiles and assignments", "SubscriptionList"),
-    ("/api/v2/subscriptions", "put", "Subscriptions", "assignSubscription", "Assign or clear a subscription", "SubscriptionAssignmentResult"),
+    ("/api/v2/subscriptions", "get", "Subscriptions", "listSubscriptions", "Subscription logins reported by each Computer", "SubscriptionList"),
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
     ("/api/v2/subscriptions/refresh", "post", "Subscriptions", "refreshSubscriptionWeekly", "Request a bounded weekly allowance read on its computer", "SubscriptionRefreshResult"),
-    ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "Effective bot subscription", "BotSubscription"),
+    ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
     ("/api/v2/github/product-repos/preview", "get", "Repositories", "previewProductRepository", "Preview an empty private product repository", "ProductRepositoryPreview"),
@@ -462,15 +461,21 @@ STABLE = [
      "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
-     "The team default limit and each bot's daily and monthly limits with this period's spend, for the bots the caller may "
-     "see usage for", "UsageLimits"),
+     "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
+     "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits", "UsageLimits"),
     ("/api/v2/usage/limits", "put", "Usage", "setUsageDefault",
      "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs "
-     "count toward it (owner and bot administrators)", "UsageDefaultView"),
+     "count toward every limit (owner and bot administrators)", "UsageDefaultView"),
     ("/api/v2/usage/limits/{bot}", "put", "Usage", "setBotUsageLimit",
-     "A bot's own daily and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or "
-     "the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns "
-     "over or the limit is raised", "BotUsageLimit"),
+     "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and "
+     "administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until "
+     "the period turns over or the limit is raised", "BotUsageLimit"),
+    ("/api/v2/usage/pools/company", "put", "Usage", "setTeamUsageLimit",
+     "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot "
+     "takes a new job (owner and bot administrators)", "UsagePoolLimit"),
+    ("/api/v2/usage/pools/groups/{group}", "put", "Usage", "setGroupUsageLimit",
+     "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none "
+     "of them takes a new job (owner and bot administrators)", "UsagePoolLimit"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -501,6 +506,7 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
+PERIODS = ("hourly", "daily", "weekly", "monthly")   # the spend limit periods (backend/usage_limits.py)
 GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
                         "description": "Skipped items in the last attempt, by fixed code and step"}
 GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
@@ -523,14 +529,13 @@ ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
 
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
-        obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))})), "assignments": items(obj({"scope": "s", "target": "s", "profile": "s", "updated": "s", "updated_by": "s"}))}),
+        obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
     "SubscriptionIdentity": obj({"id": "s", "display_name": "s"}),
     "SubscriptionWeeklyResult": obj({"weekly": {"anyOf": [obj({"used_percent": {"type": ["number", "null"]}, "resets_at": "n", "reported_at": "s", "source": {"enum": ["manual"]}}), {"type": "null"}]}}),
     "SubscriptionRefreshResult": obj({"id": "s", "profile": "s", "runtime": "s",
         "state": {"enum": ["requested", "succeeded", "unavailable", "failed", "expired"]},
         "requested_at": "s", "updated_at": "s", "expires_at": "s"}),
-    "SubscriptionAssignmentResult": obj({"scope": {"enum": ["bot"]}, "target": "s", "profile": "n"}),
-    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["bot", "computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
+    "BotSubscription": obj({"profile": "n", "id": "s", "display_name": "s", "source": {"enum": ["computer"]}, "computer": {"anyOf": [obj({"runner_id": "s", "label": "s"}), {"type": "null"}]},
                             "runtime": "s", "harness": "s", "signed_in": {"type": ["boolean", "null"]}, "problem": "s"}),
     "ChatGoal": obj({"id": "s", "conversation_id": "s", "bot": "s", "objective": "s", "status": "s",
                      "note": "s", "set_by": "s", "set_at": "s", "updated_at": "s", "ended_at": "n"},
@@ -711,7 +716,12 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
-    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "family": "n"})),
+    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "effort": "n",
+                                         "family": "n"})),
+                  "task_model": {"type": ["object", "null"], "description": "For a turn in a task's own session on a bot "
+                                 "with a task model: `source` is task (it ran on the task model), fallback (the task "
+                                 "model could not run, so the bot's own model did) or check (a check subtask kept its "
+                                 "check model), and `note` says it in plain words"},
                   "fallback": {"type": ["string", "null"], "description": "The fallback harness that ran the turn, if any"},
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
@@ -823,6 +833,9 @@ SCHEMAS = {
     "Storage": obj({"mode": {"type": "string", "enum": ["local", "s3"]}, "bucket": "s", "region": "s",
                     "files": "i", "bytes": "i", "copy": obj({"done": "i", "total": "i", "failed": "i"})}),
     "Health": obj({"audience": "s", "checks": "a", "attention": "i", "checked": "s"},
+                  stalled_runs=items(obj({"run": "s", "bot": "s", "stalled": "b", "stalled_at": "s",
+                                          "last_event": {"type": ["string", "null"]},
+                                          "last_event_at": {"type": ["string", "null"]}, "stall_minutes": "i"})),
                   required=["audience", "checks", "attention", "checked"],
                   storage={**ref("Storage"), "description": "Read-only file storage usage and copy progress; Team owners only"},
                   stuck={"type": "array", "items": {"type": "object"}, "description":
@@ -1010,14 +1023,24 @@ SCHEMAS = {
                   "departments": items({"type": "string"}), "bot": "s", "name": "s", "daily": items({"type": "object", "additionalProperties": True}),
                   "routines": items({"type": "object", "additionalProperties": True})},
                  required=["from", "to", "prices_as_of", "totals"]),
-    "UsageLimitView": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "source": {"type": "object", "description": "Where each cap comes "
-                       "from: bot, company or null"}, "day_spent": NUM_N, "month_spent": NUM_N,
-                       "percent": {"type": "integer", "description": "The highest share of a limit reached"},
-                       "blocked": {"enum": ["daily", "monthly", None], "description": "Set while a limit is met: the bot takes no new job"},
-                       "own_daily_usd": NUM_N, "own_monthly_usd": NUM_N, "may_edit": "b"}),
-    "UsageDefaultView": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"})}),
-    "UsageLimits": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"}),
-                        "may_edit_default": "b", "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
+    "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
+                       "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                       "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
+                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
+                                   "the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
+                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                                      "administrators only)", "additionalProperties": True},
+                       **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
+    "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
+    "UsagePoolView": obj({**{p + "_usd": NUM_N for p in PERIODS}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                          "percent": "i", "blocked": {"enum": [*PERIODS, None]}}),
+    "UsagePoolLimit": obj({"scope": {"type": "string", "description": "company or group:<id>"}, "limit": ref("UsagePoolView")}),
+    "UsageLimits": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"}),
+                        "may_edit_default": "b",
+                        "pools": {"type": ["object", "null"], "description": "Owner and administrators: company (UsagePoolView) and "
+                                  "groups, {id: UsagePoolView with name and parent}", "additionalProperties": True},
+                        "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),

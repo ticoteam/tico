@@ -110,3 +110,61 @@ def test_a_message_or_task_for_a_bot_over_its_limit_is_saved_and_the_sender_is_t
     put(api, "usage/limits/ops", {"daily_usd": 50})
     err, sent = call(api, "hub_message_send", {"to": "ops", "text": "And this."})
     assert not err and "warning" not in sent
+
+
+def groups(api, ops_team):
+    """Engineering with Product nested under it; ops in `ops_team`."""
+    import json
+    with api.app.state.store.transaction() as c:
+        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
+
+
+def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_counts_the_hour(api):
+    from datetime import datetime
+    from backend import usage_limits
+    from backend.tests.test_mcp import call
+    r = fleet(api)
+    groups(api, "product")                                                        # ops is in Product, under Engineering
+    put(api, "usage/pools/groups/eng", {"daily_usd": 1})
+    finish(api, r, start(api, r), 500_000)                                        # $5 against the group's $1
+    post(api, "chat/ops", {"text": "More."})
+    assert claim(api, r) is None                                                  # the parent group's limit holds it
+    assert paused(api)["focus"] == "Paused: the Engineering group is over its daily limit"
+    assert "spent" not in paused(api)["limit"]                                    # the group's total is not every reader's
+    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Check the Acme invoice."})
+    assert not err and "the Engineering group is over its daily limit" in sent["warning"]
+    pools = get(api, "usage/limits")["pools"]
+    assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
+    put(api, "usage/pools/groups/eng", {})                                        # empty removes it
+    put(api, "usage/pools/company", {"weekly_usd": 4})
+    assert claim(api, r) is None                                                  # the whole team's week is spent too
+    assert paused(api)["focus"] == "Paused: the team is over its weekly limit"
+    put(api, "usage/pools/company", {"weekly_usd": 400})
+    assert claim(api, r) is not None
+    put(api, "usage/limits/ops", {"hourly_usd": 1})
+    with api.app.state.store.read() as c:
+        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
+        assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
+        assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None
+
+
+def test_only_the_owner_and_administrators_set_team_and_group_limits(api):
+    groups(api, "eng")
+    put(api, "usage/pools/company", {"hourly_usd": 10}, "ben-test")               # Ben is an administrator
+    put(api, "usage/pools/groups/nope", {"hourly_usd": 10}, expected=404)
+    as_member(api, "ben@acme.example")
+    put(api, "usage/pools/company", {"hourly_usd": 100}, "ben-test", expected=403)
+    put(api, "usage/pools/groups/eng", {"hourly_usd": 1}, "ben-test", expected=403)
+    assert get(api, "usage/limits", "ben-test")["pools"] is None
+    assert get(api, "usage/limits")["pools"]["company"]["hourly_usd"] == 10
+
+
+def test_subscription_runs_count_unless_the_team_turns_that_off(api):
+    assert get(api, "usage/limits")["default"]["count_subscription"] is True       # never chosen
+    assert put(api, "usage/limits", {"daily_usd": 20, "count_subscription": False})["default"]["count_subscription"] is False
+    assert get(api, "usage/limits")["default"]["count_subscription"] is False      # a saved choice stays
+    assert put(api, "usage/limits", {"daily_usd": 20})["default"]["count_subscription"] is True
