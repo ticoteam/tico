@@ -133,6 +133,31 @@ p:empty{display:none}
 .sb-choice-pop .settings-choice>small{flex:1 0 100%}
 .sb-choice-pop .settings-choice>[data-choice-apply]{margin-top:4px;padding:6px 14px}
 .sb-choice-pop .settings-choice>[data-choice-cancel]{margin-top:4px}
+/* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
+   marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
+.sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
+.sb-model-wrap>.sb-pick{flex:1 1 auto;width:auto}
+.sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
+tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}
+.sb-task-mark:hover,.sb-task-mark[aria-expanded=true]{border-color:var(--line);background:var(--surface2)}
+.sb-task-mark.on{opacity:1;color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent)}
+.sb-task-mark.on::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.sb-task-mark:disabled{cursor:default}
+.settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
+.sb-task-under{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.sb-task-head{flex:1 0 100%;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 520px;min-width:0}
+.sb-task-under .settings-model-choice{flex:1 1 420px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.sb-task-under .settings-choice-blocks{grid-column:1/-1}
+.sb-task-under .settings-choice>[data-choice-apply]{margin-top:0}
+.sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
+@media (max-width:760px){
+  .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
+  .settings-bots-table tr.sb-task-row td{display:block}
+  .sb-task-under .settings-choice,.sb-task-under .settings-model-choice{flex:1 0 100%}
+  .sb-task-under .settings-model-choice{grid-template-columns:minmax(0,1fr)}
+  .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:32px}
+}
 .settings-bots-table .settings-pick{padding-right:0}.settings-pick input{margin:0;cursor:pointer}.settings-pick input:disabled{cursor:not-allowed}
 .sb-bot{display:flex;align-items:center;gap:8px;min-width:0}
 .sb-bot>.av,.sb-bot>.avatar,.sb-bot>svg,.sb-bot>img{flex:none}
@@ -585,11 +610,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
 .trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
 @media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
-/* Settings > General: a team switch with its explanation beside it (Stale ticket review). */
-.settings-team-rule{display:flex;align-items:flex-start;gap:12px;cursor:pointer}
-.settings-team-rule > span{display:flex;flex-direction:column;gap:2px}
-/* The rules share one card on General: room between them. */
-.settings-team-rule ~ .settings-team-rule{margin-top:14px}
 /* Settings > CEO Bot (ui/app/settings-ceo-bot.js): three levels, one sentence each, a Confirm before a change. */
 .ceo-levels{display:grid;gap:8px;margin:10px 0}
 .ceo-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
@@ -597,14 +617,26 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .ceo-level[aria-checked="true"]{border-color:var(--accent)}
 .ceo-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
 .ceo-confirm p{margin:0 0 8px}
-/* Settings > Routines, System section (ui/app/settings-recurring.js) */
-.sysr-group{margin-bottom:14px}
-.sysr-group h3{font-size:var(--t-sm);text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:10px 0 4px}
-.sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,.9fr) minmax(0,1.4fr) minmax(0,.7fr);gap:12px;padding:8px 0;border-top:1px solid var(--line);align-items:start}
-.sysr-name{display:grid;gap:2px;min-width:0}
+/* Settings > Routines, the flat list of Tico's own routines (ui/app/settings-recurring.js) */
+.sysr-list{display:grid}
+.settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}
+.sysr-row{display:grid;grid-template-columns:minmax(0,2.4fr) minmax(0,1fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1fr);gap:12px;padding:10px 0;border-top:1px solid var(--line);align-items:start}
+.sysr-name{display:grid;gap:3px;min-width:0}
 .sysr-name .muted{font-size:var(--t-sm)}
+.sysr-title{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sysr-dept{font-size:var(--t-xs)}
+.sysr-rule{font-size:var(--t-sm);overflow-wrap:anywhere}
+.sysr-rule b{font-size:var(--t-xs);letter-spacing:.04em;color:var(--muted)}
 .sysr-label{display:block;font-size:var(--t-sm);color:var(--muted)}
+.sysr-schedule{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:0}
+.sysr-schedule .sysr-label{flex-basis:100%}
+.sysr-schedule select,.sysr-schedule input[type=time]{max-width:100%}
+.sysr-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
+.sysr-ctl .settings-cell-note{flex-basis:100%;margin:0}
+.sysr-switch{display:inline-flex;gap:6px;align-items:center}
+.sysr-owner,.sysr-needed{font-size:var(--t-sm)}
+.sysr-note{font-size:var(--t-sm);color:var(--wait)}
 .sysr-failed{color:var(--fail);font-weight:600}
 .sysr-ai{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:var(--t-sm);margin-top:2px}
 .sysr-fallback{flex-basis:100%;color:var(--wait)}
-@media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name{grid-column:1/-1}}
+@media (max-width:720px){.sysr-row{grid-template-columns:1fr 1fr}.sysr-name,.sysr-ctl{grid-column:1/-1}}

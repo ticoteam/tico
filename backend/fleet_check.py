@@ -72,12 +72,16 @@ def check(c, who, auth, settings):
                 add(bot, "needs_setup", MEDIUM, f"{name} is waiting for its first setup with its owner.", f"hub bot go-live {slug}")
         if state == "active":
             try:
-                met = usage_limits.blocked(c, slug, default=usage_limits.company(c))
+                met = usage_limits.over(c, slug, default=usage_limits.company(c))
             except Exception:
                 met = None
-            if met:
+            if met and met["scope"] == "bot":
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it reached its spending limit.",
                     f"hub api PUT usage/limits/{slug} (a card: raising a limit is their click)")
+            elif met:
+                where = "company" if met["scope"] == usage_limits.COMPANY else "groups/" + met["scope"].split(":", 1)[1]
+                add(bot, "paused_over_limit", HIGH, f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",
+                    f"hub api PUT usage/pools/{where} (a card: raising a limit is their click)")
         if failed.get(slug):
             n = failed[slug]
             add(bot, "failing_runs", HIGH if n >= 3 else MEDIUM, f"{name} had {n} failed or expired attempt{'s' if n != 1 else ''} in the last 24 hours.",

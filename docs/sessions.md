@@ -48,7 +48,7 @@ a runner from this release or later; an older runner keeps resuming the old thre
 
 In a long direct chat with a bot, when you change subject, Tico may start a fresh session, as if you pressed **Clear**,
 and shows a quiet **Topic changed** line above your message. The bot no longer carries the old conversation, which keeps
-long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Team**, **Start fresh when
+long chats cheaper and on topic. An owner or an admin turns this on or off in **Settings > Routines**, **Start fresh when
 the topic changes** (off by default). It never happens in task chats or group chats, and there is no undo. If Tico isn't
 sure, or the check takes over 1.5 seconds, nothing changes and your message goes to the same session.
 
@@ -130,7 +130,7 @@ Each task has its own session. The main chat sees only a one-line report when th
 declined or stuck. To give the task more to go on, write in the task's thread.
 
 **Can a bot work on two of my tasks at once?**
-Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes take turns too, because OpenAI allows one job at a time per login: a waiting task shows *Waiting for <login> to be free*, not a failure ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
+Yes. Each task runs in its own session and worktree, side by side. Two messages on the same task take turns. On a Codex ChatGPT sign-in, the task lanes run side by side too and share the plan's usage allowance ([how it works](how-it-works.md#one-turn-per-chatgpt-login)).
 
 **What happens when a bot needs something from me?**
 It files a subtask for you under its task, which shows in your Needs you. When you finish it, the bot wakes on the

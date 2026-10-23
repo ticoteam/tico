@@ -4,6 +4,7 @@ import base64
 import hashlib
 import pathlib
 import re
+import time
 from dataclasses import replace
 
 import pytest
@@ -507,6 +508,18 @@ def test_a_wav_already_stored_or_sent_as_audio_vnd_wave_still_plays_inline(api):
     assert item["kind"] == "audio" and item["src"].startswith(VISUALS + "/visuals/")
 
 
+def media_settled(api):
+    """Wait until the media worker (backend/file_metadata.py) has nothing pending, deferred retries included: its
+    save rewrites a version's poster and preview, so one landing after a test sets them would clear them."""
+    from backend.file_metadata import PENDING
+    for _ in range(200):
+        with api.app.state.store.read() as c:
+            if not c.execute(PENDING, (float("inf"),)).fetchone():
+                return
+        time.sleep(0.05)
+    raise AssertionError("the media worker never settled")
+
+
 def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
     """Dev 319: the visual route rebuilds a bot reader without its run, so it cannot see a chat's files. A bot reading
     its chat reply gets the file chip (no address) rather than a link that always 404s; the person keeps theirs, and
@@ -516,6 +529,7 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
     made = publish(api, attempt, name="clip.mp4", text=None, content_base64=base64.b64encode(bytes(range(256))).decode())
     assert made.status_code == 200, made.text
     clip = made.json()["file"]["id"]
+    media_settled(api)
     with api.app.state.store.transaction() as c:              # a video with its poster ready, as file_metadata leaves it
         c.execute("UPDATE bot_file_versions SET poster_blob_id=(SELECT blob_id FROM bot_file_versions WHERE file_id=?) "
                   "WHERE file_id=?", (fid, clip))

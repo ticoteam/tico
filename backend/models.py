@@ -1561,6 +1561,12 @@ class BotFallback(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotTaskModel(Contract):
+    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
+                                                 "null is the same as the bot")
+    expected_revision: int = Field(ge=1)
+
+
 class BotCompactAt(Contract):
     compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
@@ -1809,8 +1815,16 @@ class Claim(Contract):
     next_run: bool = False
 
 
+class LoadSnapshot(Contract):
+    at: float = Field(ge=0, allow_inf_nan=False)
+    cpu_pct: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    mem_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    running_turns: int = Field(ge=0, le=10_000)
+
+
 class Started(Contract):
     thread_id: ID
+    load_snapshot: LoadSnapshot | None = None
 
 
 class Event(Contract):
@@ -1878,12 +1892,14 @@ class RunUsage(RunUsagePart):
 
 
 class UsageLimit(Contract):
+    hourly_usd: float | None = None
     daily_usd: float | None = None
+    weekly_usd: float | None = None
     monthly_usd: float | None = None
 
 
 class UsageDefault(UsageLimit):
-    count_subscription: bool = False
+    count_subscription: bool = True
 
 
 class SubscriptionUnavailable(Contract):
@@ -1898,6 +1914,7 @@ class RunPush(Contract):
 
 
 class Completion(Contract):
+    load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
@@ -1909,6 +1926,9 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
+    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
+    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    yielded: bool = False
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it
@@ -1989,6 +2009,14 @@ class Empty(Contract):
     pass
 
 
+class SystemRoutineUpdate(Contract):
+    """One system routine's switch, schedule preset or daily time (backend/system_routines.py); only what is sent
+    changes."""
+    on: bool | None = None
+    preset: Literal["15m", "hourly", "4h", "daily"] | None = None
+    at: str | None = Field(default=None, max_length=5)
+
+
 class LimitRetry(Contract):
     pass
 
@@ -2060,6 +2088,7 @@ class PerformanceProcess(_Sampled):
 
 
 class PerformanceSample(_Sampled):
+    interval_s: Literal[30, 60] = 30  # old runners sample twice a minute
     at: float = Field(ge=0, allow_inf_nan=False)
     scope: Literal["host", "container"] = "host"
     # A container's memory is the host's when it has no memory limit; an older runner leaves this out.
@@ -2071,6 +2100,9 @@ class PerformanceSample(_Sampled):
     mem_used: Bytes | None = None
     swap_total: Bytes | None = None
     swap_used: Bytes | None = None
+    # Raw swap for the simple load reading; macOS omits diagnostic swap because its total grows with use.
+    load_swap_total: Bytes | None = None
+    load_swap_used: Bytes | None = None
     disk: list[PerformanceDisk] = Field(default_factory=list, max_length=4)
     active: int = Field(default=0, ge=0, le=10_000)
     procs: list[PerformanceProcess] = Field(default_factory=list, max_length=16)

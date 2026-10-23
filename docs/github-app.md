@@ -10,19 +10,21 @@ changes; bots keep using whatever git access their computer already has.
 | Permission | Level | Why |
 |---|---|---|
 | Contents | write | a bot pulls and pushes its own repository |
-| Pull requests | write | a bot opens pull requests for its work |
-| Issues | write | a bot files and comments on issues |
+| Pull requests | write | a bot opens pull requests for its work. A read grant reads them (`gh pr view`, `gh pr diff`) and cannot change them |
+| Issues | write | a bot files and comments on issues. A read grant reads issues and pull request comments and cannot write them |
 | Metadata | read | required by GitHub for every app |
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
+| Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
 The app is private, receives installation change webhooks to refresh the repository list when its webhook is active, and requests no
 workflow permission, so a bot cannot change `.github/workflows` files. Add Workflows: write on the
 app's GitHub settings page if a bot's repository needs that.
 
-Run tokens carry write permissions for write grants and contents read for read grants, each with Actions, Checks
-and Commit statuses read for whichever of them the installation has. An App made before one of these was in its
+Run tokens carry write permissions for write grants and contents read for read grants, each with Actions, Checks,
+Commit statuses, Pull requests, Issues and Deployments read for whichever of them the installation has (a write
+grant keeps its write on pull requests and issues). An App made before one of these was in its
 manifest keeps working without it: add it as **Read-only** on the App's GitHub settings page and accept the updated
 permissions on the installation, and the next run's token carries it (at once when the App's webhook is active, otherwise within six hours). Mixed grants use separate tokens; see [Repositories](repositories.md). Tico checks the bot's own repository and effective grants, and refuses a bot the caller does not run or a repository outside the connected organization.
 

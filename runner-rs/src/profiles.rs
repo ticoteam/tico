@@ -710,7 +710,10 @@ pub(crate) mod tests {
         let own = windows("", "claude");
         assert_eq!((own["five_hour"]["used_percent"].clone(), own["weekly"]["used_percent"].clone()), (json!(53.0), json!(17.0)));
         assert_eq!(own["five_hour"]["status"], "allowed");
-        assert!(windows("", "codex").is_empty() && windows("other", "claude").is_empty());
+        // Other tests can populate the computer's Codex windows concurrently. Check absent keys that
+        // belong to this test instead of assuming the shared Codex cache is empty.
+        assert!(windows("", "own-windows-missing-runtime").is_empty()
+            && windows("own-windows-missing-profile", "claude").is_empty());
         forget_windows("", "claude");
         assert!(windows("", "claude").is_empty());
     }

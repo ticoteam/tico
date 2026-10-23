@@ -67,7 +67,7 @@ HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "eve
            "bot_status_history": "since"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
-    "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events",
+    "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
@@ -85,18 +85,18 @@ KEEP = frozenset((
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
     "market_evidence", "market_insights", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
-    "message_links_seen", "notes", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
+    "message_links_seen", "notes", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "runners",
     "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits",
+    "usage_limits", "usage_pools",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
-OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs"))
+OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
 OPEN_JOBS = ("queued", "leased", "running", "input", "uncertain")
 OPEN_ATTEMPTS = ("queued", "leased", "running", "input")
 
