@@ -229,7 +229,7 @@ CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started);
 from .meetings_schema import (MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA, MEETING_ITEMS_SCHEMA,
                               MEETING_SCHEMA, RECORDING_SOURCES_SCHEMA, MEETING_REVIEW_SCHEMA,
                               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA)
+                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA)
 
 # Goals and KPIs (backend/goals.py). A task may name the goal
 # it serves; the column is optional and nothing requires it.
@@ -730,7 +730,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA]
 
 
 class Refused(Exception):
@@ -4198,6 +4198,23 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
     return msg
+
+
+def jobs_mark(conn):
+    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
+    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
+
+
+def comment_delivery(conn, msg, copies=(), *, since=0):
+    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
+    take a turn on it), counting the comment's own job and any the write caused elsewhere, such as the notice a
+    delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write. `delivered`
+    is true when it reached a person (its recipient or an @mentioned copy), who sees it in their own lists."""
+    ids = [msg["id"], *(m["id"] for m in copies)]
+    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id IN (%s)" % ",".join("?" * len(ids)),
+                          [since, *ids]).fetchone() is not None
+    return {"woke": queued,
+            "delivered": any(is_human(m.get("to_actor")) for m in (msg, *copies))}
 
 
 def comment_target(conn, actor, row):

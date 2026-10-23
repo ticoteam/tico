@@ -1764,7 +1764,7 @@ class Execution:
         # Its work keeps its place in the queue and goes out once the machine is really up.
         if not self.awake(awake_since, now):
             return {"attempt": None}
-        # Selection scans the queue in a read snapshot. Recheck only that job's
+        # Selection scans the queue on a read connection. Recheck only that job's
         # current eligibility under the writer lock; a changed queue waits one poll.
         if prepared:
             row = self.candidate(c, who, body, runner, job_id=selected["id"]) if selected is not None else None

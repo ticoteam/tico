@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/tmp","session_id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b","model":"Auto","permissionMode":"default"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the files."}]},"session_id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Acme reply."}]},"session_id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b"}
+{"type":"result","subtype":"success","duration_ms":900,"is_error":false,"result":"Acme reply, in full.","session_id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b","request_id":"req_3"}

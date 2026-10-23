@@ -939,6 +939,9 @@ def create_app(settings=None):
 
     def mutate(request, body, fn, check=None):
         def current_access(c):
+            # Privacy can narrow after middleware preflight, including before a cached retry.
+            source = getattr(request.state, "privacy_source", request.state.identity)
+            privacy.guard_write(c, source, request.url.path, auth)
             if check:
                 check(c)
             batch_path = re.fullmatch(r"/api/v2/batch/([^/]+)/(next|respond|commit)", request.url.path)
@@ -1219,14 +1222,14 @@ def create_app(settings=None):
                                  (body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
                                  kind="message")
         if body.conversation_id:
-            conv = auth.conversation(c, who, body.conversation_id)
+            conv = auth.conversation(c, who, body.conversation_id, write=True)
             if to not in conv["participants"]:
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
             if not msg:
                 raise Problem("not_found", "Original message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"])
+            auth.conversation(c, who, msg["conversation_id"], write=True)
             privacy.require_message(c, who, msg)
             if body.conversation_id and msg["conversation_id"] != body.conversation_id:
                 raise Problem("reference", "Reply belongs to a different conversation", 422)
@@ -2676,7 +2679,7 @@ def create_app(settings=None):
     def reply(request: Request, cid: str, body: M.ChatCreate):
         def work(c):
             who = request.state.identity
-            conv = auth.conversation(c, who, cid)
+            conv = auth.conversation(c, who, cid, write=True)
             target = next((p for p in conv["participants"] if p != who.actor and p.startswith("bot:")), None)
             target = target or next((p for p in conv["participants"] if p != who.actor), None)
             if not target:
@@ -2692,7 +2695,7 @@ def create_app(settings=None):
             msg = H.message(c, mid)
             if not msg:
                 raise Problem("not_found", "Message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"])
+            auth.conversation(c, who, msg["conversation_id"], write=True)
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -2706,7 +2709,7 @@ def create_app(settings=None):
             asked = H.message(c, body.ask)
             if not asked or asked["kind"] != "ask":
                 raise Problem("not_found", "Question not found", 404)
-            auth.conversation(c, who, asked["conversation_id"])
+            auth.conversation(c, who, asked["conversation_id"], write=True)
             privacy.require_message(c, who, asked)
             return clarify_asks.clarify(c, who.actor, body.ask)
         return mutate(request, body, work)
@@ -2720,7 +2723,7 @@ def create_app(settings=None):
             asked = H.message(c, body.ask)
             if not asked or asked["kind"] != "ask":
                 raise Problem("not_found", "Question not found", 404)
-            auth.conversation(c, who, asked["conversation_id"])
+            auth.conversation(c, who, asked["conversation_id"], write=True)
             privacy.require_message(c, who, asked)
             return views.take_recommendation(c, auth, who, asked, body.version)
         return mutate(request, body, work)
@@ -3343,6 +3346,7 @@ def create_app(settings=None):
         (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
         who = request.state.identity
         def work(c):
+            mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
             from .task_review import comment_rights, check_ask
@@ -3369,8 +3373,8 @@ def create_app(settings=None):
                 extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
-            for person in people:
-                H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+            copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+                      for person in people]
             for item in attached:
                 c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)",
                           (item["id"], item["version"]))
@@ -3380,8 +3384,7 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             waits = bot_to_bot.held_reason(msg)
-            return {"comment": msg, "comments": comments,
-                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+            return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
                     **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
@@ -5485,7 +5488,7 @@ def create_app(settings=None):
             if not selected:
                 selected.append(execution.candidate(c, request.state.identity, body,
                                                     execution.runner(c, request.state.identity)))
-            # Release the selection snapshot before taking the writer lock. The selected
+            # End any transaction opened during selection before taking the writer lock. The selected
             # job is checked against current policy in that transaction.
             if c.in_transaction:
                 c.rollback()

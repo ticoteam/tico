@@ -55,3 +55,22 @@ def test_nothing_token_like_is_stored_or_shown(api):
     assert shown["url"] == "" and shown["code"] == ""            # http and free text are refused
     assert "Enter code AB12-CD345" in shown["lines"]
     assert "\x1b" not in dump
+
+
+def test_grok_and_cursor_computer_logins_can_be_controlled(api):
+    r = online(api)
+    post(api, "runners/heartbeat", {"version": "test", "platform": "linux", "readiness": {},
+                                 "capabilities": ["model_sign_out_v1"]}, token=r["token"])
+    for runtime in ("grok", "cursor"):
+        base = f"computers/{r['runner_id']}"
+        login = post(api, f"{base}/logins", {"runtime": runtime})
+        assert login["profile"] == "" and login["state"] == "requested"
+        report(api, r, login["id"], state="signed_in")
+        switch = post(api, f"{base}/logins", {"runtime": runtime, "switch": True})
+        assert switch["kind"] == "switch"
+        post(api, f"{base}/logins/{switch['id']}/cancel", {})
+        logout = post(api, f"{base}/logouts", {"runtime": runtime})
+        assert logout["kind"] == "sign_out"
+        report(api, r, logout["id"], state="signed_out")
+        refused = post(api, f"{base}/logins", {"runtime": runtime, "profile": "other"}, expected=422)
+        assert refused["error"]["code"] == "one_login"

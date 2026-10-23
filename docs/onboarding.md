@@ -37,7 +37,9 @@ the owner; a file does not add sign-in accounts. Additional people, existing ext
 refused with an explanation. The file's goals are imported onto [Goals](goals-and-kpis.md): the owner's goals become
 company goals, and so do goals the file gives a built-in bot such as the Assistant (Goals keeps the built-ins out of
 its tree). Each other bot's goal sits under that bot, with the goal's measure as a KPI carrying the file's baseline and
-target (the file holds no readings, so a new KPI starts with no history). First jobs, routines, model choices and tool
+target (the file holds no readings, so a new KPI starts with no history). A file holds up to 325 goals: the company's 3,
+2 for each department and 1 for each of up to 300 bots, which covers every goal the setup page suggests; a file with
+more is refused before anything is created. First jobs, routines, model choices and tool
 connections are saved for later setup and listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
 computer-enrollment flow after import.
 
@@ -382,7 +384,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 93 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
+Tico ships 98 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
