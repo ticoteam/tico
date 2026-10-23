@@ -1,0 +1,22 @@
+name: Release command tests
+on:
+  pull_request:
+    branches: [main]
+    paths: ['tools/release-command/**', 'scripts/release', '.github/workflows/release-command-tests.yml']
+  push:
+    branches: [main]
+    paths: ['tools/release-command/**', 'scripts/release', '.github/workflows/release-command-tests.yml']
+permissions:
+  contents: read
+jobs:
+  command:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.92 --profile minimal
+      - name: Test release refusals and exact-commit tagging with synthetic git and Actions
+        run: cargo +1.92 test --locked --manifest-path tools/release-command/Cargo.toml

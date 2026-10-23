@@ -595,9 +595,8 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
   editor with **Apply** or **Save bot**, or click **Tasks** beside the model in the bots list.
   Chat keeps the bot's own model. See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
-- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
-  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
-  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+- A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
+  login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.

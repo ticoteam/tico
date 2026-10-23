@@ -216,7 +216,11 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .prov{display:flex;align-items:center;flex-wrap:wrap;gap:2px 8px;padding:6px 0;min-height:36px}
 .prov strong{font-weight:600}
 .prov .muted{font-size:var(--t-base);min-width:0}
-.prov-preset .muted{flex-basis:100%;padding-left:24px}
+.prov-preset{display:grid;grid-template-columns:16px minmax(0,1fr);align-items:start}
+.prov-preset>input{margin-top:3px}
+.prov-preset-title{min-width:0}
+.prov-preset-title .pill{display:inline-block;white-space:nowrap;vertical-align:middle}
+.prov-preset .muted{grid-column:2}
 .prov-routed{gap:6px 14px;padding-top:10px}
 .prov-chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-base)}
 /* The Tico AI Gateway connection, below the providers: its own key and Save (ui/app/settings-providers.js). */
@@ -656,3 +660,8 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .billing-hour-head{display:flex;justify-content:space-between;color:var(--muted);font-size:var(--t-xs);margin-top:var(--s1)}
 a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent);color:var(--accent-ink);border-radius:var(--r-ctl);padding:5px 14px;line-height:20px;font-weight:600}
 @media (max-width:640px){.billing-table td,.billing-table th{padding:4px 3px}.billing-balance{font-size:1.6rem}}
+/* Settings > Computers: hosted servers (ui/app/settings-hosted.js) */
+.hosted-table{width:100%;border-collapse:collapse}.hosted-table td{padding:6px 8px;border-top:1px solid var(--line)}
+.hosted-table tr:first-child td{border-top:0}.hosted-actions{text-align:right}
+.hosted-power[data-power=on]{color:var(--ok)}.hosted-power[data-power=stopped]{color:var(--muted)}
+.hosted-note td{border-top:0;padding-top:0}.hosted-paused{color:var(--fail)}

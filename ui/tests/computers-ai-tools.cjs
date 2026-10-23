@@ -1,7 +1,7 @@
 // Settings > Computers: one compact row per computer (name, status, operator and Tico version; AI tool chips and Add) and the
 // pop-up a row opens (Connections, Screen, Bots on this computer, Versions and updates, Settings). A chip only for a
 // connection that was added, usage as "% left" with the reset on hover, a red dot only when bots depend on a
-// broken one; the computer's own login merged with a subscription on the same account; each bot's actual connection,
+// broken one; one login per AI tool, named subscriptions a runner still reports not shown; each bot's actual connection,
 // read-only; the Tool and Version headers apart at 1024 px; no connection, offline, waiting, revoked, and a
 // member who may change nothing; a desktop app's state and a sign-in several bots take turns on. Every request is
 // intercepted.
@@ -25,7 +25,6 @@ const {unrouted} = require('./support/routes.cjs');
       readiness: {
         runtimes: {
           claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', checked_at: at(-60000)}},
-          // The computer's own Codex login is the same account as the subscription Acme Pro, with an older reading.
           codex: {installed: true, authenticated: 'ready', account: {email: 'Dev@acme.example', plan: 'pro', checked_at: at(-60000)},
                   weekly: {used_percent: 70, resets_at: at(3 * 86400000), reported_at: at(-3600000), status: null}},
           musecode: {installed: true, authenticated: 'rejected', rejected_at: at(-600000), rejected_reason: 'The provider refused the login', credential_source: 'computer'},
@@ -35,8 +34,8 @@ const {unrouted} = require('./support/routes.cjs');
         harnesses: {claude: tool('Claude Code', 'claude', '2.1.300'), codex: tool('Codex', 'codex', '0.162.1'),
           musecode: tool('Muse Code', 'musecode', '1.4.9'), cursor: tool('Cursor Agent', 'cursor', '2026.10.14-941492e-long-build-suffix'),
           grok: tool('Grok Build', 'grok', '1.0.52')}},
+      // Named subscriptions from before one login per computer (#1259): still reported, never shown.
       profiles: [
-        // A login folder has a slot for every tool; only Codex was signed in here.
         {name: 'acme', display_name: 'Acme Pro', runtimes: {
           codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'},
                   weekly: {used_percent: 67, resets_at: at(2 * 86400000), reported_at: at(-120000), status: null, source: 'provider'}},
@@ -45,8 +44,8 @@ const {unrouted} = require('./support/routes.cjs');
       ],
       bot_connections: [
         {bot: 'helper', profile: null, source: 'computer', runtime: 'claude', harness: 'claude', signed_in: true, problem: ''},
-        {bot: 'ops', profile: 'acme', display_name: 'Acme Pro', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
-        {bot: 'writer', profile: 'beta', display_name: 'beta', source: 'bot', runtime: 'codex', harness: 'codex', signed_in: false, problem: ''}]};
+        {bot: 'ops', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''},
+        {bot: 'writer', profile: null, source: 'computer', runtime: 'codex', harness: 'codex', signed_in: true, problem: ''}]};
     const empty = {id: 'empty', label: 'Spare server', operator: 'ana', bots: [], platform: 'linux', version: '0.3.53', last_seen: at(-2000),
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}}, harnesses: {}}, profiles: [], bot_connections: []};
     // Before its first report the server sends readiness_document(None) (backend/store.py).
@@ -77,8 +76,8 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/operations') return json({machines: [box, empty, fresh, revoked], services: []});
       // The manifests' capabilities this page reads (runner/harnesses/*.toml).
       if (p === '/api/v2/models') return json({models: [], harnesses: [
-        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true, subscription_profiles: true}},
-        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, subscription_profiles: true}},
+        {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
+        {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
         {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
         {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
@@ -102,14 +101,13 @@ const {unrouted} = require('./support/routes.cjs');
 
     // 4, 5, 8, 9. A chip per connection: tool, thin bar and % left; hover says the rest; a red dot only where bots are stuck.
     const chips = row('box').locator('.machine-chip:not(.machine-chip-add)');
-    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 33%', 'Codex', 'Muse Code']);
+    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 30%', 'Muse Code']);
     assert.deepEqual(await chips.evaluateAll(list => list.map(c => [c.querySelector('meter')?.value ?? null, !!c.querySelector('.machine-chip-dot')])),
-      [[null, false], [33, false], [null, true], [null, true]]);
-    assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Acme Pro \(Computer's login\) · 33% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M$/);
-    assert.match(await chips.nth(2).getAttribute('title'), /^Codex · beta · Signed out; bots use it · No usage reading yet$/);
-    assert.match(await chips.nth(3).getAttribute('title'), /Login expired or rejected/);
-    // Nothing for a tool a login was never meant for (Acme's Claude Code and Muse Code slots), nor for an unused tool.
-    assert.doesNotMatch(await row('box').innerText(), /Cursor|Grok|signed out/i);
+      [[null, false], [30, false], [null, true]]);
+    assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Computer's login · 30% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M$/);
+    assert.match(await chips.nth(2).getAttribute('title'), /Login expired or rejected/);
+    // Nothing for a named subscription, nor for an unused tool.
+    assert.doesNotMatch(await row('box').innerText(), /Acme|beta|Cursor|Grok|signed out/i);
 
     // 24. No connection; never reported yet; revoked hidden.
     assert.equal((await cells(row('empty')))[1], 'No AI connection + Add');
@@ -123,19 +121,14 @@ const {unrouted} = require('./support/routes.cjs');
     await dialog.waitFor();
     assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
       ['connections', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
-    // 7. The computer's own Codex login and Acme Pro are one account: one line, one (newer) reading, marked.
+    // 7. One line per AI tool, the computer's login, used by all its bots on that tool.
     const conns = dialog.locator('[data-connection]');
-    assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)),
-      ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
-    const acme = dialog.locator('[data-connection="profile:acme:codex"]');
-    assert.match(await acme.innerText(), /Codex\s+Subscription · Acme Pro\s+Computer's login/);
-    assert.match(await acme.innerText(), /Weekly 33% left/);
-    assert.match(await acme.innerText(), /Bots: Ops/);
-    assert.equal(await acme.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '33');
-    // 9. The signed-out one names the bots on it and offers Sign in.
-    const beta = dialog.locator('[data-connection="profile:beta:codex"]');
-    assert.match(await beta.innerText(), /Signed out[\s\S]*Bots: Writer/);
-    assert.equal(await beta.locator('[data-model-login][data-profile=beta]').isEnabled(), true);
+    assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex', 'own:musecode']);
+    const codex = dialog.locator('[data-connection="own:codex"]');
+    assert.match(await codex.innerText(), /Codex\s+Computer's login/);
+    assert.match(await codex.innerText(), /Weekly 30% left/);
+    assert.match(await codex.innerText(), /Bots: Ops, Writer/);
+    assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '30');
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
     // Installed tools no bot uses, signed in only from a terminal: their command is in the Add connection pop-up, with no
@@ -146,7 +139,7 @@ const {unrouted} = require('./support/routes.cjs');
       await add.locator(`[data-add-tool=${tool}]`).click();
       const line = add.locator(`[data-add-terminal=${tool}]`);
       assert.deepEqual([await line.locator('code').textContent(), await line.locator('[data-machine-copy-login]').getAttribute('data-machine-copy-login')], [command, command]);
-      assert.equal(await add.locator('[data-add-kind=subscription]').isDisabled(), true);
+      assert.equal(await add.locator('[data-add-own]').isDisabled(), true);
       await add.locator('[data-add-close]').first().click();
       await add.waitFor({state: 'detached'});
     }
@@ -158,7 +151,7 @@ const {unrouted} = require('./support/routes.cjs');
     // 13. Each bot's actual connection, read-only, with the way to change it.
     const bots = dialog.locator('[data-detail-section=bots]');
     assert.deepEqual(await bots.locator('li').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
-      ["Helper Runs on Claude Code · Computer's login", 'Ops Runs on Codex · Acme Pro', 'Writer Runs on Codex · beta Signed out']);
+      ["Helper Runs on Claude Code · Computer's login", "Ops Runs on Codex · Computer's login", "Writer Runs on Codex · Computer's login"]);
     assert.equal(await bots.locator('select, input').count(), 0);
     assert.equal(await bots.locator('a[data-computer-bots=box]').innerText(), 'Assign on the Bots page');
 
@@ -190,11 +183,11 @@ const {unrouted} = require('./support/routes.cjs');
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
     assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline 3h ago');
-    assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 33);
+    assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 30);
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
     assert.match(await dialog.locator('[data-computer-offline]').innerText(), /Computer is offline/);
-    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-add-connection]:enabled, [data-connection-remove]:enabled, .computer-conn-rename').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login]:enabled, [data-add-connection]:enabled').count(), 0);
     assert.equal(await dialog.locator('[data-add-connection]').getAttribute('title'), 'Computer is offline');
     await page.keyboard.press('Escape');
 
@@ -209,18 +202,14 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await dialog.locator('[data-shared-login]').count(), 0, 'no shared sign-in, no note');
     box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
       signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
-    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']},
-                         {runtime: 'codex', profile: 'acme', display_name: 'Acme Pro', count: 2, bots: []}];
+    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']}];
     await page.evaluate(() => loadSettings());
     const apps = dialog.locator('[data-detail-section=versions] [role=table][aria-label="Desktop apps on Team box"]');
     await apps.waitFor();
     assert.deepEqual(await apps.locator('[data-machine-app="grok"] [role=cell]').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
       ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
-    const acmeLine = dialog.locator('[data-connection="profile:acme:codex"]');
-    assert.equal(await acmeLine.locator('[data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
-    assert.equal(await acmeLine.locator('[data-shared-login="codex:acme"]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.',
-      'no names this reader may not see');
-    assert.equal(await dialog.locator('[data-connection="profile:beta:codex"] [data-shared-login], [data-connection="own:claude"] [data-shared-login]').count(), 0);
+    assert.equal(await dialog.locator('[data-connection="own:codex"] [data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
+    assert.equal(await dialog.locator('[data-connection="own:claude"] [data-shared-login]').count(), 0);
     await page.setViewportSize({width: 390, height: 844});
     assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
     assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
@@ -234,22 +223,20 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#set-machines table [data-computer-remove]').count(), 0);
 
     // 22. A member who is neither admin nor operator sees everything and can change nothing. The server sends them no
-    // accounts and no usage of the computer's own login, and names the subscription that login shares instead.
+    // accounts and no usage of the computer's own login.
     box.last_seen = at(-2000);
     for (const state of Object.values(box.readiness.runtimes)) { delete state.account; delete state.weekly; }
-    for (const p of box.profiles) for (const state of Object.values(p.runtimes)) delete state.account;
-    Object.assign(box, {may_manage: false, same_account: {codex: 'acme'}});
+    Object.assign(box, {may_manage: false});
     await page.evaluate(() => { S.me = {...S.me, id: 'cara', role: 'member', bot_admin: false}; return loadSettings(); });
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-connection]').first().waitFor();
     assert.deepEqual(await dialog.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)),
-      ['own:claude', 'profile:acme:codex', 'profile:beta:codex', 'own:musecode']);
-    assert.match(await dialog.locator('[data-connection="profile:acme:codex"]').innerText(), /Subscription · Acme Pro\s+Computer's login/);
+      ['own:claude', 'own:codex', 'own:musecode']);
     assert.doesNotMatch(await dialog.innerText(), /@/, 'no account emails');
-    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-connection-remove], .computer-conn-rename, [data-subs-rename], [data-subs-weekly], [data-subs-refresh], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
+    assert.equal(await dialog.locator('[data-model-login], [data-add-connection], [data-machine-copy-login], [data-computer-remove], [data-inbox-only], [data-member-bots], [data-computer-screen], [data-harness-choice], [data-performance-mode]').count(), 0);
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: compact computer rows, connection chips, detail pop-up, merged login, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

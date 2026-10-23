@@ -352,14 +352,6 @@ def test_a_moved_check_tries_its_first_model_again_on_another_computer(api):
         assert [x["runner_id"] for x in out_of_quota_logins(c)] == [machine["runner_id"]]
 
 
-def test_a_subscription_for_the_checks_tool_ends_the_move(api):
-    machine, sub = moved_to_grok(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-    with api.app.state.store.read() as c:
-        assert check_models.of(c, sub["id"], "ops")["runtime"] == "codex", "its turns use the subscription's login"
-
-
 def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
     machine, parent, turn = parent_turn(api)
     company(api, "anthropic", "openai", "xai", "cursor")
@@ -478,3 +470,24 @@ def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(
     with api.app.state.store.transaction() as c:
         assert api.app.state.execution.hold_unrunnable(c) == []
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (follow_up,)).fetchone()[0] == "queued"
+
+
+def test_a_check_model_at_capacity_is_not_its_default_login_out_of_quota(api, monkeypatch):
+    # Two "at capacity" refusals on the computer's default Codex login: a busy provider, so the check waits its two
+    # minutes on Codex and Health never calls that login out of quota.
+    from backend import health_monitor
+    machine, sub, check = codex_check(api)
+    start = H.now()
+    notice = "Selected model is at capacity. Please try a different model."
+    busy = {"seq": 1, "kind": "error", "payload": {"error": notice, "limit": True}}
+    for n in range(2):
+        post(api, f"attempts/{check['id']}/started", {"thread_id": f"busy-{n}"}, machine["token"])
+        post(api, f"attempts/{check['id']}/events", {"events": [busy]}, machine["token"])
+        post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+             machine["token"])
+        later(api, monkeypatch, machine, H.shift(start, minutes=3 * (n + 1)))
+        check = claim(api, machine)
+        assert check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"
+    with api.app.state.store.read() as c:
+        assert health_monitor.out_of_quota_logins(c, api.app.state.store.settings) == []
+        assert "temporary model capacity on a check" in H.status(c, "ops")["focus"]
