@@ -687,9 +687,10 @@ function recruitFor({department, briefing, share}) {
       return [run[1], plain[1]].join('\n'); }),
       'curl -fsSL https://github.com/ticoteam/tico/releases/download/v0.2.0/install.sh -o install.sh && sh install.sh --runner --name acme-c0de --url http://server:8765 --server-network acme_default --code \'c0de\' --label "This computer"\n'
       + 'docker run -d --name tico-runner-acme-c0de --restart unless-stopped --network acme_default -v tico-runner-acme-c0de_runner-home:/home/runner ghcr.io/ticoteam/tico-runner:v0.2.0 join --url http://server:8765 --code \'c0de\' --label "This computer"');
-    // One path is on the screen: the code, then the installer line. A label's parenthetical is a small hint under it.
+    // One path is on the screen: the code, installer and saved subscriptions. A parenthetical is a hint under its label.
     assert.deepEqual(await page.locator('.onb-steps > li > .k').allTextContents(),
-      ['Create a one-time code for this computer', 'Set up the runner on the server']);
+      ['Create a one-time code for this computer', 'Set up the runner on the server',
+        'Sign in to Claude', 'Sign in to ChatGPT through Codex']);
     assert.match(await page.locator('.onb-steps .onb-hint').first().textContent(), /^installs Docker if it is missing; keeps itself on this server's release$/);
     // The bare docker run stays as an alternative under Other ways, closed, pinned to the server's release and said not to update itself.
     assert.equal(await page.locator('#onb-other').evaluate(el => el.open), false);
@@ -726,11 +727,17 @@ function recruitFor({department, briefing, share}) {
       Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
     const copies = async () => {
       await page.evaluate(() => { window.copied = []; });
-      for (const button of ['.onb-steps [data-onb-copy]', '#onb-other [data-onb-copy]', '#onb-code-copy']) await page.locator(button).click();
-      await page.waitForFunction(() => window.copied.length === 3);
-      return page.evaluate(() => window.copied);
+      const buttons = await page.locator('.onb-steps [data-onb-copy], #onb-other [data-onb-copy], #onb-code-copy').all();
+      for (const button of buttons) await button.click();
+      await page.waitForFunction(count => window.copied.length === count, buttons.length);
+      const values = await page.evaluate(() => window.copied);
+      assert.deepEqual(values, [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()]);
+      return [values[0], values.at(-2), values.at(-1)];
     };
-    const shown = async () => [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()];
+    const shown = async () => {
+      const commands = await page.locator('.onb-cmd code').allTextContents();
+      return [commands[0], commands.at(-1), await page.locator('#onb-code-value').textContent()];
+    };
     let [installer, other, code] = await copies();
     assert.deepEqual([installer, other, code], await shown());
     assert.match(installer, /^curl -fsSL .* --code 'enroll-code' /);
