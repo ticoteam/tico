@@ -1218,7 +1218,10 @@ def create_app(settings=None):
                     in_assistant_room = True
                 elif who.role in ("human", "owner") and H.actor_id(to) == ceo_bot.SLUG:
                     # Of people, only the owner talks to the CEO Bot, in the CEO Bot chat (their menu tab). Bots still
-                    # message it; that is its goals session, never the owner's chat.
+                    # message it; that is its goals session, never the owner's chat. The owner's post with no room
+                    # (the Goals page, `hub chat`) goes to that one chat.
+                    if not body.conversation_id and not who.via and assistant_mod.ceo_seat(c, who):
+                        body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     if not assistant_room(c, who, body.conversation_id) or not assistant_mod.ceo_seat(c, who):
                         raise Problem("forbidden", "Only the company's owner talks to the " + ceo_bot.name(c)
                                       + ", in their own chat with it; talk to your Assistant", 403)
@@ -2340,7 +2343,7 @@ def create_app(settings=None):
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
-            return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
+            return target == bot and bot not in (settings.assistant_bot, ceo_bot.SLUG) and views.may_chat(c, auth, who, bot)
         return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)

@@ -159,33 +159,33 @@ def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(ap
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
-def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused(api):
-    _, kpi = goal_with_kpi(api)
-    post(api, f"kpis/{kpi['id']}/archive", {}, token="cara-test", expected=403)
-
+def goals_session(api):
+    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
     machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
-    post(api, "chat/goal-manager", {"text": "Run the pass."})
-    token = claim(api, machine)["token"]
+    for bot in ("ops", "goal-manager"):
+        assign(api, machine, bot)
+    ready(api, machine, ["ops", "goal-manager"])
+    post(api, "chat/ops", {"text": "Check the goals."})
+    ops = claim(api, machine, "ops")["token"]
+    post(api, "messages", {"to": "goal-manager", "text": "Run the pass.", "needs_action": True}, token=ops)
+    return claim(api, machine, "goal-manager")["token"]
+
+
+def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused(api):
+    _, kpi = goal_with_kpi(api)
+    post(api, f"kpis/{kpi['id']}/archive", {}, token="cara-test", expected=403)
+
+    token = goals_session(api)
     post(api, f"kpis/{kpi['id']}/archive", {}, token=token, expected=403)
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
 def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_confirm(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
-    machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
-    post(api, "chat/goal-manager", {"text": "Run the pass."})
-    token = claim(api, machine)["token"]
+    token = goals_session(api)
     goal, kpi = goal_with_kpi(api, {"kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"}, token="ben-test", owner="ben")
     # It writes the readings and the automatic colours...
     log(api, kpi["id"], 45, token=token, evidence="https://analytics.example/q/12", period_end=H.now())

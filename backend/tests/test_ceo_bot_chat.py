@@ -69,8 +69,10 @@ def test_nobody_but_the_owner_talks_to_the_ceo_bot_or_reads_the_chat(api):
         post(api, "messages", {"to": "goal-manager", "text": "Hello"}, token=token, expected=403)
         post(api, "messages", {"to": "goal-manager", "text": "Hello", "conversation_id": room}, token=token,
              expected=403)
-    # The owner, too, talks to it only in their chat with it, never in a room of another bot's kind.
-    post(api, "chat/goal-manager", {"text": "Hello"}, expected=403)
+    # The owner, too, talks to it only in their chat with it: a post with no room (the Goals page) lands there.
+    direct = post(api, "chat/goal-manager", {"text": "Hello"})
+    assert direct["conversation_id"] == room and direct["refs"]["assistant"] is True
+    assert [c["room_key"] for c in get(api, "conversations?chat_with=goal-manager")["conversations"]] == ["ceo"]
     ok = post(api, "messages", {"to": "goal-manager", "text": "Also fine", "conversation_id": room})
     assert ok["refs"]["assistant"] is True
     # And a member's Assistant turn cannot reach it in their name either.
