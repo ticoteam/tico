@@ -186,7 +186,7 @@ impl Refreshes {
         let config = runner.config_now();
         let name = text_of(&work["profile"]);
         // An isolated profile, captured once: never the global or default profile.
-        let profile = (!name.is_empty()).then(|| crate::profiles::select(&config.data, None, Some(&name))).flatten();
+        let profile = (!name.is_empty()).then(|| crate::profiles::select(&config.data, Some(&name))).flatten();
         // Only a runtime whose weekly window a refresh can read (`weekly_usage = "refresh"`).
         let refreshable = crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
         self.work = Some(work);

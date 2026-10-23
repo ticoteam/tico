@@ -4,7 +4,7 @@ Unrelated historical blobs are not loaded. Small source maps are loaded only whe
 query touches that kind of content, and recursive lookups have bounded LRU caches.
 """
 from collections import defaultdict
-from functools import lru_cache
+from functools import cached_property, lru_cache
 
 from .store import H
 from . import task_privacy as privacy
@@ -15,19 +15,30 @@ class ReadIndex:
         privacy.snapshot(c)
         self.c, self.who = c, who
         self.principals = privacy.actor(who)
-        # The private rows by their partial index (tasks_private); any other task is looked up by id when a
-        # provenance check names it. Reading every task's whole row, and later every id, was a busy server's slowest query.
+        # Read private rows by their partial index. Ordinary task identifiers and
+        # room references load lazily, without task bodies or room participants.
         self.private = {r["id"]: dict(r) for r in c.execute(
             "SELECT id,requester,owner,guest,private FROM tasks WHERE private IS NOT 0")}
         self.denied = {tid for tid, row in self.private.items() if not privacy.task_readable(c, who, row)}
         self._attempts = self._attachments = self._tags = self._intervals = None
         # Each instance belongs to one consistent read transaction.
         self.message_sources = lru_cache(maxsize=4096)(self._message_sources)
-        self.known_task = lru_cache(maxsize=4096)(
-            lambda tid: tid in self.private or c.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is not None)
-        self.conversation = lru_cache(maxsize=4096)(lambda cid: H.conversation(c, cid))
         self.target_message = lru_cache(maxsize=4096)(lambda mid: H.message(c, mid, include_deleted=True))
         self.attempt_sources = lru_cache(maxsize=4096)(self._attempt_sources)
+
+    @cached_property
+    def task_ids(self):
+        # Provenance validates task existence, even when no private task is denied.
+        # Reuse identifiers from this snapshot rather than thrash a per-row LRU.
+        return {row[0] for row in self.c.execute("SELECT id FROM tasks")}
+
+    @cached_property
+    def conversation_tasks(self):
+        # Message provenance needs only the task reference, never room content.
+        return dict(self.c.execute("SELECT id,task_id FROM conversations"))
+
+    def known_task(self, tid):
+        return tid in self.task_ids
 
     def references(self, value):
         if isinstance(value, str):
@@ -117,7 +128,7 @@ class ReadIndex:
         if not isinstance(refs, dict):
             raise ValueError("Unsupported message provenance")
         ids = self.references(refs)
-        conv = self.conversation(msg["conversation_id"]) if msg.get("conversation_id") else None
+        conv = {"task_id": self.conversation_tasks.get(msg["conversation_id"])} if msg.get("conversation_id") else None
         tid = H.message_task_id(msg, conv)
         if tid and not self.known_task(tid):
             raise ValueError("Unknown task provenance")
