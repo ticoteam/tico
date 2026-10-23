@@ -31,7 +31,7 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, models_preset, providers, runner_versions, team_rules
+from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -294,6 +294,8 @@ def out_of_quota_logins(c, settings=None):
                                                             "limits": 0, "since": "", "resets_at": None, "open": True})
         if not login["open"]:
             continue
+        if result.get("limited") and (result.get("limit_source") or {}).get("kind") == login_holds.CAPACITY_KIND:
+            continue                                                    # the provider was busy: nothing of quota
         if result.get("limited") and r["state"] != "completed":
             if not login["limits"]:
                 login["resets_at"] = result.get("limit_resets_at")    # the latest limit's reset is the one that counts
@@ -468,6 +470,8 @@ def _bot_checks(c, settings=None):
     limited = {}
     for r in c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
         detail = json.loads(r["detail_json"] or "{}")
+        if (detail.get("source") or {}).get("kind") == login_holds.CAPACITY_KIND:
+            continue                    # a busy model for two minutes, not a spent subscription or spend limit
         if detail.get("bot"):
             limited[detail["bot"]] = limited.get(detail["bot"], 0) + 1
     record = providers.load(c, settings)
@@ -549,15 +553,21 @@ def _quiet_work_checks(c):
 
 def _server_checks(c):
     from . import flight
+    from .health import runner_route_latency
+    latency = runner_route_latency(c)
+    out = ([_finding("runner_route_latency", "runner_route_latency", BUG,
+                     "Runner requests are waiting too long", latency["summary"],
+                     "Inspect the flight recorder's route wait/work times and write-lock holders; shorten the longest transactions.")]
+           if latency else [])
     try:
         seen = flight.view(c, minutes=60, sections=("requests", "process", "sql"))
     except Exception:
-        return []                                   # no flight recorder on this server
+        return out                                  # no process samples on this server
     cpu, requests = (seen.get("process") or {}).get("cpu_avg"), (seen.get("requests") or {}).get("n") or 0
     if cpu is None or cpu < SERVER_CPU or requests >= QUIET_REQUESTS:
-        return []
+        return out
     top = [q["sql"][:120] for q in (seen.get("sql") or {}).get("queries", [])[:3]]
-    return [_finding("server_cpu", "server_cpu", BUG, f"The server used {cpu:g}% CPU for an hour while idle",
+    return out + [_finding("server_cpu", "server_cpu", BUG, f"The server used {cpu:g}% CPU for an hour while idle",
                      f"Average CPU {cpu:g}% over the last hour with {requests} requests. Busiest SQL: "
                      + ("; ".join(top) or "none recorded") + ".",
                      BUG_FIX["server_cpu"])]
