@@ -341,6 +341,8 @@ All notable changes to Tico are recorded here. The format follows
   theirs, private tasks stay private, and peers and reports never read a manager's chat-room runs.
 
 ### Changed
+- The key scrubber (setup chat, company file, setup support tickets) also removes 32 or more letters and digits in a
+  row, however regular and whether alone or inside a longer token, as Tico HQ's copy now does (Dev 285).
 - **The setup chart has no seat limit you will meet.** The setup chat, the company file and the first screen's
   company YAML import now take up to 300 bots and 300 people (was 60 bots and 40 people, and 150 bots on import),
   with no limit message below that. Past 300 the chat says plainly "A chart can have at most 300 bots." (or people);
