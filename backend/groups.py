@@ -268,7 +268,10 @@ def place(c, settings, slugs, group_order=()):
     # Only newly made groups take this order; an existing team's groups keep their positions.
     rank = {gid: i for i, gid in enumerate(group_order)}
     todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
-    next_order = max((g.get("order", i) for i, g in enumerate(roster["org_groups"].values())), default=-1) + 1
+    # Freeze legacy fallback positions before a new key changes their indices in sorted JSON.
+    for i, group in enumerate(roster["org_groups"].values()):
+        group.setdefault("order", i)
+    next_order = max((g["order"] for g in roster["org_groups"].values()), default=-1) + 1
     for slug in todo:
         home = homes.get(str(configs[slug].get("template") or ""))
         if home and not outside(settings, slug, configs[slug]):
