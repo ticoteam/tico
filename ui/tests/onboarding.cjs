@@ -322,7 +322,6 @@ function recruitFor({department, briefing, share}) {
     await shot(page, 'phone-0-names');
     await page.setViewportSize({width: 1100, height: 800});
 
-
     // ---- a: names, prefilled from config, with no explanation under them. The assistant
     // works in the background and is not named here; its configured name rides along unchanged.
     assert.equal(await page.locator('#onb-company').inputValue(), 'Initech');
@@ -1146,6 +1145,7 @@ function recruitFor({department, briefing, share}) {
       contrast.push({theme, ...colours[0]});
     }
     console.log('Waiting contrast:', JSON.stringify(contrast));
+    await waiting.emulateMedia({colorScheme: scheme});
     await waiting.evaluate(theme => window.ticoTheme.set(theme), scheme);
     await shot(waiting, 'desktop-6b-created-no-computer');
     await waiting.setViewportSize({width: 390, height: 844});
