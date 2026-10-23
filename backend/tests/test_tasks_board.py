@@ -716,7 +716,7 @@ def test_task_flow_counts_status_changes_by_day_and_filters_by_owner(api):
 
 def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     typ = post(api, 'task-types', {'name': 'Dev ticket', 'steps_only': True, 'bots': 'work', 'steps': [
-        {'name': 'Cant Replicate', 'status': 'declined'}, {'name': 'Backlog', 'status': 'open'},
+        {'name': 'Cant Replicate', 'status': 'closed'}, {'name': 'Backlog', 'status': 'open'},
         {'name': 'On Deck', 'status': 'open'}, {'name': 'Done', 'status': 'closed'}]})['type']
     assert typ['steps_only'] is True
     ticket = post(api, 'tasks', {'owner': 'ops', 'title': 'Fix the guest message times', 'body': 'Please.',
@@ -730,6 +730,7 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     # A working status still changes without a step: the bot's ask sets it waiting.
     assert post(api, path + '/ask', {'text': 'Which page?'}, token=ops)
     assert get(api, path)['task']['status'] == 'waiting'
+    assert get(api, path)['task']['step']['name'] == 'On Deck', 'waiting is not a step: the ticket keeps its own'
     # A bot refused Done on more tickets than the quarantine limit is not quarantined: each names its ticket.
     for n in range(H.QUARANTINE_AT + 1):
         other = post(api, 'tasks', {'owner': 'ops', 'title': f'Fix page {n}', 'body': 'Please.', 'type': typ['id']})
