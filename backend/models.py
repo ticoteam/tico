@@ -1595,7 +1595,8 @@ class BotTaskTab(Contract):
 
 
 class BotTaskTabs(Contract):
-    tabs: list[BotTaskTab] | None = Field(max_length=100)
+    # No cap on how many tabs (Task-list tabs spec): the request body limit bounds one write.
+    tabs: list[BotTaskTab] | None
 
 
 class BotTransitionCreate(Contract):

@@ -7,8 +7,8 @@ Blocked, Done Recently; ui/app/bot-tasks.js).
 
 A tab is either one of those built-ins, which may be renamed, moved or removed but keeps its own view, or a filter the
 bot's owner (or the bot itself) wrote: which task types, which states, and whom a task waits on. Nothing else: the
-filter is not a query language. There is no cap on how many tabs a bot keeps; MAX_TABS only bounds what one write
-stores. The layout is display state only: it changes no task and no one's access, and a tab shows only tasks the
+filter is not a query language. There is no cap on how many tabs a bot keeps; only the request body limit
+(backend/app.py) bounds one write. The layout is display state only: it changes no task and no one's access, and a tab shows only tasks the
 viewer could already read.
 """
 

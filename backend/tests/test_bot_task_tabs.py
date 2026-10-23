@@ -56,11 +56,26 @@ def test_the_assistants_tabs_are_each_persons_own(api):
     assert tabs(api, "coo", "cara-test")["tabs"] == DEFAULT and tabs(api, "coo", "cara-test")["can_edit"] is True
     save(api, "coo", [DEFAULT[3]], "cara-test")
     assert tabs(api, "coo")["tabs"] == [PRODUCT] and tabs(api, "coo", "cara-test")["tabs"] == [DEFAULT[3]]
+    # A bot never writes anyone's Assistant tabs.
+    _, _, attempt = setup_attempt(api, "ops")
+    save(api, "coo", [DEFAULT[0]], attempt["token"], expected=403)
 
 
 def test_no_cap_on_tabs(api):
-    many = [{**PRODUCT, "name": f"Tab {n}"} for n in range(30)]
-    assert len(save(api, "ops", many)["tabs"]) == 30
+    many = [{**PRODUCT, "name": f"Tab {n}"} for n in range(150)]
+    assert len(save(api, "ops", many)["tabs"]) == 150
+    assert tabs(api, "ops", "cara-test")["tabs"] == many
+
+
+def test_a_hidden_bots_tabs_are_not_found(api):
+    save(api, "ops", [PRODUCT])
+    access = lambda see: put(api, "bots/ops/access", {"see": see, "read": see, "write": see,  # noqa: E731
+                                                      "revision": get(api, "bots/ops/access")["revision"]})
+    access({"people": ["ben"]})
+    hidden = get(api, "bots/ops/task-tabs", "cara-test", expected=404)
+    assert "tabs" not in hidden and "product tasks" not in str(hidden)
+    access({"people": ["ben", "cara"]})
+    assert tabs(api, "ops", "cara-test")["tabs"] == [PRODUCT]
 
 
 def test_a_filter_is_type_state_and_waiting_on_only(api):
