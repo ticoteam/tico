@@ -217,6 +217,42 @@ def lift_after_model_change(c, settings, actor, bot, was):
                  reason="Model changed")
 
 
+def lift_after_connection_change(c, settings, actor, bot):
+    """The bot's connection changed (it moved to another computer, so another login; a computer's login was switched
+    to another account): a usage limit it showed was the previous login's. Only a hold on the login it runs on now
+    counts (backend/login_holds.py): with none the bot is free and its queued work starts now; with one it stays
+    Rate limited and names that hold's end. A turn still out keeps the bot at work (settle_status)."""
+    if (H.status(c, bot) or {}).get("state") != "limited":
+        return
+    why = model_change_hold(c, settings, bot)
+    if why:
+        until = own_login_hold(c, settings, bot).get("until") or ""
+        H.status_set(c, actor, bot, state="limited",
+                     focus=("Connection changed; the new login is at its usage limit"
+                            + (f" until {until[11:16]} UTC" if why == "login" and until else "")
+                            if why == "login" else
+                            "Connection changed; the Tico AI Gateway key is still at its usage limit"),
+                     reason="Connection changed")
+        return
+    out = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone()
+    H.status_set(c, actor, bot, state="running" if out else "idle",
+                 focus="Working on other tasks" if out else "Connection changed; queued work resumes",
+                 reason="Connection changed")
+
+
+def lift_after_login_switch(c, settings, actor, runner_id, runtime):
+    """A computer's login for `runtime` was switched to another account or key: the hold on it was the old account's.
+    It ends as Try now does (login_holds.try_now: one probe turn tests the new account), and every bot that was
+    Rate limited on it is freed."""
+    for key in {k for k in (login_holds.canonical(c, runner_id, "", runtime), "") if k is not None}:
+        login_holds.try_now(c, runner_id, key, runtime)
+    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                         "WHERE s.state='limited' AND a.runner_id=?", (runner_id,)).fetchall():
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
+        if providers.bot_choice(c, settings, json.loads(config[0]) if config and config[0] else {})[0] == runtime:
+            lift_after_connection_change(c, settings, actor, row[0])
+
+
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
 HISTORY_PAGE = 50
 
@@ -1406,6 +1442,8 @@ class Execution:
         if not old or old["runner_id"] != body.runner_id:
             from .model_login import hold_removals
             hold_removals(c, self.store.settings, {bot})
+            # Another computer is another login: the limit the bot showed was the old one's.
+            lift_after_connection_change(c, self.store.settings, who.actor, bot)
         H.event(c, who.actor, "bot.assigned", bot, {"runner": body.runner_id, "generation": generation + 1})
         from . import built_on
         built_on.forget(c, bot)                   # placed: its computer reports the checkout from now on

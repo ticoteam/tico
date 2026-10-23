@@ -680,6 +680,11 @@ def report(c, runner_id, lid, body, settings=None):
         c.execute("INSERT INTO model_login_key_off(runner_id,runtime,profile,set_at,set_by) VALUES(?,?,?,?,?) "
                   "ON CONFLICT(runner_id,runtime,profile) DO UPDATE SET set_at=excluded.set_at, set_by=excluded.set_by",
                   (row["runner_id"], row["runtime"], row["profile"], H.now(), row["requested_by"]))
+    # A login switched to another account or key (or the key put back): a usage limit held on the old one is not the
+    # new one's, so its bots are freed and one probe turn tests it (execution.lift_after_login_switch).
+    if settings is not None and terminal and state in ("signed_in", "done") and row["kind"] in ("switch", "to_subscription", "to_key", "use_key"):
+        from .execution import lift_after_login_switch
+        lift_after_login_switch(c, settings, "runner:" + runner_id, runner_id, row["runtime"])
     return {"state": state}
 
 
