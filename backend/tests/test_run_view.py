@@ -91,7 +91,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     assert claim(api, machine) is None
     view = get(api, f"tasks/{tid}/run-view")
     assert view["attempts"][0]["next"]["kind"] == "waiting"
-    assert view["attempts"][0]["reason"] == "Lease expired before completion"
+    assert view["attempts"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     aged(api, first["id"], grace=True)
     assert [d["state"] for d in sweep(api)] == ["queued"]
     ready(api, machine, ["ops"])

@@ -26,6 +26,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import owner_link
+from . import login_holds
 from . import check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -35,9 +36,9 @@ from .statuses import is_parked
 from . import turns as turn_work
 from . import goals as G
 from . import models as M
-from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
+from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity, validate_identity
 from .config import Settings
-from .observability import Observability, browser_config, staff_display_name
+from .observability import Observability, browser_config, staff_display_name, route as error_route
 from .execution import (Execution, bot_repository, bump_bot_session_epoch, clear_limits, lift_after_model_change,
                         model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
@@ -48,7 +49,7 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
-from . import gateway_connection
+from . import company_billing, gateway_connection
 from . import providers as Providers
 from . import access as Access
 from . import releases, runner_versions, ui_bundle
@@ -332,7 +333,7 @@ def create_app(settings=None):
     @app.exception_handler(Problem)
     async def problem_handler(request, exc):
         if exc.status >= 500:
-            telemetry.capture("request", exc, exc.status)
+            telemetry.capture("request", exc, exc.status, route=error_route(request))
             request.state.telemetry_captured = True
         caller = getattr(request.state, "privacy_source", None)
         if caller is not None and caller.actor == "bot:" + BOTOPS and exc.status == 403:
@@ -361,7 +362,7 @@ def create_app(settings=None):
 
     @app.exception_handler(sqlite3.OperationalError)
     async def storage_handler(request, exc):
-        telemetry.capture("request", exc, 503)
+        telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
         # No SQL, database paths, or request bodies in client-facing diagnostics.
         return JSONResponse({"error": {"code": "storage_unavailable", "detail": "Please retry shortly",
@@ -638,7 +639,7 @@ def create_app(settings=None):
                 from .diagnostics import request_failure
                 request_failure(request, response.status_code)
             if response.status_code >= 500 and not getattr(request.state, "telemetry_captured", False):
-                telemetry.capture("request", status=response.status_code)
+                telemetry.capture("request", status=response.status_code, route=error_route(request))
             # The page and its files (StaticFiles sends an ETag) may be kept by the browser and
             # revalidated: an unchanged script or stylesheet (ui/app, ui/styles) comes back as a 304, not in
             # full on every load (slow loads on a phone). A deploy writes new files, so the
@@ -709,7 +710,7 @@ def create_app(settings=None):
         except Exception as exc:
             from .diagnostics import request_failure
             request_failure(request, 500, exc)
-            telemetry.capture("request", exc, 500)
+            telemetry.capture("request", exc, 500, route=error_route(request))
             raise
         finally:
             if via_reset is not None:
@@ -978,6 +979,7 @@ def create_app(settings=None):
         # The stored condition is in `quiet.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume_json", None)
         value.pop("labels_json", None)
+        value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         if pipelines is None:
             if c is None:
                 with store.read() as pipeline_conn:
@@ -1465,6 +1467,44 @@ def create_app(settings=None):
         auth.domain(who)
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
+
+    # ------------------------------------------------------------------ billing (Settings > Billing)
+    def billing_key(who, does="sees billing"):
+        """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""
+        admin_only(who, does)
+        with store.read() as c:
+            return gateway_connection.key(c, app.state.vault, settings), gateway_connection.url(c, settings)
+
+    @app.get("/api/v2/billing")
+    def billing_view(request: Request, month: str = ""):
+        """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ."""
+        return company_billing.read(*billing_key(request.state.identity), month)
+
+    @app.get("/api/v2/billing/usage")
+    def billing_day(request: Request, day: str = ""):
+        """One day's usage by hour, from Tico HQ."""
+        return company_billing.day(*billing_key(request.state.identity), day)
+
+    @app.get("/api/v2/billing/statements/{month}.csv")
+    def billing_statement_csv(request: Request, month: str):
+        """The month's statement as CSV, the same lines and numbers as on screen."""
+        body = company_billing.statement_csv(*billing_key(request.state.identity), month)
+        return Response(body, media_type="text/csv; charset=utf-8", headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="tico-statement-%s.csv"' % month})
+
+    # Settings > Computers: the company's hosted servers, and Start for a stopped one (HQ refuses while out of credit).
+    @app.get("/api/v2/hosted-servers")
+    def hosted_servers(request: Request):
+        """The company's Tico server and bot computers HQ hosts, each on or stopped; `none` when HQ hosts nothing."""
+        return company_billing.servers(*billing_key(request.state.identity, "sees hosted servers"))
+
+    @app.post("/api/v2/hosted-servers/{server_id}/start")
+    def hosted_server_start(request: Request, server_id: str):
+        """Start one stopped hosted server; `paused` with the add-credit words while the company is out of credit."""
+        if settings.rehearsal:      # a copy of real data sends nothing: never a real server's power
+            raise Problem("rehearsal", "Hosted servers can't be started from a rehearsal", 409)
+        return company_billing.start(*billing_key(request.state.identity, "starts hosted servers"), server_id)
 
     @app.get("/api/v2/access")
     def access_view(request: Request):
@@ -4391,9 +4431,33 @@ def create_app(settings=None):
     def enroll(body: M.Enrollment):
         return execution.enroll(body)
 
+    @app.post("/api/v2/runners/errors")
+    def runner_errors(request: Request, body: M.RunnerErrors):
+        """Where a runner panicked, for the install's opt-in error reporting; dropped when that is off."""
+        if request.state.identity.role != "runner":
+            raise Problem("identity", "A registered runner is required", 403)
+        telemetry.capture_runner(request.state.identity.runner_id, body.version, body.panics)
+        return {"ok": True}
+
     @app.post("/api/v2/runners/heartbeat")
     def heartbeat(request: Request, body: M.Heartbeat):
-        return mutate(request, body, lambda c: execution.heartbeat(c, request.state.identity, body))
+        from .worktrees import live_turn_cache
+        # Keep the expensive, repeated provenance walks off the write lock. As for claim, a concurrent
+        # commit invalidates this selection and the write falls back to current state under its lock.
+        with store.read() as snapshot:
+            validate_identity(snapshot, request.state.identity)
+            execution.runner(snapshot, request.state.identity)
+            version = snapshot.execute("PRAGMA data_version").fetchone()[0]
+            snapshot.execute("BEGIN")
+            try:
+                selected = live_turn_cache(snapshot, request.state.identity.runner_id)
+            finally:
+                snapshot.rollback()
+            def work(c):
+                unchanged = snapshot.execute("PRAGMA data_version").fetchone()[0] == version
+                return execution.heartbeat(c, request.state.identity, body,
+                                           live_tasks=selected if unchanged else None)
+            return mutate(request, body, work)
 
     @app.get("/api/v2/runners/desired")
     def desired_runner_release(request: Request):
@@ -4404,11 +4468,13 @@ def create_app(settings=None):
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
+        # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True, "load_snapshot": True}}
+                                                          "run_pushes": True, "run_rotation": True,
+                                                          "run_diagnostics": True, "load_snapshot": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -5360,8 +5426,12 @@ def create_app(settings=None):
         def work(c):
             if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
                 raise Problem("forbidden", "Only a person who manages this bot can retry it now", 403)
-            if (H.status(c, bot) or {}).get("state") != "limited" and not own_login_hold(c, settings, bot):
+            # A hold already ended (by itself or an earlier Try now) waits only on its one probe turn.
+            if ((H.status(c, bot) or {}).get("state") != "limited"
+                    and (own_login_hold(c, settings, bot).get("until") or "") <= H.now()):
                 raise Problem("not_limited", "This bot is not waiting on a usage limit", 409)
+            if login_holds.probing(c, own_login_hold(c, settings, bot)):
+                raise Problem("probing", "This bot's login is already trying one turn; its result decides the rest", 409)
             return {"cleared": clear_limits(c, settings, who.actor, bot)}
         return mutate(request, body, work)
 
@@ -5419,6 +5489,12 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/renew")
     def renew(request: Request, aid: str, body: M.Empty):
+        if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
+            with store.read_transaction() as c:
+                validate_identity(c, request.state.identity)
+                fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                if fresh is not None:
+                    return fresh
         return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid))
 
     @app.post("/api/v2/attempts/{aid}/started")
@@ -5436,6 +5512,13 @@ def create_app(settings=None):
         body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
         return mutate(request, body, lambda c: stream_capture.keep(
             c, execution.attempt(c, request.state.identity, aid, active=False), body))
+
+    @app.post("/api/v2/attempts/{aid}/diagnostics")
+    def attempt_diagnostics(request: Request, aid: str, body: M.AttemptStderr):
+        from . import run_diagnostics
+        body = scrub_attempt(aid, body)
+        return mutate(request, body, lambda c: run_diagnostics.keep_stderr(
+            c, execution.attempt(c, request.state.identity, aid, active=False), body.tail))
 
     @app.get("/api/v2/attempts/{aid}/capture")
     def export_capture(request: Request, aid: str, full: bool = True):

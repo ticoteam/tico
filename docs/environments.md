@@ -80,8 +80,7 @@ enforced on every command. Profiles add three more keys:
 
 ```json
 {"profiles": {"acme": {"dir": ".../environments/acme/profiles/acme", "share_operator": false}},
- "default_profile": "acme",
- "bot_profiles": {"sales": "acme"}}
+ "default_profile": "acme"}
 ```
 
 A `repos` map (`{"sales": "/some/other/checkout"}`) overrides the `<workspace>/bot-<slug>`
@@ -114,28 +113,27 @@ correctly. `restart` and `update` wait for runs in flight before bouncing the bo
 
 ## Subscription profiles
 
-A profile is a named directory holding one provider login. Bots that name the same profile share a
-subscription; a bot with its own profile has its own. Credentials stay on the Computer. Tico stores profile names, sign-in state and which bots chose one.
-See [Computers](computers.md) for connections, which one a bot runs on, and browser sign-in.
+A profile is a named directory holding one provider login. The one named `default_profile` is the Computer's login:
+every bot on the Computer runs on it, and a bot cannot choose another. For a different account, add another
+environment (another runner, which can be on the same machine). Credentials stay on the Computer.
+See [Computers](computers.md) for connections and browser sign-in.
 
 ```bash
 scripts/tico -e acme profile add acme                 # first one added becomes the default
-scripts/tico -e acme profile add partner              # a second subscription
-scripts/tico -e acme profile login partner codex      # interactive, the CLI owns the browser flow
-scripts/tico -e acme profile assign sales partner     # this bot runs on that subscription
+scripts/tico -e acme profile login acme codex         # interactive, the CLI owns the browser flow
 scripts/tico -e acme profile list
 ```
 
 `--share-operator` makes a profile that does not relocate anything: its bots use the owner's own
 `~/.codex` and `$HOME`, which is what every registration made before profiles existed already does.
-`profile login` refuses on such a profile, because there is nothing separate to sign in to.
+`profile login` refuses on such a profile, because there is nothing separate to sign in to, and on any profile but
+the default.
 
-Selection order for a run: the bot's server assignment, then the nearest group's assignment.
-With neither, the Computer uses the bot's entry in `bot_profiles`, then `default_profile`, then
-the operator's own logins. If a server-assigned profile is missing on this Computer, the runner
-holds the bot and reports `Subscription <name> isn't on <computer>` in Health and subscription status.
-A signed-out assignment also holds the bot, with `Subscription <name> isn't signed in on <computer>`.
-Older Computers without profile reporting cannot claim bots with a server assignment.
+After the server/runner `computer_logins_v1` handshake, every run uses `default_profile`, or the operator's own logins
+without one. A `bot_profiles` entry, and a bot's choice saved by an earlier release, is ignored (the server upgrade
+deletes the saved choices). Until an older server upgrades, an updated runner preserves its existing local and
+server account selections. An older runner reporting named bot logins to a new server waits for its own update;
+unnamed legacy runners continue working. See [Computers](computers.md#subscriptions-from-earlier-releases).
 Linux Docker profiles currently share the existing bot Unix user; their separate login directories
 do not enforce file isolation between groups.
 

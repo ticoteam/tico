@@ -277,6 +277,7 @@ pub async fn drive(harness: &str, host: &Under, mut rx: mpsc::UnboundedReceiver<
                         break;
                     }
                     match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+                        Ok(Some(ev)) if ev.get("stderr_tail").is_some() || ev["process_exit"] == true => continue,
                         Ok(Some(ev)) => got.push(normalize(harness, &transcript(), ev)),
                         _ => break,
                     }
@@ -309,7 +310,7 @@ pub async fn drive(harness: &str, host: &Under, mut rx: mpsc::UnboundedReceiver<
     host.stop().await;
     let mut after = vec![];
     while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-        after.push(ev);
+        if ev.get("stderr_tail").is_none() && ev["process_exit"] != true { after.push(ev); }
     }
     let text = transcript();
     let norm = |v: Vec<Value>| Value::Array(v.into_iter().map(|e| normalize(harness, &text, e)).collect());

@@ -120,13 +120,9 @@ def of(c, task_id, bot):
 
 
 def _default_login(c, bot, check, runner_id):
-    """Whether `bot`'s turns on `check` run on `runner_id`'s default login: the bot is assigned to that computer and no
-    subscription of its covers the check's harness."""
-    from .subscriptions import covers, effective
+    """Whether `bot`'s turns on `check` run on `runner_id`'s default login: every bot assigned to that computer does."""
     row = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    if not row or row[0] != runner_id:
-        return False
-    return not (effective(c, bot)[0] and covers({"runtime": check["runtime"], "harness": check["harness"]}))
+    return bool(row) and row[0] == runner_id
 
 
 def _out_of_quota(c, runner_id, runtime, settings=None):
