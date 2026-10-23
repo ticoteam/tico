@@ -139,7 +139,7 @@ def supported(c):
     return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
 
 
-LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
+LIMIT = 100           # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
 PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
 
