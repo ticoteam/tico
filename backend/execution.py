@@ -1690,8 +1690,10 @@ class Execution:
         runner = self.runner(c, who)
         changes = c.total_changes
         self.expire(c, limit=CLAIM_MAINTENANCE)
-        if c.total_changes != changes and not prepared:
-            selected = None
+        if c.total_changes != changes:
+            # Expiry can put a lapsed job back in the queue after the read snapshot chose:
+            # choose afresh under this lock so it goes out now, not one poll later.
+            selected, prepared = None, False
         now = H.now()
         self.served_at = now
         # A claim is contact too, and on a machine waking for a few seconds it is the first
