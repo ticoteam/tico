@@ -592,9 +592,11 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
-- **Connection**: the login the bot runs on: **Computer's login** (the default) or one of the subscriptions on its
-  computer, listed first, then those on other computers. A line under **Model** says "Runs on *tool* · *connection* on
-  *computer*". The bot's computer operator, owners and admins choose it; groups no longer give their bots one
+- **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
+  editor with **Apply** or **Save bot**, or click **Tasks** beside the model in the bots list.
+  Chat keeps the bot's own model. See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
+- A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
+  login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.

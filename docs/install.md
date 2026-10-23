@@ -114,9 +114,9 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
    in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
-   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
-   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+   Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
 2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.

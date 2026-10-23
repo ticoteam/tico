@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde_json::{json, Map, Value};
-use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Notify;
 
 use crate::client::ApiError;
@@ -26,7 +25,7 @@ use crate::util::{log, mark, text_of, truthy};
 
 pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
-const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop"];
+const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop", "Timeout:", "Runner stopped during execution", "Computer lost or heartbeat stopped"];
 
 fn run_clock() -> Instant {
     #[cfg(test)]
@@ -118,6 +117,11 @@ impl Meter {
         }
     }
 
+    /// All the input the segment's requests read, cached reads included: what its thread re-reads (crate::rotate).
+    pub(crate) fn read(&self) -> i64 {
+        self.input
+    }
+
     /// Whether the segment used any tokens: one that used none is left out of the completion's usage.
     pub(crate) fn used(&self) -> bool {
         self.input != 0 || self.output != 0
@@ -140,6 +144,14 @@ impl Meter {
             m.insert("requests".into(), json!(requests));
         }
         Some(m)
+    }
+}
+
+/// That the turn left its thread for a fresh one, and why (`rotated`), for a server that takes it (`run_rotation`;
+/// an older one refuses the field, and a refused result would never arrive).
+fn rotation_field(completion: &mut Map<String, Value>, rotated: Option<&crate::rotate::Rotation>, feature: impl Fn(&str) -> bool) {
+    if let Some(r) = rotated.filter(|_| feature("run_rotation")) {
+        completion.insert("rotated".into(), r.report());
     }
 }
 
@@ -492,15 +504,49 @@ pub(crate) struct Drove {
     pub(crate) reply: String,
     pub(crate) tokens: Value,
     pub(crate) limited: bool,
+    /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
+    pub(crate) capacity: bool,
     pub(crate) retryable: bool,
     /// The turn running when the drive ended (a goal's continuation, a carried input's turn).
     pub(crate) turn: String,
+    /// The turn stopped at the shared login's hold cap so a waiting turn could have it (crate::login_turns): its
+    /// job goes back in the queue to continue, not to review. `outcome` is "completed" when it reached a safe point
+    /// itself and "interrupted" when the grace ran out.
+    pub(crate) yielded: bool,
 }
 
 impl Drove {
     fn interrupted() -> Drove {
-        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, retryable: false, turn: String::new() }
+        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, capacity: false, retryable: false, turn: String::new(), yielded: false }
     }
+}
+
+/// Err when the turn was stopped before it acknowledged its start (a person's Stop, or its task done or closed while it
+/// waited for its login): it ends unstarted, so its job ends with nothing run, not as an uncertain turn the drive stops.
+fn unstopped(flags: &Flags) -> Result<(), Fail> {
+    if flags.stopped.load(Ordering::SeqCst) {
+        return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
+    }
+    Ok(())
+}
+
+/// A turn as the login queue knows it (crate::login_turns): its bot, its task as a person reads it, the class the
+/// server gave it (`login_class`), the work it is for (its task, else its chat) and its attempt.
+fn login_turn(attempt: &Value) -> crate::login_turns::Turn {
+    let task = &attempt["task"];
+    let label = match (text_of(&task["number"]), text_of(&task["title"])) {
+        (n, t) if !n.is_empty() && !t.is_empty() => format!("#{n} {t}"),
+        (_, t) => t,
+    };
+    let work = [&task["session_task_id"], &task["id"], &attempt["conversation"]["id"]].into_iter().map(text_of).find(|w| !w.is_empty()).unwrap_or_default();
+    let class = crate::login_turns::Class::parse(&text_of(&attempt["login_class"]));
+    crate::login_turns::Turn::new(&text_of(&attempt["bot"]), &label, class).of(&work, &text_of(&attempt["id"]))
+}
+
+/// The login a turn may give up at the cap: only a server that names the turn's `login_class` takes a `yielded`
+/// turn back into the queue (an older one refuses the field).
+fn yields(attempt: &Value, held: &Option<crate::login_turns::Held>) -> Option<crate::login_turns::Cap> {
+    held.as_ref().filter(|_| attempt.get("login_class").is_some()).map(|h| h.cap())
 }
 
 /// One cold Claude sign-in renewal at a time on this computer (service.py claude_cold_start).
@@ -590,17 +636,19 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
-    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<Instant, Fail> {
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<(Instant, String), Fail> {
         let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
         let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
         let limit = relay.map_or(requested, |r| r.limit(requested));
+        let name = if limit < requested { "Gateway credential lifetime (24 hours)".into() } else { format!("max_run_minutes ({minutes} minutes)") };
         if limit < requested {
             self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
         }
         if limit <= run_clock() {
+            let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": format!("Timeout: {name}")}));
             return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
         }
-        Ok(limit)
+        Ok((limit, name))
     }
 
     /// publish_history with the turn's token, logged when it changes (service.py publish).
@@ -718,8 +766,8 @@ impl Runner {
     }
 
     /// The login a turn of `runtime` (`harness`) on `profile` holds while its host runs, when that CLI serves one turn
-    /// per login (`one_turn_per_login`) and the login is a subscription (Codex signed in with ChatGPT): the profile's
-    /// own login or the computer's (crate::fallback::login). None for a key login (an OpenAI API key) or another CLI.
+    /// per login (`one_turn_per_login`) and the login is a subscription: the profile's
+    /// own login or the computer's (crate::fallback::login). None for a key login or a CLI that opts out (including Codex).
     pub(crate) fn serial_login(&self, runtime: &str, harness: &str, profile: Option<&Profile>) -> Option<crate::login_turns::Login> {
         if !crate::harness_tools::caps(runtime, harness).one_turn_per_login || self.billing(runtime, profile) != "subscription" {
             return None;
@@ -766,17 +814,26 @@ impl Runner {
     /// the task's Runs show (a wait, not a failure), renamed when the holder changes and cleared once the wait is
     /// over. A lost lease, a person's Stop or the computer stopping ends the wait, and a turn cancelled just as the
     /// login came free never starts on it (crate::login_turns::wait_for).
-    async fn take_login(&self, aid: &str, bot: &str, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
+    async fn take_login(&self, aid: &str, turn: &crate::login_turns::Turn, login: &crate::login_turns::Login, flags: &Flags, wake: &Notify) -> Result<crate::login_turns::Held, Fail> {
         let mut waited = false;
-        let say = |holder: &str| {
+        let bot = &turn.bot;
+        let say = |w: &crate::login_turns::Waiting| {
             waited = true;
-            let line = login.waiting(holder, bot);
+            let line = login.waiting(w, bot);
             log(&format!("Tico runner: {bot}: {line}"));
-            // The server words it for each reader: the holder is named only to whoever may see that bot.
-            let _ = self.state.append(aid, "status", &json!({"waiting": line, "login": login.label, "holder": holder}));
+            // The server words it for each reader (backend/login_waits.py): the event goes out raw to whoever reads
+            // this run, so it names the holder's run, never its task, and the line here names neither.
+            let _ = self.state.append(aid, "status", &json!({
+                "waiting": format!("Waiting for {} to be free", login.label), "login": login.label, "holder": w.holder,
+                "holder_attempt": w.attempt, "since": w.since, "position": w.position,
+            }));
             wake.notify_one();
         };
-        let got = crate::login_turns::wait_for(&login.key, bot, || self.login_wait_over(flags, login), say, Duration::from_secs(1)).await;
+        let got = crate::login_turns::wait_for(&login.key, turn, || self.login_wait_over(flags, login), say, Duration::from_secs(1)).await;
+        if got.is_err() && flags.stopped.load(Ordering::SeqCst) {
+            // Stopped, or its task was done or closed meanwhile (the server's `stop`): the work keeps no place.
+            crate::login_turns::forget(&login.key, turn);
+        }
         if waited {
             let _ = self.state.append(aid, "status", &json!({"waiting": ""}));
             wake.notify_one();
@@ -851,6 +908,7 @@ impl Runner {
         let mut env: Env = Env::new();
         let mut base_env: Option<Env> = None;
         let mut host: Option<Host> = None;
+        let mut receivers = Vec::new();
         let (mut thread, mut turn): (Option<String>, Option<String>) = (None, None);
         let mut drove = Drove::interrupted();
         let mut redactor: Option<Arc<Redactor>> = None;
@@ -863,6 +921,8 @@ impl Runner {
         let mut selected: Option<Profile> = None;
         let mut subscription_unavailable: Option<Value> = None;
         let mut fallback: Option<String> = None;
+        // The thread this turn left for a fresh one because it had grown too large, and why (crate::rotate).
+        let mut rotated: Option<crate::rotate::Rotation> = None;
         // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
         // went to its fallback instead when another bot's turn had it.
         let mut login_held: Option<crate::login_turns::Held> = None;
@@ -880,11 +940,12 @@ impl Runner {
         crate::harness_tools::turn_runtimes(&aid, &uses);
 
         let ran: Result<(), Fail> = async {
+            // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
+            selected = self.turn_profile(&attempt)?;
             // A lane runs one turn at a time. A main-lane turn holds the bot's checkout for the whole turn; a task
             // lane works in its own worktree and takes the checkout only to refresh it (sessions.rs).
             let p = place.insert(self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)?);
             execution_path = p.main_path.clone();
-            selected = self.turn_profile(&attempt)?;
             if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent && held.is_none()) {
                 // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
                 // that waits starts on a fresh one. Busy: the bot's own fallback takes the turn when it is ready (not
@@ -892,10 +953,10 @@ impl Runner {
                 if let Some(why) = self.login_wait_over(&flags, &login) {
                     return Err(Fail::runtime(why));
                 }
-                match crate::login_turns::try_take(&login.key, &bot) {
+                match crate::login_turns::try_take(&login.key, &login_turn(&attempt)) {
                     Ok(held) => login_held = Some(held),
                     Err(holder) if self.moves_off_busy_login(&attempt, &config, goal.chat_goal.as_ref()) => busy = Some((login, holder)),
-                    Err(_) => login_held = Some(self.take_login(&aid, &bot, &login, &flags, &wake).await?),
+                    Err(_) => login_held = Some(self.take_login(&aid, &login_turn(&attempt), &login, &flags, &wake).await?),
                 }
             }
             segments.push(Segment {
@@ -997,13 +1058,30 @@ impl Runner {
                     log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
                 }
             }
-            let previous = self.state.session(&bot, &conv, &session_runtime)?;
-            let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+            let mut previous = self.state.session(&bot, &conv, &session_runtime)?;
+            let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
             }
-            let (tx, mut rx) = unbounded_channel();
+            // A thread grown past the bot's limit is left for a fresh one, told only what the room said since its
+            // last turn (crate::rotate). A command (/compact) is for the thread it names, so it keeps it.
+            let mut since: Option<String> = None;
+            let mut left: Option<String> = None;
+            if let Some(prev) = previous.clone().filter(|_| !truthy(refs.get("command"))) {
+                if let Some(r) = crate::rotate::due(&config, self.state.session_size(&prev)?) {
+                    log(&format!("Tico runner: {bot}: {}", r.diagnostic()));
+                    let _ = self.state.append(&aid, "diagnostic", &json!({"text": r.diagnostic(), "rotated": r.report()}));
+                    since = self.state.cursor(&prev, None)?;
+                    // Forgotten only once the fresh thread is saved: a turn that fails before then leaves it, so
+                    // its retry rotates again with the same seed and record.
+                    left = previous.take();
+                    rotated = Some(r);
+                }
+            }
+            let (tx, rx) = self.attempt_events(&aid, redactor.clone());
+            receivers.push((tx.clone(), rx));
+            let rx = &mut receivers.last_mut().unwrap().1;
             let own = tx.clone();
             let made = if persistent {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
@@ -1047,19 +1125,29 @@ impl Runner {
             }
             let th = thread.clone().unwrap();
             self.state.save_session(&bot, &conv, &session_runtime, &th)?;
+            if let Some(old) = left.as_deref().filter(|old| *old != th) {
+                self.state.forget_session(&bot, &conv, &session_runtime, old)?;
+            }
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
             }
+            unstopped(&flags)?;
             // Acknowledge before execution. Any later crash is explicitly uncertain.
-            self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
+            let active = self.active.lock().unwrap().len();
+            let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
+            self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
             self.state.phase(&aid, "running")?;
             // A resumed thread already holds the repo rules unless they changed since it was given them.
             let digest = p.rules_digest.clone();
             attempt["_repo_rules_changed"] = json!(!digest.is_empty() && self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str()));
             let names = self.names().await;
-            let after = if resumed { self.state.cursor(&th, None)? } else { None };
+            let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
+            attempt["_rotated"] = json!(rotated.is_some());
             let mut prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
+            if let Some(r) = &rotated {
+                prompt = format!("{prompt}\n\n{}", r.prompt_note(truthy(Some(&attempt["task"]["checkpoint"]))));
+            }
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 prompt = format!("{prompt}\n\n{line}");
             }
@@ -1085,10 +1173,18 @@ impl Runner {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             turn = Some(t.clone());
-            let d = Drive { aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key };
-            drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
+            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held) };
+            drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
             turn = Some(drove.turn.clone());
-            keep_session(&self.state, &bot, &conv, &session_runtime, &h.session_id(&th)).await?;
+            let saved = h.session_id(&th);
+            keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
+            // What this turn read, so the next one knows whether to resume the thread (crate::rotate). Only a turn that
+            // completed counts: one stopped or out of time leaves no checkpoint, and its continuation needs the thread
+            // that holds its partial work.
+            if drove.outcome == "completed" {
+                let read = segments.last().map_or(0, |s| s.meter.read());
+                self.state.off(move |s| s.note_turn(&saved, read)).await?;
+            }
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
             // harness runs the turn there instead of losing it.
             unavailable = drove.limited || drove.retryable;
@@ -1111,9 +1207,10 @@ impl Runner {
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
         let mut pending = if unavailable && !native_control { crate::fallback::configured(&config) } else { None };
         let hit_limit = drove.limited;
-        // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile.
+        // Out of quota here until its reset (or for a while): no other bot's fallback picks this login meanwhile. A
+        // model at capacity is the provider's moment, not the login's quota: the server's short hold covers it.
         if held.is_none() {
-            crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit, drove.outcome == "completed");
+            crate::fallback::settle_limit(&runtime, &text_of(&config["harness"]), selected.as_ref(), hit_limit && !drove.capacity, drove.outcome == "completed");
         }
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
@@ -1157,10 +1254,13 @@ impl Runner {
             let primary = Some(text_of(&config["harness"])).filter(|h| !h.is_empty()).unwrap_or_else(|| runtime.clone());
             let hopped: Result<(), Fail> = async {
                 let hop_config = hop.config(&config);
-                let mut hop_attempt = attempt.clone();
-                hop_attempt["config"] = hop_config.clone();
-                hop_attempt["fallback"] = json!(hop.harness);
-                selected = self.turn_profile(&hop_attempt)?;
+                let requested = text_of(&attempt["profile"]);
+                if !requested.is_empty() && !crate::profiles::covers(&hop_config) {
+                    return Err(Fail::unavailable(Unavailable {
+                        problem: format!("Subscription {requested} doesn't cover {}", hop.runtime),
+                        profile: requested, runtime: hop.runtime.clone(),
+                    }));
+                }
                 segments.push(Segment {
                     meter: Meter::default(),
                     config: hop_config.clone(),
@@ -1183,11 +1283,13 @@ impl Runner {
                 };
                 let _ = self.state.append(&aid, "diagnostic", &note);
                 if let Some(login) = self.serial_login(&hop.runtime, &hop.harness, selected.as_ref()) {
-                    login_held = Some(self.take_login(&aid, &bot, &login, &flags, &wake).await?);
+                    login_held = Some(self.take_login(&aid, &login_turn(&attempt), &login, &flags, &wake).await?);
                 }
                 // The primary's promise to report every tool call ends here; the fallback host makes its own.
                 let _ = self.state.append(&aid, "status", &json!({"tool_events": false}));
-                let (tx, mut rx) = unbounded_channel();
+                let (tx, rx) = self.attempt_events(&aid, redactor.clone());
+                receivers.push((tx.clone(), rx));
+                let rx = &mut receivers.last_mut().unwrap().1;
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(held) = login_held.as_mut() {
                     held.bind(h.clone());
@@ -1195,7 +1297,7 @@ impl Runner {
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
-                let limit = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+                let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
                     cwd: execution_path.display().to_string(),
@@ -1214,7 +1316,10 @@ impl Runner {
                 if busy.is_some() || held.is_some() {
                     // The primary never started (its login was busy, or held by the server), so this host
                     // acknowledges the turn instead, before it acts.
-                    self.client.post(&format!("attempts/{aid}/started"), &json!({"thread_id": th}), Some(&format!("started:{aid}"))).await?;
+                    unstopped(&flags)?;
+                    let active = self.active.lock().unwrap().len();
+                    let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
+                    self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
                     self.state.phase(&aid, "running")?;
                     acked = true;
                 }
@@ -1229,6 +1334,7 @@ impl Runner {
                 let t = h.start_turn(&th, &text, hop.reasoning_effort.as_deref()).await?;
                 turn = Some(t.clone());
                 let d = Drive {
+                    limit_name: &limit_name,
                     aid: &aid,
                     host: h,
                     thread: &th,
@@ -1240,8 +1346,9 @@ impl Runner {
                     runtime: &hop.runtime,
                     bot: &bot,
                     session: &key,
+                    login: yields(&attempt, &login_held),
                 };
-                drove = self.drive(&d, &mut rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
+                drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
                 let why = match &busy {
@@ -1259,7 +1366,7 @@ impl Runner {
                     self.diagnose(&aid, &format!("{}: fallback harness interrupted; inspect local runner", e.kind));
                 }
             }
-            crate::fallback::settle_limit(&hop.runtime, &hop.harness, selected.as_ref(), drove.limited, drove.outcome == "completed");
+            crate::fallback::settle_limit(&hop.runtime, &hop.harness, selected.as_ref(), drove.limited && !drove.capacity, drove.outcome == "completed");
             // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
@@ -1288,7 +1395,9 @@ impl Runner {
             self.sign_in.reject(rt, reason, selected.as_ref());
             log(&format!("Tico runner: {bot}: {rt} sign-in was rejected; this computer takes no {rt} work on this profile until the key or sign-in changes"));
         }
-        if drove.limited {
+        if drove.capacity {
+            log(&format!("Tico runner: {bot}: {ran_on} model is at capacity for now; the cloud will retry shortly"));
+        } else if drove.limited {
             log(&format!("Tico runner: {bot} hit a {ran_on} usage limit; the cloud will retry later"));
         } else if drove.retryable && subscription_unavailable.is_none() {
             log(&format!("Tico runner: {bot}: {ran_on} could not renew its sign-in and the turn never started; the cloud will retry it"));
@@ -1296,6 +1405,17 @@ impl Runner {
 
         // The result: settle the host, scrub, save, send. Each step's mark lets the flight file name a slow one.
         mark("model_done", &aid);
+        // Read an unexpected process exit before cleanup. A signal sent by h.stop() is not the failure's cause.
+        if let Some((tx, rx)) = receivers.last_mut() {
+            let _ = tx.send(json!({"kind": "_diagnostics_drained"}));
+            while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                if ev["kind"] == "_diagnostics_drained" { break; }
+                if ev["process_exit"] == true {
+                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev)).unwrap_or(ev);
+                    let _ = self.state.append(&aid, "error", &clean);
+                }
+            }
+        }
         if let Some(h) = &host {
             if let (Some(th), Some(t)) = (&thread, &turn) {
                 if drove.outcome == "interrupted" {
@@ -1310,7 +1430,19 @@ impl Runner {
                 self.warm.release(warm, drove.outcome == "completed").await;
             }
         }
-        // The host has stopped: the next turn waiting for this ChatGPT login starts now.
+        // A barrier settles final stderr before last_seq is frozen; cleanup's process exits are discarded.
+        for (tx, rx) in &mut receivers {
+            let _ = tx.send(json!({"kind": "_diagnostics_drained"}));
+            while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                if ev["kind"] == "_diagnostics_drained" { break; }
+            }
+        }
+        // The host has stopped: the next turn waiting for this ChatGPT login starts now, and one that gave it up at
+        // the cap continues right after it.
+        if let Some(held) = login_held.as_ref().filter(|_| drove.yielded) {
+            held.give_way();
+            let _ = self.state.append(&aid, "status", &json!({"yielded": held.yielded()}));
+        }
         drop(login_held.take());
         if drove.outcome != "completed" && !crate::harness_tools::caps(&runtime, "").resume_after_interrupt && !goal.controlled {
             if let Some(th) = &thread {
@@ -1364,14 +1496,23 @@ impl Runner {
             }
         }
         if let Some(g) = goal.chat_goal.as_ref().filter(|g| g["status"] == "active") {
-            if drove.outcome != "completed" && !drove.limited && !drove.retryable {
+            if drove.outcome != "completed" && !drove.limited && !drove.retryable && !drove.yielded {
                 let note = goal.failure.clone().unwrap_or_else(|| format!("The harness run {}", drove.outcome));
                 let _ = self.state.append(&aid, "goal", &json!({"goal_id": g["id"], "revision": g["updated_at"], "status": "stopped", "note": note}));
             }
         }
         let mut completion = Map::new();
-        completion.insert("outcome".into(), json!(drove.outcome));
-        completion.insert("text".into(), json!(reply));
+        if drove.yielded {
+            // Back in the queue to continue: neither answered nor held for review (backend/execution.py complete).
+            completion.insert("outcome".into(), json!("interrupted"));
+            completion.insert("yielded".into(), json!(true));
+        } else {
+            completion.insert("outcome".into(), json!(drove.outcome));
+        }
+        // A turn interrupted at the end of its grace stopped at no safe point: its partial answer stays in the run's
+        // events but does not become the task's checkpoint (backend/execution.py complete).
+        let unsafe_yield = drove.yielded && drove.outcome != "completed";
+        completion.insert("text".into(), json!(if unsafe_yield { "" } else { reply.as_str() }));
         completion.insert("tokens_in".into(), drove.tokens.get("input").cloned().unwrap_or(Value::Null));
         completion.insert("tokens_out".into(), drove.tokens.get("output").cloned().unwrap_or(Value::Null));
         if !carried.is_empty() {
@@ -1384,6 +1525,7 @@ impl Runner {
                 completion.insert("pushes".into(), json!(pushed));
             }
         }
+        rotation_field(&mut completion, rotated.as_ref(), crate::follow::feature);
         let profile_used = selected.as_ref().filter(|_| host.is_some()).map(|p| p.name.clone());
         if let Some(name) = &profile_used {
             completion.insert("profile_used".into(), json!(name));
@@ -1443,6 +1585,8 @@ impl Runner {
         if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed") {
             completion.insert("auth_rejected".into(), json!({"runtime": rt, "reason": hosts::rejection_reason(reason)}));
         }
+        let active = self.active.lock().unwrap().len();
+        let completion = crate::perf::with_snapshot(Value::Object(completion), active).await.as_object().unwrap().clone();
         mark("finished", &aid);
         let settled: Result<(), String> = async {
             let id = aid.clone();
@@ -1576,7 +1720,7 @@ impl Runner {
 
     /// The assigned subscription cannot run here: a failed, retryable result that names it, and a heartbeat now.
     fn settle_unavailable(&self, aid: &str, u: &crate::profiles::Unavailable, drove: &mut Drove, rejected: &mut Option<(String, String)>, out: &mut Option<Value>) {
-        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, retryable: true, turn: drove.turn.clone() };
+        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, capacity: false, retryable: true, turn: drove.turn.clone(), yielded: false };
         *rejected = None;
         let _ = self.state.append(aid, "diagnostic", &json!({"text": u.problem, "detail": {"runtime": u.runtime}}));
         *out = Some(u.detail());
@@ -1594,6 +1738,7 @@ impl Runner {
         let masked = redact::scrub_credentials(&scrub.scrub_text(&e.text), &[]);
         let cause: String = masked.chars().take(300).collect();
         let detail = if cause.is_empty() { String::new() } else { format!(" ({cause})") };
+        let _ = self.state.append(aid, "diagnostic", &json!({"runner_error": cause, "error_type": e.kind}));
         self.diagnose(aid, &format!("{}: {what}{detail}; inspect local runner", e.kind));
         if !OWN_INTERRUPT.iter().any(|p| e.text.contains(p)) {
             crate::util::diagnostic(&format!("Tico runner: {bot}: turn {aid} stopped: {}{}", e.kind, if cause.is_empty() { String::new() } else { format!(": {cause}") }));
@@ -1658,7 +1803,7 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_on_a_busy_chatgpt_login_moves_to_its_fallback_or_waits_and_a_wait_ends_on_a_lost_lease_a_stop_or_a_hard_stop() {
+    fn codex_logins_run_together_and_optional_queue_waits_end_on_a_lost_lease_a_stop_or_a_hard_stop() {
         let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
         let path = dir.join("runner.json");
@@ -1666,25 +1811,32 @@ mod tests {
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
-        // Only a ChatGPT sign-in is held; an API key or an unknown sign-in runs side by side.
+        // The built-in Codex manifest never holds a login, including ChatGPT subscriptions.
         let signed_in = |detail: &str| {
             *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "detail": detail}))].into_iter().collect();
             runner.serial_login("codex", "codex", None)
         };
-        assert_eq!(signed_in("Signed in with ChatGPT").map(|l| l.key), Some("codex:".into()));
+        assert_eq!(signed_in("Signed in with ChatGPT"), None);
+        let profile = Profile { name: "work".into(), directory: dir.join("work"), share_operator: false };
+        runner.runtime_rows.lock().unwrap().get_mut("codex").unwrap()["profiles"] =
+            json!({"work": {"detail": "Signed in with ChatGPT"}});
+        assert_eq!(runner.serial_login("codex", "codex", Some(&profile)), None);
+        let shared = Profile { share_operator: true, ..profile };
+        assert_eq!(runner.serial_login("codex", "codex", Some(&shared)), None);
         assert_eq!(signed_in("Signed in with an API key"), None);
         assert_eq!(signed_in(""), None);
         assert_eq!(runner.serial_login("claude", "claude", None), None);
 
-        // Busy login, ready fallback: an ordinary turn moves; a command, or a turn under an active native goal, waits.
+        // Optional queue mechanics remain available to a harness that opts in: an ordinary turn moves to its
+        // fallback; a command or a turn under an active native goal waits.
         *runner.runtime_rows.lock().unwrap() = [("codex".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in with ChatGPT"})),
                                                 ("claude".to_string(), json!({"status": "ready", "installed": true, "authenticated": "ready", "detail": "Signed in"}))].into_iter().collect();
         let config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5", "fallback": {"harness": "claude", "model": "claude-sonnet-5"}});
         let turn = |command: bool| json!({"id": "a1", "bot": "finance", "config": config, "message": {"refs": if command { json!({"command": true}) } else { json!({}) }}});
         let active = json!({"id": "g1", "status": "active", "objective": "Keep the Acme summary current"});
         let paused = json!({"id": "g1", "status": "paused", "objective": "Keep the Acme summary current"});
-        let ops = crate::login_turns::try_take("codex:", "ops").expect("the computer's ChatGPT login is free");
-        assert_eq!(crate::login_turns::try_take("codex:", "finance").map(|_| ()).err().as_deref(), Some("ops"));
+        let ops = crate::login_turns::try_take("codex:", &crate::login_turns::Turn::new("ops", "", crate::login_turns::Class::Other)).expect("the computer's ChatGPT login is free");
+        assert_eq!(crate::login_turns::try_take("codex:", &crate::login_turns::Turn::new("finance", "", crate::login_turns::Class::Other)).map(|_| ()).err().as_deref(), Some("ops"));
         assert!(runner.moves_off_busy_login(&turn(false), &config, None), "an ordinary turn takes the ready fallback");
         assert!(runner.moves_off_busy_login(&turn(false), &config, Some(&paused)), "a goal that is not active does not hold it");
         assert!(!runner.moves_off_busy_login(&turn(true), &config, None), "a command waits");
@@ -1873,6 +2025,149 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_past_the_hold_cap_while_another_waits_stops_at_a_safe_point_and_its_continuation_runs_next() {
+        use crate::login_turns::{Class, Turn};
+        use std::os::unix::fs::PermissionsExt;
+        let key = "codex:test-drive-yield";
+        crate::login_turns::cap_for_test(key, Duration::ZERO);
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "drive-yield");
+        // A stand-in app-server: the turn runs until it is steered, then ends at a safe point on its own.
+        let program = dir.join("codex");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json, os, sys
+def say(m): print(json.dumps(m), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, p = msg.get("method"), msg.get("params") or {}
+    if method == "initialize":
+        say({"id": msg["id"], "result": {}})
+    elif method == "turn/start":
+        say({"id": msg["id"], "result": {"turn": {"id": "t1"}}})
+        say({"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1"}}})
+    elif method == "turn/steer":
+        open(os.environ["FAKE_STEERS"], "a").write(p["input"][0]["text"] + "\n")
+        say({"id": msg["id"], "result": {"turnId": "t1"}})
+        say({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1", "item": {"type": "agentMessage", "id": "m1", "phase": "final_answer", "text": "Pushed my work in progress; stopping here."}}})
+        say({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}}})
+    elif "id" in msg:
+        say({"id": msg["id"], "result": {}})
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let steers = dir.join("steers");
+        let env: crate::env::Env = [("PATH".to_string(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default())),
+                                    ("FAKE_STEERS".to_string(), steers.display().to_string())].into_iter().collect();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
+        host.start().await.unwrap();
+
+        let ops = Turn::new("ops", "#7 Release notes", Class::Other).of("task-7", "a-ops");
+        let mut held = crate::login_turns::try_take(key, &ops).unwrap();
+        held.bind(host.clone());
+        let wait = |turn: Turn| tokio::spawn(async move { crate::login_turns::take(key, &turn).await });
+        let review = wait(Turn::new("reviewer", "#8 Review 1", Class::Review).of("task-8", "a-review"));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let qa = wait(Turn::new("qa", "#9 QA: PR #12", Class::Release).of("task-9", "a-qa"));
+        while !held.cap().due(Instant::now()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+                            done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
+        let wake = Notify::new();
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
+        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
+        let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
+        let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
+            .await.expect("the turn ended at its safe point").unwrap();
+        assert!(drove.yielded && drove.outcome == "completed", "{}", drove.outcome);
+        assert_eq!(drove.reply, "Pushed my work in progress; stopping here.");
+        assert!(std::fs::read_to_string(&steers).unwrap().contains("commit and push your work in progress"));
+        assert!(goal.failure.is_none());
+
+        // The release QA goes first; the yielded turn's continuation comes right after it, ahead of the review.
+        held.give_way();
+        drop(held);
+        let qa_held = tokio::time::timeout(Duration::from_secs(15), qa).await.expect("the waiting QA turn got the login").unwrap();
+        assert_eq!(crate::login_turns::holder(key).as_deref(), Some("qa"));
+        let again = wait(ops);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(qa_held);
+        let continued = tokio::time::timeout(Duration::from_secs(5), again).await.expect("the continuation ran next").unwrap();
+        assert!(!review.is_finished(), "the review went ahead of the continuation");
+        drop(continued);
+        drop(tokio::time::timeout(Duration::from_secs(5), review).await.unwrap().unwrap());
+        server.abort();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_turn_that_ignores_the_ask_to_stop_at_the_cap_is_interrupted_once_its_grace_ends() {
+        use crate::login_turns::{Class, Turn};
+        use std::os::unix::fs::PermissionsExt;
+        let key = "codex:test-drive-grace";
+        crate::login_turns::cap_for_test(key, Duration::ZERO);
+        crate::login_turns::grace_for_test(key, Duration::from_millis(300));
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "drive-grace");
+        // A stand-in app-server whose turn takes the steer and runs on; only an interrupt ends it.
+        let program = dir.join("codex");
+        std::fs::write(&program, r#"#!/usr/bin/env python3
+import json, os, sys
+def say(m): print(json.dumps(m), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        say({"id": msg["id"], "result": {}})
+    elif method == "turn/start":
+        say({"id": msg["id"], "result": {"turn": {"id": "t1"}}})
+        say({"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1"}}})
+    elif method == "turn/steer":
+        say({"id": msg["id"], "result": {"turnId": "t1"}})
+    elif method == "turn/interrupt":
+        open(os.environ["FAKE_INTERRUPTS"], "a").write("t1\n")
+        say({"id": msg["id"], "result": {}})
+        say({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "interrupted"}}})
+    elif "id" in msg:
+        say({"id": msg["id"], "result": {}})
+"#).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let interrupts = dir.join("interrupts");
+        let env: crate::env::Env = [("PATH".to_string(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default())),
+                                    ("FAKE_INTERRUPTS".to_string(), interrupts.display().to_string())].into_iter().collect();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
+        host.start().await.unwrap();
+
+        let mut held = crate::login_turns::try_take(key, &Turn::new("ops", "#7 Release notes", Class::Other).of("task-7", "a-ops")).unwrap();
+        held.bind(host.clone());
+        let review = tokio::spawn(async move { crate::login_turns::take(key, &Turn::new("reviewer", "#8 Review 1", Class::Review)).await });
+        while !held.cap().due(Instant::now()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+                            done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
+        let wake = Notify::new();
+        let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
+                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
+        let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
+        let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
+        let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
+            .await.expect("the turn was interrupted at the end of its grace").unwrap();
+        // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
+        assert!(drove.yielded && drove.outcome == "interrupted", "{}", drove.outcome);
+        assert!(goal.failure.is_none());
+        assert!(std::fs::read_to_string(&interrupts).unwrap().contains("t1"), "the turn was never interrupted");
+        drop(held);
+        drop(tokio::time::timeout(Duration::from_secs(5), review).await.expect("the waiter got the login").unwrap());
+        server.abort();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_held_logins_fallback_that_fails_before_it_starts_ends_the_turn_unstarted_on_the_hold() {
         // The server held the bot's own Claude login and sent the turn to its fallback, which cannot start on this
         // computer (no such harness here): the turn is never acknowledged, and its completion is the one the server
@@ -1910,6 +2205,106 @@ mod tests {
         let replayed: Vec<Value> = events.iter().filter(|e| ["diagnostic", "error"].contains(&e["kind"].as_str().unwrap_or_default()))
             .map(|e| json!({"kind": e["kind"], "payload": e["payload"]})).collect();
         assert_eq!(json!(replayed), fixture["events"], "{events:?}");
+    }
+
+    /// Turns on one session through a fake pi that reads 348 input tokens a turn (runner/tests/fixtures/pi), one per
+    /// (message id, refs) in `turns`, on a task's room or (`task` false) the bot's main chat: (session id of each
+    /// turn, prompt of each turn, the second turn's diagnostics).
+    async fn rotating_turns(rotate_at: i64, task: bool, turns: &[(&str, Value)]) -> (Vec<String>, Vec<String>, Vec<Value>) {
+        let _controls = RunControls;
+        let dir = std::env::temp_dir().join(format!("tico-rotate-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        let script = format!("n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'; cat > '{d}/prompt-'$n; cat '{f}'",
+                             d = dir.display(), f = fixture.display());
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "pi".into()]));
+        let (url, _seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        let history = json!([
+            {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Watch the Acme release.", "refs": {}},
+            {"id": "m2", "from_actor": "bot:ops", "body": "Here's the draft. Send it Friday?", "refs": {}},
+            {"id": "m3", "from_actor": "bot:qa", "body": "Release build 41 failed its smoke test.", "refs": {}},
+            {"id": "m4", "from_actor": "human:ana@acme.example", "body": "Yes, send it Friday", "refs": {}},
+            {"id": "m5", "from_actor": "human:ana@acme.example", "body": "/compact", "refs": {"command": "compact"}},
+        ]);
+        let room = if task { json!({"id": "c-watch", "kind": "task"}) } else { json!({"id": "c-main", "kind": "chat"}) };
+        let task = if task {
+            json!({"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
+                   "checkpoint": "Build 40 green; waiting on build 41.", "checkpoint_at": "2026-10-22T08:00:00Z"})
+        } else {
+            Value::Null
+        };
+        for (n, (message, refs)) in turns.iter().enumerate() {
+            let body = history.as_array().unwrap().iter().find(|m| m["id"] == *message).map_or(json!("Next"), |m| m["body"].clone());
+            let attempt = json!({"id": format!("a-rotate-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
+                                 "lease_seconds": 120, "conversation": room, "task": task,
+                                 "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
+                                 "history": history, "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3", "rotate_at": rotate_at}});
+            tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
+        }
+        server.abort();
+        let sessions = std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
+            .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id").nth(1).unwrap_or_default().to_string()).collect();
+        let prompts = (0..turns.len()).map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).unwrap_or_default()).collect();
+        let diagnostics = runner.state.with(|c| {
+            c.prepare("SELECT payload FROM events WHERE attempt_id='a-rotate-1' AND kind='diagnostic' ORDER BY seq")?
+                .query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()
+        }).unwrap().iter().map(|p| serde_json::from_str(p).unwrap()).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        (sessions, prompts, diagnostics)
+    }
+
+    #[tokio::test]
+    async fn a_session_past_its_limit_starts_the_next_turn_fresh_with_the_tasks_checkpoint() {
+        let (sessions, prompts, diagnostics) = rotating_turns(300, true, &[("m1", json!({})), ("m4", json!({}))]).await;
+        assert_eq!(sessions.len(), 2, "{sessions:?}");
+        assert_ne!(sessions[0], sessions[1], "the second turn resumed the large session");
+        let fresh = &prompts[1];
+        assert!(fresh.contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{fresh}");
+        assert!(fresh.contains("[m3]: Release build 41 failed its smoke test."), "what was said since is missing: {fresh}");
+        assert!(!fresh.contains("[m1]"), "the fresh session is given only what came after the last turn: {fresh}");
+        assert!(fresh.contains("Fresh session:") && fresh.contains("348 input tokens"), "{fresh}");
+        let rotated: Vec<&Value> = diagnostics.iter().filter(|d| d.get("rotated").is_some()).collect();
+        assert_eq!(rotated.len(), 1, "{diagnostics:?}");
+        assert_eq!(rotated[0]["rotated"], json!({"reason": "tokens", "tokens": 348, "turns": 1, "limit": 300}));
+    }
+
+    #[tokio::test]
+    async fn a_rotated_main_chat_sees_the_bots_own_last_reply() {
+        // No task, so no checkpoint: what the bot itself said last is all the fresh session has of its old one.
+        let (sessions, prompts, _) = rotating_turns(300, false, &[("m1", json!({})), ("m4", json!({}))]).await;
+        assert_ne!(sessions[0], sessions[1]);
+        let fresh = &prompts[1];
+        assert!(fresh.contains("[m2]: Here's the draft. Send it Friday?"), "the bot's own last reply is missing: {fresh}");
+        assert!(fresh.contains("hub conversation show c-main"), "no pointer to the older messages: {fresh}");
+        assert!(!fresh.contains("Where this task stood") && fresh.contains("only the conversation since your last turn"), "{fresh}");
+    }
+
+    #[tokio::test]
+    async fn a_session_under_its_limit_resumes_and_compact_keeps_a_large_one() {
+        let (sessions, prompts, diagnostics) = rotating_turns(1000, true, &[("m1", json!({})), ("m4", json!({}))]).await;
+        assert_eq!(sessions.len(), 2, "{sessions:?}");
+        assert_eq!(sessions[0], sessions[1]);
+        assert!(!prompts[1].contains("Where this task stood") && !prompts[1].contains("Fresh session:"), "{}", prompts[1]);
+        assert!(!diagnostics.iter().any(|d| d.get("rotated").is_some()), "{diagnostics:?}");
+        // /compact is for the thread it names, however large.
+        let (sessions, _, diagnostics) = rotating_turns(300, true, &[("m1", json!({})), ("m5", json!({"command": "compact"}))]).await;
+        assert_eq!(sessions[0], sessions[1], "/compact left its thread");
+        assert!(!diagnostics.iter().any(|d| d.get("rotated").is_some()), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn the_result_says_it_rotated_only_to_a_server_that_takes_it() {
+        let r = crate::rotate::Rotation { why: "tokens", tokens: 612_000, turns: 4, limit: 400_000 };
+        let mut sent = Map::new();
+        rotation_field(&mut sent, Some(&r), |_| false);
+        assert!(sent.is_empty());
+        rotation_field(&mut sent, Some(&r), |name| name == "run_rotation");
+        assert_eq!(sent["rotated"], r.report());
     }
 
     #[test]

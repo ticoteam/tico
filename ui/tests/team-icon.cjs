@@ -1,5 +1,5 @@
 // Offline owner Settings upload: type/size checks, stable retries, refresh preservation and roles; the Stale ticket
-// review switch on the same tab, which a local hub's owner gets too.
+// review and Topic changed switches' moved line on the same tab, which a local hub's owner gets too.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -89,27 +89,19 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.reload();
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('#settings-team').count(),0);
-    // A local hub's owner gets the Stale ticket review switch, without the team icon.
+    // A local hub's owner gets the Team card without the team icon; the Stale ticket review and Topic changed switches
+    // moved to Settings > Routines (ui/app/settings-recurring.js): one line with a link, no switch here.
     role = 'owner'; cloud = false;
     await page.reload();
     await page.locator('[data-settings-tab=general]').click();
     assert.equal(await page.locator('#settings-team-icon-change').count(),0);
-    const staleSwitch = page.locator('#settings-stale-review');
-    await page.waitForFunction(() => !document.querySelector('#settings-stale-review').disabled);
-    assert.equal(await staleSwitch.isChecked(),false);
-    await staleSwitch.check();
-    await page.waitForFunction(() => document.querySelector('#settings-stale-review-status').textContent === 'Saved');
-    assert.deepEqual(ruleWrites,[{stale_review:true}]);
-    assert.equal(await staleSwitch.isChecked(),true);
-    // Start fresh when the topic changes (backend/topic_change.py): the same tab, off until turned on, its own write.
-    const topicSwitch = page.locator('#settings-topic-fresh');
-    assert.equal(await topicSwitch.isChecked(),false);
-    await topicSwitch.check();
-    await page.waitForFunction(() => document.querySelector('#settings-topic-fresh-status').textContent === 'Saved');
-    assert.deepEqual(ruleWrites,[{stale_review:true},{topic_fresh:true}]);
-    assert.equal(await topicSwitch.isChecked(),true);
-    assert.equal(await staleSwitch.isChecked(),true, 'turning one rule leaves the other as it was');
+    assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
+    const moved = page.locator('#settings-team [data-settings-moved]');
+    assert.equal(await moved.innerText(),'Moved to Settings > Routines');
+    await moved.click();
+    await page.waitForFunction(() => !document.querySelector('#settings-recurring')?.hidden);
+    assert.deepEqual(ruleWrites,[]);
     assert.deepEqual(errors,[]);
-    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; Stale ticket review and Start fresh when the topic changes switches save');
+    console.log('Team icon: owner-only control, bounded binary uploads, stable retries, refresh preservation and phone layout passed; the moved team switches link to Settings > Routines');
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

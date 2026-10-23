@@ -128,14 +128,25 @@ def install(app, store, auth, mutate, settings):
 
     def limit_view(c, who, bot, default, allowed):
         """A bot's limits as its row shows them: the effective caps and where they came from, the period's spend
-        against them, and whether the caller may change them."""
+        against them, and whether the caller may change them. A hold by a pool names the pool, and its amounts only
+        to someone who sees every bot."""
         found = usage_limits.state(c, bot, default=default)
-        return {**found, "own_daily_usd": usage_limits.own(c, bot)["daily_usd"], "own_monthly_usd": usage_limits.own(c, bot)["monthly_usd"],
-                "may_edit": bot in allowed}
+        if found["blocked_by"] and found["blocked_by"]["scope"] != "bot" and not auth.bot_admin(who):
+            found["blocked_by"] = {k: v for k, v in found["blocked_by"].items() if k not in ("spent", "limit")}
+        mine = usage_limits.own(c, bot)
+        return {**found, **{"own_" + key: mine[key] for key in usage_limits.KEYS}, "may_edit": bot in allowed}
+
+    def pool_views(c, default):
+        """Every group with what it and the whole team are capped at and have spent (the owner and administrators)."""
+        named, _ = usage_limits.groups(c, default)
+        groups = {gid: {"name": g.get("name") or gid, "parent": g.get("parent") or None,
+                        **usage_limits.pool_state(c, "group:" + gid, default=default)} for gid, g in named.items()}
+        return {"company": usage_limits.pool_state(c, usage_limits.COMPANY, default=default), "groups": groups}
 
     @app.get("/api/v2/usage/limits")
     def limits(request: Request):
-        """The company default and the limits of every bot the caller may see usage for."""
+        """The company default, the limits of every bot the caller may see usage for and, for the owner and
+        administrators, the team's and each group's combined limits."""
         who = request.state.identity
         auth.domain(who)
         if who.role not in ("owner", "human"):
@@ -143,7 +154,8 @@ def install(app, store, auth, mutate, settings):
         with store.read() as c:
             default = usage_limits.company(c)
             allowed = own_bots(c, who)
-            return {"default": default, "may_edit_default": bool(auth.bot_admin(who)),
+            admin = bool(auth.bot_admin(who))
+            return {"default": default, "may_edit_default": admin, "pools": pool_views(c, default) if admin else None,
                     "bots": {bot: limit_view(c, who, bot, default, allowed) for bot in sorted(allowed)}}
 
     def valid(value, name):
@@ -152,6 +164,9 @@ def install(app, store, auth, mutate, settings):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value <= usage_limits.MAX_USD:
             raise Problem("limit", f"{name} is an amount in USD above zero, or empty for none", 422)
         return round(float(value), 6)
+
+    def amounts(body):
+        return {key: valid(getattr(body, key), key) for key in usage_limits.KEYS}
 
     @app.put("/api/v2/usage/limits")
     def set_default(request: Request, body: M.UsageDefault):
@@ -162,18 +177,44 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             if not auth.bot_admin(who):
                 raise Problem("forbidden", "Only the owner and administrators set the company default", 403)
-            value = {"daily_usd": valid(body.daily_usd, "daily_usd"), "monthly_usd": valid(body.monthly_usd, "monthly_usd"),
-                     "count_subscription": bool(body.count_subscription)}
+            value = {**amounts(body), "count_subscription": bool(body.count_subscription)}
             c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
                       (usage_limits.KEY, json.dumps(value)))
             H.event(c, who.actor, "usage.default", "company", value)
             return {"default": usage_limits.company(c)}
         return mutate(request, body, work)
 
+    def set_pool(request, scope, body):
+        """A limit on the combined spend of the whole team or a group (owner and bot administrators); empty removes it."""
+        who = request.state.identity
+        auth.domain(who)
+
+        def work(c):
+            if not auth.bot_admin(who):
+                raise Problem("forbidden", "Only the owner and administrators set team and group limits", 403)
+            default = usage_limits.company(c)
+            if scope != usage_limits.COMPANY and scope.split(":", 1)[1] not in usage_limits.groups(c, default)[0]:
+                raise Problem("not_found", "Group not found", 404)
+            caps = amounts(body)
+            usage_limits.save_pool(c, scope, caps, who.actor)
+            H.event(c, who.actor, "usage.pool-set", scope, caps)
+            return {"scope": scope, "limit": usage_limits.pool_state(c, scope, default=usage_limits.company(c))}
+        return mutate(request, body, work)
+
+    @app.put("/api/v2/usage/pools/company")
+    def set_company_pool(request: Request, body: M.UsageLimit):
+        """A limit on every bot's spend together: over it, no bot takes a new job."""
+        return set_pool(request, usage_limits.COMPANY, body)
+
+    @app.put("/api/v2/usage/pools/groups/{group}")
+    def set_group_pool(request: Request, group: str, body: M.UsageLimit):
+        """A limit on the spend of a group's bots together, nested groups included: over it, none of them takes a new job."""
+        return set_pool(request, "group:" + group, body)
+
     @app.put("/api/v2/usage/limits/{bot}")
     def set_limit(request: Request, bot: str, body: M.UsageLimit):
-        """A bot's own daily and monthly limit in estimated USD; empty follows the company default. A person who
-        runs the bot but is not an administrator may not go above the company default."""
+        """A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the company default. A
+        person who runs the bot but is not an administrator may not go above the company default."""
         who = request.state.identity
         auth.domain(who)
 
@@ -185,15 +226,17 @@ def install(app, store, auth, mutate, settings):
             allowed = own_bots(c, who)
             if bot not in allowed:
                 raise Problem("forbidden", "Limits are for a bot's owners and administrators", 403)
-            wanted = {"daily_usd": valid(body.daily_usd, "daily_usd"), "monthly_usd": valid(body.monthly_usd, "monthly_usd")}
+            wanted = amounts(body)
             default = usage_limits.company(c)
             if not auth.bot_admin(who):
                 for key, value in wanted.items():
                     if value is not None and default[key] is not None and value > default[key]:
                         raise Problem("limit", f"The company default is ${default[key]:g}; a bot's limit can be lower, not higher", 403)
-            c.execute("INSERT INTO usage_limits(bot, daily_usd, monthly_usd, updated, updated_by) VALUES(?,?,?,?,?) "
-                      "ON CONFLICT(bot) DO UPDATE SET daily_usd=excluded.daily_usd, monthly_usd=excluded.monthly_usd, "
-                      "updated=excluded.updated, updated_by=excluded.updated_by", (bot, wanted["daily_usd"], wanted["monthly_usd"], H.now(), who.actor))
+            c.execute("INSERT INTO usage_limits(bot, hourly_usd, daily_usd, weekly_usd, monthly_usd, updated, updated_by) "
+                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET hourly_usd=excluded.hourly_usd, "
+                      "daily_usd=excluded.daily_usd, weekly_usd=excluded.weekly_usd, monthly_usd=excluded.monthly_usd, "
+                      "updated=excluded.updated, updated_by=excluded.updated_by",
+                      (bot, *(wanted[key] for key in usage_limits.KEYS), H.now(), who.actor))
             H.event(c, who.actor, "usage.limit-set", H.bot_actor(bot), wanted)
             return {"bot": bot, "limit": limit_view(c, who, bot, default, allowed)}
         return mutate(request, body, work)

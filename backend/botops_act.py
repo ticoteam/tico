@@ -156,7 +156,6 @@ DO = _routes(
     ("POST", rf"bots/{_S}/access"), ("PUT", rf"bots/{_S}/access"),
     ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
     ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
-    ("PUT", "subscriptions"),
     ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
     ("POST", rf"routines/{_S}"), ("POST", rf"routines/{_S}/(delete|run)"),
     ("POST", rf"settings/history/{_S}/undo"),
@@ -193,7 +192,7 @@ DO = _routes(
     # everything (the route says where). Limits are spending: lowering one is always direct; raising one, and the providers,
     # are direct unless the owner's rule says otherwise (TIGHTENED).
     ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
-    ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"),
+    ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),
     ("POST", r"system/update(/check)?"),
@@ -201,7 +200,8 @@ DO = _routes(
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
 # still direct: app.py checks it against what is set.
-TIGHTENED = _routes(("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"))
+TIGHTENED = _routes(("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"),
+                    ("PUT", rf"usage/pools/(company|groups/{_S})"))
 LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
@@ -221,7 +221,8 @@ MESSAGES = re.compile(API + r"messages")
 
 # Confirm-card routes only an owner or an admin may ask for: a member is told so at once, not handed a card that fails.
 ADMIN_ONLY = _routes(
-    ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("POST", rf"(runners|computers)/{_S}/member-bots"),
+    ("PUT", r"providers"), ("PUT", r"access/(limits|allow)"), ("PUT", r"usage/limits"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
+    ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
     ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
 )

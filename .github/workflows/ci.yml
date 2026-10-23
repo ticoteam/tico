@@ -131,6 +131,14 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('candidate/package-lock.json') }}
+      - name: Use the canonical Ubuntu package mirror
+        if: steps.browsers.outputs.needed == 'true'
+        # Keep the signed Ubuntu packages; avoid Azure mirror stalls before tests start.
+        run: |
+          sudo sed -i \
+            -e 's|mirror+file:/etc/apt/apt-mirrors.txt|https://archive.ubuntu.com/ubuntu/|g' \
+            -e 's|http://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
+            /etc/apt/sources.list.d/ubuntu.sources
       - name: Install browsers
         if: steps.browsers.outputs.needed == 'true'
         working-directory: candidate

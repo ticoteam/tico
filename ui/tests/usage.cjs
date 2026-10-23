@@ -44,8 +44,9 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
       const config = {version: '0.2.18', update: null, app_name: 'Tico', usage_count_notice: false};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json({default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true, bots: {}});
-      if (p.startsWith('/api/v2/usage/limits') && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData())]); return json({ok: true}); }
+      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json({default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true, bots: {},
+        pools: {company: {hourly_usd: 10, hour_spent: 4}, groups: {revenue: {name: 'Revenue', parent: null}}}});
+      if (/^\/api\/v2\/usage\/(limits|pools)/.test(p) && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData())]); return json({ok: true}); }
       if (p === '/api/v2/usage') {
         const q = Object.fromEntries(url.searchParams);
         asked.push(q);
@@ -120,13 +121,23 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await cap.locator('[name=daily_usd]').fill('7.5');
     await cap.locator('button[type=submit]').click();
     await cap.waitFor({state: 'detached'});
-    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits/sales', {daily_usd: 7.5, monthly_usd: null}]);
+    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits/sales', {hourly_usd: null, daily_usd: 7.5, weekly_usd: null, monthly_usd: null}]);
     await page.locator('#use-default').click();
     await cap.locator('[name=monthly_usd]').fill('300');
     await cap.locator('[name=count_subscription]').check();
     await cap.locator('button[type=submit]').click();
     await cap.waitFor({state: 'detached'});
-    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits', {daily_usd: 20, monthly_usd: 300, count_subscription: true}]);
+    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits', {hourly_usd: null, daily_usd: 20, weekly_usd: null, monthly_usd: 300, count_subscription: true}]);
+    // The team's and a group's combined limits: the team's cap and spend show, and a group is chosen and saved.
+    await page.locator('#use-pools').click();
+    assert.equal(await cap.locator('[name=hourly_usd]').inputValue(), '10');
+    assert.match(await cap.locator('[data-use-spent]').innerText(), /of \$10 this hour/);
+    await cap.locator('[name=scope]').selectOption('group:revenue');
+    assert.equal(await cap.locator('[name=hourly_usd]').inputValue(), '');
+    await cap.locator('[name=hourly_usd]').fill('2');
+    await cap.locator('button[type=submit]').click();
+    await cap.waitFor({state: 'detached'});
+    assert.deepEqual(puts.at(-1), ['/api/v2/usage/pools/groups/revenue', {hourly_usd: 2, daily_usd: null, weekly_usd: null, monthly_usd: null}]);
 
     // The range switch asks for the days it says.
     for (const [label, expect] of [['Today', [day(0), day(0)]], ['30 days', [day(29), day(0)]], ['This month', [day(0).slice(0, 8) + '01', day(0)]]]) {

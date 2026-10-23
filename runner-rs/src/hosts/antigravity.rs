@@ -186,7 +186,7 @@ impl AntigravityHost {
     fn command(&self, settings: &Settings, effort: Option<&str>, provider: Option<&str>) -> Result<Command, HostError> {
         let argv = argv(&self.0.cmd, settings, effort, provider)?;
         let mut command = crate::isolation::command(&argv[0]);
-        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).current_dir(&settings.cwd);
+        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd);
         if !settings.env.is_empty() {
             command.env_clear().envs(&settings.env);
         }
@@ -203,6 +203,11 @@ impl AntigravityHost {
     fn spawn(&self, settings: &Settings, effort: Option<&str>, provider: Option<&str>) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
         let mut command = self.command(settings, effort, provider)?;
         let mut child = command.spawn().map_err(|e| failed(format!("could not start agy: {e}")))?;
+        let host = self.clone();
+        let _stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
+            let inner = host.inner();
+            if inner.turn.is_some() { let _ = inner.tx.send(value); }
+        }, &settings.env);
         log(&format!("antigravity: agy started pid {}", child.id().map_or("?".into(), |p| p.to_string())));
         let stdout = child.stdout.take().ok_or_else(|| failed("agy has no stdout"))?;
         let mut stdin = child.stdin.take();
@@ -217,11 +222,17 @@ impl AntigravityHost {
         });
         let (kill, mut asks) = mpsc::unbounded_channel::<i32>();
         let (done, exited) = watch::channel(false);
+        let host = self.clone();
         tokio::spawn(async move {
             let mut asking = true;
             loop {
                 tokio::select! {
-                    _ = child.wait() => break,
+                    status = child.wait() => {
+                        let code = super::return_code(&status);
+                        let inner = host.inner();
+                        let _ = inner.tx.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
+                        break;
+                    },
                     sig = asks.recv(), if asking => match sig {
                         // Not reaped yet: only this task waits for the child, so the group is still its own.
                         Some(sig) => if let Some(pid) = child.id() {

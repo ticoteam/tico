@@ -71,6 +71,31 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert response.status_code == 403
 
 
+def test_a_bot_can_create_its_51st_worktree_but_not_its_101st(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        filler = H.task_create(c, 'human:ana', 'Parked work', 'Existing checkouts', 'bot:cmo')['id']
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (filler,))
+
+    def seed(start, stop):
+        with api.app_state.store.transaction() as c:
+            for i in range(start, stop):
+                link = uuid.uuid4().hex
+                c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,path,detail_json) "
+                          "VALUES(?,?,'worktree',?,'Parked','present','bot:cmo',?,'Acme/product',?,?)",
+                          (link, filler, 'worktree:' + link, H.now(), f'tasks/{filler[:8]}/parked{i}',
+                           json.dumps({'owner': 'bot:cmo'})))
+
+    seed(0, 50)
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert response.status_code == 200, response.text
+    seed(50, 99)  # 99 parked checkouts plus the newly created one fill all 100 places.
+    refused = post(api, f'tasks/{filler}/worktrees', {'repo': 'Acme/product'}, 'bot-test')
+    assert refused.status_code == 409, refused.text
+    assert refused.json()['error']['code'] == 'worktree_limit'
+    assert refused.json()['error']['limit'] == 100
+
+
 def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
@@ -368,6 +393,19 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/2')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
+    # Once the follow-up also merges, the computer can finish cleanup while the ticket still waits for release.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (tid,))
+    body['worktrees'][0].update(ahead=0, dirty_files=0)
+    assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['release'] is True
+    body['worktrees'][0]['state'] = 'removed'
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    with api.app_state.store.read() as c:
+        assert H.task(c, tid)['status'] == 'waiting'
+        assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'removed'
+        released = c.execute("SELECT detail_json FROM events WHERE action='worktree.released' AND target=? "
+                             "AND json_extract(detail_json,'$.link')=?", (tid, link['link_id'])).fetchone()
+        assert json.loads(released[0])['reason'] == 'pull request merged'
 
 
 def test_a_released_worktree_refused_for_unpushed_commits_is_tried_again_after_a_push(prepared):
@@ -1041,3 +1079,67 @@ def test_a_delayed_old_push_clears_on_the_next_clean_report_and_a_real_fix_forwa
     report['state'] = 'removed'
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert released_events(api, tid)[-1]['reason'] == f"pull request merged (stale push {'a' * 12} cleared)"
+
+
+def test_a_stale_pending_tree_whose_pull_requests_finished_is_released_without_a_retry_nudge(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    old = H.shift(H.now(), hours=-(W.PENDING_HOURS + 1))
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        detail.update(checkout_state='checkout_ready', current_branch=link['branch'], last_commit='c' * 40,
+                      expected_head='a' * 40, checkout_target='refs/remotes/origin/main', expected_base='b' * 64)
+        c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?', (json.dumps(detail), old, link['link_id']))
+        H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
+        c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
+    actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': []}, 'runner-test').json()['worktree_actions']
+    assert [(a['action'], a.get('release')) for a in actions] == [('remove', True)]
+    with api.app_state.store.read() as c:
+        assert not c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:cmo' AND body LIKE '%Setup did not finish%'"
+                             ).fetchone()[0]
+        assert 'pending_expired' not in json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?',
+                                                             (link['link_id'],)).fetchone()[0])
+
+
+def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
+    api, tid, _ = prepared
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))        # cmo's turn on the task is running
+        assert W.live_turn(c, tid, 'bot:cmo')
+        assert not W.live_turn(c, tid, 'bot:cpo')                               # a reviewer's or other bot's view
+        c.execute("UPDATE tasks SET owner='bot:cpo' WHERE id=?", (tid,))        # the task moved to another bot
+        assert not W.live_turn(c, tid, 'bot:cmo')                               # the former owner's turn holds nothing
+        row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
+        assert W.held_reason(c, row, {}) == ''
+
+
+def test_a_fault_reading_turns_is_raised_not_taken_for_no_live_turn(prepared):
+    import sqlite3
+    api, tid, _ = prepared
+
+    class Failing:
+        def __init__(self, c, message):
+            self.c, self.message = c, message
+
+        def execute(self, sql, *args):
+            if 'FROM attempts' in sql:
+                raise sqlite3.OperationalError(self.message)
+            return self.c.execute(sql, *args)
+    with api.app_state.store.read() as c:
+        assert not W.live_turn(Failing(c, 'no such table: attempts'), tid, 'bot:cmo')    # a local hub
+        with pytest.raises(sqlite3.OperationalError):
+            W.live_turn(Failing(c, 'database disk image is malformed'), tid, 'bot:cmo')
+
+
+def test_a_new_push_after_a_stale_push_was_cleared_resets_the_cleared_flag(prepared):
+    from backend import github
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
+    with api.app_state.store.transaction() as c:
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+        c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+                  (json.dumps({**detail, 'stale_push_cleared': 'a' * 40}), link['link_id']))
+        github.push(c, {'ref': 'refs/heads/' + link['branch'], 'after': 'd' * 40,
+                        'repository': {'full_name': 'Acme/product', 'default_branch': 'main'}})
+        detail = json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
+    assert detail['pushed'] == 'd' * 40 and 'stale_push_cleared' not in detail

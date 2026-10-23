@@ -77,7 +77,9 @@ The task shows it ("Waits for PR #943 to merge"). When the pull request merges o
 GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
 A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
 never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
-named (`release:<owner>/<repo>@v0.3.64`). The MCP tool is `hub_task_wait`; the API is
+named (`release:<owner>/<repo>@v0.3.64`), and a version tag only (major.minor at least). Who may add or remove a
+wait is who may add a blocked_by: the task's owner, or a person on a team that moves tasks. A deleted task keeps its
+waits in the trash and gets them back when restored. The MCP tool is `hub_task_wait`; the API is
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
@@ -161,11 +163,11 @@ minutes and waiting on nothing of its own (no blocker, no unanswered question, n
 snooze, stored resume or milestone wait), the task counts as stalled even while `waiting`: its bot
 is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
 
-Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
+Task worktrees have a separate lifecycle. The 100-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
-request continues to occupy its slot until the runner removes it. For merged work that is still
-awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed
-just to free space.
+request continues to occupy its slot until the runner removes it. When all linked pull requests
+finish, clean worktrees are released even while the task awaits release or post-release QA.
+Trees with unpushed work stay and show the reason. Keep the task at its real step; do not mark it Done or Closed just to free space.
 
 ## Picking work back up
 
@@ -203,11 +205,11 @@ suggestions cover the quiet week.
 Stale ticket review finds open tasks that look finished or forgotten and suggests what to do with
 them. It only suggests: nothing changes unless the task's owner accepts.
 
-**Turn it on.** Go to **Settings > General** and switch on **Stale ticket review**. It is off by
-default, and an owner or an admin can turn it on or off. (A server started with
+**Turn it on.** Go to **Settings > Routines** and switch on **Stale ticket review**. It is off by
+default, and an owner or an admin can turn it on or off, pick how often it runs, or run it now. (A server started with
 `TICO_STALE_REVIEW=1` has it on by default; a choice saved in Settings wins.)
 
-**What it looks for.** Once an hour, Tico checks every open, doing, waiting and review task that is
+**What it looks for.** Once an hour (or on the schedule picked in Settings > Routines), Tico checks every open, doing, waiting and review task that is
 not snoozed and has no run going. A task is a candidate when one of these is true:
 
 - every pull request linked to it is merged, closed or shipped;
@@ -656,6 +658,11 @@ turn) gets one "Status check: checkpoint where you are, or mark it blocked or do
 later with still no progress its bot is retried once; thirty minutes after that, still with no progress, it is reported
 stuck in the main chat and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
 share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
+
+An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
+Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
+wake the bot as before, and leased or running sessions keep their recovery checks
+([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
 
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and

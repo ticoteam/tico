@@ -60,9 +60,25 @@ pub fn limit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
+            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
         )
         .unwrap()
+    })
+}
+
+/// A provider out of capacity for the moment, not a login's quota (backend/login_holds.py _CAPACITY_RE, _QUOTA_RE):
+/// still a limit, so a fallback can take the turn, but the server holds the login for minutes, not a quota backoff.
+fn capacity_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)model is at capacity|no capacity available|\boverloaded(?:_error)?\b|\b(?:code|status|http) 503\b|(?:retry|try again) (?:after|in) \d+(?:\.\d+)? ?(?:s|secs?|seconds)\b").unwrap()
+    })
+}
+
+fn quota_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|quota|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|out_of_credit|billing|\bresets?\b").unwrap()
     })
 }
 
@@ -93,6 +109,11 @@ fn secretish_re() -> &'static Regex {
 
 pub fn is_limit(text: &str) -> bool {
     limit_re().is_match(text)
+}
+
+/// Whether a limit notice is the provider's temporary model capacity: quota or billing words in it win.
+pub fn is_capacity(text: &str) -> bool {
+    capacity_re().is_match(text) && !quota_re().is_match(text)
 }
 
 pub fn is_auth_rejected(text: &str) -> bool {
@@ -658,6 +679,15 @@ mod tests {
         assert!(!is_limit("Raise the storage quota for the team drive"));
         assert!(!is_limit("Quota: 40 of 100 seats used"));
         assert!(!is_limit("write /tmp/out: Disk quota exceeded (os error 122)"));
+        // Capacity is a limit (a fallback may take the turn) but not quota; the plan's quota stays quota.
+        assert!(is_limit("Selected model is at capacity. Please try a different model.") && is_capacity("Selected model is at capacity. Please try a different model."));
+        assert!(is_capacity("HTTP 503 overloaded"));
+        // An API's structured refusal ("overloaded_error"): the underscore is a word character, so it needs its own match.
+        let structured = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Server busy"}}"#;
+        assert!(is_limit(structured) && is_capacity(structured));
+        assert!(!is_capacity("Quota exceeded. Check your plan and billing details."));
+        assert!(!is_capacity("API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-19T00:00:00Z. (rate_limit_error)"));
+        assert!(!is_capacity("You've hit your usage limit"));
         assert!(is_auth_retryable("OAuth: failed to refresh OAuth token"));
         assert!(!is_auth_retryable("unexpected status 401 Unauthorized: Invalid API key"));
         assert!(is_auth_rejected("Invalid API key · Please run /login"));

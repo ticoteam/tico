@@ -179,8 +179,8 @@ def test_turning_it_off_ends_an_open_overload(api):
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
 
 
-def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id(api):
-    """The computer list shows a bot only some computers; performance is every bot's to read, by label or id. An unknown
+def test_a_bot_discovers_computers_and_reads_performance_by_label_or_id(api):
+    """The computer list lets bots discover computers; performance is every bot's to read, by label or id. An unknown
     name and a removed computer's get the same answer, and a caller who may not read it learns nothing either way."""
     from backend.tests.test_mcp import call
     r, _, attempt = setup_attempt(api)
@@ -191,7 +191,7 @@ def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone))
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))    # not opened to members' bots
     bot = attempt["token"]
-    assert get(api, "computers", token=bot)["computers"] == []
+    assert rid in {x["id"] for x in get(api, "computers", token=bot)["computers"]}
     for wanted in ("Test Mac", "test mac ", rid):
         failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=bot)
         assert not failed, seen

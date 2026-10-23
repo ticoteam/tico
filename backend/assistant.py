@@ -379,6 +379,7 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
 # answers with a card): the same click, on more routes.
 _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/access/(limits|allow)"), ("PUT", r"/api/v2/usage/limits(/[^/]+)?"),
+    ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
     ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
     ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"), ("POST", r"/api/v2/system/update"),
     ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"), ("POST", r"/api/v2/support/tickets"),
@@ -599,6 +600,8 @@ def describe(c, method, path, body):
         (r"/api/v2/providers", lambda g: "Change the company's AI providers"),
         (r"/api/v2/access/(limits|allow)", lambda g: "Change who may sign in or what members may do: " + fields(body)),
         (r"/api/v2/usage/limits(?:/([^/]+))?", lambda g: ("Change the spending limit of " + bot(g[0]) if g[0] else "Change the company's spending limit")
+         + ": " + ", ".join(f"{spoken(k[:-4])} {'none' if v is None else '$' + format(v, 'g')}" for k, v in body.items() if k.endswith("_usd"))),
+        (r"/api/v2/usage/pools/(?:company|groups/([^/]+))", lambda g: ("Change the combined spending limit of the " + (g[0] + " group" if g[0] else "whole team"))
          + ": " + ", ".join(f"{spoken(k[:-4])} {'none' if v is None else '$' + format(v, 'g')}" for k, v in body.items() if k.endswith("_usd"))),
         (r"/api/v2/(?:runners|computers)/([^/]+)/(member-bots|revoke|restart)", lambda g: {
             "member-bots": "Let a computer take members' bots" if body.get("accepts") else "Stop a computer taking members' bots",
