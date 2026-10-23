@@ -63,6 +63,8 @@ def test_server_tables_come_from_the_manifests():
     from backend import model_login, providers
     assert set(model_login.RUNTIMES) == {"codex", "claude", "musecode", "grok", "cursor"}
     assert model_login.PASTE_RUNTIMES == ("claude",)
+    assert manifests.caps("musecode")["sign_out"] is True
+    assert "musecode" in model_login.SIGN_OUT_RUNTIMES
     assert providers.MODEL_KEYS["codex"] == ("OPENAI_API_KEY",) and "gemini" not in providers.MODEL_KEYS
 
 

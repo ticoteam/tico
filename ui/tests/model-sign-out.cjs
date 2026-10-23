@@ -1,5 +1,5 @@
 // Sign out and Switch account from the app (ui/model-login.js, backend/model_login.py). In a computer's pop-up on
-// Settings > Computers each signed-in Codex or Claude Code connection, the computer's one login for that tool,
+// Settings > Computers each signed-in Codex, Claude Code or Muse Code connection, the computer's one login for that tool,
 // offers Switch account and Sign out to the computer's operator or an admin, only while the computer is online. Sign out first names the bots that
 // stop, then asks the computer and follows it to Signed out; a computer login someone signed out reads Signed out and
 // offers Sign in and Use the shared key. Switch account is the sign-in dialog, titled as a switch, posting switch: true,
@@ -28,9 +28,10 @@ const {unrouted} = require('./support/routes.cjs');
           codex: {installed: true, authenticated: 'ready', account: {email: 'old@acme.example', plan: 'pro', kind: 'subscription', checked_at: at(-60000)}},
           claude: {installed: true, authenticated: 'ready', account: {email: 'chris@acme.example', plan: 'max', checked_at: at(-60000)}},
           gemini: {installed: true, authenticated: 'ready'},
+          musecode: {installed: true, authenticated: 'ready'},
         },
-        harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude'), gemini: chip('Gemini CLI', 'gemini')}},
-      profiles: [{name: 'acme', display_name: 'Acme', runtimes: {codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}}}]});
+        harnesses: {codex: chip('Codex', 'codex'), claude: chip('Claude Code', 'claude'), gemini: chip('Gemini CLI', 'gemini'), musecode: chip('Muse Code', 'musecode')}},
+      profiles: [{name: 'acme', display_name: 'Acme', runtimes: {codex: {signed_in: true, account: {email: 'dev@acme.example', plan: 'pro'}}, musecode: {signed_in: true}}}]});
 
     async function open(as = 'sam') {
       const box = fixture(), writes = [], rows = {};
@@ -142,6 +143,29 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(await buttons(own('claude')), ['Switch account', 'Switch to API key', 'Sign out']);
     assert.equal(await table.locator('[data-connection^="profile:"]').count(), 0, 'a leftover named subscription has no line');
     assert.deepEqual(await buttons(own('gemini')), [], 'no logout in its manifest: nothing to offer');
+
+    // Muse has no account metadata; its signed-in file still enables both controls at both widths.
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 900});
+      assert.deepEqual(await buttons(own('musecode')), ['Switch account', 'Sign out']);
+      for (const row of [own('musecode')]) {
+        assert.ok(await row.getByRole('button', {name: 'Switch account', exact: true}).isVisible());
+        assert.ok(await row.getByRole('button', {name: 'Sign out', exact: true}).isVisible());
+      }
+    }
+    await page.setViewportSize({width: 1440, height: 900});
+    // The same Muse capability enables key recovery and subscription switching for the computer's own login.
+    const museActions = await page.evaluate(() => {
+      const actions = options => window.TicoModelLogin.actionsHTML({runnerId: 'box', runtime: 'musecode', ...options});
+      const labels = html => {
+        const row = document.createElement('div');
+        row.innerHTML = html;
+        return Array.from(row.querySelectorAll('button'), b => b.getAttribute('aria-label') || b.textContent);
+      };
+      return [labels(actions({signedOut: true})), labels(actions({signedOut: true, profile: 'acme'})),
+        labels(actions({signedIn: true, onKey: true}))];
+    });
+    assert.deepEqual(museActions, [['Use the shared key'], [], ['Switch to subscription', 'Sign out']]);
 
     // Sign out: off while the bots that stop are looked up and when the lookup fails, which offers Try again; then
     // the confirmation names them. Cancel sends nothing.
