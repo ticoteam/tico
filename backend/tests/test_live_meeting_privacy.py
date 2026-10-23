@@ -489,6 +489,8 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         assert len(task_calls) <= 110, len(task_calls)
         with pytest.raises(Problem, match="too deep"):
             index.message(H.message(c, "shared-chain-99"), include_run=False)
+        with pytest.raises(Problem, match="too deep"):
+            task_privacy.message_tasks(c, H.message(c, "shared-chain-99"))
         # Permission results are never memoized, even when provenance is reused.
         c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
         assert not index.readable("bot:ops", ids)
@@ -506,6 +508,7 @@ def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(li
         expected = {mid, "missing-meeting"}
         assert cyclic.message(H.message(c, "shared-chain-3"), include_run=False) == expected
         assert cyclic.message(H.message(c, "shared-chain-4"), include_run=False) == expected
+        assert task_privacy.message_tasks(c, H.message(c, "shared-chain-3")) == task_privacy.message_tasks(c, H.message(c, "shared-chain-4"))
 
 
 

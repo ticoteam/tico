@@ -105,8 +105,11 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     # Only complete root traversals are reusable. A nested traversal can skip ancestors
     # already visited by its caller, so caching that partial result would lose provenance.
     values = read_cache.cache(c)
-    cache_key = ("message_tasks", mid, include_run, message.get("conversation_id"),
-           json.dumps(message.get("refs") or H._json(message.get("refs_json"), {}) or {}, sort_keys=True),
+    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    run = refs.get("run") if isinstance(refs, dict) else None
+    has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+    cache_key = ("message_tasks", mid, bool(include_run and has_run), message.get("conversation_id"),
+           json.dumps(refs, sort_keys=True),
            message.get("in_reply_to"))
     cached = values.get(cache_key) if values is not None else None
     if cached is not None:
