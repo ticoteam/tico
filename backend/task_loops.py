@@ -6,6 +6,7 @@ requester get one notice a day while it lasts.
 """
 from . import hubdb as H
 
+# A burst of status changes belongs to one task history.
 LOOP_CHANGES = 20       # status changes ...
 LOOP_HOURS = 24         # ... within this many hours flag a task
 FLAG_KEY = "task-loop:"  # registry_metadata: when a task's people were last told
