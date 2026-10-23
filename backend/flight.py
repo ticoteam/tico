@@ -154,21 +154,39 @@ def _site(frames):
     return None
 
 
-def begin(conn, recorder=None):
+def begin(conn, recorder=None, *, gate=None, checkout=None):
     """`BEGIN IMMEDIATE`, timed for the flight recorder: how long the write lock took to get (counted while it is still
     being waited for, so a stall can see it) and, when the returned `done` is called after COMMIT or ROLLBACK, how
-    long it was held."""
+    long it was held. `checkout` borrows a connection after queue admission, so waiters do not drain the read pool."""
     rec = recorder or getattr(conn, "recorder", None) or ACTIVE
     if rec is None:
-        conn.execute("BEGIN IMMEDIATE")
-        return _nothing
+        if gate is not None:
+            gate.acquire()
+        try:
+            if checkout is not None:
+                conn = checkout()
+            conn.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            if gate is not None:
+                gate.release()
+            raise
+        return gate.release if gate is not None else _nothing
     token = next(_TOKENS)
     started = time.monotonic()
     rec.waiting[token] = started
+    acquired = False
     try:
+        if gate is not None:
+            gate.acquire()
+            acquired = True
+        if checkout is not None:
+            conn = checkout()
         conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as exc:
-        rec.transaction((time.monotonic() - started) * 1000, 0.0, "locked" in str(exc))
+    except BaseException as exc:
+        if acquired:
+            gate.release()
+        rec.transaction((time.monotonic() - started) * 1000, 0.0,
+                        isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc))
         raise
     finally:
         rec.waiting.pop(token, None)
@@ -179,6 +197,8 @@ def begin(conn, recorder=None):
     def done():
         rec.holding.pop(token, None)
         hold_ms = (time.monotonic() - held) * 1000
+        if gate is not None:
+            gate.release()
         rec.transaction((held - started) * 1000, hold_ms)
         if hold_ms >= LONG_HOLD_MS:             # who held it: the call site is read only for a long hold
             rec.long_hold(route, _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)

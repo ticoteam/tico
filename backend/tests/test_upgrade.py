@@ -55,6 +55,28 @@ def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):
     assert state(path)[0] == len(H.MIGRATIONS)
 
 
+@pytest.mark.parametrize("version", [38, 39])
+def test_purpose_migration_backfills_unlabelled_turns_and_keeps_caller_labels(tmp_path, version):
+    conn = H.connect(tmp_path / "purpose.sqlite")
+    try:
+        # A file may have the column before recording the version bump.
+        conn.execute(f"PRAGMA user_version={version}")
+        conn.executemany("INSERT INTO turns(id,bot,started,trigger_kind,purpose) VALUES(?,?,'2026-01-01',?,?)",
+                         [("builder", "pr-reviewer", "pr_checks", None),
+                          ("reviewer", "pr-reviewer-sol", "status_or_relation", None),
+                          ("unknown", "ops", None, None),
+                          ("named", "pr-reviewer", "pr_checks", "prepare release")])
+        H.migrate(conn)
+        expected = {"builder": "handle PR checks", "reviewer": "review PR", "unknown": "unknown",
+                    "named": "prepare release"}
+        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
+        H.migrate(conn)
+        assert dict(conn.execute("SELECT id,purpose FROM turns")) == expected
+    finally:
+        conn.close()
+
+
 def test_failed_migration_leaves_version_behind(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
     monkeypatch.setattr(H, "MIGRATIONS", H.MIGRATIONS[:1] + ["CREATE TABLE half(x);\nSELECT * FROM missing;"])

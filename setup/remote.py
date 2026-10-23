@@ -205,9 +205,9 @@ def bootstrap_script(*, os_family: str, domain: str, front_door: str, compose: b
     and as the pasted install command (env embedded)."""
     d = contract.REMOTE_DIR
     q = shlex.quote
-    L = ["#!/bin/bash", "set -eu", "exec > >(tee -a /var/log/tico-setup.log) 2>&1", "echo tico-setup: start $(date -u)"]
+    L = ["#!/bin/bash", "set -eu", f"exec > >(tee -a {BOOT_LOG}) 2>&1", "echo tico-setup: start $(date -u)"]
     L += docker_install_lines(os_family, need_aws_cli=bool(env_param))
-    L += [f"mkdir -p {d}"]
+    L += [f"mkdir -p {d}", *company_file_dir_lines()]
     if compose is not None:
         L += [f"echo {_b64gz(compose)} | base64 -d | gunzip > {d}/compose.yaml"]
     else:
@@ -216,7 +216,8 @@ def bootstrap_script(*, os_family: str, domain: str, front_door: str, compose: b
         name, region = env_param
         L += [f"cat > {d}/pull-env.sh <<'EOS'", "#!/bin/sh", "set -eu", "umask 077",
               f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
-              f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env", "EOS",
+              f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env",
+              *plan_copy_lines(), "EOS",
               f"chmod 700 {d}/pull-env.sh", f"{d}/pull-env.sh"]
     else:
         L += ["umask 077", f"echo {env_b64} | base64 -d > {d}/.env"]
@@ -226,6 +227,102 @@ def bootstrap_script(*, os_family: str, domain: str, front_door: str, compose: b
               f"for i in $(seq 1 80); do getent hosts {q(domain)} | grep -q {q(wait_for_ip)} && break; sleep 15; done"]
     L += [f"cd {d} && docker compose pull --quiet && docker compose up -d", f"touch {d}/.bootstrapped", "echo tico-setup: done"]
     return "\n".join(L) + "\n"
+
+
+BOOT_LOG = "/var/log/tico-setup.log"
+
+
+def finish_boot_guard_lines() -> list[str]:
+    """A re-run touches a server whose boot either finished (.bootstrapped) or stopped: its log's last tico-setup line is
+    its FAILED one. A first boot still going is left alone. Not a lock: two re-runs started at once both pass it."""
+    return [f"if [ ! -f {contract.REMOTE_DIR}/.bootstrapped ] && ! grep 'tico-setup:' {BOOT_LOG} 2>/dev/null | tail -n 1 "
+            "| grep -q 'tico-setup: FAILED'; then",
+            '  echo "tico-setup: the first boot is still running; not taking it over. Re-run setup once it ends." >&2',
+            '  exit 5', 'fi']
+
+
+def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
+    """A re-run on an existing AWS server, by SSM: refresh the env and restart, or finish a first boot that stopped. With
+    the plan bucket it first installs this release's compose.yaml, the folder it mounts and the copy step (a server set up
+    before them has none), pulls this release's image, and checks that the running app reads the plan: setup deletes
+    the bucket's copy only after that. Any failure stops here with its line, the bucket's copy kept for the next run."""
+    d, q = contract.REMOTE_DIR, shlex.quote
+    L = ["set -eu", "umask 077", *finish_boot_guard_lines()]
+    if plan:
+        L += company_file_dir_lines()
+        L += [f"echo {_b64gz(compose)} | base64 -d | gunzip > {d}/compose.yaml.new" if compose is not None else
+              f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml.new", f"mv {d}/compose.yaml.new {d}/compose.yaml"]
+    L += [f"{d}/pull-env.sh"]
+    if plan:
+        L += plan_copy_lines()
+    L += [f"cd {d}", *(["docker compose pull --quiet", *plan_read_lines(running=False)] if plan else []), "docker compose up -d"]
+    if plan:
+        L += plan_read_lines()
+    L += [f"if [ ! -f {d}/.bootstrapped ]; then",
+          f"  touch {d}/.bootstrapped && echo \"tico-setup: done, finished by a re-run of setup $(date -u)\" >> {BOOT_LOG}", "fi"]
+    return "\n".join(L) + "\n"
+
+
+# Run by the server's image with the plan's sha256: exits 0 only when the app's own reader returns exactly that plan, so
+# an image from before TICO_COMPANY_FILE, an older plan left in place or a plan in the env never passes.
+PLAN_READ = ("import hashlib, sys; from backend.config import _company_file_data as f; "
+             "sys.exit(0 if hashlib.sha256(f().encode('ascii')).hexdigest() == sys.argv[1] else 1)")
+
+
+def plan_read_lines(running: bool = True) -> list[str]:
+    """In the server's folder: the app reads the plan setup selected. Before `docker compose up -d` (running=False) a
+    one-off container of the pulled image checks it, so an image that cannot read it is never started; after, the running
+    server checks it."""
+    d, q = contract.REMOTE_DIR, shlex.quote
+    run = ("docker compose exec -T server python" if running else
+           "docker compose run --rm --no-deps -T --entrypoint python server")
+    return [f"plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
+            "plan_try=1",
+            f'until {run} -c {q(PLAN_READ)} "$plan_sha" >/dev/null 2>&1; do',
+            '  [ "$plan_try" -ge ' + ("12" if running else "1") + ' ] && { echo "tico-setup: FAILED: the '
+            + ("running app" if running else "image") + ' does not read the starter plan; it stays in the plan bucket" >&2; exit 6; }',
+            "  plan_try=$((plan_try + 1)); sleep 10",
+            "done"]
+
+
+def company_file_dir_lines() -> list[str]:
+    """The folder compose.yaml mounts read-only into the server (contract.COMPANY_FILE_MOUNT), there even without a plan,
+    readable only by the server's user (10001, Dockerfile)."""
+    f = f"{contract.REMOTE_DIR}/{contract.COMPANY_FILE_DIR}"
+    return [f"mkdir -p {f}", f"chown 10001:10001 {f}", f"chmod 700 {f}"]
+
+
+def plan_copy_lines() -> list[str]:
+    """pull-env.sh, after the .env: with TICO_COMPANY_FILE_S3 set (--plan-bucket), copy the starter plan once with the
+    server's role and check its sha256. A mismatch stops the boot, so a wrong team never installs. A copy already in
+    place with the right sha256 is kept: setup deletes the bucket's copy once the server is up."""
+    d = contract.REMOTE_DIR
+    f = f"{d}/{contract.COMPANY_FILE_DIR}/{contract.COMPANY_FILE_NAME}"
+    return [f"plan_src=$(sed -n 's/^TICO_COMPANY_FILE_S3=//p' {d}/.env)",
+            'if [ -n "$plan_src" ]; then',
+            f"  plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' {d}/.env)",
+            f"  plan_region=$(sed -n 's/^TICO_COMPANY_FILE_S3_REGION=//p' {d}/.env)",
+            f'  if [ "$(sha256sum {f} 2>/dev/null | cut -d" " -f1)" != "$plan_sha" ]; then',
+            f'    rm -f {f}.new',
+            # A role just given the read (a reused server) can take a few seconds to be allowed it.
+            '    plan_try=1',
+            f'    until aws s3 cp --only-show-errors --region "$plan_region" "$plan_src" {f}.new; do',
+            '      [ "$plan_try" -ge 6 ] && { echo "tico-setup: FAILED: cannot copy the starter plan from $plan_src" >&2; exit 4; }',
+            '      plan_try=$((plan_try + 1)); sleep 10',
+            '    done',
+            f'    plan_got=$(sha256sum {f}.new | cut -d" " -f1)',
+            '    if [ "$plan_got" != "$plan_sha" ]; then',
+            f'      rm -f {f}.new',
+            '      echo "tico-setup: FAILED: the starter plan from $plan_src has sha256 $plan_got, not $plan_sha; '
+            'not starting Tico" >&2',
+            '      exit 3',
+            '    fi',
+            # Each step fails on its own: under `set -e` a failure on the left of `&&` does not stop the script.
+            *[f'    {step} || {{ rm -f {f}.new; echo "tico-setup: FAILED: cannot {what} the starter plan; not starting Tico" >&2; exit 7; }}'
+              for step, what in ((f"chown 10001:10001 {f}.new", "give the server's user"),
+                                 (f"chmod 0400 {f}.new", "make read-only"), (f"mv -f {f}.new {f}", "put in place"))],
+            '  fi',
+            'fi']
 
 
 def env_b64(env_text: str) -> str:

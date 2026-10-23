@@ -1148,6 +1148,17 @@ class WorktreeStatus(Contract):
     record_updated: str | None = Field(default=None, max_length=40)
 
 
+class RunnerPanic(Contract):
+    # Its file in the runner's crate (`src/runner.rs`), or empty for a panic in a dependency; never its message.
+    file: str = Field(default="", max_length=200)
+    line: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class RunnerErrors(Contract):
+    version: str = Field(default="", max_length=100)
+    panics: list[RunnerPanic] = Field(default_factory=list, max_length=20)
+
+
 class Heartbeat(Contract):
     worktrees: list[WorktreeStatus] | None = Field(default=None, max_length=1000)
     profiles: Annotated[list[Any], BeforeValidator(lambda value: value[:100] if isinstance(value, list) else value)] | None = None
@@ -1822,6 +1833,10 @@ class Started(Contract):
     load_snapshot: LoadSnapshot | None = None
 
 
+class AttemptStderr(Contract):
+    tail: str = Field(max_length=65536)
+
+
 class Event(Contract):
     seq: int = Field(ge=1)
     kind: Literal["delta", "message", "tokens", "status", "error", "tool", "diagnostic", "goal"]
@@ -1908,6 +1923,13 @@ class RunPush(Contract):
     count: int = Field(ge=1, le=1000)
 
 
+class RunRotation(Contract):
+    reason: Literal["tokens", "turns"]  # which of the bot's limits the old session reached (runner-rs/src/rotate.rs)
+    tokens: int = Field(ge=0)  # input tokens of the old session's newest turn
+    turns: int = Field(ge=0)   # its turns on that computer
+    limit: int = Field(ge=0)   # the limit it reached, in the unit of `reason`
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -1935,6 +1957,8 @@ class Completion(Contract):
     # Git pushes the run made from its task's worktrees (runner-rs/src/worktrees.rs pushes): writes Tico sees no
     # other way. Counted in its `writes` (backend/run_triggers.py).
     pushes: list[RunPush] = Field(default_factory=list, max_length=50)
+    # The run started a fresh provider session because the bot's last one had grown past its limit (token saving).
+    rotated: RunRotation | None = None
 
 
 class Retry(Contract):

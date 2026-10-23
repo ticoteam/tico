@@ -50,6 +50,25 @@ def _plural(n, one, many=None):
     return f"{n} {one if n == 1 else many or one + 's'}"
 
 
+def runner_route_latency(c, now=None):
+    """Merge the last fifteen minutes' histograms; averaging minute percentiles hides stalls."""
+    import time
+    from .flight import _merge, quantile
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='flight_requests'").fetchone():
+        return None
+    routes = {f"POST /api/v2/attempts/{{aid}}/{name}": {} for name in ("inputs", "renew", "events")}
+    for row in c.execute("SELECT route,hist FROM flight_requests WHERE ts>=? AND span=60 AND route IN (?,?,?)",
+                         (int(now or time.time()) - 15 * 60, *routes)):
+        _merge(routes[row[0]], json.loads(row[1] or "{}"))
+    slow = {route.rsplit("/", 1)[-1]: quantile(hist, .95) for route, hist in routes.items()
+            if quantile(hist, .95) > 1000}
+    if slow:
+        return _check("runner_route_latency", "Runner request latency", "warn",
+                      "Runner requests exceed 1 s at p95 over the last 15 minutes: " +
+                      ", ".join(f"{name} {ms / 1000:.2f} s" for name, ms in slow.items()))
+    return None
+
+
 def _computers(c, runners_online, settings):
     since = {r["id"] for r in runners_online}
     rows, fleet = [], runner_versions.load(c)
@@ -1149,6 +1168,8 @@ def view(c, who, settings, auth, github, config):
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    if (full or kind == "bot") and (latency := runner_route_latency(c)):
+        checks.append(latency)
     if full and (listening := _listening(c, settings)):
         checks.append(listening)
     storage = storage_settings(c, settings)
@@ -1526,6 +1547,12 @@ def view(c, who, settings, auth, github, config):
                       if settings.rehearsal else _backups(config, settings))
         checks.append(_signin(settings))
         checks.extend(_server_settings(c, settings))
+    from . import run_diagnostics
+    stalled_runs = run_diagnostics.stalled_runs(c, who, auth)
+    checks.append(_check("stalled_runs", "Stalled runs", "warn" if stalled_runs else "ok",
+                         f"{len(stalled_runs)} runs have no heartbeat or event for {run_diagnostics.STALL_MINUTES} minutes."
+                         if stalled_runs else "No stalled runs.",
+                         [_fix("Open Runs", "#/settings", "runs")] if stalled_runs else []))
     checks.append(_check("failed", "Failed runs", "warn" if failed else "ok",
                          f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
                          [_fix("Open Runs", "#/settings", "runs")] if failed and full else []))
@@ -1533,7 +1560,7 @@ def view(c, who, settings, auth, github, config):
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
             "on_fallback": on_fallback, "limited": limited,
-            "failures": failures if full or kind == "bot" else [], "checked": H.now(),
+            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs, "checked": H.now(),
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}
 
