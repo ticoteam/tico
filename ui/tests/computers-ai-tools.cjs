@@ -313,11 +313,11 @@ const {unrouted} = require('./support/routes.cjs');
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
     // Leaving the tab stops its timer; returning starts it and requests fresh presence.
-    await page.evaluate(() => settingsShow('general'));
+    await page.locator('[data-settings-tab=bots]').click();
     const afterLeaving = presenceReads;
     await page.clock.fastForward(65000);
     assert.equal(presenceReads, afterLeaving);
-    await page.evaluate(() => settingsShow('devices'));
+    await page.locator('[data-settings-tab=devices]').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     assert.ok(presenceReads > afterLeaving);
     await page.clock.resume();
