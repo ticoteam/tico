@@ -1,4 +1,5 @@
 """Live-meeting provenance survives bot detachment and uses current access on every read."""
+import json
 from functools import lru_cache
 
 from .store import H, Problem
@@ -37,6 +38,7 @@ class Sources:
     """One read snapshot only; caches contain identifiers, never customer text."""
     def __init__(self, c):
         self.c = c
+        self.messages = {}
         self.room = lru_cache(maxsize=4096)(self._room)
         self.conversation = lru_cache(maxsize=4096)(self._conversation)
         self.attempt = lru_cache(maxsize=4096)(self._attempt)
@@ -91,16 +93,27 @@ class Sources:
         if not message:
             return set()
         message = dict(message)
-        seen = set() if seen is None else seen
+        root = seen is None
+        seen = set() if root else seen
         mid = message.get("id")
         if mid in seen:
             return set()
         if len(seen) >= 100:
             raise Problem("privacy", "Meeting provenance is too deep to authorize", 403)
-        seen.add(mid)
         refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
         if not isinstance(refs, dict):
             raise Problem("privacy", "Meeting provenance cannot be authorized", 403)
+        cache_key = (mid, include_run, message.get("conversation_id"),
+               json.dumps(refs, sort_keys=True), message.get("in_reply_to"))
+        cached = self.messages.get(cache_key)
+        # Only complete root traversals are reusable. A nested traversal may have
+        # omitted an ancestor already visited by its caller, so never publish it.
+        if cached is not None and not (cached[1] & seen):
+            if len(seen) + len(cached[1]) > 100:
+                raise Problem("privacy", "Meeting provenance is too deep to authorize", 403)
+            seen.update(cached[1])
+            return set(cached[0])
+        seen.add(mid)
         ids = self.references(refs)
         if message.get("conversation_id"):
             ids.update(self.conversation(message["conversation_id"]))
@@ -114,6 +127,10 @@ class Sources:
         aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
         if aid and include_run:
             ids.update(self.attempt(aid))
+        if root:
+            if len(self.messages) >= 4096:
+                self.messages.clear()
+            self.messages[cache_key] = (frozenset(ids), frozenset(seen))
         return ids
 
     def _attempt(self, aid):
