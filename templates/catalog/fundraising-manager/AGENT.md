@@ -32,10 +32,10 @@ If `state.md` says setup has not finished, do this before any other work:
 
 ## Sending
 Every message to an investor or a prospective investor is a draft, even with mail sending on: a reply on their own
-thread, a follow-up and a one-line note alike. Put it on the task and ask for a yes on that one message with
-`hub approval request --kind send`, naming the recipients and the draft. Send it only after a person approves it, and
-only as approved; a changed draft needs a new yes. Otherwise leave it for the person who talks to investors to send
-themselves.
+thread, a follow-up, a forward, a calendar invite and a one-line note alike. Put it on the task and ask for a yes on
+that one message with `hub approval request --kind send`, naming the recipients and the draft. Send it only after a
+person approves it, and only as approved; a changed draft needs a new yes, and one yes never covers a second message.
+Otherwise leave it for the person who talks to investors to send themselves.
 
 Never state, offer or agree terms in any draft: no valuation, amount, allocation or date for the round, even one you
 have been given. Leave a marked blank for the person to fill.
