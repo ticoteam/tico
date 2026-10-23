@@ -159,12 +159,26 @@ def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(ap
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
-def goals_session(api):
-    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+def add_ceo_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+
+
+def owners_chat(api):
+    """A CEO Bot turn in the owner's chat with it: it acts as the owner (backend/assistant.py)."""
+    add_ceo_bot(api)
+    machine = runner(api)
+    assign(api, machine, "goal-manager")
+    ready(api, machine, ["goal-manager"])
+    post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
+    return claim(api, machine, "goal-manager")["token"]
+
+
+def goals_session(api):
+    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    add_ceo_bot(api)
     machine = runner(api)
     for bot in ("ops", "goal-manager"):
         assign(api, machine, bot)
@@ -182,6 +196,22 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     token = goals_session(api)
     post(api, f"kpis/{kpi['id']}/archive", {}, token=token, expected=403)
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
+
+
+def test_in_the_owners_chat_the_ceo_bot_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+    _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
+    token = owners_chat(api)
+    assert get(api, "me", token)["actor"] == "human:ana"
+    post(api, f"kpis/{kpi['id']}/archive", {}, token="ana-test")
+    for change in ("restore", "archive"):
+        # With the Assistant's rights, not the owner's: never on its own, and not a card the owner confirms either.
+        assert post(api, f"kpis/{kpi['id']}/{change}", {}, token=token,
+                    expected=403)["error"]["code"] == "confirm_required"
+        post(api, "assistant/actions", {"summary": change.title() + " the activation KPI", "method": "POST",
+                                        "path": f"/api/v2/kpis/{kpi['id']}/{change}", "body": {}},
+             token=token, expected=422)
+        post(api, f"kpis/{kpi['id']}/{change}", {}, token="ana-test")
+
 
 
 def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_confirm(api):
