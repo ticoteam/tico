@@ -267,3 +267,35 @@ def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_co
         plan = " ".join(row[3] for row in c.execute(
             "EXPLAIN QUERY PLAN SELECT rowid FROM attempts WHERE runner_id=? AND finished>=?", (rid, P._iso(start))))
     assert "attempts_runner_finished" in plan
+
+
+def test_steering_polls_and_output_batches_store_no_retry_receipts_and_replay_the_same(api):
+    r, _, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t"}, token=r["token"])
+
+    def receipts():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM idempotency WHERE operation LIKE ?", (f"/api/v2/attempts/{aid}/%",)
+                             ).fetchone()[0]
+    before = receipts()
+    for _ in range(3):
+        assert post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"] == []
+    batch = {"events": [{"seq": 1, "kind": "delta", "payload": {"text": "Hel"}},
+                        {"seq": 2, "kind": "delta", "payload": {"text": "lo"}}]}
+    first = post(api, f"attempts/{aid}/events", batch, token=r["token"], key="batch-1")
+    # A lost reply retried with the same key answers the same, from the sequence numbers already stored.
+    assert post(api, f"attempts/{aid}/events", batch, token=r["token"], key="batch-1") == first
+    assert first["ack_seq"] == 2
+    assert receipts() == before, "an empty poll or an output batch needs no stored receipt"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempt_events WHERE attempt_id=?", (aid,)).fetchone()[0] == 2
+
+
+def test_one_tasks_history_of_one_field_reads_by_task(api):
+    with api.app.state.store.read() as c:
+        for sql in ("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
+                    "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
+                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC, rowid DESC LIMIT 1"):
+            plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
+            assert "task_events_task_field" in plan, plan
