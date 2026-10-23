@@ -35,7 +35,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     attempt = claim(api, runner)
     start(api, runner, attempt)
     if kind == "task":
-        post(api, "tasks/" + task["id"], {"version": task["version"], "status": "done", "quiet": True}, attempt["token"])
+        post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
     if kind == "folded":
         folded = post(api, "chat/ops", {"text": "Include the archive"})
         inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, runner["token"])["messages"]
@@ -103,7 +103,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet", "private": True})
     attempt = claim(api, machine)
     start(api, machine, attempt)
-    task = post(api, "tasks/" + task["id"], {"version": task["version"], "status": "done", "quiet": True}, attempt["token"])
+    task = post(api, "tasks/" + task["id"], {"version": attempt["task"]["version"], "status": "done", "quiet": True}, attempt["token"])
     reply = finish(api, machine, attempt, "Fixture task result")
     assert reply and reply["refs"]["task"] == task["id"]
     # A replay identity is only for reading this receipt; the runner gains no domain credentials.

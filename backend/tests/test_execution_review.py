@@ -763,7 +763,7 @@ def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_
     machine, message, attempt = finished_then_lapsed(api, task=True)
     task = message['task']
     assert task['conversation_id'] == message['conversation_id']             # the task's own room, not the chat
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'close': True, 'quiet': True})
+    post(api, 'tasks/' + task['id'], {'version': attempt['task']['version'], 'close': True, 'quiet': True})
     aged(api, attempt['id'])
     assert [d['state'] for d in sweep(api)] == ['cancelled']
     done = hand_in(api, machine, attempt)

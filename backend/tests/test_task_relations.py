@@ -108,6 +108,8 @@ def test_a_bot_run_sees_the_relations_it_may_read_and_nothing_of_the_rest(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x",
                                "relations": [{"task": blocker["id"], "kind": "blocked_by"}]})
     post(api, "tasks/" + secret["id"] + "/relations", {"task": task["id"]}, token="ben-test")
+    assert claim(api, r, "ops") is None, "an unfinished blocker prevents automatic pickup"
+    post(api, "tasks/" + task["id"] + "/comments", {"text": "Describe the visible dependencies."})
     attempt = claim(api, r, "ops")
     assert attempt["task"]["id"] == task["id"]
     assert attempt["task"]["relations"] == [{"kind": "blocks", "direction": "in", "id": blocker["id"],

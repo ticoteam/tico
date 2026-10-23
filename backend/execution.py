@@ -1597,9 +1597,9 @@ class Execution:
                           (who.runner_id,)).fetchone()[0]
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
-        if auto_tasks.missing(c, self.store.settings, runner, body):
-            return None
         row = self.candidate(c, who, body, runner)
+        if row is None and auto_tasks.missing(c, self.store.settings, runner, body):
+            return None
         if row is not None and selected is not None:
             selected.append(row)
         return None if row else {"attempt": None}
@@ -1678,10 +1678,11 @@ class Execution:
         # Its work keeps its place in the queue and goes out once the machine is really up.
         if not self.awake(awake_since, now):
             return {"attempt": None}
-        if pending := auto_tasks.missing(c, self.store.settings, runner, body):
-            auto_tasks.enqueue(c, pending)
-            selected = None
         row = selected if selected is not None else self.candidate(c, who, body, runner)
+        # Backfill a free turn after queued conversations and awaited results keep their place.
+        if row is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
+            auto_tasks.enqueue(c, pending)
+            row = self.candidate(c, who, body, runner)
         if not row:
             return {"attempt": None}
         msg = H.message(c, row["message_id"])

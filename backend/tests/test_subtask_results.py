@@ -53,7 +53,7 @@ def test_nested_reviews_return_once_to_the_live_builder_then_builder_returns_to_
         assert inputs[0]["refs"]["subtask"] == review["id"]
         post(api, f"attempts/{builder['id']}/inputs/{inputs[0]['id']}/ack", {}, machine["token"])
         post(api, f"tasks/{review['id']}", {"status": "done", "note": verdict if reviewer == "cpo" else "Review recorded.",
-                                           "version": review["version"]},
+                                           "version": checking["task"]["version"]},
              checking["token"])
         finish(api, machine, checking, text=verdict)
         assert not queued(api, "ops"), "finishing after an already delivered verdict starts no second turn"

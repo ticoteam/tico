@@ -24,7 +24,7 @@ def take(api, machine):
 
 def finish(api, machine, attempt, task):
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': attempt['lane']}, machine['token'])
-    post(api, 'tasks/' + task['id'], {'step': 'Done', 'version': get(api, 'tasks/' + task['id'])['task']['version']})
+    post(api, 'tasks/' + task['id'], {'step': 'Done', 'version': get(api, 'tasks/' + task['id'])['task']['version']}, attempt['token'])
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished.'}, machine['token'])
 
 
