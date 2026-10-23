@@ -49,7 +49,8 @@ function docsMenu(menu, button) {
 // The first-run question (backend/librarian_setup.py): where the docs are. The links become sources at once and one
 // task has the Librarian read them and write the map of the docs (playbooks/docs-setup.md). Skip is the person's own;
 // "Set up with the Librarian…" in the menu brings the question back.
-const docsIsPerson = () => ['owner', 'human'].includes(S.me?.role);
+// /api/me names every signed-in person owner or viewer; a member is a viewer there, not human.
+const docsIsPerson = () => ['owner', 'viewer'].includes(S.me?.role);
 let DOCS_SETUP_SENT = null;          // what was just filed, shown until closed
 
 async function docsSetup(slot, {asked, current, openImport, reload}) {

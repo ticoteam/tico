@@ -58,7 +58,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const titleOf = raw => { const u = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); };
     let started = {empty: {docs: false}, cards: []};
     let librarianQueued = false;   // the Librarian's run waits on a missing AI provider
-    let docsSetupSkipped = false;
+    const docsSetupSkipped = new Set();   // whose Skip for now is saved: each person's own
     let chatSequence = 0, reopenBlocked = false;
     const chats = [
       {id: 'docs-earlier', title: 'Who helps new hires?', created: ago(90), closed_at: ago(60)},
@@ -105,12 +105,12 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
       }
       if (p === '/api/v2/librarian/setup') {
         const empty = !linked.length && ![...docs.values()].some(d => !d.archived && !d.path.startsWith('_librarian/'));
-        return json({available: true, docs: {show: empty && !docsSetupSkipped, empty, skipped: docsSetupSkipped, task: null},
+        return json({available: true, docs: {show: empty && !docsSetupSkipped.has(me.id), empty, skipped: docsSetupSkipped.has(me.id), task: null},
                      market: {can_answer: me.role === 'owner', answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null}});
       }
       if (p === '/api/v2/librarian/setup/docs') {
         const body = req.postDataJSON(); requests.push({api: 'librarian/setup/docs', body});
-        if (body.skip) { docsSetupSkipped = true; return json({}); }
+        if (body.skip) { docsSetupSkipped.add(me.id); return json({}); }
         const added = body.sources.map(raw => linkView(addLinked(raw, titleOf(raw), kindOf(raw), '')));
         return json({task_id: 'task-docs-setup', bot: 'librarian', sources: added});
       }
@@ -619,6 +619,16 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     await page.locator('#docs-browser .docs-section').first().waitFor();
     await page.waitForTimeout(t(300));
     assert.equal(await page.locator('#docs-setup [data-docs-setup]').count(), 0);
+    await page.close();
+    // A member, who /api/me calls a viewer, is still asked on their own first visit after the owner skipped.
+    const owner = me;
+    me = {id: 'cara', name: 'Cara', email: 'cara@acme.example', role: 'viewer', cloud: true, bot_admin: false};
+    page = await open('#/docs');
+    await page.locator('#docs-setup [data-docs-setup]').waitFor();
+    await page.close();
+    me = owner;
+    page = await open('#/docs');
+    await page.locator('#docs-browser .docs-section').first().waitFor();
     await page.locator('#docs-more').click();
     await page.locator('#docs-setup-open').click();
     await page.locator('#docs-setup [data-docs-setup]').waitFor();
