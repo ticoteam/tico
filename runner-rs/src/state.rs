@@ -32,6 +32,8 @@ pub const SCHEMA: &str = "
       thread TEXT PRIMARY KEY, message TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS session_repo_rules(
       thread TEXT PRIMARY KEY, digest TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS session_sizes(
+      thread TEXT PRIMARY KEY, turns INTEGER NOT NULL, last_input INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS import_cursors(
       source TEXT PRIMARY KEY, cursor TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS imports(
@@ -267,8 +269,9 @@ impl State {
             c.execute(
                 "DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
                 params![bot, conversation, runtime, thread],
-            )
-            .map(|_| ())
+            )?;
+            // Its size is only read to decide whether to resume it (crate::rotate).
+            c.execute("DELETE FROM session_sizes WHERE thread=?", params![thread]).map(|_| ())
         })
     }
 
@@ -308,6 +311,23 @@ impl State {
             }
             c.query_row("SELECT message FROM session_cursors WHERE thread=?", params![thread], |r| r.get(0)).optional()
         })
+    }
+
+    /// A turn on a saved thread: its turns so far and the input tokens of the newest (crate::rotate), from which the
+    /// next turn decides whether to resume it or start a fresh one.
+    pub fn note_turn(&self, thread: &str, input: i64) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO session_sizes VALUES(?,1,?) ON CONFLICT(thread) DO UPDATE SET turns=turns+1, last_input=excluded.last_input",
+                params![thread, input.max(0)],
+            )
+            .map(|_| ())
+        })
+    }
+
+    /// (turns, input tokens of the newest turn) of a saved thread, None for one no turn here has measured.
+    pub fn session_size(&self, thread: &str) -> Result<Option<(i64, i64)>, String> {
+        self.with(|c| c.query_row("SELECT turns, last_input FROM session_sizes WHERE thread=?", params![thread], |r| Ok((r.get(0)?, r.get(1)?))).optional())
     }
 
     /// What a thread was last given under `thread` in session_repo_rules (state.py repo_rules): the repo-rules
@@ -430,7 +450,7 @@ mod tests {
         drop(state);
         let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(len(c.execute(\"select name from sqlite_master where type='table'\").fetchall()))";
         let out = std::process::Command::new("python3").args(["-c", script]).arg(dir.join("runner.sqlite")).output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", "11"]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>(), ["wal", "interrupted", "thread-1", "12"]);
         std::fs::remove_dir_all(dir).ok();
     }
 }

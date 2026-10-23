@@ -1,0 +1,6 @@
+#!/bin/sh
+# Build once through scripts/heavy.sh, then run this from the repository root.
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
+exec "$root/tools/release-command/target/debug/tico-release" "$@"
