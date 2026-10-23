@@ -232,7 +232,7 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
 5. **Parked until then.** Finish setup creates every starter `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
-   conversation. Parked starters do not count toward a member's bot limit. See [Finish setup](onboarding.md#needs-setup).
+   conversation. Parked starters do not count toward a member's bot limit. See [A bot's stages](onboarding.md#a-bots-stages).
 
 <a id="what-stops-a-starter-sending-things-outside-the-company"></a>
 

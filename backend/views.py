@@ -14,6 +14,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from clients import gateway, sessions
 
 from . import access as Access
+from . import lifecycle
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
@@ -1675,6 +1676,10 @@ def install_views(app, store, auth, mutate, task_view):
                          "wake": wake_presets.effective(config),
                          "my_access": level, **policy,
                          "can_chat": level["write"] and slug != auth.settings.assistant_bot,
+                         # Onboarding or Active, and whether this person may mark onboarding complete (backend/lifecycle.py).
+                         "stage": lifecycle.stage(config.get("onboarding_state")),
+                         "can_complete_onboarding": (lifecycle.stage(config.get("onboarding_state")) == lifecycle.ONBOARDING
+                                                     and lifecycle.may_complete(auth, c, who, slug)),
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.
                          "app_delivery": app_delivery.view(c, config),
                          "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})

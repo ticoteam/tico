@@ -884,16 +884,16 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(definitions, []);                                    // it was already active: nothing to activate first
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
-    assert.match(await page.locator('#bot-onboard').textContent(), /Needs setup/);
+    assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
-    assert.equal(await page.locator('#bot-start-setup').textContent(), 'Set up');
-    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help setting up?');
+    assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
+    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
     // The Chat tab shows the setup conversation: the person's line, in the chat Set up wrote to.
     await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
-    await page.locator('#bot-start-setup', {hasText: 'Setup started'}).waitFor();
+    await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
     // Its Chat tab was open and empty when Set up was pressed: the message shows at once, not after a reload.
     await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
     assert.equal(await page.locator('#conv-thread .empty').count(), 0);

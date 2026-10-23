@@ -1,4 +1,4 @@
-"""Every bot goes Recruiting -> Onboarding -> Active (docs/bots.md, "A bot's stages").
+"""Every bot goes Recruiting -> Onboarding -> Active (docs/onboarding.md, "A bot's stages").
 
 - **Recruiting** is a seat: a role on the org chart with its job description and reporting line, and no bot, repository
   or computer slot. It is not an actor, so it holds no work: nothing is assigned to it, nothing wakes it, it has no
