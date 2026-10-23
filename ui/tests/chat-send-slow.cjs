@@ -26,6 +26,7 @@ async function check(engine) {
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'warning' && m.text().startsWith('chat send')) warnings.push(m.text()); });
     let answer = 'ok', busy = 0, hold = null, stopHold = null;
+    const refusals = new Set();                     // like the server, replay a stored refusal for the same key
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -46,7 +47,9 @@ async function check(engine) {
       if (p === '/api/v2/bots/botops/stop') { await stopHold; return json({ok: true}); }
       if (p === '/api/v2/chat/botops') {
         const text = route.request().postDataJSON().text;
-        keys.push(route.request().headers()['idempotency-key']);
+        const key = route.request().headers()['idempotency-key']; keys.push(key);
+        if (answer === 'refused') refusals.add(key);
+        if (refusals.has(key)) return json({error: {code: 'forbidden', detail: 'A rule refused this send'}}, 403);
         if (answer === 'stall') return;                       // never answered: the page has to give up on its own
         if (busy > 0) { busy--; return json({error: {code: 'unavailable', detail: 'Busy'}}, 503); }
         if (hold) await hold;
@@ -101,11 +104,32 @@ async function check(engine) {
     assert.equal(sends.at(-1), 'Through two busy answers');
     assert.equal(new Set(keys.slice(-3)).size, 1, 'the retries reuse one request id');
 
+    // A definitive refusal did not send a message. If its cause changes, explicit Send of the unchanged draft
+    // must evaluate that new situation rather than replaying the server's cached refusal for48h.
+    answer = 'refused';
+    await box.fill('A rule refused this draft'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const refusedKey = keys.at(-1);
+    assert.equal(await box.inputValue(), 'A rule refused this draft');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'confirmed refusal ends pending delivery');
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
+    assert.notEqual(keys.at(-1), refusedKey, 'confirmed refusal allows a later explicit send to evaluate again');
+    assert.equal(sends.at(-1), 'A rule refused this draft');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
     // No answer at all: it ends in time, says so, keeps the draft, and Retry sends it under the same request id.
     await page.evaluate(() => { CHAT_SEND.timeout = 1500; });
     answer = 'stall';
     const stalled = 'Sent into a stalled connection';
+    const firstAttempt = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/botops');
     await box.fill(stalled); await page.keyboard.press('Enter');
+    const firstAttemptKey = (await firstAttempt).headers()['idempotency-key'];
+    // A person may type then undo, or clear then restore, while the request is still out. Its outcome is not known
+    // yet, so these transient edits must not erase the original key when the same draft is back at timeout.
+    await box.fill(stalled + ' edited'); await box.fill(''); await box.fill(stalled);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), firstAttemptKey, 'inflight draft keeps its identity');
     const toast = page.locator('.toast.err');
     await toast.waitFor({timeout: 6000});
     assert.match(await toast.innerText(), /Not confirmed: No answer from the server in 2 seconds\. It may still arrive\. Your message is still here/);
@@ -139,9 +163,15 @@ async function check(engine) {
     const expiredKey = keys.at(-1), originalAt = await page.evaluate(() => BOT_PILL.unconfirmed.at);
     await page.evaluate(() => { const now = Date.now(); Date.now = () => now + 47 * 60 * 60000; });
     await toast.locator('button', {hasText: 'Retry'}).click();
+    await page.waitForFunction(() => !BOT_PILL.sending);
     await toast.waitFor();
     assert.equal(keys.at(-1), expiredKey, 'a late failed retry keeps the first identity');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed.at), originalAt, 'retry does not restart replay retention');
+    await page.reload();
+    await page.waitForFunction(() => V2C?.loaded);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), expiredKey, 'same-tab reload keeps the key with the draft');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.at), originalAt, 'reload keeps original replay age');
+    await page.evaluate(() => { window.chatRealNow = Date.now; });
     // Switching away and back in the same tab must not lose the pending identity or its original age.
     await page.evaluate(() => {
       const old = BOT_PILL; chatDraftSave(old); PILLS.delete(old); BOT_PILL = null;

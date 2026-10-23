@@ -17,7 +17,21 @@ let BOT_PILL = null;
 // back. The text is kept per bot in this browser, so a reload keeps it too; attached files are
 // kept for the session only. Sending clears it.
 const CHAT_DRAFTS = 'hub.chat.drafts', CHAT_FILES = new Map();
-const CHAT_PENDING = new Map();                    // submission identities last for this tab, until a draft changes
+const CHAT_PENDING_KEY = 'hub.chat.pending';
+const chatPendingRead = () => {
+  try {
+    return new Map(JSON.parse(sessionStorage.getItem(CHAT_PENDING_KEY) || '[]').filter(([slug, u]) =>
+      typeof slug === 'string' && u && typeof u.text === 'string' && typeof u.signature === 'string'
+      && typeof u.key === 'string' && u.key.length > 0 && u.key.length <= 200 && Number.isFinite(u.at)));
+  } catch { return new Map(); }
+};
+const CHAT_PENDING = chatPendingRead();             // per tab, including reloads; no in-flight promises are persisted
+function chatPendingSave() {
+  try {
+    sessionStorage.setItem(CHAT_PENDING_KEY, JSON.stringify([...CHAT_PENDING].map(([slug, u]) =>
+      [slug, {text: u.text, signature: u.signature, key: u.key, at: u.at}])));
+  } catch {}                                      // like draft storage, memory still works when storage is unavailable
+}
 const chatDrafts = () => { try { return JSON.parse(localStorage.getItem(CHAT_DRAFTS) || '{}') || {}; } catch { return {}; } };
 function chatDraftSave(P) {
   if (P?.mode !== 'chat' || !P.slug) return;
@@ -37,6 +51,7 @@ function pillRestore(P) {
   if (draft) pq(P, '.p-text').value = draft;
   if (files?.length) { P.files.push(...files); pillChips(P); }
   P.unconfirmed = CHAT_PENDING.get(P.slug) || null;
+  P.unconfirmed?.inFlight?.then(() => pillButtons(P));
   if (draft || files?.length) pillButtons(P);
   return P;
 }
@@ -167,7 +182,7 @@ function pillButtons(P) {
   const fileChat = P.files.length && P.action === 'chat';
   const btn = pq(P, '.p-send');
   btn.classList.toggle('p-off', !box.value.trim() && !fileChat);
-  btn.disabled = !!P.sending || P.action === 'chat' && !P.send && !pillGoalMode(P) && chatReplayExpired(P);
+  btn.disabled = !!P.sending || !!P.unconfirmed?.inFlight || P.action === 'chat' && !P.send && !pillGoalMode(P) && chatReplayExpired(P);
   // While the bot runs (chatStopSync sets P.running), Stop takes Send's place until something is typed: a message
   // typed meanwhile still queues for after the run.
   const stop = pq(P, '.p-stop');
@@ -216,7 +231,7 @@ const pillBtnSay = (btn, text) => {
 const PILL_BUSY = {'Sending…': 'Sending… waiting for Tico to answer'};
 function pillWhy(P) {
   const btn = pq(P, '.p-send'), why = pq(P, '.p-why'); if (!btn || !why) return;
-  const busy = btn.disabled && (btn.dataset.busy || (P.sending ? 'Sending…' : ''));
+  const busy = btn.disabled && (btn.dataset.busy || (P.sending || P.unconfirmed?.inFlight ? 'Sending…' : ''));
   const stop = pq(P, '.p-stop'), stopping = stop && !stop.hidden && stop.disabled;
   let text = '';
   if (stopping) text = 'Stopping…';

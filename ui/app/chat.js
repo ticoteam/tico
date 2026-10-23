@@ -731,9 +731,10 @@ function v2ChatAdopt(slug, j) {
 async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
   // Return during a send that is still out waits for it, then sends what the box still holds; returning
   // here without a word was a message lost.
-  while (P.sending) {
-    if (!P.sent) return false;                       // a task being created, not a chat send
-    await P.sent;
+  while (P.sending || P.unconfirmed?.inFlight) {
+    const waiting = P.sent || P.unconfirmed?.inFlight;
+    if (!waiting) return false;                     // a task being created, not a chat send
+    await waiting;
     if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim() || !text && !P.files.length) return false;
   }
   chatForgetUnconfirmed(P);
@@ -742,14 +743,17 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     toast(CHAT_REPLAY_EXPIRED, true);
     return false;
   }
-  // Keep the identity separately from the request cache: a later refusal or redraw must not silently rotate it.
+  // Keep uncertain intent separately from the request cache; a redraw cannot silently rotate its identity.
   if (!P.files.length && !P.unconfirmed) {
     const path = `/v2/chat/${encodeURIComponent(slug)}`, body = {text: text || 'Attached files.', refs: {...extraRefs}, ...extra};
     P.unconfirmed = {text: (text || '').trim(), at: Date.now(), key: newRequestId(), signature: 'POST ' + path + '\n' + JSON.stringify(body)};
     CHAT_PENDING.set(P.slug, P.unconfirmed);
+    chatPendingSave();
   }
   P.sending = true;
   let sent; P.sent = new Promise(done => sent = done);
+  const pending = P.unconfirmed;
+  if (pending) pending.inFlight = P.sent;
   const files = P.files.slice();
   const btn = pq(P, '.p-send'), label = btn ? btn.textContent : '';
   // "Sending" is a spinner on the button, never the dimmed look of an empty box; after a few seconds a line under
@@ -771,6 +775,9 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     return true;
   } catch (e) {
     watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
+    // A confirmed rule refusal created no message. The server caches that refusal too, so a later explicit Send
+    // must be able to try again after its cause is resolved. Uncertain deliveries always retain their key.
+    if (pending && e.status >= 400 && e.status < 500 && !e.unconfirmed) pending.refused = true;
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
     if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
@@ -779,6 +786,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     return false;
   }
   finally {
+    if (pending) pending.inFlight = null;
     P.sending = false; P.sent = null; sent();
     if (btn) { btn.disabled = false; btn.classList.remove('p-sending'); btn.removeAttribute('aria-busy'); pillBtnSay(btn, label); }
     pillLabel(P); pillButtons(P);
@@ -817,8 +825,9 @@ const CHAT_REPLAY_EXPIRED = 'This message may already have sent. Check the chat 
 const chatReplayExpired = P => !!P.unconfirmed && Date.now() - P.unconfirmed.at >= CHAT_REPLAY_MS;
 function chatForgetUnconfirmed(P) {
   const u = P.unconfirmed; if (!u) return;
-  if ((pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
-  if (CHAT_PENDING.get(P.slug) === u) CHAT_PENDING.delete(P.slug);
+  if (u.inFlight) return;                           // edit-and-restore while sending is still the same uncertain send
+  if (!u.refused && (pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
+  if (CHAT_PENDING.get(P.slug) === u) { CHAT_PENDING.delete(P.slug); chatPendingSave(); }
   pendingWrites.delete(u.signature); P.unconfirmed = null;
 }
 // "see if anything was disconnected ... and trigger retries automatically". A
