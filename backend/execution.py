@@ -1442,7 +1442,7 @@ class Execution:
         gap = (H.parse_ts(now) - H.parse_ts(self.served_at)).total_seconds()
         return self.store.settings.lease_seconds / 2 < gap <= STALL_MAX
 
-    def stall_recovery(self, now, *, contact=False):
+    def stall_recovery(self, now):
         """Keep the original cutoff and deadline while bounded sweeps drain a stalled fleet.
 
         Contact may resume between chunks. A lease extended beyond the cutoff cannot receive
@@ -1454,20 +1454,21 @@ class Execution:
                 self.stall_seen = self.served_at
                 self.stall_graces.append((self.served_at, now,
                                           H.shift(now, seconds=self.store.settings.lease_seconds)))
-            if contact:
-                self.served_at = now
             return tuple(self.stall_graces)
 
     def record_contact(self, now):
-        self.stall_recovery(now, contact=True)
+        with self.stall_lock:
+            self.served_at = now
 
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
-        graces = self.stall_recovery(now)
         rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND lease_until<=?" +
                          (" AND id IN (" + ','.join('?' * len(attempt_ids)) + ")" if attempt_ids else "") +
                          " ORDER BY lease_until,id" + (" LIMIT ?" if limit is not None else ""),
                          (now, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
+        # Contact alone does not enroll future work in a grace cohort: expiration must
+        # first observe overdue leases, as it did before maintenance was chunked.
+        graces = self.stall_recovery(now) if rows else ()
         for row in rows:
             with isolated(c, "expire", row["id"]):
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
