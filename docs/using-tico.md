@@ -66,9 +66,14 @@ Tico also forgets it when the server confirms the send.
 An identical message sent later can be a new send.
 For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
 
-If Tico says **Not sent** because a rule refuses the message, no message was created.
-Resolve the refusal, then press **Send** to try the unchanged text again.
-An uncertain send keeps its original request ID for Retry.
+If a rule refuses your first attempt and Tico says **Not sent**, no message was created and the pending request ID is forgotten.
+Resolve the refusal, then press **Send** to try the unchanged text as a new send.
+
+If an earlier send was uncertain, a **Retry** refused because you currently lack chat access does not prove the original was unsent.
+Tico says **Not confirmed: This message may already have sent. Chat access is currently refused. Check the chat before resending.**
+Your draft keeps its original request ID and first-attempt time.
+Check the chat before resending. Once access returns, press **Send** with the draft unchanged to reuse that same ID within the original 48-hour window.
+The expiry guard and deliberate draft changes described above still apply.
 
 **Do file uploads have the same deadline?**
 **Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
