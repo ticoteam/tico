@@ -677,6 +677,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        from .provenance_clock import Cache
+        self.provenance_cache = Cache()
 
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=30, isolation_level=None,
@@ -744,6 +746,8 @@ class Store:
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
+            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
+                H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
@@ -1404,6 +1408,8 @@ class Store:
             except Exception:
                 c.rollback()
                 raise
+            from . import provenance_clock
+            provenance_clock.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -1442,6 +1448,8 @@ class Store:
             if identity != self.pool_file:
                 # A restored or replaced database file: connections to the old one are not reused.
                 stale, self.pool, self.pool_file = self.pool, [], identity
+                from .provenance_clock import Cache
+                self.provenance_cache = Cache()
             else:
                 stale = []
             c = self.pool.pop() if self.pool else None
@@ -1451,6 +1459,8 @@ class Store:
             c = self.connect(factory=self.pooled, check_same_thread=False)
             c.pool_file = identity
         c.read_cache = {}
+        c.provenance_cache = self.provenance_cache
+        c.write_transaction = False
         return c
 
     def _give(self, c):
@@ -1480,6 +1490,9 @@ class Store:
                 c = stack.enter_context(self.read())
                 return c
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
+            c.write_transaction = True
+            from . import provenance_clock
+            c.provenance_start = provenance_clock.current(c)
             try:
                 yield c
                 message_links.refresh_dirty(c)

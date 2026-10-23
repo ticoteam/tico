@@ -172,8 +172,9 @@ def _live_tasks(c, bot, memo):
 
 
 def live_turn_cache(c, computer):
-    """Prepare provenance without the write lock; the caller validates data_version before using it."""
-    memo = {}
+    """Prepare provenance without the write lock; the caller validates its source clock before using it."""
+    from . import provenance_clock
+    memo = {("provenance_clock",): provenance_clock.current(c)}
     owners = {row['owner'] for row in inventory(c, computer) if H.is_bot(row['owner'] or '')}
     for owner in owners:
         memo[("live_turn", owner)] = _live_tasks(c, H.actor_id(owner), memo)

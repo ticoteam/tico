@@ -767,7 +767,8 @@ def create_app(settings=None):
             found = request.scope.get("route")
             route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
             total = (time.perf_counter() - started) * 1000
-            response.headers["Server-Timing"] = f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+            response.headers["Server-Timing"] = (f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+                                                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else ""))
             return response
         finally:
             found = request.scope.get("route")
@@ -4454,7 +4455,10 @@ def create_app(settings=None):
             finally:
                 snapshot.rollback()
             def work(c):
-                unchanged = snapshot.execute("PRAGMA data_version").fetchone()[0] == version
+                from . import provenance_clock
+                clock = selected.get(("provenance_clock",))
+                unchanged = (provenance_clock.current(c) == clock if clock is not None else
+                             snapshot.execute("PRAGMA data_version").fetchone()[0] == version)
                 return execution.heartbeat(c, request.state.identity, body,
                                            live_tasks=selected if unchanged else None)
             return mutate(request, body, work)

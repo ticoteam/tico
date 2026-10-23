@@ -402,8 +402,11 @@ class Scheduler:
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).
             self.goals_checked = at
             with SR.recording(self.store, "goal_colours", failures, "goals") as run:
-                with self.store.transaction() as c:
-                    G.refresh(c)
+                with self.store.read() as c:
+                    goal_ids = [row["id"] for row in G.goals(c, live_only=True)]
+                for goal_id in goal_ids:
+                    with locked("goal_colour:" + goal_id) as c:
+                        G.refresh(c, [goal_id])
                 run.did("Done")
             try:
                 # The CEO Bot's Monday note: started once above Passive, paused at Passive (backend/ceo_bot.py `reconcile`).
@@ -468,14 +471,31 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import run_diagnostics
                     run_diagnostics.sweep(c, stamp(at))
-                    woke = H.wake_stalled(c, stamp(at))
+                # Discover candidates in a WAL snapshot, then recheck one task under each
+                # short lock. Unrelated runner writes can progress between tasks.
+                with self.store.read_transaction() as c:
+                    task_ids = list(dict.fromkeys(row["id"] for row in
+                                    [*H.stalled_tasks(c, stamp(at)), *H.spot_check_tasks(c, stamp(at))]))
+                woke = {key: [] for key in ("woke", "escalated", "checked", "stuck", "held", "retried")}
+                for task_id in task_ids:
+                    with locked("stall_check:" + task_id) as c:
+                        result = H.wake_stalled(c, stamp(at), task_ids=[task_id])
+                        for key, values in result.items():
+                            woke.setdefault(key, []).extend(values)
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:
-                    with self.store.transaction() as c:
-                        self.execution.drop_unreadable(c)
+                    with self.store.read_transaction() as c:
+                        # The expensive privacy/provenance scan does not need the writer lock.
+                        from . import task_privacy
+                        job_ids = [row["job_id"] for row in c.execute(
+                            "SELECT j.id AS job_id,j.bot,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
+                            if not task_privacy.message_readable(c, "bot:" + row["bot"], row, current=True)]
+                    for job_id in job_ids:
+                        with locked("drop_unreadable:" + job_id) as c:
+                            self.execution.drop_unreadable(c, job_ids=[job_id])
                 except Exception as exc:
                     failures.append({"drop_unreadable": type(exc).__name__})
         if self.stranded is None or at - self.stranded >= timedelta(hours=1):

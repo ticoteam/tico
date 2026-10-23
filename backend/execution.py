@@ -3050,7 +3050,7 @@ class Execution:
                 held.append(row["id"])
         return held
 
-    def drop_unreadable(self, c):
+    def drop_unreadable(self, c, job_ids=None):
         """Cancel every queued job whose message its bot may no longer read: a private task it was taken off, say.
 
         The claim passes over such a job for good (job_refusal's "unreadable"), so it would sit queued forever,
@@ -3060,7 +3060,9 @@ class Execution:
         dropped = []
         # From the bots to their queued jobs (jobs_queue), not from every job ever run.
         for row in c.execute("SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j "
-                             "WHERE j.bot=b.slug AND j.state='queued' ORDER BY j.created,j.id").fetchall():
+                             "WHERE j.bot=b.slug AND j.state='queued'" +
+                             (" AND j.id IN (" + ",".join("?" * len(job_ids)) + ")" if job_ids else "") +
+                             " ORDER BY j.created,j.id", job_ids or ()).fetchall():
             with isolated(c, "drop_unreadable", row["id"]):
                 # job_refusal's own check, with its arguments.
                 if privacy.message_readable(c, "bot:" + row["bot"], H.message(c, row["message_id"])):

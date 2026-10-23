@@ -1144,7 +1144,8 @@ def _rows(cur):
 
 
 def _one(conn, sql, args=()):
-    return _row(conn.execute(sql, args).fetchone())
+    from .read_cache import one
+    return _row(one(conn, sql, args))
 
 
 # ----------------------------------------------------------------------------- audit
@@ -3305,7 +3306,8 @@ def hydrate_task_tags(conn, rows):
         row["tags"] = []
     if by_id:
         marks = ",".join("?" * len(by_id))
-        for row in conn.execute("SELECT tags.*,task_tags.task_id FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
+        from .read_cache import rows as cached_rows
+        for row in cached_rows(conn, "SELECT tags.*,task_tags.task_id FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
                                 f"WHERE task_tags.task_id IN ({marks}) ORDER BY task_tags.rowid", tuple(by_id)):
             value = _tag_view(row)
             by_id[value.pop("task_id")]["tags"].append(value)
@@ -5893,7 +5895,7 @@ def setup_hold(conn, actor):
             f"its owner finishes its setup in its chat (hub bot go-live {slug}).")
 
 
-def stalled_tasks(conn, at=None):
+def stalled_tasks(conn, at=None, task_ids=None):
     """Bot tasks nothing is going to move, with how long they have been quiet (minutes). A task whose bot is
     still in setup carries `held`: waking it would only queue another run that never starts. A task held only
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
@@ -5902,8 +5904,9 @@ def stalled_tasks(conn, at=None):
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
         "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
         "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-        "AND coalesce(t.private,1)=0 AND t.updated<? ORDER BY t.updated",
-        (shift(at, seconds=-STALL_MINUTES * 60),)))
+        "AND coalesce(t.private,1)=0 AND t.updated<?" +
+        (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated",
+        (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ()))))
     if not rows:
         return []
     parked = parked_bots(conn)
@@ -5956,7 +5959,7 @@ def _session_lanes(conn, row):
     return ["task:" + row["id"], "task:" + root], root
 
 
-def spot_check_tasks(conn, at=None):
+def spot_check_tasks(conn, at=None, task_ids=None):
     """Bot tasks whose own session ran in the last SPOT_SESSION_HOURS (or runs now) with no progress for
     SPOT_CHECK_MINUTES, each with when it last progressed (`progress`). A subtask whose turns run in its
     parent's session is checked through the parent, so a session is never steered twice for one stretch."""
@@ -5965,8 +5968,9 @@ def spot_check_tasks(conn, at=None):
         return []
     rows = _rows(conn.execute(
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
-        "AND t.status IN ('open','doing') AND coalesce(t.private,1)=0 AND t.updated<? ORDER BY t.updated",
-        (shift(at, seconds=-SPOT_CHECK_MINUTES * 60),)))
+        "AND t.status IN ('open','doing') AND coalesce(t.private,1)=0 AND t.updated<?" +
+        (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated",
+        (shift(at, seconds=-SPOT_CHECK_MINUTES * 60), *(task_ids or ()))))
     out, recent, base = [], shift(at, hours=-SPOT_SESSION_HOURS), parse_ts(at)
     for row in rows:
         if not_yet_due(row, at) or row.get("next_run") or unanswered_ask(conn, row):
@@ -6139,7 +6143,7 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
-def wake_stalled(conn, at=None):
+def wake_stalled(conn, at=None, task_ids=None):
     """Wake the owner of each stalled task (at most once per STALL_REPEAT_MINUTES, STALL_WAKES_PER_DAY
     a day); past that, one diagnostic per stuck task, for BotOps. No diagnostic is filed about another
     diagnostic or sent to a person: when BotOps cannot take one, the stuck task carries the cause instead
@@ -6153,8 +6157,8 @@ def wake_stalled(conn, at=None):
     from . import wake_rules
     at = at or now()
     woke, escalated, checked, stuck, held, retried_ids = [], [], [], [], [], []
-    stalled = {row["id"]: row for row in stalled_tasks(conn, at)}
-    spots = {row["id"]: row for row in spot_check_tasks(conn, at)}
+    stalled = {row["id"]: row for row in stalled_tasks(conn, at, task_ids=task_ids)}
+    spots = {row["id"]: row for row in spot_check_tasks(conn, at, task_ids=task_ids)}
     parked = parked_bots(conn)
     for row in [*stalled.values(), *[r for r in spots.values() if r["id"] not in stalled]]:
         with isolated(conn, "wake_stalled", row["id"]):

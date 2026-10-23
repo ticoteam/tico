@@ -427,7 +427,11 @@ def pr_signal(c, event, payload):
 
 def refresh_task_prs(service, task_id):
     """Schedule a bounded refresh; task reads always use the last known state."""
-    with service.lock:
+    # A task read serves stored PR state. A background inventory may hold this mutex
+    # while reading a large checkout set; scheduling a refresh must never wait for it.
+    if not service.lock.acquire(blocking=False):
+        return
+    try:
         if getattr(service, "pr_refresh_running", False):
             return
         cache = getattr(service, "pr_refresh_cache", {})
@@ -450,6 +454,8 @@ def refresh_task_prs(service, task_id):
             return
         service.pr_refresh_running = True
         service.pr_refresh_cache = cache
+    finally:
+        service.lock.release()
 
     def refresh():
         try:

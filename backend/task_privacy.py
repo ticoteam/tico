@@ -7,6 +7,12 @@ import json
 import re
 
 from .store import H, Problem
+from . import read_cache
+
+
+def _task(c, tid):
+    # Authorization uses task identity and parties; display tags are unrelated to access.
+    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -23,7 +29,7 @@ def actor(who):
 
 def task_readable(c, who, row):
     if snapshot(c) and row:
-        row = H.task(c, row["id"])
+        row = _task(c, row["id"])
     principals = actor(who)
     return all(H.task_private_readable(c, a, row) for a in
                (principals if isinstance(principals, tuple) else (principals,)))
@@ -54,31 +60,60 @@ def references(c, value):
     """Task ids anywhere in a structured reference or payload, including nested lists. Every string that could
     name a task is gathered first and looked up in one query: one query per string was most of a busy server's SQL."""
     snapshot(c)
-    names = [name for name in _candidates(value, set()) if name]
+    names = sorted(name for name in _candidates(value, set()) if name)
     found = set()
     for start in range(0, len(names), 500):
         chunk = names[start:start + 500]
-        found.update(row[0] for row in c.execute(
+        found.update(row[0] for row in read_cache.rows(c,
             "SELECT id FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
     return found
 
 
 def message_tasks(c, message, seen=None, include_run=True, current=False):
+    snapshot(c)
+    if not message or seen is not None:
+        return _message_tasks(c, message, seen, include_run, current)
+    from . import provenance_clock
+    row = dict(message)
+    if row.get("id") and not current:
+        row = H.message(c, row["id"], include_deleted=True) or row
+    refs = row.get("refs") or H._json(row.get("refs_json"), {}) or {}
+    run = refs.get("run") if isinstance(refs, dict) else None
+    has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+    key = ("message_tasks", row.get("id"), bool(include_run and has_run), row.get("conversation_id"),
+           json.dumps(refs, sort_keys=True), row.get("in_reply_to"))
+    return provenance_clock.cached(c, key, lambda: _message_tasks(c, row, None, include_run, True))
+
+
+def _message_tasks(c, message, seen=None, include_run=True, current=False):
     """`current`: `message` is its row as stored, read in this snapshot, so it is not read again."""
     snapshot(c)
     if not message:
         return set()
     message = dict(message)
-    seen = set() if seen is None else seen
+    root = seen is None
+    seen = set() if root else seen
     mid = message.get("id")
     if mid in seen:
         return set()
     if len(seen) >= 100:
         # An unbounded reply chain is an unsupported provenance path.
         raise Problem("privacy", "Message provenance is too deep to authorize", 403)
-    seen.add(mid)
     if mid and not current:
         message = H.message(c, mid, include_deleted=True) or message
+    # Only complete root traversals are reusable. A nested traversal can skip ancestors
+    # already visited by its caller, so caching that partial result would lose provenance.
+    values = read_cache.cache(c)
+    key = ("message_tasks", mid, include_run, message.get("conversation_id"),
+           json.dumps(message.get("refs") or H._json(message.get("refs_json"), {}) or {}, sort_keys=True),
+           message.get("in_reply_to"))
+    cached = values.get(key) if values is not None else None
+    if cached is not None and not (cached[1] & seen):
+        if len(seen) + len(cached[1]) > 100:
+            raise Problem("privacy", "Message provenance is too deep to authorize", 403)
+        seen.update(cached[1])
+        return set(cached[0])
+    seen.add(mid)
     conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
     refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
     if not isinstance(refs, dict):
@@ -98,6 +133,8 @@ def message_tasks(c, message, seen=None, include_run=True, current=False):
     run_id = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
     if include_run and run_id:
         ids.update(attempt_tasks(c, run_id))
+    if root and values is not None:
+        values[key] = (frozenset(ids), frozenset(seen))
     return ids
 
 
@@ -110,6 +147,12 @@ def attempt_tasks(c, aid, memo=None):
             memo[key] = frozenset(attempt_tasks(c, aid))
         return set(memo[key])
     snapshot(c)
+    from . import provenance_clock
+    return read_cache.value(c, ("attempt_tasks", aid), lambda: provenance_clock.cached(
+        c, ("attempt_tasks", aid), lambda: _attempt_tasks(c, aid)))
+
+
+def _attempt_tasks(c, aid):
     ids = set()
     for row in c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                          "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
@@ -366,7 +409,7 @@ def require_attempt(c, who, aid):
 
 
 def private_execution(c, who):
-    return bool(who.attempt_id and any(H.task_private(c, H.task(c, tid))
+    return bool(who.attempt_id and any(H.task_private(c, _task(c, tid))
                                      for tid in attempt_tasks(c, who.attempt_id)))
 
 
@@ -434,7 +477,7 @@ def public_message(c, message):
     if not message or dict(message).get("deleted_at") or dict(message).get("deleted"):
         return False
     try:
-        return not any(H.task_private(c, H.task(c, tid)) for tid in message_tasks(c, message))
+        return not any(H.task_private(c, _task(c, tid)) for tid in message_tasks(c, message))
     except Problem:
         return False
 
@@ -480,7 +523,7 @@ def tag_readable(c, who, row):
     for event in c.execute("SELECT detail_json FROM events WHERE target=? AND action='tag.attach'", (row["id"],)):
         linked.update(references(c, H._json(event[0], {}) or {}))
     return (not linked or bool(row.get("is_template")) or
-            any(task_readable(c, who, H.task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
+            any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
 def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
@@ -492,7 +535,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
         ids.update(attempt_tasks(c, who.attempt_id))
-    private = [H.task(c, tid) for tid in ids if H.task_private(c, H.task(c, tid))]
+    private = [_task(c, tid) for tid in ids if H.task_private(c, _task(c, tid))]
     if not private:
         return
     conv = H.conversation(c, conversation_id) if conversation_id else None
@@ -500,7 +543,7 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
-    target = H.task(c, target) if isinstance(target, str) else None
+    target = _task(c, target) if isinstance(target, str) else None
     for row in private:
         if all(_reads(c, actor, row, guest) for actor in audience):
             continue
@@ -559,7 +602,7 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
         ("bot:" + row["bot"], "bot:" + row["bot"]))]
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
-        task = H.task(c, tid)
+        task = _task(c, tid)
     private = [task] if task and H.task_private(c, task) else []
     if not tid:
         private = [t for t in tasks if H.task_private(c, t)]
@@ -650,7 +693,7 @@ def event_readable(c, actor, event):
     event = dict(event)
     ids = references(c, H._json(event.get("detail_json"), {}) or {}) | references(c, event.get("target"))
     target = event.get("target")
-    if H.task(c, target):
+    if _task(c, target):
         ids.add(target)
     msg = H.message(c, target)
     if msg and not message_readable(c, actor, msg):

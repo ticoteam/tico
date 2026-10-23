@@ -60,3 +60,14 @@ def value(c, key, build):
         values[key] = build()
     # Callers enrich roster/config dictionaries; their changes must not become cached policy.
     return deepcopy(values[key])
+
+
+def one(c, statement, args=()):
+    """One neutral stored row; never cache a mutation or an answer outside its snapshot."""
+    values = cache(c) if statement.lstrip().upper().startswith("SELECT ") else None
+    key = ("one", statement, tuple(args))
+    if values is None:
+        return c.execute(statement, args).fetchone()
+    if key not in values:
+        values[key] = c.execute(statement, args).fetchone()
+    return values[key]
