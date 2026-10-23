@@ -256,6 +256,24 @@ def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
         (2, "acted", 0) if case == "own_task" else (0, "no_change", 1))
 
 
+@pytest.mark.parametrize("case", ["rotated", "resumed"])
+def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api, case):
+    """The runner reports a session left behind for its size (runner-rs/src/rotate.rs); the token table counts it."""
+    r = machine(api)
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    if case == "rotated":
+        body["rotated"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
+    post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
+    row = turn(api, attempt)
+    assert row["rotated"] == ("tokens" if case == "rotated" else None)
+    rows = weekly(api, where="bot='ops'")
+    assert {bucket["purpose"] for bucket in rows} == {row["purpose"]}
+    assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
+
+
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})

@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend import login_holds
+from backend import health_monitor, login_holds
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, get, headers, post, ready, runner
 
@@ -699,3 +699,42 @@ def test_a_limit_keeps_the_provider_and_login_it_came_from_after_settings_and_ho
                                     (first["id"],)).fetchone()[0])["source"]["profile"] == "work"
     assert f"Limit: {said}" in api.get(f"/api/runs/{first['id']}/log", headers=headers()).text
     assert health_detail(api, "ops").startswith(said)
+
+
+def test_a_model_at_capacity_holds_the_login_minutes_and_a_later_real_quota_is_still_a_quota_hold(api, monkeypatch):
+    # Oct 23 03:04Z: "Selected model is at capacity" held the shared Codex login for an hour as spent quota; the probe
+    # after it met "Quota exceeded", which is the plan's and must stay a full hold.
+    at(monkeypatch, "2026-10-23T03:04:45.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    post(api, "tasks", {"owner": "ops", "title": "More work", "body": "Please do it."})
+    # The runner's plan-window reset hours away says nothing about a busy model.
+    limit(api, machine, claim(api, machine), errors=("Selected model is at capacity. Please try a different model.",),
+          limit_resets_at="2026-10-23T08:00:00Z")
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, machine["runner_id"], "", "fake")
+        assert hold["until"].startswith("2026-10-23T03:06:45") and hold["capacity"] and hold["streak"] == 0
+        assert H.status(c, "ops")["focus"] == ("Primary fake temporary model capacity at 03:04; retrying after "
+                                               "2026-10-23 03:06 UTC")
+        # A busy moment is not a spent plan: Health does not say the bot stopped on a subscription limit for it.
+        assert not [f for f in health_monitor._bot_checks(c, api.app.state.store.settings)
+                    if f["check_id"] == "limited_no_fallback"]
+    at(monkeypatch, "2026-10-23T03:06:46.000000Z", api)
+    ready(api, machine, ["ops"])
+    limit(api, machine, claim(api, machine), errors=("Quota exceeded. Check your plan and billing details.",))
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, machine["runner_id"], "", "fake")
+        # The first quota limit in a row: the 30-minute backoff, not a streak the capacity hold grew.
+        assert hold["until"].startswith("2026-10-23T03:36:46") and not hold["capacity"] and hold["streak"] == 1
+        assert "API quota or billing limit" in H.status(c, "ops")["focus"]
+
+
+def test_a_capacity_notice_during_a_quota_hold_leaves_the_providers_reset_where_it_was(api):
+    with api.app.state.store.transaction() as c:
+        quota = login_holds.record(c, "r1", "", "codex", "2026-10-23T04:30:00.000000Z", reset="2026-10-23T05:00:30Z",
+                                   error="Quota exceeded. Check your plan and billing details.")
+        busy = login_holds.record(c, "r1", "", "codex", "2026-10-23T05:00:00.000000Z",
+                                  error="Selected model is at capacity. Please try a different model.")
+    assert (busy["until"], busy["streak"], busy["reset"], busy["capacity"]) == (quota["until"], 1, True, False)

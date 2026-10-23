@@ -422,7 +422,7 @@ impl CodexHost {
                     return;
                 }
                 if done["status"] == "failed" {
-                    let msg = done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string();
+                    let msg = with_kind(&done["error"], done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string());
                     self.emit(event("turn_failed", t, finished.as_deref(), json!({"limit": is_limit(&msg), "error": msg})));
                 } else {
                     let status = done["status"].as_str().filter(|s| !s.is_empty()).unwrap_or("completed");
@@ -431,7 +431,7 @@ impl CodexHost {
             }
             "error" => {
                 let err = &p["error"];
-                let msg = err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| py_dumps(err).chars().take(500).collect());
+                let msg = with_kind(err, err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| py_dumps(err).chars().take(500).collect()));
                 let will_retry = crate::util::truthy(p.get("willRetry"));
                 let fresh = turn.as_ref().is_some_and(|x| !self.0.done_turns.lock().unwrap().contains(x));
                 if turn.is_some() && !will_retry && fresh {
@@ -663,6 +663,29 @@ impl CodexHost {
     }
 }
 
+// Codex names an overload or quota refusal in the error's structure (`codexErrorInfo`, or the API's `type`), and its
+// message may say neither ("Server busy"). Name the kind in the text the limit rules read; a message that already
+// reads as a limit is kept as it is, so a genuine quota is never relabelled as capacity.
+fn with_kind(err: &Value, msg: String) -> String {
+    let info = &err["codexErrorInfo"];
+    let kind = info.as_str().map(String::from).or_else(|| info.as_object().and_then(|o| o.keys().next().cloned()))
+        .or_else(|| err["type"].as_str().map(String::from)).or_else(|| err["error"]["type"].as_str().map(String::from))
+        .unwrap_or_default().to_lowercase();
+    let status = info.as_object().and_then(|o| o.values().next()).and_then(|v| v["httpStatusCode"].as_u64());
+    let tag = if kind.contains("overloaded") {
+        "overloaded"
+    } else if kind.contains("usagelimit") || kind.contains("usage_limit") {
+        "usage limit"
+    } else if status == Some(429) {
+        "status 429"
+    } else if status == Some(503) {
+        "status 503"
+    } else {
+        return msg;
+    };
+    if is_limit(&msg) { msg } else { format!("{msg} ({tag})") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +722,24 @@ mod tests {
     fn no_thread_keeps_a_codex_memory_outside_the_repository() {
         let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
         assert_eq!(host.thread_params(&Settings::default())["config"]["features.memories"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn a_structured_overload_is_capacity_and_a_quota_stays_a_quota() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        for line in [
+            r#"{"method": "turn/started", "params": {"threadId": "thr_o", "turn": {"id": "turn_1"}}}"#,
+            r#"{"method": "error", "params": {"threadId": "thr_o", "turnId": "turn_1", "willRetry": false, "error": {"message": "Server busy", "codexErrorInfo": "serverOverloaded"}}}"#,
+            r#"{"method": "turn/started", "params": {"threadId": "thr_o", "turn": {"id": "turn_2"}}}"#,
+            r#"{"method": "turn/completed", "params": {"threadId": "thr_o", "turn": {"id": "turn_2", "status": "failed", "error": {"message": "Quota exceeded. Check your plan and billing details.", "codexErrorInfo": "serverOverloaded"}}}}"#,
+        ] {
+            host.on_message(serde_json::from_str(line).unwrap()).await;
+        }
+        let failed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "turn_failed").collect();
+        assert_eq!(failed.len(), 2);
+        let (busy, quota) = (failed[0]["error"].as_str().unwrap(), failed[1]["error"].as_str().unwrap());
+        assert!(failed[0]["limit"] == true && crate::hosts::is_capacity(busy), "{busy}");
+        assert!(failed[1]["limit"] == true && !crate::hosts::is_capacity(quota), "{quota}");
     }
 }

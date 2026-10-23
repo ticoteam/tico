@@ -94,7 +94,7 @@ impl Runner {
         let redact = |v: &Value| d.redactor.map(|r| r.scrub_json(v)).unwrap_or_else(|| v.clone());
         let scrub = |t: &str| d.redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
         let (mut reply, mut tokens, mut outcome) = (String::new(), json!({}), "interrupted".to_string());
-        let (mut limited, mut retryable, mut acted, mut complete) = (false, false, false, false);
+        let (mut limited, mut capacity, mut retryable, mut acted, mut complete) = (false, false, false, false, false);
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -150,12 +150,12 @@ impl Runner {
             if d.flags.stopped.load(Ordering::SeqCst) {
                 goal.failure = Some("Stopped by a person".into());
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: false });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: false });
             }
             if yielding.is_some_and(|by| Instant::now() >= by) {
                 // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: true });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -291,6 +291,12 @@ impl Runner {
                     let error = text_of(&event["error"]);
                     goal.failure = Some(if error.is_empty() { "The harness stopped".into() } else { scrub(&error) });
                     limited = truthy(event.get("limit"));
+                    capacity = limited && hosts::is_capacity(&error);
+                    if capacity && acted {
+                        // A busy model after the bot acted is not a turn that never ran: no fallback or replay may
+                        // repeat what it did, so it ends as a failed run saved for review.
+                        (limited, capacity) = (false, false);
+                    }
                     // A sign-in the runtime could not renew refuses the turn before it starts, so the job can go
                     // back in the queue; `acted` guards a token that died after the bot had done something.
                     let rejected = hosts::is_auth_rejected(&error);
@@ -415,7 +421,7 @@ impl Runner {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
         let yielded = yielding.is_some() && outcome != "failed";
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, retryable, turn, yielded })
+        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, capacity, retryable, turn, yielded })
     }
 }
 
