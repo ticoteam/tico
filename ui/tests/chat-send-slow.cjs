@@ -26,6 +26,7 @@ async function check(engine) {
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'warning' && m.text().startsWith('chat send')) warnings.push(m.text()); });
     let answer = 'ok', busy = 0, hold = null, stopHold = null;
+    const delivered = new Map();                    // stored sends can lose their response before access is revoked
     const refusals = new Set();                     // like the server, replay a stored refusal for the same key
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname;
@@ -48,6 +49,14 @@ async function check(engine) {
       if (p === '/api/v2/chat/botops') {
         const text = route.request().postDataJSON().text;
         const key = route.request().headers()['idempotency-key']; keys.push(key);
+        // Current access is checked before replay, and this denial does not overwrite the stored result.
+        if (answer === 'access-refused') return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
+        if (delivered.has(key)) return json(delivered.get(key));
+        if (answer === 'stored-stall') {
+          sends.push(text);
+          delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
+          return;                                  // saved, but the response never reaches the page
+        }
         if (answer === 'refused') refusals.add(key);
         if (refusals.has(key)) return json({error: {code: 'forbidden', detail: 'A rule refused this send'}}, 403);
         if (answer === 'stall') return;                       // never answered: the page has to give up on its own
@@ -107,9 +116,12 @@ async function check(engine) {
     // A definitive refusal did not send a message. If its cause changes, explicit Send of the unchanged draft
     // must evaluate that new situation rather than replaying the server's cached refusal for48h.
     answer = 'refused';
+    const beforeRefusal = sends.length;
     await box.fill('A rule refused this draft'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
     const refusedKey = keys.at(-1);
+    assert.match(await page.locator('.toast.err').innerText(), /Not sent:/, 'first-attempt refusal is definitive');
+    assert.equal(sends.length, beforeRefusal, 'first-attempt refusal stores nothing');
     assert.equal(await box.inputValue(), 'A rule refused this draft');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'confirmed refusal ends pending delivery');
     answer = 'ok';
@@ -117,6 +129,39 @@ async function check(engine) {
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
     assert.notEqual(keys.at(-1), refusedKey, 'confirmed refusal allows a later explicit send to evaluate again');
     assert.equal(sends.at(-1), 'A rule refused this draft');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // A stored send with a lost response is still uncertain if access is refused before same-key replay.
+    // Restoring access and sending the unchanged draft must replay that original, never create a second message.
+    await page.evaluate(() => { CHAT_SEND.timeout = 200; });
+    answer = 'stored-stall';
+    const uncertainText = 'Stored before access was revoked', beforeUncertain = sends.length;
+    await box.fill(uncertainText); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const uncertainKey = keys.at(-1), uncertainAt = await page.evaluate(() => BOT_PILL.unconfirmed.at);
+    assert.equal(sends.length, beforeUncertain + 1, 'the original reached storage before its response was lost');
+    answer = 'access-refused';
+    await page.locator('.toast.err button', {hasText: 'Retry'}).click();
+    await page.waitForFunction(() => !BOT_PILL.sending);
+    assert.equal(keys.at(-1), uncertainKey, 'access-refused Retry uses the original key');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, '403 cannot resolve an earlier uncertain send');
+    assert.equal(await page.evaluate(() => !!BOT_PILL.unconfirmed?.refused), false, 'the pending send is not a confirmed refusal');
+    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*access.*refused.*Check the chat before resending/);
+    assert.ok(!/Not sent:/.test(await page.locator('.toast.err').innerText()), 'the UI does not claim the original was unsent');
+    assert.equal(await box.inputValue(), uncertainText);
+    await page.reload();
+    await page.waitForFunction(() => V2C?.loaded);
+    await page.evaluate(() => { CHAT_SEND.timeout = 1500; });
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, 'reload preserves the uncertain key');
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.at), uncertainAt, 'another denial after reload keeps the original replay age');
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
+    assert.equal(keys.at(-1), uncertainKey, 'restored access replays the same key for an unchanged draft');
+    assert.equal(sends.length, beforeUncertain + 1, 'same-key replay leaves exactly one message server-side');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledged replay ends pending delivery');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // No answer at all: it ends in time, says so, keeps the draft, and Retry sends it under the same request id.

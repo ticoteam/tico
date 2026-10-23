@@ -743,6 +743,8 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     toast(CHAT_REPLAY_EXPIRED, true);
     return false;
   }
+  // A retained identity means an earlier send may have landed, including one interrupted by a reload.
+  const uncertainRetry = !!P.unconfirmed;
   // Keep uncertain intent separately from the request cache; a redraw cannot silently rotate its identity.
   if (!P.files.length && !P.unconfirmed) {
     const path = `/v2/chat/${encodeURIComponent(slug)}`, body = {text: text || 'Attached files.', refs: {...extraRefs}, ...extra};
@@ -774,13 +776,16 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     P.retryTries = 0;
     return true;
   } catch (e) {
-    watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
+    // Access is checked before replay, so its refusal cannot disprove delivery of an earlier uncertain send.
+    const accessRefused = uncertainRetry && e.status === 403 && !e.unconfirmed;
+    watch.end(accessRefused ? 'unconfirmed' : e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A confirmed rule refusal created no message. The server caches that refusal too, so a later explicit Send
     // must be able to try again after its cause is resolved. Uncertain deliveries always retain their key.
-    if (pending && e.status >= 400 && e.status < 500 && !e.unconfirmed) pending.refused = true;
+    if (pending && e.status >= 400 && e.status < 500 && !e.unconfirmed && !accessRefused) pending.refused = true;
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
     if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
+    else if (accessRefused) toast('Not confirmed: This message may already have sent. Chat access is currently refused. Check the chat before resending.', true);
     else if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
     else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
