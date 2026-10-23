@@ -362,6 +362,7 @@ if __package__ in (None, ""):                          # run as a script: python
 # Mirrors of the server's vocabulary (backend/hubdb.py), so a typo is refused by the parser
 # before a request is made. The server is the authority when they disagree.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
@@ -371,6 +372,12 @@ ASKED = ("Assistant: the person asked for exactly this in their own Assistant ch
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+def task_update_status(value):
+    if value == "closed":
+        raise argparse.ArgumentTypeError("use `hub task close <id>` to close a task")
+    return value
 
 
 # `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
@@ -903,7 +910,7 @@ def parser():
     visibility.add_argument("--company", dest="private", action="store_false", help="human requester publishes the task")
     s.add_argument("id")
     s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--status", choices=list(TASK_STATUSES))
+    s.add_argument("--status", choices=list(TASK_UPDATE_STATUSES), type=task_update_status)
     s.add_argument("--note")
     s.add_argument("--owner")
     s.add_argument("--due")

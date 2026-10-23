@@ -704,6 +704,7 @@ def push(c, payload):
                                        "AND branch=?", (repo.lower(), branch))):
             detail = H._json(link["detail_json"], {}) or {}
             detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
+            detail.pop("stale_push_cleared", None)     # a release names only a stale push the newest push left behind
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}

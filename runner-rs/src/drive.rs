@@ -64,7 +64,15 @@ pub struct Drive<'a> {
     pub bot: &'a str,
     /// The provider thread's session key (execute::session_key), for commands a turn leaves running.
     pub session: &'a str,
+    /// The shared login this stretch holds, when its server can take a turn back that gave it up at the cap
+    /// (crate::login_turns::HOLD_CAP).
+    pub login: Option<crate::login_turns::Cap>,
 }
+
+/// What a turn holding a shared login is told when another turn has waited out the cap for it.
+const YIELD_ASK: &str = "Another bot's turn is waiting for the ChatGPT login this turn runs on. Stop at a safe point \
+now: let the command in progress finish, commit and push your work in progress, note on the task where you stopped \
+and what comes next, then end this turn. It continues right after the other turn.";
 
 impl Runner {
     #[allow(clippy::too_many_arguments)]
@@ -111,6 +119,8 @@ impl Runner {
         let mut tried: HashSet<String> = HashSet::new();
         let mut pausing: Option<String> = None;
         let (mut pause_ready, mut pause_at, mut clearing) = (false, Instant::now(), false);
+        // By when this turn, asked to give the shared login up (YIELD_ASK), must have ended; past it, it is interrupted.
+        let mut yielding: Option<Instant> = None;
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -139,7 +149,12 @@ impl Runner {
             if d.flags.stopped.load(Ordering::SeqCst) {
                 goal.failure = Some("Stopped by a person".into());
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: false });
+            }
+            if yielding.is_some_and(|by| Instant::now() >= by) {
+                // No safe point within the grace: the work so far stays in the worktree and on the task.
+                let _ = host.interrupt(thread, &turn).await;
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: true });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -263,8 +278,9 @@ impl Runner {
                 }
                 if kind == "turn_completed" {
                     outcome = if event["status"] == "interrupted" { "interrupted".into() } else { "completed".into() };
-                    // A goal that runs across turns is not continued once the lease is lost.
-                    complete = salvage.is_some() || !(goal_running && across_turns && outcome == "completed");
+                    // A turn that gave the login up ends here, between a native goal's turns too; a goal that runs
+                    // across turns is not continued once the lease is lost.
+                    complete = yielding.is_some() || salvage.is_some() || !(goal_running && across_turns && outcome == "completed");
                 } else if kind == "turn_failed" || (kind == "error" && truthy(event.get("host_restart"))) {
                     outcome = "failed".into();
                     let error = text_of(&event["error"]);
@@ -305,7 +321,7 @@ impl Runner {
                     }
                 }
             }
-            if complete && outcome == "completed" && !carried.is_empty() && !goal.controlled && salvage.is_none() {
+            if complete && outcome == "completed" && !carried.is_empty() && !goal.controlled && yielding.is_none() && salvage.is_none() {
                 // Not on a failed or stopped turn: those settle the attempt, inputs included.
                 turn = self.carry_inputs(aid, host, thread, carried, d.effort).await?;
                 outcome = "interrupted".into();
@@ -332,6 +348,16 @@ impl Runner {
                             goal_running = false;
                             complete = true;
                             outcome = "completed".into();
+                        }
+                    }
+                    if let Some(held) = d.login.as_ref().filter(|h| !complete && yielding.is_none() && pausing.is_none() && !clearing && h.due(Instant::now())) {
+                        yielding = Some(Instant::now() + held.grace());
+                        let note = held.yielded();
+                        self.state.append(aid, "status", &json!({"yielding": note}))?;
+                        d.wake.notify_one();
+                        if !host.supports_steer() || host.steer(thread, &turn, YIELD_ASK).await.is_err() {
+                            // Nothing to ask: the turn is interrupted at once and continues after the waiter.
+                            yielding = Some(Instant::now());
                         }
                     }
                     if !complete && host.supports_steer() {
@@ -383,7 +409,8 @@ impl Runner {
         if let Some(p) = &goal.paused {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, retryable, turn })
+        let yielded = yielding.is_some() && outcome != "failed";
+        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, retryable, turn, yielded })
     }
 }
 
@@ -479,7 +506,7 @@ mod tests {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
         let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread };
+                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
