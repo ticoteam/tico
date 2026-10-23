@@ -470,7 +470,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     assert stats.status_code == 200 and stats.json()["tools"][0]["tool"] == "hub_task_show"
     # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
     for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
-        assert rpc(api, "tools/call", {"name": name, "arguments": {}})["error"]["code"] == -32601
+        assert rpc(api, "tools/call", {"name": name, "arguments": {}})["error"]["code"] == -32602
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
         ["hub_task_show", 1], ["other", 2]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
@@ -529,7 +529,7 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     for view in ("assistant_action_weekly", "mcp_call_weekly"):
         assert query(api, "SELECT * FROM " + view, delegated, expected=403)["error"]["code"] == "confirm_required"
     auth, store = api.app.state.auth, api.app.state.store
-    who = auth.authenticate(headers(delegated), "/api/v2/sql", "POST")
+    who = auth.authenticate({"authorization": "Bearer " + delegated}, "/api/v2/sql", "POST")
     assert who.role == "owner" and who.via == "assistant" and who.task_actor
     with store.read() as c:
         conn = S.connect(store.settings.db_path, c, auth, who)
