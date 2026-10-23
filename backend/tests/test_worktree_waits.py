@@ -410,7 +410,8 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
     served = rows(api, 'SELECT * FROM worktree_waits')[0]
     assert served['state'] == 'reserved' and served['link_id'] == retired
     detail = json.loads(rows(api, 'SELECT detail_json FROM task_links WHERE id=?', (retired,))[0]['detail_json'])
-    assert not any(key in detail for key in stale if key != 'owner')
+    assert not any(key in detail for key in stale if key not in ('owner', 'held'))
+    assert detail.get('held') != stale['held']  # a current reservation hold is separate from the retired one
     assert finish_setup(api, tid, retired).status_code == 200
     assert rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
     assert not any(a['link_id'] == retired and a['action'] == 'remove' for a in beat(api))
