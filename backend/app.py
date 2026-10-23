@@ -3197,24 +3197,38 @@ def create_app(settings=None):
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
-    def review_preflight(who, tid, step=None, child_title=None, status=None):
+    def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
         from . import review_gate
-        if step not in ("Review 1", "Review 2") and not (child_title and review_gate.REVIEW.match(child_title)):
-            # Step ids are also accepted, so resolve the name before deciding.
-            if not step and status != "review":
-                return None
+        # None is reserved for a genuinely unconfigured GitHub integration.
+        # If a skipped preflight becomes applicable during mutation, fail closed.
+        if child_title is not None and not review_gate.REVIEW.match(child_title):
+            return {}
+        if child_title is None and step is None and status is None and task_type is None:
+            return {}
         with store.read() as c:
             row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            named = c.execute("SELECT name FROM task_steps WHERE id=?", (step,)).fetchone() if step else None
-            if not step and status == "review":
-                named = c.execute("SELECT name FROM task_steps WHERE type_id=? AND status='review' ORDER BY position,id LIMIT 1",
-                                  (row["type_id"],)).fetchone()
-            if not (child_title and review_gate.REVIEW.match(child_title)) and (named[0] if named else step) not in ("Review 1", "Review 2"):
-                return None
+            typ = H.type_get(c, task_type if task_type is not None else row.get("type_id") or H.GENERAL_TYPE)
+            if not typ:
+                return {}  # Mutation reports an invalid destination without trusting cached PR evidence.
+            row = {**row, "type_id": typ["id"]}
+            if child_title is None:
+                # Match _task_state's destination resolution, including a type-only
+                # move whose retained status selects a review step on the new board.
+                effective = status if status is not None else row.get("status") or "open"
+                current = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None)
+                if step is not None:
+                    named = next((s for s in typ["steps"] if s["id"] == step), None)
+                    named = named or next((s for s in typ["steps"] if s["name"] == step), None)
+                elif current and current["status"] == effective:
+                    named = current
+                else:
+                    named = next((s for s in typ["steps"] if s["status"] == effective), None)
+                if not named or named["name"] not in ("Review 1", "Review 2"):
+                    return {}
             if not review_gate.engineering(c, row):
-                return None
+                return {}
             prs = review_gate.links(c, row)
-        return review_gate.snapshot(app.state.github_app, prs) if prs else None
+        return review_gate.snapshot(app.state.github_app, prs) if prs else {}
 
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
@@ -3234,7 +3248,7 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
-        snapshots = review_preflight(caller, tid, step=body.step, status=body.status)
+        snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         def work(c):
             # A person's request to BotOps can purge tasks that are not really needed, as that person.
             who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller

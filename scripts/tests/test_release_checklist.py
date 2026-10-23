@@ -202,6 +202,22 @@ def test_unrecognised_missing_failure_and_base_head_are_distinct():
     assert 'no current passing receipt' in '\n'.join(build(task)['prs'][0]['gaps'])
 
 
+def test_mixed_note_scopes_failures_and_pending_to_the_named_head_result():
+    task = complete()
+    task['messages'] = []
+    text = (f'Review 1: receipt gate implemented. Tests: base {BASE} head {HEAD}: '
+            '185 passed, 0 failed, 0 skipped; exit 0, 78.10s. '
+            'Two original existing-fixture failures were corrected before final validation. '
+            'Independent Review 1 and hosted checks pending. '
+            'Full suite, browsers/native builds and installed behavior not run.')
+    task.update(note=text, updated='2026-01-04')
+    assert build(task)['gaps'] == 0
+    task['note'] = text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored')
+    assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])
+    task['messages'] = [message(task, f'Tests: head {HEAD}: 185 passed, 0 failed', created='2026-01-05')]
+    assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])
+
+
 def test_review_two_recheck_title_is_not_mistaken_for_an_optional_absent_review():
     task = complete()
     task['children'][1]['title'] = 'Review 2 re-check: PR #12'

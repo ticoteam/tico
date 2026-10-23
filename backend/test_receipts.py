@@ -17,12 +17,24 @@ REMOVED = ("deleted_at", "hidden_at", "superseded_at")
 
 def recognise(line):
     """None for unrelated prose; otherwise explicit status, head and original line."""
-    if not TEST.search(line):
-        return None
     match = HEAD.search(line)
-    shas = SHA.findall(line)
-    head = match[1].lower() if match else shas[0].lower() if len(shas) == 1 else None
-    result = ZERO.sub("", line)
+    shas = list(SHA.finditer(line))
+    anchor = match or (shas[0] if len(shas) == 1 else None)
+    # Notes and keeper notices wrap a receipt in other sentences: corrected
+    # historical failures and unrun suites do not describe this head's result.
+    start, end = 0, len(line)
+    if anchor:
+        for boundary in re.finditer(r"[.!?]\s+", line):
+            if boundary.end() <= anchor.start():
+                start = boundary.end()
+            elif boundary.start() >= anchor.end():
+                end = boundary.start()
+                break
+    clause = line[start:end]
+    if not TEST.search(clause):
+        return None
+    head = match[1].lower() if match else shas[0][0].lower() if len(shas) == 1 else None
+    result = ZERO.sub("", clause)
     status = ("failed" if FAIL.search(result) else "unrecognised" if PLAN.search(result)
               else "passed" if PASS.search(result) else "unrecognised")
     return {"head": head, "status": status, "text": line}

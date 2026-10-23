@@ -90,6 +90,64 @@ def test_shared_recognizer_result_spellings(text, state):
     assert not test_receipts.at_head({'id': 't', 'note': f'Tests: base {HEAD} head {OLD}: 9 passed'}, HEAD)[0] == 'passed'
 
 
+@pytest.mark.parametrize('historical', ['', ' Two original existing-fixture failures were corrected before final validation.'])
+def test_mixed_note_keeps_current_result_separate_from_history_and_unrun_checks(api, historical):
+    text = (f'Review 1: receipt gate implemented. Tests: base {BASE} head {HEAD}: '
+            '185 passed, 0 failed, 0 skipped; exit 0, 78.10s.' + historical +
+            ' Independent Review 1 and hosted checks pending. Full suite, browsers/native builds '
+            'and installed behavior not run.')
+    task = ticket(api, text)
+    assert move(api, task).status_code == 200
+    child = api.post('/api/v2/tasks', headers=headers(), json={'owner': 'cmo', 'title': 'Review 1: PR #412',
+        'body': 'Review the change.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
+    assert child.status_code == 200, child.text
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        c.execute('UPDATE tasks SET note=? WHERE id=?',
+                  (text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored'), task['id']))
+    failed = move(api, get(api, 'tasks/' + task['id'])['task'], 'Review 2')
+    assert failed.status_code == 422 and 'failed test receipt' in failed.text
+
+
+@pytest.mark.parametrize('target', ['Review 1', 'Review 2', 'status', 'type-only'])
+def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomically(api, monkeypatch, target):
+    task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'human:ana', task['id'], type=H.GENERAL_TYPE,
+                      status='review' if target == 'type-only' else 'doing')
+    task = get(api, 'tasks/' + task['id'])['task']
+    service = api.app.state.github_app
+    monkeypatch.setattr(service, 'row', lambda c: {'org': 'acme'})
+    monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
+    calls, fresh = [], {'head': OLD, 'conclusion': 'failure'}
+    def fetch(method, path, **kw):
+        calls.append(path)
+        data = ({'head': {'sha': fresh['head']}} if '/pulls/' in path else
+                {'check_runs': [{'name': 'python', 'conclusion': fresh['conclusion']}]} if path.endswith('check-runs') else [])
+        return SimpleNamespace(status_code=200, json=lambda: data)
+    monkeypatch.setattr(service, '_call', fetch)
+    # Type names and ids, step names and ids, and implicit review steps use the same destination.
+    body = {'version': task['version'], 'type': 'Dev tickets'}
+    if target == 'status':
+        body['status'] = 'review'
+    elif target != 'type-only':
+        with api.app.state.store.read() as c:
+            typ = H.type_get(c, 'Dev tickets')
+        body['type'] = typ['id']
+        body['step'] = next(s['id'] for s in typ['steps'] if s['name'] == target) if target == 'Review 2' else target
+    refused = api.post('/api/v2/tasks/' + task['id'], headers=headers(), json=body)
+    assert refused.status_code == 422 and OLD in refused.text and 'python' in refused.text, refused.text
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert (current['type_id'], current['step_id'], current['version']) == (task['type_id'], task['step_id'], task['version'])
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+    assert any('/commits/' + OLD + '/check-runs' in p for p in calls)
+    fresh.update(head=HEAD, conclusion='success')
+    allowed = api.post('/api/v2/tasks/' + task['id'], headers=headers(), json=body)
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()['task']['step']['name'] in ('Review 1', 'Review 2')
+
+
 def test_fresh_github_snapshot_head_and_checks_are_used_and_races_refuse(api, monkeypatch):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
@@ -236,6 +294,24 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
             if removal:
                 c.execute(f'UPDATE messages SET {removal}=? WHERE id=?', (H.now(), msg['id']))
     assert move(api, task).status_code == 422
+
+
+@pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
+def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
+    task = ticket(api, private=False)
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
+        c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=?, note=? WHERE id=?",
+                  (reader, f'Tests: head {HEAD}: 9 passed, 0 failed', child['id']))
+        assert H.task_private_readable(c, reader, H.task(c, child['id']))
+        other = task['owner'] if reader == 'human:ana' else 'human:ana'
+        assert not H.task_private_readable(c, other, H.task(c, child['id']))
+    refused = move(api, task)
+    assert refused.status_code == 422 and 'missing test receipt' in refused.text
+    with api.app.state.store.transaction() as c:
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
+        c.execute('UPDATE tasks SET private=0 WHERE id=?', (child['id'],))
+    assert move(api, task).status_code == 200
 
 
 def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatch):
