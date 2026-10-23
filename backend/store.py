@@ -686,7 +686,7 @@ class Store:
         # As hubdb.connect: a writer waits out a backup checkpoint or a long scheduler pass
         # rather than answering storage_unavailable.
         c.execute("PRAGMA busy_timeout=30000")
-        c.execute("PRAGMA synchronous=FULL")
+        c.execute(f"PRAGMA synchronous={H.synchronous('FULL')}")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
