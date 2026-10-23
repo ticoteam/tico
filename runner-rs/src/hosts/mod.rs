@@ -813,6 +813,14 @@ pub fn file_sign_in_detail(runtime: &str, env: &Env) -> Option<&'static str> {
     }
 }
 
+/// Why the host's login file cannot be used, when `file_signed_in` gives no answer for a reason the person can fix.
+pub fn file_problem(runtime: &str, env: &Env) -> Option<String> {
+    match runtime {
+        "musecode" => musecode::store_problem(&musecode::auth_file(env)),
+        _ => None,
+    }
+}
+
 /// `model_list = "host"`: the models the host offers (for a profile's own login where that matters).
 pub fn models(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Vec<String> {
     match runtime {

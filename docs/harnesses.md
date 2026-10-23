@@ -66,8 +66,16 @@ write it, readiness shows Muse Code as not ready and names the folder: Settings 
 and says which folder, without asking for a sign-in, since signing in again does not fix it.
 The download is about 340 MB. The sign-in is `muse/auth.json` in that folder (sign in from Settings; a
 profile signs in to its own); `META_API_KEY` wins over it, and a computer-wide key reaches the run. The CLI has no
-sign-in status command, so readiness reports the file being there. Version checks and sign-ins also set
-`MUSE_NO_AUTO_UPDATE=1` (the manifest's `[env]`).
+sign-in status command, so readiness checks for its saved Meta credential: an API key or Meta-account token in
+that file. Every Muse process Tico starts sets `TBH_CREDENTIAL_BACKEND=file`, so the login stays in that file on a Mac
+too; Muse's default there keeps the token in the login Keychain, outside the config files that Switch account moves
+into place and Cancel keeps. A saved login that points at the Keychain (from before this setting) shows as not
+ready, asking for a sign-in from Tico; Tico never reads or changes that Keychain item. Sign out runs `muse logout`;
+Switch account signs in to a temporary config folder and replaces the saved login only after success,
+for the computer's login. Cancelling keeps the old login. The runner retains the same protection for
+legacy named profiles, which Settings no longer lists.
+Version checks and sign-ins also set
+`MUSE_NO_AUTO_UPDATE=1` and `TBH_CREDENTIAL_BACKEND=file` (the manifest's `[env]`).
 Meta's install script only installs the newest release, so this harness follows `latest` like Cursor's.
 Meta's Llama models stay on pi through OpenRouter (`llama-4-maverick`, no longer recommended).
 

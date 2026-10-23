@@ -794,3 +794,17 @@ def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_com
     # The starter import takes the owner and the bots: all 300 of them.
     owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]]}
     assert len(starter.load(C.to_yaml(owner_only, CREATED))["bots"]) == 300
+
+
+def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_words():
+    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 325th lands, the 326th is refused,
+    and the full plan passes the check and its file reads back."""
+    draft = started()
+    draft["goals"] = [{"id": "goal-%d" % i, "title": "Goal %d" % i, "owner": "you", "measure": "", "unit": "",
+                       "direction": "up", "target": None, "baseline": None, "deadline": None}
+                      for i in range(C.LIMITS["goals"] - 1)]
+    draft, (last, over) = run(draft, ("goal_add", {"title": "The last goal"}), ("goal_add", {"title": "One too many"}))
+    assert C.LIMITS["goals"] == 325 and last["ok"] and len(draft["goals"]) == 325
+    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (325)."
+    assert C.Turn(draft, TODAY).finish()["goals"] == draft["goals"]
+    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 325
