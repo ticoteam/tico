@@ -204,6 +204,16 @@ async function check(engine) {
     assert.equal(lateProbe.requests, 1, 'no request is retried after the budget expires');
     assert.equal(lateProbe.kept, true, 'the timed-out probe keeps the request identity');
 
+    // Clipping to replay retention can leave exactly zero milliseconds. Zero is an expired budget, not no cap.
+    const zeroBudget = await page.evaluate(async () => {
+      const real = window.fetch; let requests = 0;
+      window.fetch = () => { requests++; throw new Error('zero budget must not fetch'); };
+      try { await writeRequestOnce('POST', '/v2/chat/botops', {text: 'zero budget'}, undefined, {timeout: 0}); }
+      catch (e) { return {timedOut: !!e.timedOut, requests}; }
+      finally { window.fetch = real; }
+    });
+    assert.deepEqual(zeroBudget, {timedOut: true, requests: 0});
+
     // Headers arrived, then the body stalled: still a timeout, and the request id is kept for the retry.
     const bodyStall = await page.evaluate(async () => {
       const real = window.fetch;

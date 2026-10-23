@@ -78,7 +78,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   const payload = JSON.stringify(body), signature = method + ' ' + p + '\n' + payload;
   const key = operationId || pendingWrites.get(signature) || newRequestId();
   pendingWrites.set(signature, key);
-  const deadline = opts.timeout ? performance.now() + opts.timeout : Infinity;
+  const deadline = opts.timeout == null ? Infinity : performance.now() + opts.timeout;
   for (let attempt = 0; attempt < 3; attempt++) {
     const left = deadline - performance.now();
     if (left <= 0) throw writeTimedOut(opts.timeout, signature);
