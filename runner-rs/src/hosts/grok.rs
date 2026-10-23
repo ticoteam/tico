@@ -23,6 +23,39 @@ use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of, truthy};
 
+/// Grok has no status subcommand. Its scoped auth store is the local sign-in; an empty store after logout is not.
+/// Paths and entry fields follow xai-org/grok-build's xai-grok-login storage.rs and model.rs.
+pub fn sign_in_detail(env: &Env) -> Option<&'static str> {
+    let path = env.get("GROK_AUTH_PATH").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).or_else(|| {
+        env.get("GROK_HOME").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+            .or_else(|| env.get("HOME").map(|h| std::path::Path::new(h).join(".grok")))
+            .map(|h| h.join("auth.json"))
+    })?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(""),
+        Err(_) => return None,
+    };
+    if text.trim().is_empty() {
+        return Some("");
+    }
+    let store = serde_json::from_str::<Value>(&text).ok()?;
+    let entries = store.as_object()?;
+    let modes = || entries.values().filter(|entry| entry["key"].as_str().is_some_and(|k| !k.trim().is_empty()))
+        .filter_map(|entry| entry["auth_mode"].as_str());
+    if modes().any(|mode| matches!(mode, "oidc" | "external")) {
+        Some("Signed in with a Grok account")
+    } else if modes().any(|mode| mode == "api_key") {
+        Some("Signed in with an API key")
+    } else {
+        Some("")
+    }
+}
+
+pub fn signed_in(env: &Env) -> Option<bool> {
+    sign_in_detail(env).map(|detail| !detail.is_empty())
+}
+
 const PROTOCOL_VERSION: i64 = 1;
 const REQUEST_TIMEOUT: u64 = 120;
 pub const DEFAULT_MODEL: &str = "grok-4.6";
