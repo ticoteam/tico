@@ -53,6 +53,28 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
     assert api.put('/api/v2/repositories/Acme/product', json={'enabled': False}, headers=auth('person-test')).status_code == 403
 
 
+def test_read_grant_reads_pull_requests_comments_and_deployments_but_never_writes(api, gh):
+    # A read-only reviewer needs `gh pr view`, `gh pr diff`, a PR's comments and its preview deployment.
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    put(api, 'repositories/Acme/docs', {'enabled': True})
+    put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [{'full_name': 'Acme/docs', 'access': 'read'}]})
+    gh.permissions = {'contents': 'write', 'pull_requests': 'write', 'issues': 'write', 'actions': 'read',
+                      'checks': 'read', 'statuses': 'read', 'deployments': 'read'}
+    assert turn_token(api).status_code == 200
+    read = [r[2] for r in gh.of('/access_tokens') if r[2].get('repositories') == ['docs']][-1]
+    assert read['permissions'] == {'contents': 'read', 'metadata': 'read', 'actions': 'read', 'checks': 'read',
+                                   'statuses': 'read', 'pull_requests': 'read', 'issues': 'read', 'deployments': 'read'}
+    # An installation that has not accepted Deployments yet still reads pull requests and comments.
+    gh.permissions.pop('deployments')
+    api.app_state.github_app.cache.clear()
+    api.app_state.github_app.live.clear()
+    assert turn_token(api).status_code == 200
+    read = [r[2] for r in gh.of('/access_tokens') if r[2].get('repositories') == ['docs']][-1]
+    assert 'deployments' not in read['permissions']
+    assert read['permissions']['pull_requests'] == read['permissions']['issues'] == 'read'
+
+
 def test_modes_mixed_scopes_alias_and_default(api, gh):
     catalog(api, gh)
     runner_token(api, 'cpo')
@@ -354,7 +376,7 @@ def test_a_refused_workflow_mint_keeps_a_webhook_reset_of_the_turn_reads(api, gh
     put(api, 'repositories/Acme/product', {'enabled': True})
     put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [
         {'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]})
-    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read', 'deployments': 'read'}
     gh.refuse_actions_write = True
     service = api.app_state.github_app
     service.live['turn-reads'] = (time.time() + 3600, {'actions': 'read', 'checks': 'read'})

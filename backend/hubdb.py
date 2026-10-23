@@ -975,6 +975,9 @@ def migrate(conn, adopt_legacy=False):
     # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
     from .milestone_waits import ensure as ensure_milestone_waits
     ensure_milestone_waits(conn)
+    # Hourly and weekly spend limits, and limits on a group's or the whole team's combined spend (backend/usage_limits.py).
+    from .usage_limits import ensure as ensure_usage_limits
+    ensure_usage_limits(conn)
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
                  "ON conversations(owner_actor,room_key) WHERE scope='personal' AND closed_at IS NULL")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "

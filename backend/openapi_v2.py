@@ -462,15 +462,21 @@ STABLE = [
      "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
-     "The team default limit and each bot's daily and monthly limits with this period's spend, for the bots the caller may "
-     "see usage for", "UsageLimits"),
+     "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
+     "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits", "UsageLimits"),
     ("/api/v2/usage/limits", "put", "Usage", "setUsageDefault",
      "The default limit for bots with none of their own, in estimated USD (empty is no limit), and whether subscription runs "
-     "count toward it (owner and bot administrators)", "UsageDefaultView"),
+     "count toward every limit (owner and bot administrators)", "UsageDefaultView"),
     ("/api/v2/usage/limits/{bot}", "put", "Usage", "setBotUsageLimit",
-     "A bot's own daily and monthly limit in estimated USD; empty follows the team default. Owner and administrators, or "
-     "the person who runs the bot within the team default. A bot over a limit takes no new job until the period turns "
-     "over or the limit is raised", "BotUsageLimit"),
+     "A bot's own hourly, daily, weekly and monthly limit in estimated USD; empty follows the team default. Owner and "
+     "administrators, or the person who runs the bot within the team default. A bot over a limit takes no new job until "
+     "the period turns over or the limit is raised", "BotUsageLimit"),
+    ("/api/v2/usage/pools/company", "put", "Usage", "setTeamUsageLimit",
+     "A limit on every bot's estimated spend together, per hour, day, week and month; empty removes it. Over it, no bot "
+     "takes a new job (owner and bot administrators)", "UsagePoolLimit"),
+    ("/api/v2/usage/pools/groups/{group}", "put", "Usage", "setGroupUsageLimit",
+     "A limit on the estimated spend of a group's bots together, nested groups included; empty removes it. Over it, none "
+     "of them takes a new job (owner and bot administrators)", "UsagePoolLimit"),
     ("/healthz", "get", "Health", "getLiveness", "Is the server up (no sign-in)", None),
     ("/api/v2/health", "get", "Health", "getHealth", "Checks, computers and failures (bots see counts, computers and failed runs)", "Health"),
     ("/api/v2/health-monitor", "get", "Health", "getHealthMonitor",
@@ -501,6 +507,7 @@ def obj(fields, required=None, **arrays):
 
 
 NUM_N = {"type": ["number", "null"]}
+PERIODS = ("hourly", "daily", "weekly", "monthly")   # the spend limit periods (backend/usage_limits.py)
 GRANOLA_SKIP_REASONS = {"type": "object", "additionalProperties": {"type": "integer"},
                         "description": "Skipped items in the last attempt, by fixed code and step"}
 GRANOLA_ERROR_DETAIL = {"type": ["object", "null"], "additionalProperties": False,
@@ -711,7 +718,12 @@ SCHEMAS = {
                                "applies; read in full"}},
                     required=["tasks", "next_offset", "cursor"], actors=ACTORS),
     "TaskResult": obj({"task": ref("Task")}),
-    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "family": "n"})),
+    "RanOn": obj({"segments": items(obj({"model": "n", "provider": "n", "runtime": "n", "harness": "n", "effort": "n",
+                                         "family": "n"})),
+                  "task_model": {"type": ["object", "null"], "description": "For a turn in a task's own session on a bot "
+                                 "with a task model: `source` is task (it ran on the task model), fallback (the task "
+                                 "model could not run, so the bot's own model did) or check (a check subtask kept its "
+                                 "check model), and `note` says it in plain words"},
                   "fallback": {"type": ["string", "null"], "description": "The fallback harness that ran the turn, if any"},
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
@@ -1010,14 +1022,24 @@ SCHEMAS = {
                   "departments": items({"type": "string"}), "bot": "s", "name": "s", "daily": items({"type": "object", "additionalProperties": True}),
                   "routines": items({"type": "object", "additionalProperties": True})},
                  required=["from", "to", "prices_as_of", "totals"]),
-    "UsageLimitView": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "source": {"type": "object", "description": "Where each cap comes "
-                       "from: bot, company or null"}, "day_spent": NUM_N, "month_spent": NUM_N,
-                       "percent": {"type": "integer", "description": "The highest share of a limit reached"},
-                       "blocked": {"enum": ["daily", "monthly", None], "description": "Set while a limit is met: the bot takes no new job"},
-                       "own_daily_usd": NUM_N, "own_monthly_usd": NUM_N, "may_edit": "b"}),
-    "UsageDefaultView": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"})}),
-    "UsageLimits": obj({"default": obj({"daily_usd": NUM_N, "monthly_usd": NUM_N, "count_subscription": "b"}),
-                        "may_edit_default": "b", "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
+    "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
+                       "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                       "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
+                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
+                                   "the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
+                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                                      "administrators only)", "additionalProperties": True},
+                       **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
+    "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
+    "UsagePoolView": obj({**{p + "_usd": NUM_N for p in PERIODS}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
+                          "percent": "i", "blocked": {"enum": [*PERIODS, None]}}),
+    "UsagePoolLimit": obj({"scope": {"type": "string", "description": "company or group:<id>"}, "limit": ref("UsagePoolView")}),
+    "UsageLimits": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"}),
+                        "may_edit_default": "b",
+                        "pools": {"type": ["object", "null"], "description": "Owner and administrators: company (UsagePoolView) and "
+                                  "groups, {id: UsagePoolView with name and parent}", "additionalProperties": True},
+                        "bots": {"type": "object", "additionalProperties": ref("UsageLimitView")}}),
     "BotUsageLimit": obj({"bot": "s", "limit": ref("UsageLimitView")}),
     "Token": obj({"access_token": "s", "token_type": "s", "expires_in": "i", "idle_timeout": "i", "person": "s"}),
     "Revoked": obj({"revoked": "b"}),

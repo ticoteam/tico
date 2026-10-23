@@ -16,13 +16,13 @@ from clients import judge as J
 
 def rows(api, token="ana-test"):
     data = get(api, "system-routines", token=token)
-    return {job["key"]: {**job, "group": g["key"]} for g in data["groups"] for job in g["jobs"]}, data
+    return {job["key"]: job for job in data["jobs"]}, data
 
 
-def test_every_built_in_job_is_listed_in_its_group_and_six_are_marked_controllable(api):
+def test_every_built_in_job_is_listed_with_its_group_word_and_six_are_marked_controllable(api):
     jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
-    assert [g["name"] for g in data["groups"]] == ["Checks that suggest", "Learning", "Reminders and deadlines",
-                                                   "Housekeeping"]
+    assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
+    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines"}
     assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings"}

@@ -3,7 +3,6 @@ served from the app's own address as media only; pages and SVG are cards that op
 served from the app's own address. No visual response ever sets a cookie. Spec tests 1-4 and 7 (Product roadmap
 "Visuals always on"); the UI half is ui/tests/visual-fallback.cjs."""
 import base64
-import time
 from dataclasses import replace
 
 import pytest
@@ -11,7 +10,7 @@ import pytest
 from backend import visuals as V
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixtures)
 from backend.tests.test_files import publish, turn
-from backend.tests.test_visuals import PNG, VISUALS, bot_reply, task_with_file, visual_on_task, wav
+from backend.tests.test_visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
 SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
 CLIP = bytes(range(256)) * 8
@@ -53,18 +52,6 @@ def page_and_svg_comment(api):
 def comment_items(api, tid, comment):
     listed = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
     return next(m for m in listed if m["id"] == comment["id"])["refs"]["attachments"]
-
-
-def media_settled(api):
-    """Wait until the media worker (backend/file_metadata.py) has nothing it may still save: its save rewrites a
-    version's poster and preview, so one landing after a test sets them would clear them."""
-    from backend.file_metadata import PENDING
-    for _ in range(200):
-        with api.app.state.store.read() as c:
-            if not c.execute(PENDING, (time.time(),)).fetchone():
-                return
-        time.sleep(0.05)
-    raise AssertionError("the media worker never settled")
 
 
 def give_preview(api, fid, version, data=PNG, mime="image/png"):

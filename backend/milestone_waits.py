@@ -117,7 +117,7 @@ def parse(c, actor, spec, release_repo="", resolve_task=None):
     if kind_word == "release":
         parsed = release_target(value, release_repo)
         if not parsed:
-            H.refuse(c, actor, "milestone", "release: takes a tag like v0.3.64, or <owner>/<repo>@v0.3.64 when this "
+            H.refuse(c, actor, "milestone", "release: takes a version tag like v0.3.64 (major.minor at least), or <owner>/<repo>@v0.3.64 when this "
                                             "server has no release repository")
         return ("release_published", *parsed, None)
     H.refuse(c, actor, "milestone", "wait on pr:<url|task>, release:<tag> or task:<id>")
@@ -307,7 +307,9 @@ def recover(service):
                 return
             org = str(app["org"] or "").lower()
             reachable = {r[0].lower() for r in c.execute("SELECT full_name FROM repositories WHERE reachable=1")}
-            targets = [t for t in _pending_targets(c) if t not in _met(c, [t])]
+            pending = _pending_targets(c)
+            met = _met(c, pending)
+            targets = [t for t in pending if t not in met]
         def repo_of(kind, target):
             return (target.rpartition("#")[0] if kind == "pr_merged" else target.partition("@")[0]).lower()
         due = sorted((t for t in targets if repo_of(*t) in reachable and repo_of(*t).split("/")[0] == org
@@ -330,7 +332,7 @@ def recover(service):
                         response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/"
                                                         f"{int(target.rpartition('#')[2])}", headers=auth)
                         body = response.json() if response.status_code == 200 else {}
-                        found = bool(body.get("merged")) and str(body.get("html_url") or "")
+                        found = bool(body.get("merged")) and str(body.get("html_url") or "github")
                     else:
                         tag = target.partition("@")[2]
                         response = service._call("GET", f"/repos/{quote(repo, safe='/')}/releases/tags/"

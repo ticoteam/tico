@@ -334,6 +334,10 @@ Computers), `paste_code` means it takes a pasted code, `logout` means Sign out a
 some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
 (`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).
 
+Codex bots on the same ChatGPT login run turns at the same time, as Claude bots do. The computer's own
+login and a named subscription both share their plan's usage allowance. Tico never copies a login into
+another bot's home; all turns use the original login in its own home.
+
 | Capability | Means | Absent |
 |---|---|---|
 | `terminal_login` | What a person runs on the computer to sign in (after the executable) | No interactive sign-in; keys only |
@@ -355,7 +359,7 @@ some of `files`, and `logout` needs `files`. `keychain` lists the platforms wher
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
-| `one_turn_per_login` | A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
+| `one_turn_per_login` | Optional queue, disabled for Codex (`false`). A subscription login (its `subscription_marker` in the sign-in detail) runs one turn at a time on the computer: another bot's turn on it waits, or runs on its fallback. A key login is not held | Turns on one login run together |
 | `compaction` | The bot's Compact at setting applies | Setting hidden |
 | `resume_command` | The local command that resumes a session (the id follows) | `<executable> --resume` |
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
