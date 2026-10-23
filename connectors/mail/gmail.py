@@ -489,9 +489,7 @@ def when_of(msg, hdrs, tz):
         return None
 
 
-def body_text(payload):
-    """(text, html) of one payload, not truncated: its plain parts, or its HTML stripped when it has none."""
-    plain, rich, _ = bodies_and_attachments(payload)
+def _joined(plain, rich):
     text = "\n\n".join(t for t in plain if t.strip()).strip()
     html_text = "\n\n".join(t for t in rich if t.strip())
     if not text and html_text:
@@ -499,13 +497,19 @@ def body_text(payload):
     return text, html_text
 
 
+def body_text(payload):
+    """(text, html) of one payload, not truncated: its plain parts, or its HTML stripped when it has none."""
+    plain, rich, _ = bodies_and_attachments(payload)
+    return _joined(plain, rich)
+
+
 def normalize(msg, label_names=None, tz_name=DEFAULT_TZ):
     """Raw Gmail message dict -> the shape every command prints and every rule reads."""
     tz = zone(tz_name)
     payload = msg.get("payload") or {}
     hdrs = headers_of(payload)
-    _, _, atts = bodies_and_attachments(payload)
-    text, html_text = body_text(payload)
+    plain, rich, atts = bodies_and_attachments(payload)
+    text, html_text = _joined(plain, rich)
     body, cut = truncate(text)
     has_unsub, unsub_url = find_unsubscribe(hdrs.get("list-unsubscribe"), text, html_text)
     names = label_names or {}
