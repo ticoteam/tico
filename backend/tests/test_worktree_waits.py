@@ -393,6 +393,7 @@ def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
     retired = uuid.uuid4().hex
     stale = dict(owner='bot:cmo', release_requested=True, cleanup_requested=True,
                  release_reason='pull request merged', removed_by='cleanup', restore_on_reopen=True,
+                 held='held: live turn',
                  cleanup_attempts=W.CLEANUP_TRIES, cleanup_gave_up=True, cleanup_retry_at=H.now())
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
