@@ -271,7 +271,7 @@ def test_scheduler_skips_never_become_retries_or_diagnostics(api, monkeypatch):
         for spot_only in (False, True):
             if spot_only:
                 c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (tid,))
-                monkeypatch.setattr(H, "stalled_tasks", lambda *a: [])
+                monkeypatch.setattr(H, "stalled_tasks", lambda *a, **k: [])
             next_run = H.task(c, tid)["next_run"]
             for minutes in (31, 62, 93, 124):
                 at = H.shift(start, seconds=minutes * 60)
