@@ -7,6 +7,14 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
+### Changed
+- **Each bot can keep up to 100 worktrees.** The per-bot worktree limit rises from 50 to 100. Adding or restoring a worktree still needs 5 GB free on the computer, and cleanup still waits until the bot is idle. The limit is separate from how many turns a computer runs at once ([Worktrees](docs/worktrees.md)).
+
+### Fixed
+- **The docs say when an automatic check skips an idle task.** An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check. Wake behavior is unchanged: human messages still wake the bot, and running sessions keep their recovery checks ([Sessions](docs/sessions.md)).
+
 ## [0.4.0] - 2026-10-23
 
 ### Changed
@@ -4315,7 +4323,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
 [0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74

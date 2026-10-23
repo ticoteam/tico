@@ -10,8 +10,10 @@ then the Release Manager tags it once the release checks are green. Keep those v
 after publishing a tag, so later builds retain the complete history and do not announce already shipped work again.
 The existing CHANGELOG checks still guard the release commit and shipped history.
 The release cut normally lands as a direct, CHANGELOG-only commit on `main` before validation and tagging.
-If the cut lands by pull request instead, it needs review at its final head and a `Changelog-Release: vX.Y.Z`
-commit trailer for each version section it changes; preserve the trailers in the merged commit. A pull request
+If the cut lands by pull request instead, it must change only `CHANGELOG.md`, needs review at its final head,
+and each notes commit needs a `Changelog-Release: vX.Y.Z` trailer for each version section it changes;
+preserve the trailers in the merged commit. PR checks reject ordinary changelog edits before selecting tests.
+A pull request
 that merges notes back to `main` or corrects a shipped section needs the same trailers. Once the notes are on
 `main`, a released section that differs from its tag fails the tests.
 
@@ -69,18 +71,42 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 
 ### A failed nightly stops the next freeze
 
-A failed or cancelled scheduled Release validation on main immediately triggers **Report failed nightly gate**.
-It uses the cloud `hub` CLI to file a **Dev tickets / On Deck** task for the Builder at the top of the queue, with
-the failed run and candidate attached. Repeated reports of the same run use the same title for task deduplication.
+A failed, cancelled or otherwise unsuccessful scheduled Release validation on main immediately triggers **Report failed nightly gate**.
+It sends one `POST /api/v2/inbound/tasks` to file a **Dev tickets / On Deck** task for the Builder, labelled
+`nightly-red`, with the failed run and candidate attached. The per-run key `nightly-gate:<run_id>` makes reruns
+with the same service key update the same task. The inbound route does not set queue rank; Engineering ranks it.
+Replaying a report can move an advanced ticket back to On Deck or reopen a fixed one; check its existing task first.
 The release command refuses a freeze while the latest full gate on main is red or incomplete. Only a newer green
 full gate on main clears it; a PR check or a validation of a commit outside main cannot clear it.
 
-Before enabling this workflow, an owner configures the private Actions secrets `TICO_NIGHTLY_HUB_API_URL` (the Tico
-origin) and `TICO_NIGHTLY_HUB_TOKEN` (a dedicated API credential allowed to read the Builder's state and create Dev
-tickets). Never use a per-turn bot credential or commit a credential. Reporting runs in a separate `workflow_run`
-job on trusted main controls; the validation VMs have no Tico credential, and the reporter downloads no candidate
-artifacts. Missing credentials, an inactive Builder or a refused write fail the reporter visibly without retries;
-an operator must recover that report. The red full gate continues to block freeze even if reporting fails.
+Merging the source does not activate reporting. The owner first creates a dedicated **tasks service key** labelled
+`GitHub Actions nightly gate reporter (<owner>/<repo>)` (for example, `GitHub Actions nightly gate reporter (acme/product)`)
+while signed in, as described in [Service keys](service-keys.md).
+Do not derive it from a personal token: that key would stop when the personal token expires. A tasks key can only
+file, update or close its own inbound tasks; it cannot read, cannot be restricted to Builder and has no automatic
+expiry. The trusted script fixes the owner to `bot:pr-reviewer`. Do not use a personal API token, bot agent or
+per-turn credential, reuse a broader grant, or put the key in a task, commit, command argument or log.
+
+The owner sets the existing private Actions secrets `TICO_NIGHTLY_HUB_API_URL` (the HTTPS Tico origin, no path) and
+`TICO_NIGHTLY_HUB_TOKEN` (the tasks key). Rotate every 90 days, or immediately on suspected exposure: make a new key,
+replace the secret, verify the dry run, then revoke the old key. First close any open tasks the old key filed;
+the new key cannot find them. Record only the key ID, label, owner and creation/rotation dates.
+
+After owner setup, manually run **Report failed nightly gate** on **main** with `dry_run=true`. It posts only
+`{"key":"nightly-dry-run-<manual Actions run ID>","close":true}`, expecting HTTP 200 and
+`{"task":null,"created":false,"changed":false}`. It then tries `GET /api/v2/bots/pr-reviewer` with the same header,
+expecting HTTP 403 with the service-key-only refusal. HTTP 401 means invalid authentication; HTTP 200 on that read
+means the credential is too broad. The dry run creates no task; an unexpected write result or read response fails
+visibly. Logs contain status codes and response bodies, with any echoed token redacted, never request headers.
+Check the key's last use/revocation metadata through the owner's normal service-key view; never disclose its value.
+Manual runs with `dry_run=false` do nothing. Do not fake a failed nightly to test reporting.
+
+Reporting runs separately on trusted main controls with `contents: read`; validation VMs have no Tico credential,
+and the reporter downloads no candidate artifacts. It makes no Builder-state precheck, follows no redirects,
+uses a bounded HTTP timeout and has no retry or fallback route. Missing credentials, an inactive Builder or a
+refused write fail visibly with the response; an operator must recover the report. Revoking the key stops reporting
+immediately; removing both Actions secrets disables its configuration. Neither action clears the red full gate's
+freeze block. Owner setup and verification remain separate from the source merge.
 
 ## Tests on a PR
 

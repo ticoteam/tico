@@ -1,6 +1,13 @@
 # Separate from validation: test VMs never receive a Tico credential or download artifacts with it.
 name: Report failed nightly gate
 on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Verify the tasks service key without creating a task
+        type: boolean
+        required: true
+        default: true
   workflow_run:
     workflows: [Release validation]
     types: [completed]
@@ -9,9 +16,12 @@ permissions:
 jobs:
   report:
     if: >-
+      (github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'schedule' &&
       github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.conclusion != 'success'
+      github.event.workflow_run.status == 'completed' &&
+      github.event.workflow_run.conclusion != 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -20,8 +30,14 @@ jobs:
           # Only trusted default-branch controls, never the candidate or artifacts from its run.
           ref: refs/heads/main
           persist-credentials: false
-      - name: File a top-priority Builder Dev ticket
+      - name: Report a failed nightly or verify the tasks service key
         env:
           HUB_API_URL: ${{ secrets.TICO_NIGHTLY_HUB_API_URL }}
           HUB_TOKEN: ${{ secrets.TICO_NIGHTLY_HUB_TOKEN }}
-        run: python3 scripts/nightly_gate_report.py
+          NIGHTLY_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "$NIGHTLY_DRY_RUN" = true ]; then
+            python3 scripts/nightly_gate_report.py --dry-run
+          else
+            python3 scripts/nightly_gate_report.py
+          fi
