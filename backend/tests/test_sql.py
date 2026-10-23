@@ -295,6 +295,72 @@ def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api,
         assert any('attempts_created (created>?)' in row[3] for row in plan)
 
 
+def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):
+    from backend import sql as S, task_privacy
+    from backend.auth import Identity
+
+    def no_history(index):
+        raise AssertionError('SQL candidate lookup loaded all attempts')
+
+    monkeypatch.setattr(S.ReadIndex, 'attempts', no_history)
+    store, auth = api.app.state.store, api.app.state.auth
+    aid = world['attempt']['id']
+    who = Identity('bot:ops', 'bot', attempt_id=aid)
+    # The initial run is public to this caller; its only private source arrives
+    # as an input, then survives solely in the moved-input event after removal.
+    with store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden fixture', '', 'bot:finance', private=True, lint=False)
+        msg = H.say(c, 'human:ben', 'human:ana', 'Hidden input',
+                    conversation_id=world['ana_room'], refs={'task': hidden['id']})
+
+    def readable():
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                return S.run(conn, 'SELECT id FROM attempts WHERE id=?', [aid], 500, 5)['rows']
+            finally:
+                conn.close()
+
+    assert readable() == [[aid]]
+    with store.transaction() as c:
+        c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
+    assert readable() == []
+    with store.transaction() as c:
+        task_privacy.record_moved_input(c, aid, 'other-fixture-run', msg)
+        c.execute('DELETE FROM attempt_inputs WHERE message_id=?', (msg['id'],))
+    assert readable() == []
+
+
+def test_nested_udf_interrupt_is_timeout_and_other_udf_errors_remain_sql(monkeypatch):
+    import sqlite3
+    from backend import sql as S
+    from backend.store import Problem
+
+    conn = sqlite3.connect(':memory:', factory=S.ReadConnection)
+    conn.private_prefix = 'fixture_'
+    clock = [0.0]
+    monkeypatch.setattr(S, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    def nested():
+        clock[0] = 10
+        return conn.execute('WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) '
+                            'SELECT sum(x) FROM n').fetchone()[0]
+
+    conn.create_function('nested', 0, nested)
+    conn.create_function('broken', 0, lambda: 1 / 0)
+    try:
+        with pytest.raises(Problem) as failure:
+            S.run(conn, 'SELECT nested()', [], 500, 5)
+        assert failure.value.code == 'timeout'
+        assert 'user-defined function' in str(failure.value.__cause__)
+        with pytest.raises(Problem) as failure:
+            S.run(conn, 'SELECT broken()', [], 500, 5)
+        assert failure.value.code == 'sql'
+        assert S.run(conn, 'SELECT 1', [], 500, 5)['rows'] == [[1]]
+    finally:
+        conn.close()
+
+
 def test_current_docs_and_files_follow_api_visibility(api, world):
     doc = post(api, "docs", {"title": "Release guide", "body": "Read the release notes.", "path": "release-guide.md"})["doc"]
     linked = post(api, "linked-docs", {"title": "Release reference", "url": "https://example.com/release"})["linked"]
