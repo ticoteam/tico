@@ -134,6 +134,10 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
         return verdict(True)
+    key_caps = harness_caps(own if runtime_of(own) == runtime else runtime, runtime)
+    if signed != "rejected" and key_caps.get("api_key_in_turn") and set(key_caps.get("api_key_env") or ()) & _held(c, bot):
+        # A granted per-turn key does not depend on the computer's subscription login.
+        return verdict(True)
     if signed in SIGNED_OUT and (line := models_preset.gateway_line(
             c, bot, readiness, config={"runtime": runtime, "model": model or config.get("model")})):
         # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
