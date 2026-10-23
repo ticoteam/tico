@@ -164,7 +164,10 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
             None => all.clone(), // a cursor older than the page means all of it is new
         },
     };
-    let pointer = if !history.is_empty() || all.is_empty() {
+    // A fresh thread that replaces one grown too large (crate::rotate) is given the room since the old one's last
+    // turn, its own replies included, and has seen nothing older.
+    let rotated = truthy(&attempt["_rotated"]);
+    let pointer = if (!history.is_empty() && !rotated) || all.is_empty() {
         String::new()
     } else {
         format!(" earlier messages are in {app}; `hub conversation show {conv_id}` reads them.")
@@ -175,7 +178,7 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
     }
     let own = format!("bot:{bot}");
     for msg in &history {
-        if msg["id"] == message["id"] || s(&msg["from_actor"]) == own {
+        if msg["id"] == message["id"] || (!rotated && s(&msg["from_actor"]) == own) {
             continue;
         }
         lines.push(format!("{} [{}]: {}", speaker(msg), s(&msg["id"]), s(&msg["body"])));
