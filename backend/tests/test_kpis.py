@@ -37,7 +37,6 @@ def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
-
 def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
@@ -57,6 +56,7 @@ def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
         assert botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]["value"] == 0
+
 
 def colour(link, value, days_ago=0, kpi=ACTIVATION, **more):
     return K.assess({**kpi, **more}, link, [reading(value, days_ago)], NOW)

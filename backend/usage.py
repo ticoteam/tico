@@ -58,8 +58,8 @@ def money(value):
 
 
 def figures(row):
-    """The fields every row shares. `est_cost_usd` is null when the row has API-billed tokens and none
-    of them has a price or reported usage, so the page shows a dash and not a false zero.
+    """The fields every row shares. `est_cost_usd` is null when API runs have no priced reading
+    but have unpriced tokens or unreported usage, so the page shows a dash and not a false zero.
     `low_estimate_runs` counts the priced runs whose figure may be low (LOW)."""
     return {"runs": row["runs"], "input_tokens": row["input_tokens"], "cached_tokens": row["cached_tokens"],
             "output_tokens": row["output_tokens"],

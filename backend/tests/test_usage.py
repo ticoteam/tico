@@ -114,17 +114,17 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
     assert sum(r["share"] for r in got["rows"]) == pytest.approx(1, abs=1e-3) and cpo["share"] > 0.99
 
 
-
-@pytest.mark.parametrize("group", ["bot", "day", "routine", "model"])
-def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api, group):
+def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO turns(id,bot,started,finished,input_tokens,cached_tokens,output_tokens,"
                       "est_cost_usd,billing,usage_reason) VALUES(?,'ops',?,?,0,0,0,0,?,?)", [
             (reason, DAY + "T10:00:00Z", DAY + "T10:05:00Z", billing, reason)
             for reason, billing in (("usage_unreported", "api"), ("usage_limited", None), ("no_result", "api"))])
     def amounts():
-        got = usage(api, group=group, bot="ops")
-        return [got["totals"], *got["rows"], *[r for r in got["daily"] if r["runs"]]]
+        grouped = usage(api)
+        detail = usage(api, bot="ops")
+        return [grouped["totals"], *grouped["rows"], detail["totals"], *detail["routines"],
+                *[r for r in detail["daily"] if r["runs"]]]
     assert all(r["est_cost_usd"] is None and r["unpriced_runs"] == 3 for r in amounts())
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started,finished,input_tokens,est_cost_usd,billing,usage_reason) "
@@ -138,6 +138,7 @@ def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api, group):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE turns SET est_cost_usd=0 WHERE id='measured'")
     assert all(r["est_cost_usd"] == 0 for r in amounts())
+
 
 def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(api):
     seed(api)
