@@ -46,7 +46,8 @@ def release_version():
 SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
-TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
+# Bots cannot set ready; a task is closed through its separate requester action.
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status not in ("ready", "closed"))
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
@@ -819,7 +820,7 @@ def task_question(api, args):
 
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
-      "Done stays Done, including tasks you requested for yourself; closing is a separate decision.",
+      "Done stays Done, including tasks you requested for yourself; the requester closes with hub_task_close.",
       {"id": TASK_ID,
        "private": {"type": "boolean", "description": "Tighten visibility; only the direct human requester can publish"},
        "visibility": _s("Roadmap publication", enum=["public", "private"]),

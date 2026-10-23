@@ -147,7 +147,7 @@ class Parser(unittest.TestCase):
         self.assertNotIn("closed", out["_stdout"])
         statuses = ["open", "doing", "waiting", "review", "ready", "done", "declined"]
         schema = next(t["inputSchema"] for t in hubtools.TOOLS if t["name"] == "hub_task_update")
-        self.assertEqual(schema["properties"]["status"]["enum"], statuses)
+        self.assertEqual(schema["properties"]["status"]["enum"], [status for status in statuses if status != "ready"])
         for status in statuses:
             args = hubcli.parser().parse_args(["task", "update", "T1", "--status", status])
             self.assertEqual(args.status, status)
