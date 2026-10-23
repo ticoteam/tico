@@ -1,7 +1,9 @@
 # Curate the market
 
 Daily, and on an urgent insight (`playbooks/urgent-market-insight.md`). Read new insights oldest first,
-write the graph, then sweep what you could not verify. With no new insight and no listening item, and on a
+write the graph, then sweep what you could not verify. What the owner asked Market to track is the
+`## What Market tracks` section at the top of the Coverage universe page (`market/coverage-universe`): an
+insight about something on it comes first, and an entry marked "not found yet" is looked for again in the sweep. With no new insight and no listening item, and on a
 day that is not Monday, stop at once.
 
 0. Drain the Social Media Manager's inbox first. `hub listening item list --destination market` lists posts the Social Media Manager saved

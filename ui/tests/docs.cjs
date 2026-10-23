@@ -1,7 +1,7 @@
 // The Docs page, against an in-memory stand-in for the docs API (fixtures only, no server): write a doc,
 // edit it (with the version-conflict message), read its history and restore an old version, lock it
 // (only owners and bot administrators), add, open, edit and remove a linked doc, search across both
-// kinds, and import a file.
+// kinds, and import a file. On a first visit to an empty Docs the Librarian asks where the docs are.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (both themes, and a phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -58,6 +58,7 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     const titleOf = raw => { const u = new URL(/^https?:\/\//.test(raw) ? raw : 'https://' + raw); return u.hostname.replace(/^www\./, '') + u.pathname.replace(/\/$/, ''); };
     let started = {empty: {docs: false}, cards: []};
     let librarianQueued = false;   // the Librarian's run waits on a missing AI provider
+    let docsSetupSkipped = false;
     let chatSequence = 0, reopenBlocked = false;
     const chats = [
       {id: 'docs-earlier', title: 'Who helps new hires?', created: ago(90), closed_at: ago(60)},
@@ -101,6 +102,17 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
         if (reopenBlocked) return problem('busy', 'Wait for this conversation’s current turn to finish', 409);
         chats.forEach(chat => { chat.closed_at = chat.id === reopen[1] ? null : chat.closed_at || ago(0); });
         return json({conversation_id: reopen[1]});
+      }
+      if (p === '/api/v2/librarian/setup') {
+        const empty = !linked.length && ![...docs.values()].some(d => !d.archived && !d.path.startsWith('_librarian/'));
+        return json({available: true, docs: {show: empty && !docsSetupSkipped, empty, skipped: docsSetupSkipped, task: null},
+                     market: {can_answer: me.role === 'owner', answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null}});
+      }
+      if (p === '/api/v2/librarian/setup/docs') {
+        const body = req.postDataJSON(); requests.push({api: 'librarian/setup/docs', body});
+        if (body.skip) { docsSetupSkipped = true; return json({}); }
+        const added = body.sources.map(raw => linkView(addLinked(raw, titleOf(raw), kindOf(raw), '')));
+        return json({task_id: 'task-docs-setup', bot: 'librarian', sources: added});
       }
       if (p === '/api/v2/librarian/research') {
         const body = req.postDataJSON(); requests.push({api: 'librarian/research', body});
@@ -568,7 +580,58 @@ const ago = minutes => new Date(Date.now() - minutes * 60000).toISOString();
     assert(sourceHeading.y + sourceHeading.height < page.viewportSize().height);
     await page.close();
 
+    // ---- a first visit to an empty Docs: the Librarian asks where the docs are, takes the links as sources and
+    // files one task; Skip for now is remembered, and the menu brings the question back
+    page = await open('#/docs');
+    assert.equal(await page.locator('[data-docs-setup]').count(), 0);         // Docs has docs: nothing is asked
+    await page.close();
+    docs.clear(); linked.length = 0;
+    add('doc-librarian-index', '_librarian/index.md', 'Docs index', 'Nothing yet.');   // the Librarian's own map does not count
+    page = await open('#/docs');
+    const ask = page.locator('#docs-setup [data-docs-setup]');
+    await ask.waitFor();
+    assert.equal(await ask.locator('h2').textContent(), 'Where are your docs?');
+    await shot(page, 'setup');
+    await ask.locator('[type=submit]').click();                               // nothing to set up from
+    await ask.locator('[data-error]:not([hidden])').waitFor();
+    assert.equal(requests.filter(r => r.api === 'librarian/setup/docs').length, 0);
+    await ask.locator('textarea').fill('https://github.com/acme/handbook\nhttps://help.acme.example');
+    await ask.locator('input[name=note]').fill('Policies are in Google Drive');
+    await ask.locator('[type=submit]').click();
+    const filed = page.locator('#docs-setup [role=status]');
+    await filed.waitFor();
+    assert.deepEqual(requests.findLast(r => r.api === 'librarian/setup/docs').body,
+      {sources: ['https://github.com/acme/handbook', 'https://help.acme.example'], note: 'Policies are in Google Drive'});
+    assert.match(await filed.textContent(), /2 sources are in Docs now/);
+    assert.equal(await filed.locator('a[href="#/task/task-docs-setup"]').count(), 1);
+    await page.locator('.docs-link-main', {hasText: 'help.acme.example'}).waitFor();   // the list shows them at once
+    await shot(page, 'setup-filed');
+    await filed.locator('[data-setup-close]').click();
+    assert.equal(await page.locator('#docs-setup').innerHTML(), '');
+    await page.close();
+    linked.length = 0;
+    page = await open('#/docs');
+    await page.locator('#docs-setup [data-docs-setup]').waitFor();
+    await page.locator('#docs-setup [data-setup-skip]').click();
+    await page.waitForFunction(() => document.querySelector('#docs-setup').innerHTML === '');
+    assert.deepEqual(requests.findLast(r => r.api === 'librarian/setup/docs').body, {skip: true});
+    await page.reload();
+    await page.locator('#docs-browser .docs-section').first().waitFor();
+    await page.waitForTimeout(t(300));
+    assert.equal(await page.locator('#docs-setup [data-docs-setup]').count(), 0);
+    await page.locator('#docs-more').click();
+    await page.locator('#docs-setup-open').click();
+    await page.locator('#docs-setup [data-docs-setup]').waitFor();
+    assert.equal(await page.locator('#docs-setup [data-setup-skip]').textContent(), 'Not now');
+    await page.close();
+    // Phone: the question sits above the list, where a phone shows it.
+    page = await open('#/docs?setup=1', {width: 390, height: 844});
+    await page.locator('#docs-setup [data-docs-setup]').waitFor();
+    assert((await page.locator('#docs-setup').boundingBox()).width > 300);
+    await shot(page, 'setup-phone');
+    await page.close();
+
     assert.deepEqual(errors, []);
-    console.log('PASS: docs are written, edited (with the conflict message), versioned and restored, locked for admins, linked, searched and imported.');
+    console.log('PASS: docs are written, edited (with the conflict message), versioned and restored, locked for admins, linked, searched and imported; a first visit asks where the docs are.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

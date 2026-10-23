@@ -1,6 +1,7 @@
 // Offline regression for the pieces around the wizard: there is no checklist and no card above any page; an
-// empty Market page is where the owner asks for research (one box, the Librarian is asked, and a notice shows
-// until the market has content), and a quiet empty state for everyone else; one line under the org list
+// empty Market page is where the Librarian asks the owner four questions (kept as answered, so they can skip and
+// resume; the last one asks for research, and a notice shows until the market has content), and a quiet empty
+// state for everyone else; one line under the org list
 // points at BotOps while there are no bots of your own; the tour is replayable from Help, traps focus, closes
 // on Escape and works in the phone drawer. Fixtures only - no server.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (the market's empty states and the sidebar line in both
@@ -56,6 +57,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     let items = checklist(), role = 'owner', canBuild = true;
     let dismissed = {tour: true, checklist: false, skipped: []};
     let librarianOff = false, polls = [];
+    let setup = {can_answer: true, answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null};
     let market = {entities: [], docs: [{id: 'market/overview', title: 'Overview', seeded: true, fetched: '2026-01-01T00:00:00Z'}]};
     const view = () => {
       const rows = items.map(row => ({...row, skipped: row.optional && !row.done && dismissed.skipped.includes(row.id)}));
@@ -90,10 +92,13 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
         if (body.skip) dismissed.skipped = [...new Set([...dismissed.skipped, body.skip])];
         return json({tour: dismissed.tour, checklist: dismissed.checklist, skipped: dismissed.skipped});
       }
-      if (p === '/api/v2/setup/getting-started/market') {
+      if (p === '/api/v2/librarian/setup') return json({available: true, docs: {show: false, empty: true, skipped: false, task: null}, market: setup});
+      if (p === '/api/v2/librarian/setup/market') {
         const body = req.postDataJSON(); calls.push({p, body});
-        if (librarianOff) return json({error: {code: 'librarian', detail: 'The Librarian is not running yet.'}}, 409);
-        return json({task_id: 't-market', bot: 'librarian'});
+        if (body.action === 'finish' && librarianOff) return json({error: {code: 'librarian', detail: 'The Librarian is not running yet.'}}, 409);
+        setup = {...setup, answers: {...setup.answers, ...body.answers}, step: body.step, skipped: body.action === 'skip',
+                 task: body.action === 'finish' ? {id: 't-market', status: 'open'} : setup.task};
+        return json(setup);
       }
       if (p === '/api/v2/market/entities') { polls.push(Date.now()); return json({entities: market.entities, total: market.entities.length}); }
       if (p === '/api/v2/market/graph') return json({entities: market.entities, edges: []});
@@ -123,45 +128,77 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     await page.waitForFunction(() => location.hash === '#/tasks');
     await page.close();
 
-    // ---- Market: an empty market is the page's own empty state: one box, the Librarian is asked, and a
-    // notice shows until the market has content
+    // ---- Market: an empty market is the page's own empty state: the Librarian asks four questions, one at a
+    // time, kept as answered so the owner can skip and pick up again; the last asks for research, and a notice
+    // shows until the market has content
     page = await context.newPage();
     await page.clock.install();
     page.on('pageerror', e => errors.push('market: ' + e.message));
     await page.goto('http://tico-ui.test/#/market');
     await ready(page);
-    const box = page.locator('#market-shell [data-market-research]');
+    const box = page.locator('#market-shell [data-market-setup]');
+    const asked = () => box.locator('h1').textContent();
+    const posts = () => calls.filter(c => c.p === '/api/v2/librarian/setup/market');
     await box.waitFor();
-    assert.equal(await box.locator('h1').textContent(), 'Market');
-    assert.equal(await box.locator('label').textContent(), 'Your website, a description, or links to anything about your market');
-    assert.equal(await box.locator('textarea').getAttribute('placeholder'), 'https://example.com');
-    assert.equal(await box.locator('textarea').count(), 1);
-    assert.equal(await box.locator('input').count(), 0);                 // not four questions
-    assert.equal(await box.locator('[type=submit]').textContent(), 'Start research');
+    assert.equal(await asked(), 'What do you sell?');
+    assert.match(await box.locator('.market-who').textContent(), /Librarian$/);
+    assert.equal(await box.locator('textarea').count(), 1);                 // one question at a time
+    assert.equal(await box.locator('[type=submit]').textContent(), 'Next');
     assert.equal(await box.locator('a[href="#/docs?import=1"]').textContent(), 'Attach files');
-    assert.equal(await box.locator('p').count() - await box.locator('p.err').count(), 0);   // no paragraphs of explanation
+    assert.equal(await box.locator('[data-market-back]').count(), 0);
     // It fills the page: no empty graph, index or ask box, and never the seed's text.
     assert.equal(await page.locator('#market-canvas, #market-index, #market-ask').count(), 0);
     assert.doesNotMatch(await page.locator('#market-shell').textContent(), /None in the seed|Northwind/);
     await shotAll(page, 'empty');
-    await box.locator('[type=submit]').click();                          // an empty box files nothing
-    assert.equal(calls.filter(c => c.p.endsWith('/market')).length, 0);
-    // A Librarian that is not running is said plainly, and the box keeps what was typed.
-    await box.locator('textarea').fill('https://northwind.example\nOffice cleaning for property managers.');
+    await box.locator('[type=submit]').click();                          // the first answer is the one it needs
+    await box.locator('[data-market-error]:not([hidden])').waitFor();
+    assert.equal(posts().length, 0);
+    await box.locator('textarea').fill('https://northwind.example');
+    await box.locator('[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'Who buys it?');
+    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: '', competitors: '', watch: ''}, step: 1, action: 'save'});
+    await box.locator('textarea').fill('Property managers in Ohio');
+    // Skip for now keeps the answer and the place; the page then offers to continue.
+    await box.locator('[data-market-skip]').click();
+    const resume = page.locator('#market-shell [data-market-resume]');
+    await resume.waitFor();
+    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio', competitors: '', watch: ''}, step: 1, action: 'skip'});
+    assert.match(await resume.textContent(), /You've answered 2\./);
+    await shotAll(page, 'skipped');
+    // A reload (or another browser) resumes from the server at the same question, with the answer in it.
+    await page.reload();
+    await resume.waitFor();
+    await resume.locator('[data-market-continue]').click();
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'Who buys it?');
+    assert.equal(await box.locator('textarea').inputValue(), 'Property managers in Ohio');
+    await box.locator('[data-market-back]').click();                       // back keeps what was typed
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'What do you sell?');
+    assert.equal(await box.locator('textarea').inputValue(), 'https://northwind.example');
+    await box.locator('[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'Who buys it?');
+    await box.locator('[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'Who do you compete with?');
+    await box.locator('textarea').fill('CleanCo');
+    await box.locator('[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#market-shell h1')?.textContent === 'What should Market watch?');
+    assert.equal(await box.locator('[type=submit]').textContent(), 'Start research');
+    await shotAll(page, 'question');
+    // A Librarian that is not running is said plainly, and the question keeps what was typed.
+    await box.locator('textarea').fill('r/PropertyManagement');
     librarianOff = true;
     await box.locator('[type=submit]').click();
     await box.locator('[data-market-error]:not([hidden])').waitFor();
     assert.match(await box.locator('[data-market-error]').textContent(), /Librarian is not running/);
-    assert.equal(await box.locator('textarea').inputValue(), 'https://northwind.example\nOffice cleaning for property managers.');
+    assert.equal(await box.locator('textarea').inputValue(), 'r/PropertyManagement');
     librarianOff = false;
     await box.locator('[type=submit]').click();
     const notice = page.locator('#market-shell [data-market-researching]');
     await notice.waitFor();
-    assert.deepEqual(calls.filter(c => c.p.endsWith('/market')).at(-1),
-      {p: '/api/v2/setup/getting-started/market', body: {text: 'https://northwind.example\nOffice cleaning for property managers.'}});
-    assert.equal(calls.filter(c => c.p.endsWith('/market')).length, 2);
+    assert.deepEqual(posts().at(-1).body, {answers: {sell: 'https://northwind.example', buyers: 'Property managers in Ohio',
+      competitors: 'CleanCo', watch: 'r/PropertyManagement'}, step: 3, action: 'finish'});
+    assert.equal(posts().filter(c => c.body.action === 'finish').length, 2);
     assert.match(await notice.textContent(), /The Librarian is researching your market\.\s+This usually takes 5–10 minutes\./);
-    assert.equal(await page.locator('[data-market-research]').count(), 0);
+    assert.equal(await page.locator('[data-market-setup]').count(), 0);
     assert.equal(await notice.locator('a[href="#/task/t-market"]').count(), 1);
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.market.researching')).task), 't-market');
     await shotAll(page, 'researching');
@@ -193,8 +230,9 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     market = {entities: [], docs: []};
     await page.close();
 
-    // The notice is only kept for thirty minutes: an old record is dropped and the box is back.
-    for (const [minutes, shows] of [[10, '[data-market-researching]'], [31, '[data-market-research]']]) {
+    // The notice is only kept for thirty minutes: an old record is dropped and the questions are back.
+    setup = {...setup, task: {id: 't-market', status: 'done'}};
+    for (const [minutes, shows] of [[10, '[data-market-researching]'], [31, '[data-market-setup]']]) {
       page = await context.newPage();
       await page.addInitScript(([ago]) => localStorage.setItem('tico.market.researching', JSON.stringify({at: Date.now() - ago * 60000, task: 't-market', base: '0|'})), [minutes]);
       page.on('pageerror', e => errors.push('market-old: ' + e.message));
@@ -209,7 +247,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     page = await open('#/market');
     await page.locator('#market-shell .market-none').waitFor();
     assert.equal(await page.locator('#market-shell').textContent(), 'Nothing here yet.');
-    assert.equal(await page.locator('[data-market-research], #market-canvas').count(), 0);
+    assert.equal(await page.locator('[data-market-setup], [data-market-resume], #market-canvas').count(), 0);
     await shotAll(page, 'none');
     await page.close();
     role = 'owner';

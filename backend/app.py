@@ -5672,6 +5672,8 @@ def create_app(settings=None):
     install_assistant(app, store, auth, mutate, onboarding)
     from .librarian import install as install_librarian
     install_librarian(app, store, auth, mutate, onboarding)
+    from .librarian_setup import install as install_librarian_setup
+    install_librarian_setup(app, store, auth, mutate)
     from .goal_routes import install as install_goal_routes
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay

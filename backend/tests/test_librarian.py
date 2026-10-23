@@ -161,3 +161,62 @@ def test_a_research_request_is_one_task_to_the_librarian_for_that_page_and_secti
         c.execute("UPDATE docs SET locked=1 WHERE id=?", (doc["id"],))
     post(desk, "librarian/research", {"target": doc["id"], "instructions": "x"}, expected=409)
     post(desk, "librarian/research", {"target": "market/overview", "instructions": "x"}, token=desk.runner["token"], expected=403)
+
+
+def test_docs_first_visit_takes_the_sources_and_files_one_setup_task(desk):
+    # A first visit asks while Docs holds nothing a person wrote or linked; the Librarian's own map does not count.
+    post(desk, "docs", {"title": "Docs index", "body": "x", "path": "_librarian/index.md"})
+    assert get(desk, "librarian/setup")["docs"]["show"] is True
+    # Skipping is each person's own: Ben's skip leaves it showing for Ana.
+    assert post(desk, "librarian/setup/docs", {"skip": True}, token="ben-test")["docs"]["show"] is False
+    assert get(desk, "librarian/setup")["docs"]["show"] is True
+    post(desk, "librarian/setup/docs", {}, expected=422)                                # nothing to set up from
+    post(desk, "librarian/setup/docs", {"sources": ["not a link"]}, expected=422)
+    assert get(desk, "doc-sources")["sources"] == []                                   # a refusal adds nothing
+    done = post(desk, "librarian/setup/docs", {
+        "sources": ["https://github.com/acme/handbook", "https://help.acme.example", "https://help.acme.example"],
+        "note": "Policies are in Google Drive."})
+    assert [s["kind"] for s in done["sources"]] == ["github", "website"]
+    assert {s["url"] for s in get(desk, "doc-sources")["sources"]} == {"https://github.com/acme/handbook",
+                                                                       "https://help.acme.example"}
+    task = get(desk, f"tasks/{done['task_id']}")
+    task = task.get("task", task)
+    assert task["owner"] == "bot:librarian" and task["title"] == "Set up Docs"
+    assert "https://help.acme.example" in task["body"] and "Policies are in Google Drive." in task["body"]
+    assert "playbooks/docs-setup.md" in task["body"]
+    # Docs is past its first visit for everyone now, and Ben can still set up more from the menu.
+    after = get(desk, "librarian/setup")["docs"]
+    assert after["show"] is False and after["task"]["id"] == done["task_id"]
+    assert post(desk, "librarian/setup/docs", {"sources": ["https://help.acme.example"]}, token="ben-test")["task_id"]
+    # Bots and a Librarian that is off are refused.
+    post(desk, "librarian/setup/docs", {"note": "x"}, token=desk.runner["token"], expected=403)
+    with desk.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='librarian'")
+    post(desk, "librarian/setup/docs", {"note": "x"}, expected=409)
+
+
+def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(desk):
+    first = get(desk, "librarian/setup")["market"]
+    assert first["can_answer"] is True and first["step"] == 0 and first["task"] is None
+    answers = {"sell": "https://northwind.example", "buyers": "Property managers in Ohio"}
+    post(desk, "librarian/setup/market", {"answers": answers, "step": 2, "action": "skip"})
+    later = get(desk, "librarian/setup")["market"]                                      # another browser, a day later
+    assert later["skipped"] is True and later["step"] == 2
+    assert later["answers"] == {**answers, "competitors": "", "watch": ""}
+    # The first answer is the one that must be there; the Librarian finds the rest.
+    post(desk, "librarian/setup/market", {"answers": {"buyers": "x"}, "step": 3, "action": "finish"}, expected=422)
+    done = post(desk, "librarian/setup/market", {"answers": {**answers, "competitors": "CleanCo\nSparkle",
+                                                             "watch": "r/PropertyManagement"},
+                                                 "step": 3, "action": "finish"})
+    task = get(desk, f"tasks/{done['task']['id']}")
+    task = task.get("task", task)
+    assert task["owner"] == "bot:librarian" and task["title"] == "Set up the market map"
+    for text in ("## Who we compete with\n\nCleanCo\nSparkle", "## What to watch\n\nr/PropertyManagement",
+                 "What Market tracks", "playbooks/market-setup.md"):
+        assert text in task["body"]
+    assert done["skipped"] is False
+    # Only the owner answers: the market is the owner's and the Librarian's to change.
+    assert get(desk, "librarian/setup", token="ben-test")["market"] == {
+        "can_answer": False, "answers": {"sell": "", "buyers": "", "competitors": "", "watch": ""}, "step": 0,
+        "skipped": False, "task": None}
+    post(desk, "librarian/setup/market", {"answers": answers, "action": "save"}, token="ben-test", expected=403)

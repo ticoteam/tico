@@ -1,9 +1,10 @@
 # Set up the market map
 
-A task titled "Set up the market map" (a number after it means the owner asked again). The owner gave a
-website, a description, links, or all three, on the Market page, and is waiting on a map: the nine pages
-under Market and the graph beside them. You build the first version. It is a start people correct, not a
-finished study.
+A task titled "Set up the market map" (a number after it means the owner asked again). On their first visit to
+Market the owner answered your four questions: what they sell, who buys it, who they compete with, and what to
+watch (an older task holds one box: a website, a description, links). They are waiting on a map, the nine pages
+under Market and the graph beside them, and on Market tracking what they asked for. You build the first version.
+It is a start people correct, not a finished study.
 
 The outcome is a Market page a stranger could learn the team's market from, every claim tied to a source
 you read this run, and a plain note saying what you found and what you could not. Nothing else counts as good.
@@ -21,7 +22,14 @@ the gap goes on Open questions. No round figures, no "typically", no "roughly" f
 
 ## 1. Read what the owner gave
 
-The task holds the owner's words. Pull out every address and everything that describes the team.
+The task holds the owner's words, under one heading per question. Pull out every address and everything that
+describes the team. A blank answer means: find it yourself.
+
+- **What we sell** is who the team is (step 2).
+- **Who buys it** names the segments to start from (step 3.2).
+- **Who we compete with** names the competitors to start from (step 3.1). A name the owner gave is a candidate
+  you verify, not a fact: find its site, and tier it from what you read (core unless a source shows otherwise).
+- **What to watch** names the channels, topics, rules and people the owner wants followed (steps 3.3 to 3.5).
 
 - Fetch each address the owner gave: `hub doc fetch <url>`. Start with the home page, then its "about",
   "pricing", "customers", "solutions", "blog" or "press" pages, taken from that page's own links (a
@@ -128,7 +136,10 @@ A page with nothing found says what you looked for, in one line. Do not pad it.
 
 ## 6. Finish
 
-1. Rewrite the Overview and Coverage universe last, from what the graph now holds.
+1. Rewrite the Overview and Coverage universe last, from what the graph now holds. The Coverage universe opens
+   with a `## What Market tracks` section: the competitors, the buyer segments, and the channels, topics, rules
+   and people to watch, each with its entity id, starting with what the owner named. Something the owner named
+   that you could not find or verify stays on the list, marked "not found yet", so the curate routine looks again.
 2. From here on you keep the map current from what others report: the daily "Curate the market" routine
    (`playbooks/curate-the-market.md`). Note in `state.md` what is thin and which sources could not be read, so
    the next curate pass knows where to look.

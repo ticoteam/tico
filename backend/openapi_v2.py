@@ -335,6 +335,15 @@ STABLE = [
     ("/api/v2/librarian/research", "post", "Docs", "requestLibrarianResearch",
      "Ask the Librarian to research the web and add what it finds, cited, to one doc, market page or market entity "
      "(`target`), optionally one `section` of it; it files one task to the Librarian", "LibrarianResearchFiled"),
+    ("/api/v2/librarian/setup", "get", "Docs", "getLibrarianSetup",
+     "The Librarian's first-run setup for the caller: whether Docs asks where the docs are, and the owner's market "
+     "answers so far", "LibrarianSetup"),
+    ("/api/v2/librarian/setup/docs", "post", "Docs", "setUpDocs",
+     "Add the places the caller's docs are as sources and file one \"Set up Docs\" task to the Librarian; "
+     "`skip` hides the first-visit question for the caller only", None),
+    ("/api/v2/librarian/setup/market", "post", "Docs", "setUpMarket",
+     "Owner only: keep the answers to the Librarian's four market questions (`save`, `skip`), or `finish` and file "
+     "\"Set up the market map\", which builds the map and sets what Market tracks", "LibrarianMarketSetup"),
     ("/api/v2/librarian/turn-on", "post", "Docs", "turnOnLibrarian",
      "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it", None),
     ("/api/v2/assistant", "get", "Assistant", "getAssistant",
@@ -886,6 +895,12 @@ SCHEMAS = {
                               "next_offset": {"type": ["integer", "null"]}}),
     "DocsReopened": obj({"conversation_id": "s"}),
     "LibrarianResearchFiled": obj({"task_id": "s", "bot": "s", "kind": "s", "target": "s"}),
+    "LibrarianMarketSetup": obj({"can_answer": "b", "answers": obj({"sell": "s", "buyers": "s", "competitors": "s",
+                                                                    "watch": "s"}),
+                                 "step": "i", "skipped": "b", "task": {"type": ["object", "null"]}}),
+    "LibrarianSetup": obj({"available": "b",
+                           "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
+                           "market": ref("LibrarianMarketSetup")}),
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
