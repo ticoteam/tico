@@ -695,6 +695,12 @@ TASK_GUEST_SCHEMA = """
 ALTER TABLE tasks ADD COLUMN guest TEXT;
 """
 
+# Why a run left its session for a fresh one (runner-rs/src/rotate.rs; backend/run_triggers.py rotation): `tokens` or
+# `turns`, NULL for a run that resumed or started fresh for any other reason. Append to preserve existing installations.
+RUN_ROTATION_SCHEMA = """
+ALTER TABLE turns ADD COLUMN rotated TEXT;
+"""
+
 # The CEO Bot's merged asks (backend/ceo_merge.py): each original item in a person's Needs you that one CEO Bot item
 # stands for, and what became of it; append to preserve existing installations.
 CEO_MERGES_SCHEMA = """
@@ -723,7 +729,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
-              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA]
+              TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
+              RUN_ROTATION_SCHEMA]
 
 
 class Refused(Exception):
@@ -1029,6 +1036,8 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "checkpoint", "TEXT")
     add_column(conn, "tasks", "checkpoint_at", "TEXT")
     add_column(conn, "tasks", "checkpoint_by", "TEXT")
+    # Where the task stood by the others' changes when that checkpoint was left (wake_rules.state_of, token saving 3/9).
+    add_column(conn, "tasks", "checkpoint_state", "TEXT")
     add_column(conn, "tasks", "stale_asked_at", "TEXT")
     # Set once a turn in the task's own session took in another private task: that session may
     # carry it from then on, so no later turn's reply becomes the checkpoint (execution.complete).
@@ -1107,6 +1116,7 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS events_target_action ON events(target,action)")
     conn.execute("CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
                  "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created TEXT NOT NULL, "
                  "pr_sha TEXT, pr_merged_at TEXT)")
@@ -2506,8 +2516,12 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         body = librarian_text(body)
     if VIA.get() and is_human(actor):
         refs = {**(refs or {}), "via": VIA.get()}         # the Assistant wrote this for the person
-    # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run.
     from . import wake_rules
+    if actor == KEEPER and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
+        # Tico's notice of a person's own act keeps who acted: the request's cause ends with it, and the reply
+        # rule at the turn's end (execution.quiet_recheck) must still see that a person is owed the answer.
+        refs = {**(refs or {}), wake_rules.CAUSED_BY: wake_rules.CAUSE.get()}
+    # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run.
     held = wake_rules.gate(conn, actor, target, kind, refs, body, conv, in_reply_to)
     if held:
         refs = {**(refs or {}), "quiet": True, wake_rules.MARK: held}
@@ -4712,8 +4726,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     ], "guidance": "Check for overlap. Reuse shared work; keep distinct decisions and deliverables separate."} if related else None
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
+    # A task a bot files for itself in one of its turns starts its own turn only once that turn has ended
+    # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
+    # rather than start a turn that finds nothing left to do (Dev 359).
+    filed_in = RUN.get() if is_bot(target) and target == actor else ""
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {**({"reconcile": reconcile} if reconcile else {}), **(wake_refs or {})} or None,
+          {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
+           **(wake_refs or {})} or None,
           quiet_bots=next_run, quiet=next_run, trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
@@ -6128,6 +6147,7 @@ def wake_stalled(conn, at=None):
     (spot_check_tasks) that is not stalled gets one status check per quiet stretch; a status check or a
     stall wake with still no progress SPOT_STUCK_MINUTES later retries its bot once, and SPOT_STUCK_MINUTES after
     that reports it stuck to BotOps (_report_stuck), never to a person. Returns what it did."""
+    from . import wake_rules
     at = at or now()
     woke, escalated, checked, stuck, held, retried_ids = [], [], [], [], [], []
     stalled = {row["id"]: row for row in stalled_tasks(conn, at)}
@@ -6181,14 +6201,14 @@ def wake_stalled(conn, at=None):
                 # A spot check: one status check into the task's session per quiet stretch.
                 if nudged:
                     continue
-                _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"}, trigger="stall_check")
+                msg = _wake(conn, row, row["owner"], STATUS_CHECK, {"wake": "status_check"}, trigger="stall_check")
+                if msg and msg["refs"].get(wake_rules.MARK) == "same_state":
+                    continue     # no attempted wake for the retry/escalation machinery to count
                 event(conn, KEEPER, "task.stall_wake", row["id"],
                       {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1,
                        "kind": "status_check"})
                 checked.append(row["id"])
                 continue
-            if row.get("next_run"):
-                conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
             if row.get("own_blockers"):
                 own = ", ".join(row["own_blockers"])
                 text = (f"Stalled {row['quiet_minutes']} min: {row['title']}. It is blocked only by its own subtask "
@@ -6200,7 +6220,11 @@ def wake_stalled(conn, at=None):
                 text = (f"Stalled {row['quiet_minutes']} min: {row['title']}. Nothing is set to move it. Carry it on now, "
                         f"or, when someone else must act, file a subtask for them (hub task create --parent {row['id']} "
                         "--owner <bot or person>) and set this waiting; finishing the subtask wakes it.")
-            _wake(conn, row, row["owner"], text, {"wake": "stalled"}, trigger="stall_check")
+            msg = _wake(conn, row, row["owner"], text, {"wake": "stalled"}, trigger="stall_check")
+            if msg and msg["refs"].get(wake_rules.MARK) == "same_state":
+                continue
+            if row.get("next_run"):
+                conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
             event(conn, KEEPER, "task.stall_wake", row["id"],
                   {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
             woke.append(row["id"])
@@ -6773,6 +6797,9 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
         conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
+    from . import run_diagnostics
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
+        run_diagnostics.finish(conn, turn_id, exit_code, summary)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "cost": cost})
     return row
 

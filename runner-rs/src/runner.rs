@@ -191,6 +191,40 @@ impl Runner {
         self.assignments.lock().unwrap().clone()
     }
 
+    /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
+    pub(crate) fn attempt_events(&self, aid: &str, redactor: Option<Arc<crate::redact::Redactor>>) ->
+        (crate::hosts::Events, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (input, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (out, events) = tokio::sync::mpsc::unbounded_channel();
+        let state = self.state.clone();
+        let aid = aid.to_string();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
+                    let text = crate::util::text_of(&ev["stderr_tail"]);
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = crate::redact::scrub_credentials(&text, &[]);
+                    let id = aid.clone();
+                    let _ = state.off(move |s| s.stderr(&id, &text)).await;
+                } else { let _ = out.send(ev); }
+            }
+        });
+        (input, events)
+    }
+
+    async fn upload_stderr(&self, aid: Option<&str>) {
+        if !crate::follow::feature("run_diagnostics") { return; }
+        let filter = aid.map(str::to_string);
+        let pending = self.state.off(move |s| s.pending_stderr(filter.as_deref())).await.unwrap_or_default();
+        for (id, tail, revision) in pending.into_iter().take(10) {
+            // Diagnostics never hold up a run result through network retries. The capped row retries on maintenance.
+            let sent = tokio::time::timeout(Duration::from_secs(2), self.client.post(&format!("attempts/{id}/diagnostics"), &json!({"tail": tail}), None)).await;
+            if matches!(sent, Ok(Ok(_))) || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408) {
+                let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
+            }
+        }
+    }
+
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
     pub async fn flush(&self, aid: &str) -> Result<(), ApiError> {
         let lock = self.flush_locks.lock().unwrap().entry(aid.to_string()).or_default().clone();
@@ -230,6 +264,7 @@ impl Runner {
 
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
+        self.upload_stderr(None).await;
         crate::files_publish::drain(&self.state, &self.client).await; // files a restart or an outage left queued
         let rows = match self.state.unfinished() {
             Ok(rows) => rows,
@@ -285,6 +320,8 @@ impl Runner {
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
+        // First, so a panic later in this pass (or one that keeps recurring here) is still sent.
+        crate::panics::report(&self.client).await;
         let repository_rows = if full { self.lanes.repositories.poll().await } else { None };
         if full {
             let assignments = self.client.get("runners/assignments").await?;
@@ -873,6 +910,24 @@ mod tests {
         assert!(seen[1].starts_with("POST /api/v2/runners/heartbeat") && !seen[1].contains("isolated"), "{}", seen[1]);
         assert!(seen[1].contains("\"ops\":{\"ready\":true}") && seen[1].contains("\"pi\":{\"installed\":true}"), "{}", seen[1]);
         assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
+    }
+
+    #[tokio::test]
+    async fn a_panic_since_the_last_pass_is_the_first_thing_a_pass_sends() {
+        let _one = crate::panics::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"ok": true}"#)]).await;
+        let dir = std::env::temp_dir().join(format!("tico-panic-report-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        crate::panics::note_for_test("src/drive.rs", 4242);
+        // The rest of the pass finds no server: only what it sent first matters here.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runner.maintain(false, false)).await;
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("POST /api/v2/runners/errors") && seen[0].contains(r#"{"file":"src/drive.rs","line":4242}"#), "{}", seen[0]);
     }
 
     #[test]

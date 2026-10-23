@@ -56,9 +56,9 @@ def since_time(value):
 def attempt_details(c, turn):
     attempt = c.execute("SELECT state,result_json,finished FROM attempts WHERE id=?", (turn["id"],)).fetchone()
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
+    from .run_diagnostics import metadata
     from .performance import attempt_snapshots
-    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"],
-               **attempt_snapshots(c, turn["id"])}
+    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
             result = json.loads(attempt["result_json"] or "{}")
@@ -67,7 +67,7 @@ def attempt_details(c, turn):
         reason = result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
         details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
-                       failure_reason=str(reason))
+                       failure_reason=details["end_reason"] or str(reason))
     return details
 
 
@@ -1575,6 +1575,7 @@ def install_views(app, store, auth, mutate, task_view):
         return {"run": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
                 "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
                 "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
+                **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
                 "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
