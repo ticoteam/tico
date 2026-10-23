@@ -116,12 +116,93 @@ async function check(engine) {
     assert.ok(warnings.some(w => /timeout/.test(w)), 'a timed-out send is recorded');
     const stalledKey = keys.at(-1);
     answer = 'ok';
-    await page.evaluate(() => { CHAT_SEND.timeout = 30000; });
+    // Retry after the old five-minute cutoff is still the same submission. Advance the browser's wall clock only;
+    // real timers and the whole-send performance clock keep running normally.
+    await page.evaluate(() => {
+      CHAT_SEND.timeout = 30000;
+      window.chatRealNow = Date.now;
+      const now = Date.now(); Date.now = () => now + 6 * 60000;
+      pendingWrites.clear();                         // the pending identity also survives request-cache cleanup
+    });
     await toast.locator('button', {hasText: 'Retry'}).click();
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
     assert.equal(sends.at(-1), stalled);
     assert.equal(keys.at(-1), stalledKey, 'Retry keeps the request id, so a send that did land is not saved twice');
+    await page.evaluate(() => { Date.now = window.chatRealNow; });
     assert.ok(warnings.every(w => !w.includes('Secret') && !w.includes('stalled')), 'no message text in any line');
+
+    // Another timeout, then a retry near the end of the server's replay window: the first attempt's age stays.
+    await page.evaluate(() => { CHAT_SEND.timeout = 200; document.querySelectorAll('.toast').forEach(t => t.remove()); });
+    answer = 'stall';
+    await box.fill('An old pending message'); await page.keyboard.press('Enter');
+    await toast.waitFor();
+    const expiredKey = keys.at(-1), originalAt = await page.evaluate(() => BOT_PILL.unconfirmed.at);
+    await page.evaluate(() => { const now = Date.now(); Date.now = () => now + 47 * 60 * 60000; });
+    await toast.locator('button', {hasText: 'Retry'}).click();
+    await toast.waitFor();
+    assert.equal(keys.at(-1), expiredKey, 'a late failed retry keeps the first identity');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed.at), originalAt, 'retry does not restart replay retention');
+    // Switching away and back in the same tab must not lose the pending identity or its original age.
+    await page.evaluate(() => {
+      const old = BOT_PILL; chatDraftSave(old); PILLS.delete(old); BOT_PILL = null;
+      const restored = botPill('botops'); old.el.replaceWith(restored.el);
+      const now = window.chatRealNow(); Date.now = () => now + 49 * 60 * 60000;
+      document.querySelectorAll('.toast').forEach(t => t.remove());
+      CHAT_SEND.timeout = 30000;
+    });
+    const beforeExpiry = keys.length;
+    answer = 'ok';
+    // Exercise the send entry point too: Enter and an automatic retry must be safe even before a button redraw.
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => v2ChatSend(BOT_PILL, 'An old pending message'));
+    await toast.waitFor();
+    assert.match(await toast.innerText(), /may already have sent.*Check the chat before resending/);
+    assert.equal(await toast.locator('button', {hasText: 'Retry'}).count(), 0, 'expired replay has no Retry action');
+    assert.equal(keys.length, beforeExpiry, 'expired replay sends no request');
+    assert.equal(await box.inputValue(), 'An old pending message');
+    assert.ok(await send.isDisabled(), 'expired replay disables Send');
+    assert.match((await why())[0], /may already have sent/);
+    await page.evaluate(() => pillNeeds(BOT_PILL, null));
+    assert.match((await why())[0], /may already have sent/, 'label redraw preserves the expiry reason');
+    await page.evaluate(() => {
+      chatRetryLater(BOT_PILL, 'An old pending message', 'botops', {}, {});
+      window.dispatchEvent(new Event('online'));
+    });
+    assert.equal(keys.length, beforeExpiry, 'online recovery also refuses an expired replay');
+    await box.fill('');
+    await box.fill('An old pending message');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value && !BOT_PILL.sending);
+    assert.notEqual(keys.at(-1), expiredKey, 'intentional clear allows a new submission');
+    await page.evaluate(() => { Date.now = window.chatRealNow; document.querySelectorAll('.toast').forEach(t => t.remove()); });
+
+    // A late network failure must not add the session probe's separate five seconds to the send budget. Keep a
+    // shared probe pending past that budget, then let it answer signed-out late: this write already timed out.
+    const lateProbe = await page.evaluate(async () => {
+      const realFetch = window.fetch, realProbe = sessionProbe;
+      const started = performance.now(); let finishProbe, probeTimer, probedAt, requests = 0;
+      window.fetch = (url, init) => {
+        if (url !== API + '/v2/chat/botops') return realFetch(url, init);
+        requests++; return new Promise((_, fail) => setTimeout(() => fail(new TypeError('offline')), 300));
+      };
+      sessionProbe = () => {
+        probedAt = performance.now() - started;
+        return new Promise(done => { finishProbe = done; probeTimer = setTimeout(() => done(true), 1500); });
+      };
+      try {
+        await writeRequestOnce('POST', '/v2/chat/botops', {text: 'late network'}, undefined, {timeout: 400});
+        return {resolved: true};
+      } catch (e) {
+        finishProbe(true);
+        return {timedOut: !!e.timedOut, elapsed: performance.now() - started, probedAt, requests,
+          kept: pendingWrites.has(e.signature)};
+      } finally { clearTimeout(probeTimer); window.fetch = realFetch; sessionProbe = realProbe; }
+    });
+    assert.equal(lateProbe.timedOut, true, 'the shared sign-in check cannot outlast the write');
+    assert.ok(lateProbe.probedAt >= 250, 'network failure happened near the send deadline');
+    assert.ok(lateProbe.elapsed < 850, `send settled within its budget plus scheduling tolerance: ${lateProbe.elapsed}ms`);
+    assert.equal(lateProbe.requests, 1, 'no request is retried after the budget expires');
+    assert.equal(lateProbe.kept, true, 'the timed-out probe keeps the request identity');
 
     // Headers arrived, then the body stalled: still a timeout, and the request id is kept for the retry.
     const bodyStall = await page.evaluate(async () => {

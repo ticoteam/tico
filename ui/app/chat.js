@@ -737,6 +737,17 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim() || !text && !P.files.length) return false;
   }
   chatForgetUnconfirmed(P);
+  if (chatReplayExpired(P)) {
+    pillButtons(P);
+    toast(CHAT_REPLAY_EXPIRED, true);
+    return false;
+  }
+  // Keep the identity separately from the request cache: a later refusal or redraw must not silently rotate it.
+  if (!P.files.length && !P.unconfirmed) {
+    const path = `/v2/chat/${encodeURIComponent(slug)}`, body = {text: text || 'Attached files.', refs: {...extraRefs}, ...extra};
+    P.unconfirmed = {text: (text || '').trim(), at: Date.now(), key: newRequestId(), signature: 'POST ' + path + '\n' + JSON.stringify(body)};
+    CHAT_PENDING.set(P.slug, P.unconfirmed);
+  }
   P.sending = true;
   let sent; P.sent = new Promise(done => sent = done);
   const files = P.files.slice();
@@ -748,7 +759,8 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
   try {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
-      {timeout: CHAT_SEND.timeout, onRetry: watch.retry});
+      {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
+        onRetry: watch.retry, operationId: P.unconfirmed?.key});
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
@@ -761,8 +773,8 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     watch.end(e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
-    if (e.timedOut) P.unconfirmed = {text: (text || '').trim(), signature: e.signature, at: Date.now()};
-    if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
+    if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
+    else if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
     else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
   }
@@ -798,13 +810,15 @@ function chatSendWatch(P, fileCount) {
     },
   };
 }
-// A timed-out send keeps its request id so Retry cannot save it twice. Once the box no longer holds that text (the
-// person cleared or edited it, or it is minutes later), the id is forgotten: a send that did land must not swallow
-// the same short reply ("yes") sent again later, which would otherwise replay the old answer and reach no one.
-const CHAT_UNCONFIRMED_KEEP_MS = 5 * 60000;
+// Pending text keeps its original identity until the draft is changed or acknowledged, including a later visit to
+// this bot in the same tab. Beyond the server's replay retention (backend/store.py), never resend automatically.
+const CHAT_REPLAY_MS = 48 * 60 * 60000;
+const CHAT_REPLAY_EXPIRED = 'This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.';
+const chatReplayExpired = P => !!P.unconfirmed && Date.now() - P.unconfirmed.at >= CHAT_REPLAY_MS;
 function chatForgetUnconfirmed(P) {
   const u = P.unconfirmed; if (!u) return;
-  if ((pq(P, '.p-text')?.value || '').trim() === u.text && Date.now() - u.at < CHAT_UNCONFIRMED_KEEP_MS) return;
+  if ((pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
+  if (CHAT_PENDING.get(P.slug) === u) CHAT_PENDING.delete(P.slug);
   pendingWrites.delete(u.signature); P.unconfirmed = null;
 }
 // "see if anything was disconnected ... and trigger retries automatically". A
@@ -813,12 +827,14 @@ function chatForgetUnconfirmed(P) {
 // twice. Editing or clearing the box hands it back to the person.
 function chatRetryLater(P, text, slug, extraRefs, extra) {
   clearTimeout(P.retryTimer);
+  const pending = P.unconfirmed;
   const tries = P.retryTries = (P.retryTries || 0) + 1;
   if (tries > 8) { P.retryTries = 0; toast('Still no connection. Your message is still here, so send it again once you are back online.', true); return; }
   if (tries === 1) toast('No connection. Your message will send by itself when you are back online.');
   const again = () => {
     window.removeEventListener('online', again); clearTimeout(P.retryTimer);
     if (P.sending) return;
+    if (pending && P.unconfirmed !== pending) return;    // editing away and back is still a new draft
     if ((pq(P, '.p-text')?.value || '').trim() !== (text || '').trim()) { P.retryTries = 0; return; }
     void v2ChatSend(P, text, slug, extraRefs, extra);
   };

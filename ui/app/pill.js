@@ -17,6 +17,7 @@ let BOT_PILL = null;
 // back. The text is kept per bot in this browser, so a reload keeps it too; attached files are
 // kept for the session only. Sending clears it.
 const CHAT_DRAFTS = 'hub.chat.drafts', CHAT_FILES = new Map();
+const CHAT_PENDING = new Map();                    // submission identities last for this tab, until a draft changes
 const chatDrafts = () => { try { return JSON.parse(localStorage.getItem(CHAT_DRAFTS) || '{}') || {}; } catch { return {}; } };
 function chatDraftSave(P) {
   if (P?.mode !== 'chat' || !P.slug) return;
@@ -35,6 +36,7 @@ function pillRestore(P) {
   const draft = chatDrafts()[P.slug], files = CHAT_FILES.get(P.slug);
   if (draft) pq(P, '.p-text').value = draft;
   if (files?.length) { P.files.push(...files); pillChips(P); }
+  P.unconfirmed = CHAT_PENDING.get(P.slug) || null;
   if (draft || files?.length) pillButtons(P);
   return P;
 }
@@ -161,10 +163,11 @@ const pq = (P, sel) => P.el?.querySelector(sel);
 // send on a click, and pillSend puts the cursor back in an empty box.
 function pillButtons(P) {
   const box = pq(P, '.p-text'); if (!box) return;
+  chatForgetUnconfirmed(P);
   const fileChat = P.files.length && P.action === 'chat';
   const btn = pq(P, '.p-send');
   btn.classList.toggle('p-off', !box.value.trim() && !fileChat);
-  btn.disabled = !!P.sending;
+  btn.disabled = !!P.sending || P.action === 'chat' && !P.send && !pillGoalMode(P) && chatReplayExpired(P);
   // While the bot runs (chatStopSync sets P.running), Stop takes Send's place until something is typed: a message
   // typed meanwhile still queues for after the run.
   const stop = pq(P, '.p-stop');
@@ -218,10 +221,11 @@ function pillWhy(P) {
   let text = '';
   if (stopping) text = 'Stopping…';
   else if (busy) text = busy === 'Sending…' && P.sendRetrying ? 'Sending… trying again' : PILL_BUSY[busy] || busy;
+  else if (btn.disabled && chatReplayExpired(P)) text = CHAT_REPLAY_EXPIRED;
   else if (btn.classList.contains('p-off'))
     text = pillGoalMode(P) ? 'Type a goal to set' : P.action === 'chat' ? 'Type a message or attach a file to send' : 'Type a message to send';
   why.textContent = text;
-  why.classList.toggle('p-why-busy', !!(stopping || busy));
+  why.classList.toggle('p-why-busy', !!(stopping || busy || btn.disabled && chatReplayExpired(P)));
   if (stop) {
     stop.title = stopping ? text : 'Stop';
     if (stopping) stop.setAttribute('aria-describedby', why.id); else stop.removeAttribute('aria-describedby');
