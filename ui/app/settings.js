@@ -383,7 +383,7 @@ async function loadSettings() {
       S.me?.cloud ? settingsMachinesRead().catch(error => {
         if (!SETTINGS_DATA.loaded) throw error;
         SETTINGS_PRESENCE.failed = true;
-        return SETTINGS_DATA;
+        return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
       }) : Promise.resolve({machines: [], services: []}),
       S.me?.cloud ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),

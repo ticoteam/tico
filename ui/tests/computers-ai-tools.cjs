@@ -225,7 +225,6 @@ const {unrouted} = require('./support/routes.cjs');
     await page.keyboard.press('Escape');
 
     // Presence refresh protects the core recovery flow: cached heartbeats cannot disable a live computer.
-    console.log('presence: starting');
     box.readiness.runtimes.codex.authenticated = 'missing';
     await page.clock.install({time: now});
     await page.clock.pauseAt(now + 1000);
@@ -244,17 +243,17 @@ const {unrouted} = require('./support/routes.cjs');
       assert.equal(await dialog.locator('[data-add-connection=box]').isEnabled(), true);
       assert.equal(await dialog.locator('[data-model-login][data-runtime=codex]').isEnabled(), true);
     };
-    await online(); console.log('presence: online');
+    await online();
     const openedReads = presenceReads;
     presenceOffset = 130000;
     await page.clock.fastForward(65000);
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
-    await online(); console.log('presence: online');
+    await online();
     await page.keyboard.press('Escape');
     await row('box').locator('.machine-name').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     assert.ok(presenceReads > openedReads, 'open and reopen read presence');
-    await online(); console.log('presence: online');
+    await online();
 
     // Carry the actual draft node through repaint, including focus and the selected text range.
     await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
@@ -268,6 +267,21 @@ const {unrouted} = require('./support/routes.cjs');
       return [field === window.presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
     }), [true, 'unfinished connection', true, 3, 8]);
 
+    await dialog.locator('[data-add-connection=box]').click();
+    await add.locator('[data-add-tool=codex]').click();
+    await add.locator('[data-add-step=kind]').evaluate(node => {
+      const field = document.createElement('textarea'); field.dataset.addDraft = ''; node.appendChild(field);
+      field.value = 'unfinished add connection'; field.focus(); field.setSelectionRange(2, 7);
+      window.addDraft = field;
+    });
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.deepEqual(await page.evaluate(() => {
+      const field = document.querySelector('[data-add-draft]');
+      return [field === window.addDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+    }), [true, 'unfinished add connection', true, 2, 7]);
+    await add.locator('[data-add-close]').first().click();
+    await add.waitFor({state: 'detached'});
+
     // A slow/failed read preserves the last confirmed state, even when its heartbeat ages past a minute.
     await page.evaluate(() => clearTimeout(SETTINGS_PRESENCE.timer));
     presenceMode = 'slow';
@@ -277,12 +291,11 @@ const {unrouted} = require('./support/routes.cjs');
     presenceOffset = 200000;
     await page.clock.fastForward(70000);
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
-    await online(); console.log('presence: online');
+    await online();
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
     presenceMode = 'failure';
-    for (const held of heldPresence.splice(0)) await held.fulfill({status: 503, contentType: 'application/json', body: '{}'});
     await page.evaluate(() => settingsMachinesRefresh());
-    await online(); console.log('presence: online');
+    await online();
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
 
     // Only a successful read can confirm disconnect; both views recover from the next heartbeat.
@@ -293,7 +306,10 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await dialog.locator('[data-add-connection=box]').isDisabled(), true);
     presenceMode = 'live';
     await page.evaluate(() => settingsMachinesRefresh());
-    await online(); console.log('presence: online');
+    await online();
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({machines: [{...box, last_seen: at(-3 * 3600000)}], services: []})});
+    await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
     // Leaving the tab stops its timer; returning starts it and requests fresh presence.
