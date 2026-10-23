@@ -29,12 +29,26 @@ policy = "latest"
 methods = ["subscription", "api-key"]
 api_key_env = ["CURSOR_API_KEY"]
 
+[login]
+command = ["login"]
+terminal = false
+logout = ["logout"]
+# File storage uses ~/.config/cursor on Linux and ~/.cursor on macOS.
+files = [".config/cursor/auth.json", ".cursor/auth.json"]
+
+# File credentials let the computer default home and a switch keep their own login on macOS too.
+[env]
+AGENT_CLI_CREDENTIAL_STORE = "file"
+NO_OPEN_BROWSER = "1"
+
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
 terminal_login = ["login"]
 api_keys = "computer"
 api_key_in_turn = true
 subscription_marker = "signed in"
+profile_home = "HOME"
+profile_home_overrides = ["XDG_CONFIG_HOME", "CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR"]
 mcp_unsupported = "cursor-agent reads MCP servers only from ~/.cursor/mcp.json or the bot's .cursor/mcp.json, with no per-run setting, so a bot would also get the operator's own servers"
 resume_command = "cursor-agent --resume"
 model_list = "host"
