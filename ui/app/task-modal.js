@@ -114,6 +114,8 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
   const onProp = d.contains(document.activeElement) ? document.activeElement.dataset.prop : '';
   if (onProp) d.focusProp = onProp;
+  // A previous close's Back navigation must settle before a new dialog takes its place in history.
+  if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   // Session copy commands need the CLI's manifest even when Tasks is the first page opened.
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;

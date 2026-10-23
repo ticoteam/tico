@@ -87,6 +87,28 @@ async function show(page) {
    assert.equal(await page.locator(id).evaluate(d => d.open), false, 'a newer close cancels a pending task switch');
    assert.deepEqual(errors, []); await page.close();
   }
+  // The native close can arrive before reopening starts, while the Back traversal it queued is still pending.
+  {
+   const {page, data, errors} = await open(browser, {at: '#/bot/eng', rich: true});
+   await page.waitForFunction(() => S.emps?.length);
+   await page.evaluate(task => taskModalShow(task), data.tasks[0]);
+   await page.evaluate(async task => {
+    const d = taskModal();
+    const popped = new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
+    const closed = new Promise(resolve => d.addEventListener('close', resolve, {once: true}));
+    d.close(); await closed;
+    await taskModalShow(task);
+    await popped;
+   }, data.tasks[0]);
+   assert.equal(await page.locator('#task-modal').evaluate(d => d.open), true, 'an older Back traversal must not close the reopened task');
+   assert.equal(await page.evaluate(() => !!history.state?.taskModal), true, 'the reopened task owns its history entry');
+   await page.evaluate(async () => {
+    const popped = new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
+    history.back(); await popped;
+   });
+   assert.equal(await page.locator('#task-modal').evaluate(d => d.open), false, 'Back still closes the new opening');
+   assert.deepEqual(errors, []); await page.close();
+  }
   {
    const {page, data, errors} = await visit(browser);
    data.comments[1].refs.target = {file: 'f-notes', version: 2};
