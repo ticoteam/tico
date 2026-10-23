@@ -218,7 +218,8 @@ impl CompanyUpdatePolicy {
         let builder = builder.redirect(reqwest_updater::redirect::Policy::custom(
             move |attempt| redirect_policy.redirect_attempt(attempt),
         ));
-        if let Some(cookie) = &self.cookie {
+        // REPRODUCTION ONLY: the pre-0.3.21 updater, which sent no hub session to the feed.
+        if let Some(cookie) = self.cookie.as_ref().filter(|_| false) {
             let mut headers = reqwest_updater::header::HeaderMap::new();
             headers.insert(reqwest_updater::header::COOKIE, cookie.clone());
             builder.default_headers(headers)
