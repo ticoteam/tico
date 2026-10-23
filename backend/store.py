@@ -1250,6 +1250,9 @@ class Store:
                 # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
                 from .milestone_waits import ensure as ensure_milestone_waits
                 ensure_milestone_waits(c)
+                # Recruiting seats (backend/lifecycle.py). Unversioned like the trash.
+                from .lifecycle import ensure as ensure_seats
+                ensure_seats(c)
                 # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
                 # Unversioned like the trash: an older release never reads the tables or the columns.
                 from .company import ensure as ensure_company

@@ -151,7 +151,14 @@ def install(app, store, auth, mutate):
                 auth.require_read(c, who, bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            return view(c, bot)
+            found = view(c, bot)
+            from . import lifecycle
+            if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
+                # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off, so
+                # every message needs an approval, which an onboarding bot cannot request.
+                found.update({"set": True, "outbound_send": False, "forward_to": [],
+                              "updated_by": "onboarding, until a person above it marks onboarding complete"})
+            return found
 
     @app.post("/api/v2/bots/{bot}/mail-settings")
     def write(request: Request, bot: str, body: M.MailSettingsUpdate):

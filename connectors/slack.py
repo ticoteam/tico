@@ -477,6 +477,17 @@ def check_can_post(manifest, slug):
     return entry
 
 
+def check_not_onboarding(slug):
+    """An onboarding bot sends nothing to anyone but its manager until a person above it marks onboarding complete
+    (backend/lifecycle.py), so it neither posts nor DMs. Only a hosted run can ask Tico; one that cannot is let through
+    to the gates after this, as before."""
+    row = HUB_GET(f"bots/{slug}")
+    if isinstance(row, dict) and row.get("stage") == "onboarding":
+        raise Refused(f"{slug} is still onboarding, so it can't post on Slack yet.",
+                      "Answer in chat or ask your manager; a person above you on the org chart marks onboarding "
+                      "complete when you are ready.")
+
+
 def check_history_scope(manifest, slug, refs, channels=None):
     """Refuse a history read outside an employee's declared channel scope.
 
@@ -1096,6 +1107,7 @@ def cmd_post(args):
     slug = args.as_slug.strip()
     manifest = load_manifest(slug)
     check_can_post(manifest, slug)
+    check_not_onboarding(slug)
     entry = find_registry_channel(load_channels(), args.channel)
     if entry.get("post") is not False and not str(entry.get("id") or "").strip():
         cid, _name = resolve_channel(args.channel)      # listed by name: Slack gives the id
@@ -1125,6 +1137,7 @@ def cmd_dm(args):
     slug = args.as_slug.strip()
     manifest = load_manifest(slug)
     check_can_post(manifest, slug)                              # (a) the employee may write
+    check_not_onboarding(slug)
     text = check_text(sys.stdin.read() if args.text == "-" else args.text)   # (d) length
     allowed = load_hub_access()                                 # (b) the company list
     refs = split_refs(args.to)
