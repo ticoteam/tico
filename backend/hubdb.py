@@ -717,6 +717,18 @@ CREATE INDEX IF NOT EXISTS ceo_merges_original ON ceo_merges(original, state);
 CREATE INDEX IF NOT EXISTS ceo_merges_person ON ceo_merges(person, created);
 """
 
+# The CEO Bot log (backend/ceo_acts.py): each decision it made alone at level 3, or each thing it proposed because it
+# stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
+CEO_ACTIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS ceo_actions (
+  id TEXT PRIMARY KEY, created TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  goal_id TEXT, state TEXT NOT NULL, proposal_task TEXT, note TEXT NOT NULL DEFAULT '',
+  changes_json TEXT NOT NULL DEFAULT '{}', undone_at TEXT, undone_by TEXT, undo_json TEXT);
+CREATE INDEX IF NOT EXISTS ceo_actions_created ON ceo_actions(created);
+ALTER TABLE task_events ADD COLUMN action_id TEXT;
+CREATE INDEX IF NOT EXISTS task_events_action ON task_events(action_id);
+"""
+
 # One login per AI tool per computer (backend/subscriptions.py): a bot's own subscription choice goes, and the bot
 # runs on its computer's login. The table and the computers' profile reports stay, unread, for one release.
 ONE_LOGIN_PER_COMPUTER_SCHEMA = """
@@ -734,7 +746,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, CEO_ACTIONS_SCHEMA]
 
 
 class Refused(Exception):
@@ -4796,6 +4808,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         requester = actor
     from .roadmaps import settings as roadmap_settings
     # Bots (and Assistant/BotOps acting for a person) publish only through an approved publication.
+    if visibility == 'public' or public_title or public_summary:
+        from .ceo_acts import gate
+        gate(conn, actor, "publish", f"publish a new task on the public roadmap: {public_title or title}")
     bot_review = (is_bot(actor) or VIA.get()) and roadmap_settings(conn)['bot_public_approval']
     if bot_review and (visibility == 'public' or public_title or public_summary):
         # Said rather than dropped, so the bot knows its text is not on the roadmap.
@@ -5187,6 +5202,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("updated=:updated")
     if owner is not None:
         new_owner = _reach(conn, actor, owner)
+        if is_human(new_owner) and new_owner != row["owner"]:
+            from .ceo_acts import TASK, gate
+            # The proposal lands in the CEO Bot log, which names the task only to a reader who may open it.
+            gate(conn, actor, "person_task", f"give {TASK} to {person_name(conn, new_owner)}", task_id=task_id)
         _takes_tasks(conn, actor, new_owner)
         if new_owner != row["owner"]:
             _learner(conn, actor)
@@ -5219,6 +5238,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if rank is not None:
         sets.append("rank=:rank")
         args["rank"] = float(rank)
+        # A queue move writes no event of its own, except on a task a CEO Bot decision changed: its Undo keeps a
+        # later move, even one back to the same place (backend/ceo_acts.py).
+        if float(rank) != row.get("rank") and _ceo_changed(conn, task_id):
+            _task_event(conn, task_id, actor, "rank", row.get("rank"), float(rank), note or "")
     if person != row.get("waiting_on"):
         sets.append("waiting_on=:waiting_on")
         args["waiting_on"] = person
@@ -5742,11 +5765,22 @@ def _task_event(conn, task_id, actor, field, old, new, note=""):
     via = VIA.get()
     if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
         conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
-    conn.execute("INSERT INTO task_events (id, task_id, ts, actor, field, old, new, note" + (", via" if via else "")
-                 + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?" + (", ?" if via else "") + ")",
+    # A CEO Bot decision (or its Undo) stamps each change it makes with its action id (backend/ceo_acts.py).
+    from .ceo_acts import ACTION
+    action = ACTION.get()
+    extra = (("via", via),) * bool(via) + (("action_id", action),) * bool(action)
+    conn.execute("INSERT INTO task_events (id, task_id, ts, actor, field, old, new, note"
+                 + "".join(", " + k for k, _ in extra) + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?" + ", ?" * len(extra) + ")",
                  (new_id(), task_id, now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note,
-                  *((via,) if via else ())))
+                  *(v for _, v in extra)))
+
+
+def _ceo_changed(conn, task_id):
+    """Whether a CEO Bot decision (or its Undo) is writing this task now or has changed it before."""
+    from .ceo_acts import ACTION
+    return bool(ACTION.get()) or bool(conn.execute(
+        "SELECT 1 FROM task_events WHERE task_id=? AND action_id IS NOT NULL LIMIT 1", (task_id,)).fetchone())
 
 
 def _task_ref(value):

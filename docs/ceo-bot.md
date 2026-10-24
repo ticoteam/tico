@@ -14,10 +14,15 @@ and won't do. Every company starts at **Passive**.
 |---|---|---|
 | 1 | **Passive** (default) | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when you talk to it. It suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
 | 2 | **Suggests actions** | Also asks you for the vision, proposes Why lines, sends a Monday note, asks a goal's owner what is happening, and suggests how your bots could recover a goal that falls behind, as items in **Needs you** that you approve one by one. |
-| 3 | **Acts on its own** | Also makes, reorders and closes bot tasks itself to recover a goal, each with an Undo. |
+| 3 | **Acts on its own** | Also decides on its own: makes, reorders, reassigns and closes bot tasks itself to recover a goal, each decision with an Undo. |
 
-Level 3 can be chosen today, but it does not do more yet. Until it arrives in a later release, it does what level 2
-does, and its sentence says so.
+At level 3 the CEO Bot also decides on its own. One decision has a reason and up to 10 changes to bot tasks: a new task
+for a bot, a bot's task moved to the top of its queue, a bot's task given to another bot, or a bot's task closed. Each
+decision is an entry in the [CEO Bot log](#the-ceo-bot-log) with an Undo. It never acts alone on a private task, or
+gives a task to a bot that keeps its tasks private. It touches only tasks it may read and gives work only to bots it may
+write to, as its own API calls would: a task hidden from it by a bot's access is refused as not found. A change it can't make alone, such as a person's task or a bot that
+is offline, becomes an item in your **Needs you** instead. Everything that
+[stays yours](#what-stays-yours) stays yours at level 3 too.
 
 An install that was on the old level 1, **Goals and tracking**, is **Passive** after the upgrade.
 
@@ -135,8 +140,44 @@ reply on.
 
 ## What stays yours
 
-At every level, spending, publishing, people, and changes to your goals or vision stay yours. The CEO Bot can
-propose a goal's Why, wording or target. It cannot accept one. Nobody's `reports_to` changes and it gets no access it
-did not have before it was the CEO Bot.
+At every level, these stay yours, and the server refuses the CEO Bot each one:
+- anything that raises cost: a new routine or a routine that runs more often, a bot's model, fallback or wake settings;
+- publishing to a public roadmap without your approval;
+- sending anything outside the company, such as a calendar invitation to someone outside it;
+- adding, removing or bringing back bots;
+- changing a goal, or a goal's KPI target;
+- changing the vision or the description;
+- changing a bot's instructions or settings;
+- giving a task to a person.
+
+When it tries one, nothing changes. It becomes an item in your **Needs you** saying what it wanted, why, and that the
+change is yours to make. It also shows in the [CEO Bot log](#the-ceo-bot-log). It counts toward the 5 a day. When the 5
+are used, it waits in the log and says so. It is not counted as one of the bot's mistakes.
+
+The CEO Bot can propose a goal's Why, wording or target. It cannot accept one. Nobody's `reports_to` changes and it
+gets no access it did not have before it was the CEO Bot.
+
+## The CEO Bot log
+
+The CEO Bot's page shows its log on the **Info** tab, newest first. The log is visible to the owner only: it shows
+what happened to bots' tasks, which other people may not be allowed to see. Nobody else sees the section, and the API
+refuses them. A task the owner can't open, such as a private task they are not part of, shows as "a task you can't
+open", without its words. It lists:
+- each decision it made on its own at **Acts on its own**, with its reason and the bot tasks it created, moved up,
+  gave to another bot or closed;
+- each thing it proposed to you instead, because it stays yours or because a bot was offline.
+
+One decision is one entry. Every change in it carries the same action id in each task's history.
+
+Only the owner sees **Undo**, and it asks once before it acts. Undo puts each task back as it was before the
+decision: its owner, its status and step, its place in the queue and its note. A task the decision created is closed.
+Each bot whose task changed is told, including a bot that loses a task it was given. If someone changed a task after
+the decision, their change stays, and a task the decision created that someone has changed stays open. If Tico can't
+put one task back, the others are still put back. A task that has a guest now keeps its owner, so the guest keeps it.
+The entry then says, in plain words, what could not be restored. An entry is undone once.
+
+Over the API, the owner reads the log with `GET /api/v2/ceo-bot/log` (`hub goal ceo-bot-log`) and undoes an entry
+with `POST /api/v2/ceo-bot/log/{id}/undo`. The CEO Bot decides with `POST /api/v2/ceo-bot/decisions`
+(`hub goal ceo-bot-decide`), at level 3 only.
 
 Related: [Goals and KPIs](goals-and-kpis.md), [Team chart](org-chart.md).

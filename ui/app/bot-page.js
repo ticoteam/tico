@@ -358,6 +358,8 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
+    ${slug === GM && ceoBotLogShown() ? `<section class="card" id="ceo-bot-log-card"><header><h2>${esc(ceoBotName())} log</h2></header>
+      <div id="ceo-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
@@ -635,6 +637,7 @@ function showBotTab(tab) {
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
+  if (view === 'info' && BOT.slug === GM && ceoBotLogShown()) once('ceo-log', () => renderCeoBotLog($('#ceo-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {
       if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);

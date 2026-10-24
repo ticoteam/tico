@@ -69,6 +69,8 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
     at = _clock(at)
     entry = validate(fields)
+    from . import ceo_acts
+    ceo_acts.gate(c, actor, "cost", f"add a routine for {bot}: {entry['title']}")   # more runs cost more: the owner's
     require_trigger(c, entry["on"])
     H._takes_tasks(c, actor, "bot:" + bot)        # every run of a routine is a task
     if key is not None:
@@ -106,6 +108,11 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
     elif changes.get("on"):
         merged["cron"] = ""
     entry = validate(merged)
+    # A new cadence or a routine started again can cost more: the owner's. Pausing it or rewording it costs nothing more.
+    if any(changes.get(k) is not None for k in ("cron", "on", "timezone")) or restore and current["deleted_at"] \
+            or changes.get("enabled") and not current["enabled"]:
+        from . import ceo_acts
+        ceo_acts.gate(c, actor, "cost", f"change when {current['bot']}'s routine \"{current['title']}\" runs")
     if (entry["on"] or None) != current["event_name"]:
         require_trigger(c, entry["on"])
     now = stamp(at)

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from clients.catalog import free_slug, slug_from_name
 
 from . import access as Access
+from . import ceo_acts as CA
 from . import ceo_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
@@ -249,6 +250,7 @@ class SettingsAdmin:
         return next((card["name"] for card in read_cards(self.settings) if card["template"] == template), template)
 
     def create_bot(self, c, who, body):
+        CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
@@ -370,6 +372,7 @@ class SettingsAdmin:
         """Register a bot with the server, planned, as `who`: the record BotOps then builds the repository for.
         Idempotent for the bot's own owners; a slug someone else holds is a 409. The model is the company's
         default until the bot's owner picks one."""
+        CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
         if not body.slug:
             name = body.display_name or (self.template_name(body.template) if body.template else "")
@@ -457,6 +460,7 @@ class SettingsAdmin:
         return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
+        CA.gate(c, who.actor, "bots", f"remove {bot}")
         # The assistant, BotOps, the Librarian and the CEO Bot are built in: nobody archives them, the owner included.
         if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
@@ -473,6 +477,7 @@ class SettingsAdmin:
     def restore(self, c, who, bot):
         """Bring an archived bot back: to the status it had when it was archived (active, paused or planned),
         else planned. Its routines and computer are not restored; an active bot is placed the way any is."""
+        CA.gate(c, who.actor, "bots", f"bring back {bot}")
         row = H.bot(c, bot)
         if not row:
             raise Problem("not_found", "Bot not found", 404)
@@ -518,6 +523,9 @@ class SettingsAdmin:
     BOTOPS_OWN_DEFINITION = {"bot_contact"}
 
     def update_bot(self, c, who, bot, body):
+        asked = body.model_dump(exclude_unset=True, exclude={"expected_revision", "on_behalf_of"})
+        CA.gate(c, who.actor, "instructions", f"change {bot}'s instructions or settings: "
+                + "; ".join(f"{k} to \"{v}\"" for k, v in asked.items()))
         own_run = not (who.role == "owner" or self.auth.bot_manager(c, who, bot))
         self._manager(c, who, bot, botops=True)
         changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
@@ -757,6 +765,7 @@ class SettingsAdmin:
         return {"runner_id": runner["id"], "label": runner["label"], "operator": runner["operator"]}
 
     def begin(self, c, who, bot, body, undo_change_id=None):
+        CA.gate(c, who.actor, "cost", f"change {bot}'s model or harness")
         self._manager(c, who, bot)
         if body.kind == "model":
             shared_bots.refuse_copy(c, bot)
@@ -1045,6 +1054,7 @@ class SettingsAdmin:
         return {"bot": bot, **doc, "revision": config["revision"] + 1}
 
     def set_fallback(self, c, who, bot, body, undo_change_id=None):
+        CA.gate(c, who.actor, "cost", f"change {bot}'s fallback model")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1093,6 +1103,7 @@ class SettingsAdmin:
         as the bot. Only the one key changes: the bot's own model, and so its sessions, stay as they are. A model the
         bot's computer cannot run is saved all the same, and its tasks run on the bot's model until it can: the
         answer's `readiness` says so now."""
+        CA.gate(c, who.actor, "cost", f"change the model {bot}'s tasks run on")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1132,6 +1143,7 @@ class SettingsAdmin:
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
         session is kept: the next turn simply compacts at the new size."""
+        CA.gate(c, who.actor, "cost", f"change where {bot}'s conversation compacts")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1166,6 +1178,7 @@ class SettingsAdmin:
         """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
         one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
         picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
+        CA.gate(c, who.actor, "cost", f"change how soon {bot} wakes")
         self._manager(c, who, bot)
         config = self._config(c, bot)
         if config["revision"] != body.expected_revision:

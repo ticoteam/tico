@@ -75,8 +75,8 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_ceo_bot_included(api):
     """The API refuses a Vision or Description edit and a Why accept or write from any bot; the CEO Bot proposes."""
     ceo = with_ceo_bot(api)
     ops = bot(api, "ops")
-    for token in (ceo, ops):
-        post(api, "company", {"vision": "Bots rule."}, token=token, expected=403)
+    post(api, "company", {"vision": "Bots rule."}, token=ops, expected=403)
+    post(api, "company", {"vision": "Bots rule."}, token=ceo, expected=409)      # refused, and proposed to the owner
     # Not the Assistant acting for the owner either, even on a card she confirmed (which gets past the Assistant's own
     # gate in backend/app.py): only her own click here. The CEO Bot's proposal is the one way words reach it.
     api.app.state.store.settings.test_identities["ana-via"] = Identity("human:ana", "owner", "ana@acme.example",

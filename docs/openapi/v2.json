@@ -2306,6 +2306,68 @@
         ]
       }
     },
+    "/api/v2/ceo-bot/decisions": {
+      "post": {
+        "summary": "The CEO Bot only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the top of their queue, given to another bot or closed, under one action id in the CEO Bot log. A person's task, a bot offline or a refusal becomes one proposal in the owner's Needs you instead, never dropped",
+        "operationId": "makeCeoBotDecision",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CeoBotDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotLogEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/ceo-bot/level": {
       "post": {
         "summary": "Settings > CEO Bot, \"How much your CEO Bot does\": the owner picks Passive (1), Suggests actions (2) or Acts on its own (3) on their own click, logged with who and when. No admin or bot may, the CEO Bot included",
@@ -2427,6 +2489,146 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/log": {
+      "get": {
+        "summary": "The CEO Bot log, newest first: each decision it made alone and each thing it proposed because it stays the owner's (cost, publishing, outside sends, adding or removing bots, goal and KPI targets, the vision, a bot's instructions, a person's task), with the reason. The owner only; anyone else is refused (403)",
+        "operationId": "listCeoBotLog",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotLog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
+    "/api/v2/ceo-bot/log/{action_id}/undo": {
+      "post": {
+        "summary": "The owner, on their own click, undoes one decision the CEO Bot made alone: each task goes back where nobody changed it since, a later change is kept and named, a task it made is closed, and each bot is told",
+        "operationId": "undoCeoBotDecision",
+        "parameters": [
+          {
+            "name": "action_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Action Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CeoBotLogEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
         ]
       }
     },
@@ -19540,6 +19742,86 @@
         ],
         "additionalProperties": true
       },
+      "CeoBotChange": {
+        "properties": {
+          "do": {
+            "type": "string",
+            "enum": [
+              "create",
+              "reorder",
+              "reassign",
+              "close"
+            ],
+            "title": "Do"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "body": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "do"
+        ],
+        "title": "CeoBotChange"
+      },
       "CeoBotChecks": {
         "properties": {
           "on": {
@@ -19553,6 +19835,44 @@
           "on"
         ],
         "title": "CeoBotChecks"
+      },
+      "CeoBotDecision": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/CeoBotChange"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Changes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "changes"
+        ],
+        "title": "CeoBotDecision"
       },
       "CeoBotLevel": {
         "properties": {
@@ -19605,6 +19925,112 @@
         },
         "required": [
           "level3_offer"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotLog": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CeoBotLogEntry"
+            }
+          },
+          "next_before": {
+            "type": "string"
+          },
+          "can_undo": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_undo",
+          "items"
+        ],
+        "additionalProperties": true
+      },
+      "CeoBotLogEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "decision",
+              "cost",
+              "publish",
+              "send",
+              "bots",
+              "target",
+              "vision",
+              "instructions",
+              "person_task"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "goal_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "done",
+              "proposed",
+              "undone"
+            ]
+          },
+          "proposal_task": {
+            "type": "string",
+            "description": "The owner's Needs you item, when filed"
+          },
+          "note": {
+            "type": "string"
+          },
+          "done": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "left": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "undoable": {
+            "type": "boolean"
+          },
+          "undone_at": {
+            "type": "string"
+          },
+          "undone_by": {
+            "type": "string"
+          },
+          "undo": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What Undo restored and what it kept: {restored, kept, text}"
+          }
+        },
+        "required": [
+          "created",
+          "done",
+          "id",
+          "kind",
+          "left",
+          "state",
+          "undoable"
         ],
         "additionalProperties": true
       },

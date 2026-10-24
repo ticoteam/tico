@@ -398,6 +398,11 @@ def refused(c, identity, exc):
     """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it."""
     c.execute("ROLLBACK TO domain_write")
     c.execute("RELEASE domain_write")
+    from . import ceo_acts
+    if isinstance(exc, ceo_acts.Proposed):
+        # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
+        ceo_acts.settle(c, exc)
+        return Problem(exc.rule, exc.detail, 409)
     # Gate notifications survive the refused move, while its step and reviewer wake roll back.
     if getattr(exc, "review_gate", None):
         from . import review_gate

@@ -176,9 +176,12 @@ def test_only_the_owner_renames_it_and_the_new_name_shows_everywhere(environment
     refused (a built-in bot is the owner's alone, backend/auth.py `bot_manager`). The new name is what the chart, the
     bot list, its settings and its messages say, and it survives a setup run again and an update."""
     api = company(environment)
-    for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops"), as_bot(api, "goal-manager")):
+    for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops")):
         refused = definition(api, {"display_name": "Atlas"}, headers)
         assert refused.status_code == 403, refused.text
+    # The CEO Bot itself is refused too, and its try becomes a proposal to the owner (backend/ceo_acts.py `gate`).
+    refused = definition(api, {"display_name": "Atlas"}, as_bot(api, "goal-manager"))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "proposed", refused.text
     assert stored(api)[1]["goal-manager"] == "CEO Bot"
     renamed = definition(api, {"display_name": "Atlas"})
     assert renamed.status_code == 200, renamed.text

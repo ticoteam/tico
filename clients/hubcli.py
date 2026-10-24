@@ -128,6 +128,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
                                            the CEO Bot at level 2+: one item for several bots' same ask of a person
     hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
+    hub goal ceo-bot-decide "<reason>" '<changes json>' [--goal-id ID]
+                                           the CEO Bot at level 3: one decision alone on bot tasks, logged with Undo
+    hub goal ceo-bot-log [--before CURSOR] the CEO Bot log (the owner only): what it decided alone, proposed instead
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
@@ -1193,6 +1196,17 @@ def parser():
     s.set_defaults(fn="goal ceo-bot-merge")
     s = goal.add_parser("ceo-bot-level3-offer", help="the CEO Bot: record the level-3 offer its Monday note made")
     s.set_defaults(fn="goal ceo-bot-level3-offer")
+    s = goal.add_parser("ceo-bot-decide", help="the CEO Bot at level 3: one decision alone on bot tasks, with Undo")
+    s.add_argument("reason", help="why, in one sentence the owner reads in the log")
+    s.add_argument("changes", help='a JSON list of 1 to 10 changes: {"do": "create", "owner": "<bot>", "title": "..."}, '
+                                   '{"do": "reorder"|"close", "task_id": "..."}, {"do": "reassign", "task_id": "...", '
+                                   '"owner": "<bot>"}')
+    s.add_argument("--goal-id", dest="goal_id", help="the goal this serves")
+    s.set_defaults(fn="goal ceo-bot-decide")
+    s = goal.add_parser("ceo-bot-log", help="the CEO Bot log (the owner only): what it decided alone and what it "
+                                            "proposed instead")
+    s.add_argument("--before", help="next_before from the previous page")
+    s.set_defaults(fn="goal ceo-bot-log")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")

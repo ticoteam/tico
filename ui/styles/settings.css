@@ -647,6 +647,11 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .ceo-level[aria-checked="true"]{border-color:var(--accent)}
 .ceo-confirm{padding:10px 12px;border:1px solid var(--accent);border-radius:8px;margin-bottom:8px}
 .ceo-confirm p{margin:0 0 8px}
+.ceo-log{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.ceo-log-entry{padding-bottom:10px;border-bottom:1px solid var(--line)}
+.ceo-log-entry:last-child{border-bottom:0}
+.ceo-log-entry .row{gap:8px;flex-wrap:wrap;align-items:baseline}
+.ceo-log-entry ul{margin:6px 0 0;padding-left:18px}
 /* Settings > Routines, the flat list of Tico's own routines (ui/app/settings-recurring.js) */
 .sysr-list{display:grid}
 .settings-bots-filters .settings-filter-search.sysr-search{width:min(100%,420px);flex:0 1 420px;max-width:100%}

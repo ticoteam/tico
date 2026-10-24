@@ -1751,6 +1751,22 @@ class CeoBotMerge(Contract):
     tasks: list[str] = Field(min_length=2, max_length=10)
 
 
+# One change in a decision the CEO Bot makes alone at level 3 (backend/ceo_acts.py).
+class CeoBotChange(Contract):
+    do: Literal["create", "reorder", "reassign", "close"]
+    task_id: str | None = Field(default=None, max_length=100)
+    owner: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=300)
+    body: str | None = Field(default=None, max_length=8000)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class CeoBotDecision(Contract):
+    reason: str = Field(min_length=1, max_length=1000)
+    goal_id: str | None = Field(default=None, max_length=100)
+    changes: list[CeoBotChange] = Field(min_length=1, max_length=10)
+
+
 class UsageCountNotice(Contract):
     state: Literal["shown", "dismissed"]
 

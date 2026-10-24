@@ -424,6 +424,18 @@ STABLE = [
      "The CEO Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
      "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
      "CeoBotLevel3OfferResult"),
+    ("/api/v2/ceo-bot/decisions", "post", "Goals", "makeCeoBotDecision",
+     "The CEO Bot only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the top of "
+     "their queue, given to another bot or closed, under one action id in the CEO Bot log. A person's task, a bot "
+     "offline or a refusal becomes one proposal in the owner's Needs you instead, never dropped", "CeoBotLogEntry"),
+    ("/api/v2/ceo-bot/log", "get", "Goals", "listCeoBotLog",
+     "The CEO Bot log, newest first: each decision it made alone and each thing it proposed because it stays the "
+     "owner's (cost, publishing, outside sends, adding or removing bots, goal and KPI targets, the vision, a bot's "
+     "instructions, a person's task), with the reason. The owner only; anyone else is refused (403)", "CeoBotLog"),
+    ("/api/v2/ceo-bot/log/{action_id}/undo", "post", "Goals", "undoCeoBotDecision",
+     "The owner, on their own click, undoes one decision the CEO Bot made alone: each task goes back where nobody "
+     "changed it since, a later change is kept and named, a task it made is closed, and each bot is told",
+     "CeoBotLogEntry"),
     ("/api/v2/company", "get", "Goals", "getCompany",
      "The company's Vision and Description (the Company section at the top of Goals), "
      "and whether the caller may edit them", "CompanyResult"),
@@ -1059,6 +1071,19 @@ SCHEMAS = {
                                                          "description": "{person actor: items the CEO Bot put in their Needs you today (UTC)}"},
                        "level3_offer": ref("CeoBotLevel3Offer")},
                       required=["name", "regular_checks", "level", "levels", "daily_cap"]),
+    "CeoBotLogEntry": obj({"id": "s", "created": "s", "kind": {"type": "string", "enum": [
+                               "decision", "cost", "publish", "send", "bots", "target", "vision", "instructions",
+                               "person_task"]},
+                           "reason": "s", "goal_id": "s", "state": {"type": "string", "enum": ["done", "proposed", "undone"]},
+                           "proposal_task": {"type": "string", "description": "The owner's Needs you item, when filed"},
+                           "note": "s", "done": items({"type": "object", "additionalProperties": True}),
+                           "left": items({"type": "object", "additionalProperties": True}),
+                           "undoable": "b", "undone_at": "s", "undone_by": "s",
+                           "undo": {"type": "object", "additionalProperties": True,
+                                    "description": "What Undo restored and what it kept: {restored, kept, text}"}},
+                          required=["id", "created", "kind", "state", "done", "left", "undoable"]),
+    "CeoBotLog": obj({"items": items(ref("CeoBotLogEntry")), "next_before": "s", "can_undo": "b"},
+                     required=["items", "can_undo"]),
     "CeoBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
                              required=["streak", "needed", "due"]),
     "CeoBotLevel3OfferResult": obj({"level3_offer": ref("CeoBotLevel3Offer")}),

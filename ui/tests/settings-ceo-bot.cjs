@@ -11,7 +11,7 @@ const {unrouted} = require('./support/routes.cjs');
 const LEVELS = [
   {level: 1, name: 'Passive', sentence: 'It keeps the regular checks running and otherwise acts only when you talk to it.', ready: true},
   {level: 2, name: 'Suggests actions', sentence: 'It also asks goal owners and suggests how your bots could recover a goal.', ready: true},
-  {level: 3, name: 'Acts on its own', sentence: 'It also makes bot tasks itself. Not yet: it does what level 2 does.', ready: false},
+  {level: 3, name: 'Acts on its own', sentence: 'It also decides on its own: it makes, moves up, reassigns and closes bot tasks, each with an Undo.', ready: true},
 ];
 
 async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
@@ -50,6 +50,19 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
       state.regular_checks = body.on;
       return json(state);
     }
+    // The CEO Bot log, two pages: Undo on an entry of the second page.
+    const entry = (id, over) => ({id, kind: 'decision', reason: 'Reason ' + id, state: 'done', undoable: true, created: '2026-10-01T00:00:00Z',
+      done: [{text: 'Close "Task ' + id + '"'}], left: [], note: '', proposal_task: null, undo: null, ...over});
+    if (p === '/api/v2/ceo-bot/log') {
+      const before = new URL(req.url()).searchParams.get('before');
+      return json(before === 'c|first-last' ? {items: [entry('older')], next_before: null, can_undo: true}
+        : {items: [entry('newest'), entry('first-last')], next_before: 'c|first-last', can_undo: true});
+    }
+    const undo = p.match(/^\/api\/v2\/ceo-bot\/log\/([^/]+)\/undo$/);
+    if (undo) {
+      posted.push({undo: undo[1]});
+      return json(entry(undo[1], {state: 'undone', undoable: false, undo: {restored: [], kept: [], text: 'Undone: Task ' + undo[1] + ' put back.'}}));
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -69,7 +82,7 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
       assert.equal(await levels.count(), 3);
       assert.match(await levels.nth(0).innerText(), /Passive[\s\S]*Now[\s\S]*acts only when you talk to it/);
       assert.equal(await levels.nth(0).getAttribute('aria-checked'), 'true');
-      assert.match(await levels.nth(2).innerText(), /Not yet/);
+      assert.match(await levels.nth(2).innerText(), /decides on its own/);
       const panel = await page.locator('#set-ceo-bot').innerText();
       assert.match(panel, /Regular checks[\s\S]*How much your CEO Bot does[\s\S]*Passive, where every company starts/);
       assert.doesNotMatch(panel, /Goal Manager|level 1|switch/i);
@@ -103,6 +116,21 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
       await page.locator('[data-settings-tab="ceo"]').click();
       await page.locator('#set-ceo-bot [data-ceo-level]').first().waitFor();
       assert.match(await page.locator('#set-ceo-bot').innerText(), /How much your Atlas does/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // Undo on an entry past the first page asks, and confirms, where it is: the older page stays loaded.
+      const {page, errors, posted} = await open(browser);
+      await page.evaluate(() => { const host = document.createElement('div'); host.id = 'log-under-test'; host.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto'; document.body.append(host); void renderCeoBotLog(host); });
+      const log = page.locator('#log-under-test');
+      await log.locator('[data-ceo-log-more]').click();
+      await log.locator('[data-ceo-undo="older"]').click();
+      await log.locator('[data-ceo-undo-confirm="older"]').click();
+      await log.getByText('Undone: Task older put back.').waitFor();
+      assert.deepEqual(posted, [{undo: 'older'}]);
+      assert.equal(await log.locator('[data-ceo-log]').count(), 3);
+      assert.equal(await log.locator('[data-ceo-undo]').count(), 2);
       assert.deepEqual(errors, []);
       await page.close();
     }

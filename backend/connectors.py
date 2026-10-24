@@ -480,11 +480,16 @@ def install_connectors(app, store, execution, mutate):
             start = instant(body.start)
             if start.astimezone(timezone.utc) < datetime.now(timezone.utc):
                 raise Problem("start", "Calendar appointments must start in the future", 422)
+            known = {str(row["email"] or "").lower() for row in c.execute("SELECT email FROM humans")}
+            outside = [address for address in body.attendees if address.lower() not in known]
+            if outside:
+                # An invitation outside the company is a send, which stays the owner's whatever this install allows
+                # other bots (backend/ceo_acts.py).
+                from . import ceo_acts
+                ceo_acts.gate(c, who.actor, "send", f"invite {', '.join(outside[:3])} to \"{body.title}\"")
             if who.role == "bot" and store.settings.block_external_invites:
                 # TICO_BLOCK_EXTERNAL_INVITES=1: an invitation is an email from the company's calendar, so a
                 # bot may invite only the people on the roster; anyone else is a person's act.
-                known = {str(row["email"] or "").lower() for row in c.execute("SELECT email FROM humans")}
-                outside = [address for address in body.attendees if address.lower() not in known]
                 if outside:
                     raise Problem("external_attendee", "A bot may invite only people on the company roster; "
                                   + ", ".join(outside[:3]) + " is not. Put the time in a draft for a person to send", 403)

@@ -250,8 +250,8 @@ def chart_groups(roster, entries, chart, groups, archived=()):
 # an admin or a bot, the CEO Bot included (backend/goal_routes.py). Every install starts at Passive (level 1; installs
 # on the old level 1, "Goals and tracking", are Passive now). Each change is kept in the record with who and when.
 # Level 2 asks goal owners, proposes Why lines, sends the Monday note and suggests recoveries (backend/goal_asks.py,
-# backend/ceo_suggest.py, backend/ceo_merge.py). Level 3 can be chosen now but adds nothing to level 2 yet: its
-# behaviour arrives in a later release, and its sentence says so until then (`READY`).
+# backend/ceo_suggest.py, backend/ceo_merge.py). Level 3 also decides alone (backend/ceo_acts.py). A level whose
+# behaviour has not arrived yet says so in its sentence (`READY`, `NOT_YET`); every level has arrived.
 LEVELS = {
     1: ("Passive",
         "It keeps the regular checks running, KPI readings and the automatic goal colours, and otherwise acts only when "
@@ -261,10 +261,12 @@ LEVELS = {
         "Monday note, and suggests how your bots could recover a goal that falls behind, as items in Needs you that you "
         "approve one by one; nothing changes without your yes."),
     3: ("Acts on its own",
-        "It also makes, reorders and closes bot tasks itself to recover a goal, each logged with an Undo; spending, "
-        "publishing, people and changes to goals or the vision stay yours."),
+        "It also decides on its own: it makes bot tasks, moves them up a bot's queue, gives them to another bot and "
+        "closes them to recover a goal, each decision logged with an Undo. It never acts alone on a private task; "
+        "what it can't do alone becomes an item in Needs you, and spending, publishing, people and changes to goals "
+        "or the vision stay yours."),
 }
-READY = {1, 2}
+READY = {1, 2, 3}
 NOT_YET = " Not yet: until this level arrives in a later release, it does what level 2 does."
 DEFAULT_LEVEL = 1
 HISTORY_KEEP = 50

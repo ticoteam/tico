@@ -243,8 +243,10 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
     assert goal_of(api, goal["id"], token)["status_source"] == "auto"
     assert post(api, "goals/refresh", {}, token=token)["checked"] >= 1
     # ...and nothing else: not the target, the definition, a colour, a new KPI or a new link.
-    for path, body in ((f"goals/{goal['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 50, "deadline": "2099-01-01"}),
-                       (f"kpis/{kpi['id']}", {"definition": "Whatever is easiest to hit"}),
+    # A target is refused and becomes a proposal in the owner's Needs you (backend/ceo_acts.py `gate`); the rest are refused.
+    post(api, f"goals/{goal['id']}/kpis/{kpi['id']}", {"kind": "improve", "target": 50, "deadline": "2099-01-01"},
+         token=token, expected=409)
+    for path, body in ((f"kpis/{kpi['id']}", {"definition": "Whatever is easiest to hit"}),
                        (f"goals/{goal['id']}/status", {"status": "green", "note": "Fine."}),
                        (f"goals/{goal['id']}/status/auto", {}),
                        ("kpis", {"name": "Vanity"}), (f"goals/{goal['id']}/kpis", {"kpi_id": kpi["id"]})):
