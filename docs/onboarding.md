@@ -189,9 +189,10 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
   chat, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
-  comments on no task, asks no approval, sends no email and posts nothing on Slack, and sends messages only to its manager,
-  the people above it and a person it answers in chat. Each attempt is refused with a plain reason. Any number of bots may be
-  onboarding at once.
+  comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
+  nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
+  chat. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
+  plain reason. Any number of bots may be onboarding at once.
 - When it has learned enough, the bot says so with `hub bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
   (`hub bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm

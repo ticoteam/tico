@@ -2750,7 +2750,8 @@ def create_app(settings=None):
             msg = H.message(c, mid)
             if not msg:
                 raise Problem("not_found", "Message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"], write=True)
+            conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
+            lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -2920,6 +2921,7 @@ def create_app(settings=None):
             who = request.state.identity
             to = auth.target(c, who, body.to, need="write")
             auth.require_bot_contact(c, who, to, kind="note")
+            lifecycle.refuse_send(c, who, to, what="a note")
             return {"note": note_view(H.note_create(c, who.actor, to, body.text), c)}
         return mutate(request, body, work)
 
@@ -3392,6 +3394,7 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
+            lifecycle.refuse_send(c, request.state.identity, None, what="task questions")
             return H.task_ask(c, request.state.identity.actor, task_id, body.text)
         return mutate(request, body, work)
 
@@ -3404,7 +3407,6 @@ def create_app(settings=None):
             mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            lifecycle.refuse_send(c, who, None, what="task comments")
             from .task_review import comment_rights, check_ask
             comment_rights(c, auth, who, task_id)
             ask = check_ask(c, task_id, body.ask, auth, who)
