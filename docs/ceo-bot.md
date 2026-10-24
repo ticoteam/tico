@@ -93,6 +93,23 @@ At every level, the CEO Bot puts at most 5 items a day in one person's **Needs y
 count includes the asks Tico files in its name, recoveries and merged items. The most important come first, with the vision before everything else;
 the rest wait for the next day. The server refuses a sixth.
 
+## Your chat with it
+
+The owner talks to the CEO Bot in place of an Assistant. The menu tab reads **CEO Bot** (or the name you gave it) and
+opens your chat with it (`#/assistant`, `GET /api/v2/assistant` answers `"ceo": true`). It does everything an
+[Assistant](assistant.md) does, as you and with the same "via" rules (your cards, your cited requests, your daily update
+draft, labelled the CEO Bot's), plus company-wide work within its level. Your chat is one conversation and one session
+of its own, whatever its session setting; its goals work (regular checks, goals, bots' messages to it) is another,
+and neither shares the other's context. Everything it does in your chat is recorded as you, via the CEO Bot.
+
+Nobody else talks to it: everyone else, administrators included, keeps the Assistant, and the chat routes refuse them
+(`403`). Bots still message it, in its goals session, never in your chat. Your chats with your Assistant from before
+stay readable under **Earlier chats** on the same page, also while the CEO Bot is paused.
+
+If you hand ownership to someone else (Settings > People), the CEO Bot tab and its chat history go with the owner seat
+to the new owner. You get your Assistant back, with your own earlier Assistant chats; the new owner does not see those.
+Cards the CEO Bot had waiting on you are withdrawn.
+
 ## What stays yours
 
 At every level, spending, publishing, people, and changes to your goals or vision stay yours. The CEO Bot can
