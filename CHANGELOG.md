@@ -7,10 +7,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
-### Fixed
-- **A roadmap item moved by hand stays there.** Moving a Product roadmap item to a step (Shipped, say) no longer snaps it straight back when its Dev tickets were closed without being done. The item follows its tickets again the next time one of them moves.
-- **A person can close any task.** Close task works on steps-only types too (the Product roadmap and Dev tickets): from the task menu, the API and Decide. A closed task lands on its type's last closed step, or none, and leaves the board. Done, decline and reopen still go by a step move, and bots still move these tasks by step.
-
 ## [0.4.1] - 2026-10-23
 
 ### Changed
