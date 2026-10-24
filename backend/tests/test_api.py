@@ -109,6 +109,41 @@ def get(api, path, token="ana-test", expected=200):
     return data
 
 
+def test_chat_refusal_receipt_distinguishes_access_before_replay(api, monkeypatch):
+    """Only a rolled-back, recorded refusal can resolve an uncertain Send's identity."""
+    from backend import task_privacy
+    from backend.store import Problem
+
+    path, body, key = "/api/v2/chat/ops", {"text": "A synthetic draft"}, str(uuid.uuid4())
+
+    def refuse(*args, **kwargs):
+        raise H.Refused("escape", "A rule refused this send")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(H, "say", refuse)
+        first = api.post(path, json=body, headers=headers(key=key))
+    assert first.status_code == 403, first.text
+    assert first.json()["error"].get("idempotency_refused") is True, first.text
+    replay = api.post(path, json=body, headers=headers(key=key))
+    assert replay.status_code == 403, replay.text
+    assert replay.json()["error"]["idempotency_refused"] is True
+    fresh_key = str(uuid.uuid4())
+    sent = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert sent.status_code == 200, sent.text
+
+    def deny(*args, **kwargs):
+        raise Problem("privacy", "Chat access refused", 403)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(task_privacy, "guard_write", deny)
+        denied = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert denied.status_code == 403, denied.text
+    assert "idempotency_refused" not in denied.json()["error"]
+    restored = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["message"]["id"] == sent.json()["message"]["id"]
+
+
 def put(api, path, body, token="ana-test", expected=200):
     r = api.put("/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == expected, r.text
@@ -131,7 +166,7 @@ def ready(api, r, bots):
 
 
 def claim(api, r, bot=None, key=None):
-    return post(api, "jobs/claim", {"bot": bot}, token=r["token"], key=key)["attempt"]
+    return post(api, "jobs/claim", {"bot": bot, "start_places": True}, token=r["token"], key=key)["attempt"]
 
 
 def setup_attempt(api, bot="ops", operator="ana"):
