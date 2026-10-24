@@ -1062,7 +1062,10 @@ def create_app(settings=None):
 
         links = {tid: [] for tid in ids}
         for link in c.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks}) ORDER BY created", ids):
-            links[link["task_id"]].append({k: v for k, v in dict(link).items() if k not in ("detail_json", "pr_sha")})
+            # Not a link's record, its empty columns or its own write time (a computer's heartbeat rewrites that every
+            # minute): the task's read and its /links have them, and every open tab gets each list change.
+            links[link["task_id"]].append({k: v for k, v in dict(link).items()
+                                           if v is not None and k not in ("detail_json", "pr_sha", "updated")})
 
         attachments = {tid: [] for tid in ids}
         from .blobs import brief
