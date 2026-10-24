@@ -30,6 +30,7 @@ from backend.app import create_app  # noqa: E402
 from backend.auth import Identity  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.credentials import CredentialCipher  # noqa: E402
+from backend.getting_started import save_state  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 from backend.tests.test_credentials import FakeKMS  # noqa: E402
 
@@ -137,6 +138,8 @@ def main():
     people = [{"id": "ana", "name": "Ana Rivera", "email": OWNER, "title": "CEO", "primary_for": ["*"]}]
     with app.state.store.transaction() as c:
         H.sync_registry(c, {}, {"people": people})
+        # Computers tests start with an existing owner, whose first-visit tour is already complete.
+        save_state(c, Identity("human:ana", "owner", OWNER), {"tour": True})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
     received, ready = tmp / "received.txt", {}

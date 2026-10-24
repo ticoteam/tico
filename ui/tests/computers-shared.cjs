@@ -65,8 +65,6 @@ function start() {
     if (process.env.TICO_TEST_PRESENCE_INTERVAL_MS) await page.evaluate(interval => {
       SETTINGS_PRESENCE.interval = interval; settingsMachinesWatch();
     }, Number(process.env.TICO_TEST_PRESENCE_INTERVAL_MS));
-    // A new install offers its tour first; skipped, as a person would.
-    await page.locator('[data-tour-skip]').click({timeout: 5000}).catch(() => {});
     await page.locator('[data-settings-tab=devices]').click();
     const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
