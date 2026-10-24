@@ -51,7 +51,8 @@ TOPICS = ("tasks", "messages", "runs", "bots", "needs")
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
-LIFETIME_SECONDS = 300    # bounded, so a revoked sign-in stops being served
+LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
+RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
 GATHER_SECONDS = 1.0      # coalesce busy teams' writes before per-viewer hydration
 GATHER_CHAT_SECONDS = 0.25  # a stream following a conversation: its messages and run output stay prompt
@@ -770,6 +771,9 @@ def _runs(view, rows):
             picked.append(row)
     readable = {}
     out = []
+    refs = [row["ref"] for row in picked if row["kind"] == "output"]
+    outputs = {str(e["id"]): e for e in c.execute(
+        "SELECT * FROM attempt_events WHERE id IN (" + ",".join("?" * len(refs)) + ")", refs)} if refs else {}
     for row in picked:
         cid, bot, aid = row["conversation_id"], row["bot"], row["subject_id"]
         if cid and not view.conversation(cid):
@@ -784,7 +788,7 @@ def _runs(view, rows):
                 continue
         entry = {"attempt_id": aid, "conversation_id": cid, "bot": bot}
         if row["kind"] == "output":
-            event = c.execute("SELECT * FROM attempt_events WHERE id=?", (row["ref"],)).fetchone()
+            event = outputs.get(str(row["ref"]))
             if event is None:
                 continue
             event = dict(event)
@@ -983,10 +987,14 @@ def install(app, store, auth, task_views, task_view):
                 return latest(c)
 
         def check():
-            auth.authenticate(request.headers)
+            fresh = auth.authenticate(request.headers)
+            # A changed role ends the stream at once rather than at its lifetime: reads use the role it opened with.
+            # (Another actor is BotOps acting for its requester, whose identity the headers alone do not give.)
+            if fresh.actor == who.actor and fresh.role != who.role:
+                raise Problem("unauthenticated", "Sign in again", 401)
 
         def poll(cursor):
-            auth.authenticate(request.headers)
+            check()
             with store.read() as c:
                 return read(c, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
                             tasks=tasks, parties=parties,
@@ -1106,7 +1114,7 @@ def install_runner(app, store, execution):
         """Server-sent events for a computer: what changed for it, as hints to re-read one of its
         endpoints (`event: runner`, `data: {seq, kind, bots}`), never a value. `ready` names this
         server's release; `reset` means re-read everything. Ends with `expired` once the computer is
-        revoked, and on its own after LIFETIME_SECONDS; the runner reconnects with `after`."""
+        revoked, and on its own after RUNNER_LIFETIME_SECONDS; the runner reconnects with `after`."""
         who = request.state.identity
         if who.role != "runner":
             raise Problem("forbidden", "A registered computer is required", 403)
@@ -1142,7 +1150,7 @@ def install_runner(app, store, execution):
                 yield "retry: 1000\n\n"
                 yield _frame(None, "ready", {"seq": now_seq, "after": cursor,
                                              "release": runner_versions.desired().get("version", "")})
-                deadline = time.monotonic() + LIFETIME_SECONDS
+                deadline = time.monotonic() + RUNNER_LIFETIME_SECONDS
                 # Contact is due every keepalive whatever is sent, so last_seen never lapses.
                 quiet_since = time.monotonic()
                 due = after is not None          # a resume catches up first

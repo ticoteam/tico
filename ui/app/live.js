@@ -149,7 +149,7 @@ function liveEventsConnect() {
     liveDown(es);
     liveAfterProbe(30000);
   });
-  // The server ends each stream after about five minutes; the browser would reconnect on its own, but with the
+  // The server ends each stream after about fifteen minutes; the browser would reconnect on its own, but with the
   // first URL's `after`. This reconnects with the newest one: at once after a full stream, backing off while
   // the connection keeps failing.
   // A second failure in a row, while the browser says it is online, asks whether a proxy signed the person out: its

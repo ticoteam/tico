@@ -293,7 +293,7 @@ data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "
   before a tool call) and `tool` (a short label such as `Ran hub task create`, never the call's arguments; Claude and
   Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
   the tool labels out.
-- **Resume.** The stream ends after about five minutes by design (so a revoked session stops listening); `event: ready`
+- **Resume.** The stream ends after about fifteen minutes by design; `event: ready`
   opens each one with where the log stands. Reconnect with `after` set to the last `id` you saw (or let `EventSource` send
   `Last-Event-ID`); `event: cursor` moves it past changes you were not sent. Back off (0.5 s, 1 s, 2 s ... up to 15 s)
   while the network is down.

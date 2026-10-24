@@ -1730,7 +1730,9 @@ def view(c, who, settings, auth, github, config):
             "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
             "waiting": waiting if full else [], "slow": slow if full else [], "stuck": blocked,
             "on_fallback": on_fallback, "limited": limited,
-            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs, "checked": H.now(),
+            "failures": failures if full or kind == "bot" else [], "stalled_runs": stalled_runs,
+            # To the minute, so an unchanged answer keeps its ETag (backend/json_response.py) between polls.
+            "checked": H.now()[:17] + "00.000000Z",
             # The sidebar's notice reads the same fresh answer, so the two never disagree.
             "update": config.get("update") or {}}
 
@@ -1783,6 +1785,6 @@ def install(app, store, auth, settings):
         if who.role != "bot":
             _person(who)
         github = getattr(request.app.state, "github_app", None)
-        with store.read() as c:
+        with store.read_transaction() as c:
             # Health reads only these two parts of the config; building all of it cost a changelog parse per poll.
             return view(c, who, settings, auth, github, {"update": releases.notice(), "backup": replication.status()})

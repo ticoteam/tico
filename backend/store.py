@@ -1369,6 +1369,9 @@ class Store:
                                    # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
                                    ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
+                                   # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
+                                   # expression word for word, or SQLite sorts every conversation.
+                                   ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
