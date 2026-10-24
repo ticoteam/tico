@@ -54,6 +54,8 @@ pub struct Runner {
     pub worktrees: Arc<crate::worktrees::Worktrees>,
     /// The server takes `record_updated` on worktree reports (its heartbeat reply said so).
     worktree_stamp: AtomicBool,
+    /// The server accepts short start reservations; claims opt in only after its heartbeat says so.
+    start_places: AtomicBool,
     /// The server takes runtimes' `credential_source` (its heartbeat reply said so); until then it is left out.
     credential_source: AtomicBool,
     /// The server takes the signed-in account and the 5-hour window (its heartbeat reply said so); until then
@@ -140,6 +142,7 @@ impl Runner {
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
             worktree_stamp: AtomicBool::new(false),
+            start_places: AtomicBool::new(false),
             credential_source: AtomicBool::new(false),
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
@@ -446,6 +449,7 @@ impl Runner {
             if full || !actions.is_empty() {
                 self.worktrees.poll(host, &actions);
             }
+            self.start_places.store(beat["start_places"] == true, Ordering::SeqCst);
             self.worktree_stamp.store(beat["worktree_record_stamp"] == true, Ordering::SeqCst);
             self.credential_source.store(beat["runtime_credential_source"] == true, Ordering::SeqCst);
             self.accounts.store(beat["subscription_accounts"] == true, Ordering::SeqCst);
@@ -531,9 +535,13 @@ impl Runner {
         maintaining.sort();
         if !crate::lanes::held_back("busy_lanes") {
             // Lanes: a bot with a task turn running here can still take its other tasks' turns.
-            let body = json!({"next_run": true, "busy_bots": maintaining, "busy_lanes": self.lanes.busy_lanes()});
+            let mut body = json!({"next_run": true, "busy_bots": maintaining, "busy_lanes": self.lanes.busy_lanes()});
+            if self.start_places.load(Ordering::SeqCst) { body["start_places"] = json!(true); }
             match self.client.post("jobs/claim", &body, None).await {
-                Err(e) if e.status == 422 => crate::lanes::hold_back("busy_lanes"),
+                Err(e) if e.status == 422 => {
+                    if e.detail.contains("start_places") { self.start_places.store(false, Ordering::SeqCst); }
+                    else { crate::lanes::hold_back("busy_lanes"); }
+                },
                 other => return other,
             }
         }
@@ -1037,6 +1045,32 @@ mod tests {
         assert!(crate::profiles::configured(&now.data).is_empty());
         assert_eq!(now.url(), "http://127.0.0.1:9");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn start_places_are_opt_in_and_a_server_rollback_drops_only_that_protocol() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"attempt":null}"#),
+            (200, r#"{"attempt":null}"#),
+            (422, r#"{"error":{"code":"validation","detail":"body.start_places: Extra inputs are not permitted"}}"#),
+            (200, r#"{"attempt":null}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-protocol-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let runner = Runner::new(config.clone(), Client::new(&config.url(), &config.token(), 5, 0).unwrap(), State::open(&dir.join("state")).unwrap());
+        runner.claim_next().await.unwrap();
+        runner.start_places.store(true, Ordering::SeqCst);
+        runner.claim_next().await.unwrap();
+        runner.claim_next().await.unwrap();
+        let requests = seen.lock().unwrap();
+        assert!(!requests[0].contains("start_places"), "older servers get their original contract");
+        assert!(requests[1].contains("\"start_places\":true"));
+        assert!(requests[2].contains("start_places") && !requests[3].contains("start_places"));
+        assert!(!runner.start_places.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

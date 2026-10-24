@@ -647,7 +647,6 @@ def free_turn(c, bot, location, human=False):
     return (machine.get("label") or "its computer") if sum(held.values()) >= (row["capacity"] or 1) else ""
 
 
-
 def queued_label(c, bot, location, settings=None, human=False, behind=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation."""

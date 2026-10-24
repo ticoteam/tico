@@ -10,6 +10,15 @@ task. A login, quota or other pre-start wait holds no place, so unrelated work c
 CPU or memory above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
 Running turns continue. New starts resume when the sustained overload clears.
 
+The counts describe the computer's total load, including work belonging to other people; wait reasons never name
+bots, tasks, people or accounts. The bot list still follows each viewer's access.
+
+During an update, server and runner negotiate the new start protocol. Older runners retain their existing delivery
+leases, including preparation already underway, until they update; those starts are not cut off after three minutes.
+Upgraded runners opt in after a successful heartbeat. They hold a place throughout active preparation, release it
+while waiting for a lane or login, and obtain a fresh atomic place before continuing. Repeated missed start deadlines
+use the existing pre-start retry limit and report a failure instead of retrying forever.
+
 To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
 team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
 out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.

@@ -145,8 +145,78 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api):
         c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
                   "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
         start_places.restore_waits(c)
-        assert start_places.overdue(c) == ['attempt-1']
-        assert sum(start_places.held(c, computer['runner_id']).values()) == 1
+        assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
+        assert sum(start_places.held(c, computer['runner_id']).values()) == 2
         counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
         assert counts['running'] == 1 and counts['waiting'] == 1
         assert counts['waits'][0]['oldest'] == old
+
+
+def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypatch):
+    from backend import execution
+    from backend.tests.test_api import setup_attempt
+    monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
+    machine, message, first = setup_attempt(api)
+    store = api.app.state.store
+    attempt = first
+    for i in range(2):
+        with store.transaction() as c:
+            c.execute('UPDATE start_places SET start_until=? WHERE attempt_id=?',
+                      (H.shift(H.now(), seconds=-1), attempt['id']))
+            # Expiry is caused only by the hard start window, with a fresh delivery lease.
+            c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=600), attempt['id']))
+            api.app.state.execution.expire(c)
+        ready(api, machine, ['ops'])
+        attempt = claim(api, machine)
+        if i == 0:
+            assert attempt['job_id'] == first['job_id']
+    assert attempt is None
+    with store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'failed'
+    replies = get(api, f"conversations/{message['conversation_id']}/messages")
+    assert [m['body'] for m in replies if m['from_actor'] == 'bot:ops'] == [
+        "Your ops couldn't start on Test Mac; check that Computer"]
+
+
+def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monkeypatch):
+    from backend import start_places
+    from backend.tests.test_api import runner
+    computer = runner(api)
+    assign(api, computer, 'ops')
+    assert ready(api, computer, ['ops'])['start_places'] is True
+    post(api, 'chat/ops', {'text': 'Work claimed by a worker before start-place support'})
+    # Its old claim omits the opt-in even on a new server.
+    old = post(api, 'jobs/claim', {}, computer['token'])['attempt']
+    assert 'start_reservation_seconds' not in old
+    now = H.now()
+    monkeypatch.setattr(H, 'now', lambda: H.shift(now, seconds=181))
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (H.shift(H.now(), seconds=600), old['id']))
+        start_places.restore_waits(c)
+        assert start_places.overdue(c) == []
+        assert sum(start_places.held(c, computer['runner_id']).values()) == 1
+        api.app.state.execution.expire(c)
+    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy-thread'}, computer['token'])
+    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])
+    post(api, 'chat/ops', {'text': 'The upgraded worker now opts in'})
+    ready(api, computer, ['ops'])
+    from backend.tests.test_api import settled
+    settled(api, computer)  # The worker kept heartbeating throughout the simulated preparation.
+    fresh = claim(api, computer)
+    assert fresh['start_reservation_seconds'] == 180
+    with api.app.state.store.read() as c:
+        assert start_places.managed(c, fresh['id'])
+
+
+def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api):
+    from backend.tests.test_api import restrict
+    computer = waiters(api)
+    with api.app.state.store.transaction() as c:
+        restrict(c, 'ops', people=['ana'])
+        c.execute('UPDATE runners SET accepts_member_bots=1 WHERE id=?', (computer['runner_id'],))
+    row = next(x for x in get(api, 'computers', token='cara-test')['computers'] if x['id'] == computer['runner_id'])
+    assert row['bots'] == []
+    assert row['turn_counts']['waiting'] == 37 and row['turn_counts']['running'] == 3
+    assert row['turn_counts']['waits'][0]['reason'] == 'shared login'
+    for secret in ('ops', 'ChatGPT', 'task-', 'room-', 'ana'):
+        assert secret not in str(row['turn_counts']) + row['turn_summary']

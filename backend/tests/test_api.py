@@ -131,7 +131,7 @@ def ready(api, r, bots):
 
 
 def claim(api, r, bot=None, key=None):
-    return post(api, "jobs/claim", {"bot": bot}, token=r["token"], key=key)["attempt"]
+    return post(api, "jobs/claim", {"bot": bot, "start_places": True}, token=r["token"], key=key)["attempt"]
 
 
 def setup_attempt(api, bot="ops", operator="ana"):

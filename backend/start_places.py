@@ -6,13 +6,14 @@ START_SECONDS = 180
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS start_places(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
- start_until TEXT, wait_reason TEXT NOT NULL DEFAULT '', waiting_since TEXT
+ start_until TEXT, managed INTEGER NOT NULL DEFAULT 0, wait_reason TEXT NOT NULL DEFAULT '', waiting_since TEXT
 );
 """
 
 
 def restore_waits(c):
     """An upgrade preserves waits reported by older runners, including harnesses now opting out of login queues."""
+    H.add_column(c, "start_places", "managed", "INTEGER NOT NULL DEFAULT 0")
     for row in c.execute("SELECT a.id,a.created,(SELECT e.payload_json FROM attempt_events e WHERE e.attempt_id=a.id "
                          "AND e.kind='status' AND json_extract(e.payload_json,'$.waiting') IS NOT NULL "
                          "ORDER BY e.seq DESC LIMIT 1) payload FROM attempts a WHERE a.state='leased' "
@@ -20,7 +21,7 @@ def restore_waits(c):
         payload = H._json(row['payload'], {})
         reason = ('shared login' if payload.get('login') else 'pre-start requirements') if isinstance(payload, dict) and payload.get('waiting') else ''
         c.execute("INSERT INTO start_places(attempt_id,start_until,wait_reason,waiting_since) VALUES(?,?,?,?)",
-                  (row['id'], None if reason else H.shift(row['created'], seconds=START_SECONDS),
+                  (row['id'], None,
                    reason, row['created'] if reason else None))
 
 
@@ -36,12 +37,12 @@ def held(c, runner_id):
     return {r[0]: r[1] for r in c.execute(
         "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.runner_id=? AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR (p.attempt_id IS NULL AND a.created>?)))) GROUP BY a.bot",
-        (runner_id, now, now, H.shift(now, seconds=-START_SECONDS)))}
+        "AND (p.start_until>? OR p.attempt_id IS NULL OR (p.managed=0 AND p.wait_reason='')))) GROUP BY a.bot",
+        (runner_id, now, now))}
 
 
 def claim(c, aid):
-    c.execute("INSERT INTO start_places(attempt_id,start_until) VALUES(?,?)",
+    c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
 
 
@@ -56,11 +57,14 @@ def waiting(c, aid, reason):
               "coalesce(start_places.waiting_since,excluded.waiting_since) ELSE excluded.waiting_since END", (aid, reason, H.now()))
 
 
+def managed(c, aid):
+    return bool(c.execute("SELECT 1 FROM start_places WHERE attempt_id=? AND managed=1", (aid,)).fetchone())
+
+
 def overdue(c):
     return [r[0] for r in c.execute(
-        "SELECT a.id FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id WHERE a.state='leased' "
-        "AND (p.start_until<=? OR (p.attempt_id IS NULL AND a.created<=?))",
-        (H.now(), H.shift(H.now(), seconds=-START_SECONDS)))]
+        "SELECT a.id FROM attempts a JOIN start_places p ON p.attempt_id=a.id WHERE a.state='leased' "
+        "AND p.start_until<=?", (H.now(),))]
 
 
 def reserve(c, attempt):
@@ -85,8 +89,8 @@ def reserve(c, attempt):
         waiting(c, aid, 'computer busy')
         return {"reserved": False, "waiting": "computer busy"}
     until = H.shift(H.now(), seconds=START_SECONDS)
-    c.execute("INSERT INTO start_places(attempt_id,start_until) VALUES(?,?) ON CONFLICT(attempt_id) "
-              "DO UPDATE SET start_until=excluded.start_until,wait_reason='',waiting_since=NULL", (aid, until))
+    c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1) ON CONFLICT(attempt_id) "
+              "DO UPDATE SET start_until=excluded.start_until,managed=1,wait_reason='',waiting_since=NULL", (aid, until))
     return {"reserved": True, "start_until": until}
 
 
@@ -103,14 +107,14 @@ def summary(c, runner_id, settings):
         old['oldest'] = min(old['oldest'], since)
 
     now = H.now()
-    for row in c.execute("SELECT a.state,a.created,a.lease_until,p.start_until,p.wait_reason,p.waiting_since "
+    for row in c.execute("SELECT a.state,a.created,a.lease_until,p.start_until,p.wait_reason,p.waiting_since,p.managed "
                          "FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
                          "WHERE a.runner_id=? AND a.state IN ('leased','running')", (runner_id,)):
         if row['state'] == 'running':
             out['running'] += 1
         elif row['wait_reason']:
             add(row['wait_reason'], 1, row['waiting_since'] or row['created'])
-        elif row['lease_until'] > now and (row['start_until'] or H.shift(row['created'], seconds=START_SECONDS)) > now:
+        elif row['lease_until'] > now and (not row['managed'] or (row['start_until'] or '') > now):
             out['starting'] += 1
         else:
             out['queued'] += 1

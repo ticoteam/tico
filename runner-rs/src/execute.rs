@@ -4,6 +4,7 @@
 //! posts it on a 1 s tick.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -661,6 +662,45 @@ impl Runner {
         Ok(())
     }
 
+    /// Release capacity only if a lane really blocks; all subsequent preparation needs a fresh grant.
+    async fn pre_start_lock<T>(&self, attempt: &Value, flags: &Flags,
+        waiting: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
+        let mut waiting = std::pin::pin!(waiting);
+        let first = std::future::poll_fn(|cx| std::task::Poll::Ready(waiting.as_mut().poll(cx))).await;
+        match first {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => {
+                self.wait_before_start(attempt, "pre-start requirements").await?;
+                let result = waiting.await?;
+                self.wait_start_place(attempt, flags).await?;
+                Ok(result)
+            },
+        }
+    }
+
+    /// Acquire sign-in serialization only while a computer place is already granted.
+    async fn wait_cold_start(&self, attempt: &Value, flags: &Flags) -> Result<tokio::sync::MutexGuard<'static, ()>, Fail> {
+        loop {
+            self.wait_start_place(attempt, flags).await?;
+            if let Ok(guard) = claude_cold_start().try_lock() { return Ok(guard); }
+            self.wait_before_start(attempt, "shared login").await?;
+            let lock = claude_cold_start().lock();
+            tokio::pin!(lock);
+            loop {
+                tokio::select! {
+                    guard = &mut lock => { drop(guard); break; },
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        unstopped(flags)?;
+                        if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() || self.stopping() {
+                            return Err(Fail::runtime("Lease expired while waiting for sign-in renewal"));
+                        }
+                    }
+                }
+            }
+            // Never hold the shared sign-in lock while waiting for computer capacity.
+        }
+    }
+
     /// Posts the outbox as events land: at once for the first, then at most once per STREAM_WINDOW, so a
     /// burst of deltas is one request and a lone first delta waits for nothing.
     async fn stream_loop(self: Arc<Self>, aid: String, wake: Arc<Notify>, flags: Arc<Flags>) {
@@ -1047,12 +1087,15 @@ impl Runner {
         crate::harness_tools::turn_runtimes(&aid, &uses);
 
         let ran: Result<(), Fail> = async {
-            self.wait_before_start(&attempt, "pre-start requirements").await?;
+            self.wait_start_place(&attempt, &flags).await?;
             // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
             selected = self.turn_profile(&attempt)?;
             // A lane runs one turn at a time. A main-lane turn holds the bot's checkout for the whole turn; a task
             // lane works in its own worktree and takes the checkout only to refresh it (sessions.rs).
-            let p = place.insert(self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)?);
+            let lanes = self.pre_start_lock(&attempt, &flags, async {
+                self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)
+            }).await?;
+            let p = place.insert(lanes);
             execution_path = p.main_path.clone();
             if let Some(login) = self.serial_login(&runtime, &text_of(&config["harness"]), selected.as_ref()).filter(|_| !persistent && held.is_none()) {
                 // One turn at a time on a ChatGPT login: taken before the checkout is brought up to date, so a turn
@@ -1255,30 +1298,12 @@ impl Runner {
                 }
             }
             let cold = crate::harness_tools::caps(&runtime, "").serial_cold_start && crate::hosts::token_cold(&runtime, selected.as_ref());
-            let cold_guard = if cold {
-                self.wait_before_start(&attempt, "shared login").await?;
-                let lock = claude_cold_start().lock();
-                tokio::pin!(lock);
-                let guard = loop {
-                    tokio::select! {
-                        guard = &mut lock => break guard,
-                        _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                            unstopped(&flags)?;
-                            if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() || self.stopping() {
-                                return Err(Fail::runtime("Lease expired while waiting for sign-in renewal"));
-                            }
-                        }
-                    }
-                };
-                Some(guard)
-            } else {
-                None
-            };
+            let mut cold_guard = if cold { Some(self.wait_cold_start(&attempt, &flags).await?) } else { None };
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
             }
             unstopped(&flags)?;
-            self.wait_start_place(&attempt, &flags).await?;
+            if !cold { self.wait_start_place(&attempt, &flags).await?; }
             // Acknowledge before execution. Any later crash is explicitly uncertain.
             let active = self.active.lock().unwrap().len();
             // The thread the task has until the new one is confirmed (Fresh::told).
@@ -1290,8 +1315,10 @@ impl Runner {
                 match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
                     Ok(_) => break,
                     Err(e) if e.code == "start_wait" => {
+                        drop(cold_guard.take());
                         self.places.lock().unwrap().remove(&aid);
-                        self.wait_start_place(&attempt, &flags).await?;
+                        if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
+                        else { self.wait_start_place(&attempt, &flags).await?; }
                         start_try += 1;
                     },
                     Err(e) => return Err(e.into()),
@@ -2011,6 +2038,38 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn preparation_keeps_a_place_and_only_a_blocked_lane_releases_it() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"reserved":false}"#),
+            (200, r#"{"reserved":false,"waiting":"computer busy"}"#),
+            (200, r#"{"reserved":true}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-preparation-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "capacity": 1,
+                                   "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
+        let turn = json!({"id": "a1", "start_reservation_seconds": 180});
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+                            done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
+        runner.places.lock().unwrap().insert("a1".into());
+        runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
+        assert_eq!(runner.places.lock().unwrap().len(), runner.capacity, "immediate preparation blocks new claims");
+        assert!(seen.lock().unwrap().is_empty(), "preparation must not unconditionally release its claim");
+        runner.pre_start_lock(&turn, &flags, async {
+            tokio::task::yield_now().await;
+            assert!(runner.places.lock().unwrap().is_empty(), "a real lane wait holds no place");
+            Ok(())
+        }).await.unwrap();
+        assert!(runner.places.lock().unwrap().contains("a1"), "preparation resumes only after a new server grant");
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn codex_logins_run_together_and_optional_queue_waits_end_on_a_lost_lease_a_stop_or_a_hard_stop() {
         let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
@@ -2158,6 +2217,7 @@ mod tests {
                     // Events are acknowledged up to the last one sent, as the server does.
                     let answer = match body["events"].as_array().and_then(|e| e.last()) {
                         Some(last) => json!({"ack_seq": last["seq"]}),
+                        None if path.ends_with("/start-place") => json!({"reserved": true}),
                         None => json!({}),
                     }
                     .to_string();
@@ -2169,6 +2229,37 @@ mod tests {
             }
         });
         (url, seen, server)
+    }
+
+    #[tokio::test]
+    async fn execute_holds_its_claim_through_unblocked_preparation() {
+        let _controls = RunControls;
+        let dir = std::env::temp_dir().join(format!("tico-bounded-prepare-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(),
+            format!("cat > /dev/null; cat '{}'", fixture.display())]));
+        let (url, seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "capacity":1,
+                                   "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        runner.places.lock().unwrap().insert("prepare-1".into());
+        let attempt = json!({"id":"prepare-1", "job_id":"j1", "bot":"ops", "token":"synthetic-turn",
+            "start_reservation_seconds":180, "lease_seconds":120, "conversation":{"id":"c1","kind":"chat"},
+            "message":{"id":"m1","from_actor":"human:ana@acme.example","body":"Next","refs":{}},
+            "history":[], "config":{"runtime":"pi","harness":"pi","model":"kimi-k3"}});
+        tokio::time::timeout(Duration::from_secs(30), runner.clone().execute(attempt)).await.unwrap().unwrap();
+        server.abort();
+        let requests = seen.lock().unwrap();
+        assert!(requests.iter().any(|(_, path, _)| path.ends_with("/started")), "the fixture must actually start");
+        let places: Vec<_> = requests.iter().filter(|(_, path, _)| path.ends_with("/start-place")).collect();
+        assert!(!places.is_empty());
+        assert!(places.iter().all(|(_, _, body)| body.get("waiting").is_none()),
+                "unblocked preparation must keep its claim instead of permitting unbounded new workers");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     async fn expired_gateway_harness_is_not_started(fallback: bool) {
