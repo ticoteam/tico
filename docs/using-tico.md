@@ -62,17 +62,20 @@ The warning says **This message may already have sent. Check the chat before res
 Check the chat before deciding whether to send it again.
 
 After the send finishes or reports an error, deliberately editing or clearing the text, or changing attachments, forgets the pending request ID.
-Tico also forgets it when the server confirms the send.
+Tico also forgets it when the server confirms the send, including in a message box restored after switching bots and returning.
 An identical message sent later can be a new send.
 For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
 
-If a rule refuses your first attempt and Tico says **Not sent**, no message was created and the pending request ID is forgotten.
+For text sends, only a server-confirmed refusal proves no message was created.
+Tico says **Not sent** and forgets the pending request ID.
 Resolve the refusal, then press **Send** to try the unchanged text as a new send.
 
-If an earlier send was uncertain, a **Retry** refused because you currently lack chat access does not prove the original was unsent.
-Tico says **Not confirmed: This message may already have sent. Chat access is currently refused. Check the chat before resending.**
+Other server refusals, including sign-in and access errors, leave delivery uncertain even on the first attempt.
+Tico says **Not confirmed**, includes the server's reason, and warns **This message may already have sent.** and **Check the chat before resending.**
+This warning also appears alongside the sign-in banner.
 Your draft keeps its original request ID and first-attempt time.
-Check the chat before resending. Once access returns, press **Send** with the draft unchanged to reuse that same ID within the original 48-hour window.
+Check the chat before resending.
+After signing in again or regaining access, press **Send** with the draft unchanged to reuse the same ID within the original 48-hour window.
 The expiry guard and deliberate draft changes described above still apply.
 
 **Do file uploads have the same deadline?**
