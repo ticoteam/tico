@@ -122,6 +122,17 @@ class Chain(Stage2):
         d = self.decide([STRANGER], approval="77")
         self.assertTrue(d.allowed, d)
 
+    def test_an_onboarding_bot_sends_nothing_even_with_a_matching_approval(self):
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        hub(owner_order())
+        off = {"set": True, "outbound_send": False, "forward_to": []}
+        for approval in ("77", ORDER):                                   # a GitHub Issue, the owner's message
+            pl.SERVER_GET = lambda slug: dict(off, bot=slug)
+            self.assertTrue(self.decide([STRANGER], approval=approval).allowed, approval)   # it lifts sending off
+            pl.SERVER_GET = lambda slug: dict(off, bot=slug, onboarding=True)
+            d = self.decide([STRANGER], approval=approval)
+            self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
+
     def test_with_sending_off_none_of_it_applies(self):
         p = self.root / "emp-inbox" / "employee.yaml"
         p.write_text(p.read_text().replace("outbound_send: true", "outbound_send: false"))

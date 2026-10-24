@@ -154,9 +154,9 @@ def install(app, store, auth, mutate):
             found = view(c, bot)
             from . import lifecycle
             if who.actor == "bot:" + bot and lifecycle.is_onboarding(c, bot):
-                # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off, so
-                # every message needs an approval, which an onboarding bot cannot request.
-                found.update({"set": True, "outbound_send": False, "forward_to": [],
+                # An onboarding bot sends nothing (backend/lifecycle.py): its mail connector reads sending as off and
+                # `onboarding`, which refuses every message before any approval could lift the switch.
+                found.update({"set": True, "outbound_send": False, "forward_to": [], "onboarding": True,
                               "updated_by": "onboarding, until a person above it marks onboarding complete"})
             return found
 

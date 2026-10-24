@@ -479,13 +479,18 @@ def check_can_post(manifest, slug):
 
 def check_not_onboarding(slug):
     """An onboarding bot sends nothing to anyone but its manager until a person above it marks onboarding complete
-    (backend/lifecycle.py), so it neither posts nor DMs. Only a hosted run can ask Tico; one that cannot is let through
-    to the gates after this, as before."""
+    (backend/lifecycle.py), so it neither posts nor DMs. A run that cannot ask Tico for its stage (no hub credential,
+    Tico unreachable) cannot show it is past onboarding, so it sends nothing either."""
     row = HUB_GET(f"bots/{slug}")
-    if isinstance(row, dict) and row.get("stage") == "onboarding":
+    stage = row.get("stage") if isinstance(row, dict) else None
+    if stage == "onboarding":
         raise Refused(f"{slug} is still onboarding, so it can't post on Slack yet.",
                       "Answer in chat or ask your manager; a person above you on the org chart marks onboarding "
                       "complete when you are ready.")
+    if not stage:
+        raise Refused(f"Tico couldn't confirm that {slug} has finished onboarding, so nothing was sent to Slack.",
+                      "A bot run reads its stage from Tico with HUB_API_URL and HUB_TOKEN; try again once Tico "
+                      "answers.")
 
 
 def check_history_scope(manifest, slug, refs, channels=None):

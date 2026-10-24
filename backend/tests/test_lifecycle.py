@@ -62,8 +62,9 @@ def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainl
     said = api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "I can help"}, headers=headers(token))
     assert said.status_code >= 400 and "still onboarding" in said.text, said.text
 
-    # Its mail is held for approval while it learns.
-    assert get(api, "bots/ops/mail-settings", token=token)["outbound_send"] is False
+    # Its mail connector refuses every message while it learns, approval or not (connectors/mail/policy.py).
+    mail = get(api, "bots/ops/mail-settings", token=token)
+    assert mail["outbound_send"] is False and mail["onboarding"] is True
 
 
 def test_a_person_above_marks_onboarding_complete_and_its_routines_start(api):

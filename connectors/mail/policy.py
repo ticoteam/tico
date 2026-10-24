@@ -785,7 +785,8 @@ def switch(slug, manifest=None):
                          + (". bot.yaml asks for outbound_send: true, which has no effect by itself" if asks else ""))
         return out
     out["source"] = "server"
-    out["on"] = bool(row.get("outbound_send"))
+    out["onboarding"] = bool(row.get("onboarding"))
+    out["on"] = bool(row.get("outbound_send")) and not out["onboarding"]
     out["forward_to"] = [a for a in access.forward_to({"forward_to": row.get("forward_to") or []})]
     who = str(row.get("updated_by") or "a person")
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
@@ -932,6 +933,14 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("verb", f"{slug} declares {', '.join(verbs or ['nothing'])} on {box}, not send")
     ok("verb", f"{slug} may send as {box}")
 
+    # An onboarding bot sends no email until a person above it marks onboarding complete (backend/lifecycle.py).
+    # This comes before the approval read: no approval, Issue or owner message lifts it.
+    sw = switch(slug, manifest)
+    if sw.get("onboarding"):
+        return no("onboarding", f"{slug} is still onboarding, so it sends no email yet, with or without an approval; "
+                                "a person above it on the org chart marks onboarding complete")
+    ok("onboarding", f"{slug} is not onboarding")
+
     ext = externals(pol, to)
     ext_cc = externals(pol, cc)
     # One read of the approval Issue for the whole chain. `full` means it names every external
@@ -942,7 +951,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
             if approval else None)
     full = bool(appr and appr["full"])
 
-    sw = switch(slug, manifest)
     if not sw["on"]:
         if full:
             ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
