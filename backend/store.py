@@ -771,6 +771,8 @@ class Store:
             from . import start_places as _start_places
             c.executescript(_start_places.SCHEMA)
             _start_places.restore_waits(c)
+            from . import org_turns as _org_turns
+            c.executescript(_org_turns.SCHEMA)
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)

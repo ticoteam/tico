@@ -58,6 +58,8 @@ def _diagnostic_summary(summary, items):
 def _queue_items(rows, full, bot_reader):
     items = []
     for row in rows[:DIAGNOSTIC_LIMIT]:
+        if bot_reader and row['reason'] == 'no_slot':
+            continue  # Capacity is an explained queue, never a "no more slots" alert to a bot.
         oldest = row.get("oldest_queued", row["oldest"])
         minutes = max(0, quiet_minutes(oldest))
         command = "hub run list " + shlex.quote(row["bot"])
@@ -485,6 +487,8 @@ def _waiting(c, online_ids, settings=None):
     # once the hold is old).
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
+    from . import org_turns
+    company_stopped = settings and org_turns.snapshot(c, settings)['at_stop']
     busy, running, turns = set(), {}, {}
     for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
@@ -554,7 +558,8 @@ def _waiting(c, online_ids, settings=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             idle = slug not in busy and where[0] not in full
-            refused, first, person = bot_claimable(c, settings, where[0], slug) if idle else (None,) * 3
+            refused, first, person = (('company_limit', None, False) if company_stopped else
+                                      bot_claimable(c, settings, where[0], slug)) if idle else (None,) * 3
             if idle and not refused:
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
@@ -648,6 +653,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
+    "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
@@ -1330,6 +1336,16 @@ def view(c, who, settings, auth, github, config):
         checks.append(company)
     if (full or kind == "bot") and (latency := runner_route_latency(c)):
         checks.append(latency)
+    if full:
+        from . import org_turns
+        incident = org_turns.saved(c, org_turns.INCIDENT)
+        if incident.get('opened_at'):
+            value = org_turns.snapshot(c, settings)
+            text = (f"{value['in_use']} company turns in use; warning {value['warning']}, stop {value['stop']}. "
+                    + ('Incident opened ' + incident['opened_at'] if incident.get('active') else
+                       'Incident resolved ' + incident.get('resolved_at', '')))
+            checks.append(_check('company_turns', 'Company turns', 'warn' if incident.get('active') else 'ok',
+                                 text, items=[incident]))
     if full and (listening := _listening(c, settings)):
         checks.append(listening)
     storage = storage_settings(c, settings)

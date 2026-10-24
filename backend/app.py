@@ -1553,6 +1553,27 @@ def create_app(settings=None):
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
 
+    @app.get('/api/v2/settings/turn-levels')
+    def turn_levels(request: Request):
+        admin_only(request.state.identity, 'sees company turn settings')
+        from . import org_turns
+        with store.read_transaction() as c:
+            return org_turns.snapshot(c, settings)
+
+    @app.post('/api/v2/settings/turn-levels')
+    def turn_levels_set(request: Request, body: M.TurnLevels):
+        from . import org_turns
+
+        def permitted(c):
+            auth.sync_access(c)
+            who = request.state.identity
+            # Rebuild human roles under the writer lock, including on an idempotent replay.
+            current = auth.identity_for_actor(c, who.actor) if who.role in ('owner', 'human') and not who.support else who
+            admin_only(current, 'changes company turn settings')
+
+        return mutate(request, body, lambda c: org_turns.configure(c, request.state.identity.actor, body, settings),
+                      check=permitted)
+
     # ------------------------------------------------------------------ billing (Settings > Billing)
     def billing_key(who, does="sees billing"):
         """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""

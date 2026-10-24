@@ -24,9 +24,10 @@ def restore_waits(c):
 
 
 def ready_waiting(c, runner_id):
+    from .org_turns import REASON
     return bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
                           "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                          "AND p.wait_reason='computer busy' LIMIT 1", (runner_id, H.now())).fetchone())
+                          "AND p.wait_reason IN ('computer busy',?) LIMIT 1", (runner_id, H.now(), REASON)).fetchone())
 
 
 def held(c, runner_id):
@@ -70,7 +71,7 @@ def overdue(c):
         "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
-def reserve(c, attempt):
+def reserve(c, attempt, settings=None):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
     from .performance import load_status
     aid, rid = attempt['id'], attempt['runner_id']
@@ -82,12 +83,19 @@ def reserve(c, attempt):
     place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     if place and place['start_until']:
         return {"reserved": place['start_until'] > H.now(), "start_until": place['start_until']}
+    from . import org_turns
+    # Admission is claim's job: a turn already counted in the company's in-use total (waiting, or an unmanaged
+    # live lease) takes its place without raising the count, so waiters cannot freeze a stopped company.
+    counted = (place and place['wait_reason']) or (attempt['lease_until'] > H.now() and not (place and place['managed']))
+    if settings and not counted and org_turns.observe(c, settings)['at_stop']:
+        waiting(c, aid, org_turns.REASON)
+        return {'reserved': False, 'waiting': org_turns.REASON}
     capacity = c.execute("SELECT capacity FROM runners WHERE id=?", (rid,)).fetchone()[0] or 1
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                      "AND p.wait_reason='computer busy' AND (a.created,a.id)<(?,?) LIMIT 1",
-                      (rid, H.now(), attempt['created'], aid)).fetchone()
+                      "AND p.wait_reason IN ('computer busy',?) AND (a.created,a.id)<(?,?) LIMIT 1",
+                      (rid, H.now(), org_turns.REASON, attempt['created'], aid)).fetchone()
     if sum(held(c, rid).values()) >= capacity or ahead:
         waiting(c, aid, 'computer busy')
         return {"reserved": False, "waiting": "computer busy"}

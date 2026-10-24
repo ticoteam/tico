@@ -44,6 +44,17 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class TurnLevels(Contract):
+    warning_per_person: Annotated[int, Field(strict=True, ge=1, le=10000)] = 40
+    stop_per_person: Annotated[int, Field(strict=True, ge=1, le=10000)] = 100
+
+    @model_validator(mode='after')
+    def ordered(self):
+        if self.warning_per_person > self.stop_per_person:
+            raise ValueError('The warning level must not exceed the stop level')
+        return self
+
+
 class ConversationCreate(Contract):
     participants: list[ID] = Field(min_length=1, max_length=20)
     kind: Literal["chat", "ask", "notice"] = "chat"

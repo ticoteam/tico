@@ -880,7 +880,7 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
     assert {i['task'] for i in issues if i['kind'] == 'stalled_tasks'} == {t['id'] for t in tasks}
     assert all(t['title'] in checks['stalled_tasks']['summary'] for t in tasks)
 
-    # A full computer is an explained wait, also in the CLI, without raising an outage.
+    # Capacity stays an explained queue; bots no longer receive a no-slot alert.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug='helper'")
         claimable(c, runner, 'helper')
@@ -892,9 +892,9 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
                   "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
                   (job, runner, H.shift(H.now(), hours=1), H.now()))
     queue = health_of(api, headers)[1]['queue']
-    assert queue['status'] == 'info' and queue['items'][0]['reason'] == 'no_slot'
+    assert queue['status'] == 'info' and not queue.get('items')
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
-    assert next(i for i in issues if i['kind'] == 'queue')['reason'] == 'no_slot'
+    assert not any(i['kind'] == 'queue' and i['reason'] == 'no_slot' for i in issues)
 
 
 def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(environment, monkeypatch):

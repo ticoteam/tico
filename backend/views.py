@@ -677,6 +677,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation."""
     from .performance import load_status
+    from . import org_turns
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -693,6 +694,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
+    elif settings and org_turns.snapshot(c, settings)['at_stop']:
+        label = 'Saved — ' + org_turns.REASON
     elif (location.get("machine") or {}).get("runner_id") and load_status(
             c, location["machine"]["runner_id"])["overloaded"]:
         label = "Saved — waiting: computer busy"

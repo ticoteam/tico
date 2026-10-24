@@ -202,6 +202,10 @@ class Scheduler:
 
         def placement_sweep(c):
             placement.sweep(c, self.execution)
+
+        def company_turns_tick(c):
+            from . import org_turns
+            org_turns.observe(c, self.store.settings)
         with self.store.read() as c:
             from . import start_places
             expired = [row[0] for row in c.execute(
@@ -217,6 +221,7 @@ class Scheduler:
                      self.execution.auto_reconcile,
                      self.execution.release_deploy_drains,
                      self.execution.release_limits,      # a usage limit lifts at its reset, not at the next claim
+                     company_turns_tick,
                      wake_presets_tick,                         # wake presets let go of the notices and sweeps now due
                      self.execution.hold_unrunnable,
                      placement_sweep,                           # an active bot with no computer gets one

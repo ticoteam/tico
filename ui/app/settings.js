@@ -99,10 +99,10 @@ function pageSettings() {
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
-  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
+  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin()) && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
+    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
@@ -144,6 +144,7 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>' : ''}
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
@@ -251,7 +252,7 @@ function settingsShow(tab) {
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
+  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) { void renderSettingsProviders(); void renderSettingsTurnLevels(); }
   if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
   const general = $('#settings-general');
   if (general) {
@@ -380,6 +381,38 @@ async function renderSettingsPrivacy() {
     void renderSettingsPrivacy();
   };
 }
+async function renderSettingsTurnLevels() {
+  const host = $('#set-turn-levels');
+  if (!host || !settingsIsAdmin() || formBusy(host) || host.dataset.loading) return;
+  host.dataset.loading = 'true';
+  try {
+    const value = await get('/v2/settings/turn-levels', {fresh: true});
+    if (!host.isConnected || !settingsIsAdmin() || formBusy(host)) return;
+    host.innerHTML = `<form id="turn-levels-form">
+      <p>Levels are per person who can sign in, across all company computers. Guests do not count.</p>
+      <label>Warning level per person <input name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"></label>
+      <p class="settings-cell-note">At warning, Tico opens a Health incident. New turns still start.</p>
+      <label>Stop level per person <input name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"></label>
+      <p class="settings-cell-note">At stop, new turns wait. Running turns continue; waiting work starts in order when the count drops.</p>
+      <p>${value.people} ${value.people === 1 ? 'person' : 'people'}: warning at ${value.warning}, stop at ${value.stop}. ${value.in_use} turns in use.</p>
+      <button class="primary" type="submit">Save turn levels</button><p data-turn-levels-status role="status"></p>
+    </form>`;
+    const form = host.querySelector('form');
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const status = form.querySelector('[data-turn-levels-status]'), button = form.querySelector('button');
+      const warning = Number(form.elements.warning_per_person.value), stop = Number(form.elements.stop_per_person.value);
+      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; return; }
+      button.disabled = true;
+      try {
+        const saved = await post('/v2/settings/turn-levels', {warning_per_person: warning, stop_per_person: stop});
+        status.textContent = `Saved. Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
+      } catch (error) { status.textContent = error.message; }
+      finally { button.disabled = false; }
+    };
+  } catch (error) { host.textContent = error.message; }
+  finally { delete host.dataset.loading; }
+}
 async function loadSettings() {
   try {
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
@@ -411,6 +444,7 @@ async function loadSettings() {
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     void renderSettingsHosted();
+    void renderSettingsTurnLevels();
     if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
