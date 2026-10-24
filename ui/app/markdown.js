@@ -108,7 +108,21 @@ function safeLink(el, options) {
     else if (bare && href.length > 48) { el.title = href; el.textContent = shortUrl(url); }
   } catch { el.removeAttribute('href'); }
 }
+// The same text drawn the same way gives the same markup: a chat redraws every message for each streamed snapshot, so
+// the recent ones are kept (by text and options, newest last; a long document is drawn each time).
+const SAFE_MD_SEEN = new Map(), SAFE_MD_KEEP = 400, SAFE_MD_LONG = 20000;
 function safeMd(s, options = {}) {
+  const text = String(s ?? '');
+  if (text.length > SAFE_MD_LONG) return safeMdDraw(text, options);
+  const key = `${options.shortLinks ? 1 : 0}${options.documentImages ? 1 : 0}${text}`;
+  let html = SAFE_MD_SEEN.get(key);
+  if (html !== undefined) SAFE_MD_SEEN.delete(key);
+  else html = safeMdDraw(text, options);
+  SAFE_MD_SEEN.set(key, html);
+  if (SAFE_MD_SEEN.size > SAFE_MD_KEEP) SAFE_MD_SEEN.delete(SAFE_MD_SEEN.keys().next().value);
+  return html;
+}
+function safeMdDraw(s, options) {
   const tpl = document.createElement('template');
   try { tpl.innerHTML = marked.parse(String(s ?? '')); }
   catch { return `<div class="plain-message">${esc(s)}</div>`; }

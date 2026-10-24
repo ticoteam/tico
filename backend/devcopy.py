@@ -42,7 +42,7 @@ EMPTY = (
     # runner and bot sessions
     "enrollments", "hosting_enrollments", "assignments", "agent_pairings", "bot_sessions", "session_epochs", "bot_session_epochs", "model_logins", "model_login_cleared", "computer_keys", "model_login_key_off",
     "computer_profiles", "subscription_assignments", "runner_harness_actions", "runner_harness_choices",
-    "runner_versions",
+    "runner_versions", "start_places",
     # human sign-in and service keys
     "human_tokens", "oidc_sessions", "oidc_codes", "oauth_grants", "oauth_clients", "service_keys",
     "service_key_tasks", "owner_links",
@@ -71,7 +71,7 @@ KEEP = frozenset((
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",
     "bot_memory_documents", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
-    "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_merges", "changes", "chat_goals",
+    "bot_task_tabs", "bot_tool_requests", "bot_transition_checkpoints", "bot_transitions", "bots", "ceo_merges", "changes", "chat_goals",
     "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
     "document_versions", "documents", "external_documents", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",

@@ -193,6 +193,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
                          # A task's own room is read by whoever may read the task (auth.conversation).
                          "OR (kind='task' AND task_id IS NOT NULL)")
+        conversations = f"({conversations}) OR " + function("meeting_room") + "(id)"
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
@@ -211,7 +212,8 @@ def guarded(c, auth, who, inner, function, columns=None):
                  function("attempt") + "(v.attempt_id))))")
 
     # Even an attempt's retained conversation grant must pass the current task gate.
-    conversations = f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks))"
+    conversations = (f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks)) AND "
+                     + function("conversation") + "(id)")
     by_task = "task_id IN (SELECT id FROM tasks)"
     # Correlate large history tables by primary key. An IN subquery materializes
     # every readable message/job/attempt before even a LIMIT 1 can return.
@@ -376,7 +378,8 @@ def connect(path, c, auth, who, trace=None):
         conn.execute(f'CREATE TEMP TABLE "{visible}"(id TEXT PRIMARY KEY) WITHOUT ROWID')
         conn.execute(f'INSERT INTO "{visible}" SELECT id FROM main.tasks WHERE ' + tables["tasks"][0])
         tables["tasks"] = (f'id IN (SELECT id FROM "{visible}")', tables["tasks"][1])
-        source_tables = set(tables) | {"blob_media"}
+        source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
+                                       "live_meeting_turns"}
         class Source:
             def execute(self, statement, args=()):
                 statement = re.sub(r'\b(FROM|JOIN)\s+(\w+)', lambda m:
@@ -389,6 +392,7 @@ def connect(path, c, auth, who, trace=None):
                     trusted[0] = False
         index = ReadIndex(Source(), who)
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+                     "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
@@ -489,17 +493,28 @@ def json_value(value):
 def run(conn, sql, params, cap, seconds):
     """Execute one read statement; returns the response body or raises a Problem with SQLite's words."""
     deadline = time.monotonic() + seconds
-    conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 2000)
+    interrupted = False
+
+    def progress():
+        nonlocal interrupted
+        interrupted = interrupted or time.monotonic() > deadline
+        return int(interrupted)
+
+    conn.set_progress_handler(progress, 2000)
     started = time.monotonic()
     try:
         cursor = conn.execute(sql, params)
         rows = cursor.fetchmany(cap + 1)
     except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc):
+        # SQLite wraps an interrupt from a nested SELECT inside a Python UDF
+        # as "user-defined function raised exception". Preserve its cause.
+        if interrupted or "interrupted" in str(exc):
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise Problem("sql", str(exc), 422) from exc
     except (sqlite3.Error, sqlite3.Warning) as exc:
         raise Problem("sql", str(exc), 422) from exc
+    finally:
+        conn.set_progress_handler(None, 0)
     ms = round((time.monotonic() - started) * 1000)
     blobs = any(isinstance(value, bytes) for row in rows for value in row)
     kind = STATEMENT.match(sql)

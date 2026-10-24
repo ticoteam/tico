@@ -5,7 +5,7 @@ the thread being replied to (a reply, no added recipients). Anything else still 
 the caps, the blocklist and owner-handles-personally still apply. A computer with no registry has a built-in policy.
 """
 
-import hashlib, os, sys, unittest
+import base64, hashlib, os, sys, unittest
 from unittest import mock
 from pathlib import Path
 
@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fake, harness                                                 # noqa: E402
 from harness import MANIFESTS, POLICY, Stage2                        # noqa: E402
 
-from connectors.mail import Refused, policy as pl, access            # noqa: E402
+from connectors.mail import Refused, compose, policy as pl, access   # noqa: E402
 from connectors.mail import __main__ as cli                          # noqa: E402
 
 AVA, STRANGER, ME = "ava@creator.example", "stranger@elsewhere.example", "owner@personal-domain.example"
@@ -46,12 +46,13 @@ def file_meta(name, data):
 
 
 FILE_A, FILE_B = file_meta("a.pdf", b"%PDF-1.4 A"), file_meta("b.pdf", b"%PDF-1.4 B")
+BODY_SHA = hashlib.sha256(BODY.strip().encode()).hexdigest()           # what `mail draft` reports for BODY
 
 
 def send_approval(to, files, draft="d-1", **row):
     """A decided Tico `send` approval as GET approvals/<id> returns it."""
     return dict({"id": APPROVAL, "kind": "send", "decision": "approved", "consumed_at": None,
-                 "payload": {"to": to, "cc": [], "subject": "s", "body_sha256": "a" * 64,
+                 "payload": {"to": to, "cc": [], "subject": "s", "body_sha256": BODY_SHA,
                              "mailbox": "ana@acme.example", "draft": draft, "attachments": files}}, **row)
 
 
@@ -69,9 +70,9 @@ def hub(*rows):
 class Chain(Stage2):
     manifests = dict(MANIFESTS, inbox=INBOX_ON)
 
-    def decide(self, to, cc=(), slug="inbox", policy=None, **kw):
+    def decide(self, to, cc=(), slug="inbox", policy=None, body=BODY, **kw):
         return pl.check_send(policy or self.policy(), slug, "ana@acme.example", list(to), list(cc),
-                             root=self.root, **kw)
+                             root=self.root, body=body, **kw)
 
     def test_the_sender_of_the_thread_being_answered_goes_without_approval(self):
         d = self.decide([AVA], thread_id=THREAD, thread_senders=[AVA])
@@ -239,6 +240,48 @@ class Chain(Stage2):
         pl.check_draft(self.policy(), "inbox", "ana@acme.example", [AVA], attachments=1)
         self.assertTrue(self.decide([AVA], **kw).allowed)
 
+    def test_a_tico_send_approval_covers_only_the_text_it_names(self):
+        hub(send_approval([STRANGER], []))
+        self.assertTrue(self.decide([STRANGER], approval=APPROVAL).allowed)
+        # Gmail's CRLF line ends, or the final newline `sha256sum` of the body file counts, are the same text.
+        for same in (BODY.replace("\n", "\r\n"), BODY.strip() + "\n", "\n" + BODY.strip()):
+            self.assertTrue(self.decide([STRANGER], approval=APPROVAL, body=same).allowed, repr(same))
+        # The same addresses with one character changed: refused, and the reason says why.
+        for changed in (BODY.replace("a day", "a dag"), BODY.replace("Hi Ava,", "Hi Ava!"), BODY + "P.S. 50% off\n"):
+            d = self.decide([STRANGER], approval=APPROVAL, body=changed)
+            self.assertEqual(d["gate"], "recipient", d)
+            self.assertIn("the draft changed after it was approved; ask for a new yes", d["reason"])
+            self.assertIn(BODY_SHA[:12], d["reason"])
+        self.assertEqual(self.decide([STRANGER], approval=APPROVAL, body=None)["gate"], "recipient")   # no text: no yes
+        row = send_approval([STRANGER], [])                                    # hashed by `sha256sum body.txt`
+        row["payload"]["body_sha256"] = hashlib.sha256((BODY.strip() + "\n").encode()).hexdigest()
+        hub(row)
+        self.assertTrue(self.decide([STRANGER], approval=APPROVAL, body=BODY.strip()).allowed)
+        for digest in ("", None, "a" * 64):                                    # a placeholder hash approves nothing
+            row = send_approval([STRANGER], [])
+            row["payload"]["body_sha256"] = digest
+            hub(row)
+            self.assertEqual(self.decide([STRANGER], approval=APPROVAL)["gate"], "recipient", digest)
+        # The yes no longer lifts what it lifted: sending off, the cap, the reviewer (approval_check's `full`).
+        hub(send_approval([STRANGER], []))
+        self.assertFalse(pl.approval_check(APPROVAL, [STRANGER], body=BODY + "!", slug="inbox")["full"])
+        self.assertTrue(pl.approval_check(APPROVAL, [STRANGER], body=BODY, slug="inbox")["full"])
+
+    def test_with_files_the_text_must_match_too(self):
+        self.write_policy(harness.POLICY.replace("allow_attachments: false", "allow_attachments: true"))
+        kw = {"attachments": [FILE_A], "draft": "d-1", "approval": APPROVAL, "thread_id": THREAD, "thread_senders": [AVA]}
+        hub(send_approval([AVA], [FILE_A]))
+        self.assertTrue(self.decide([AVA], **kw).allowed)
+        d = self.decide([AVA], body=BODY.replace("Support", "Sales"), **kw)  # same draft id, same file, new words
+        self.assertEqual(d["gate"], "attachments", d)
+        self.assertIn("the draft changed after it was approved", d["reason"])
+
+    def test_a_github_issue_or_the_owners_message_carries_no_hash_and_is_unchanged(self):
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        self.assertTrue(self.decide([STRANGER], approval="77", body=BODY + "!").allowed)
+        hub(owner_order())
+        self.assertTrue(self.decide([STRANGER], approval=ORDER, body=BODY + "!").allowed)
+
     def test_forward_to_reads_a_list_or_a_comma_string_and_nothing_else(self):
         self.assertEqual(access.forward_to({"forward_to": "A@x.example, b@y.example;a@x.example, nope"}),
                          ["a@x.example", "b@y.example"])
@@ -264,6 +307,41 @@ class Cli(Stage2):
                                    "--body-file", self.body_file(FORWARD), "--issue", "2", "--json")
         self.assertEqual(rc, 0, err)
         rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "2")
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_a_text_approval_sends_its_draft_and_not_the_draft_edited_after_the_yes(self):
+        rc, p, err = self.run_json("draft", "--as", "inbox", "--to", STRANGER, "--subject", "Support question",
+                                   "--body-file", self.body_file(BODY), "--issue", "1", "--json")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(p["body_sha256"], BODY_SHA)                         # the value to put in the request
+        hub(send_approval([STRANGER], []))                                    # approves BODY's sha256, no files
+        def edit(text, crlf=False):
+            raw = compose.decode(compose.build([STRANGER], "Support question", text, from_addr="ana@acme.example"))
+            raw = raw.replace("\n", "\r\n") if crlf else raw
+            self.service.drafts().update(id=p["draft"], body={"message": {
+                "raw": base64.urlsafe_b64encode(raw.encode()).decode()}}).execute()
+        edit(BODY.strip().replace("within a day", "within a week"))           # changed in Gmail after the yes
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((out["sent"], out["gate"]), (False, "recipient"), out)
+        self.assertIn("the draft changed after it was approved; ask for a new yes", out["reason"])
+        self.assertEqual(self.service.sent, [])
+        edit(BODY.strip(), crlf=True)                                         # back as approved, with Gmail's CRLF
+        rc, out, _ = self.run_json("send", "--as", "inbox", "--draft", p["draft"], "--issue", "1",
+                                   "--approval-issue", APPROVAL)
+        self.assertEqual((rc, out["sent"]), (0, True), out)
+
+    def test_a_reply_with_a_text_approval_sends_only_the_approved_words(self):
+        # Sending is off in Tico, so the reply to the thread's sender needs the per-message yes.
+        pl.SERVER_GET = lambda slug: {"bot": slug, "set": True, "outbound_send": False, "forward_to": []}
+        args = ("reply", "--as", "inbox", "--thread", THREAD, "--to", AVA, "--issue", "1", "--approval-issue", APPROVAL,
+                "--json")
+        hub(send_approval([AVA], []))
+        rc, out, _ = self.run_json(*args, "--body-file", self.body_file(BODY.replace("a day", "an hour")))
+        self.assertEqual((out["sent"], out["gate"]), (False, "outbound_send"), out)   # the yes no longer lifts it
+        self.assertIn("the draft changed after it was approved", out["reason"])
+        self.assertEqual(self.service.sent, [])
+        rc, out, _ = self.run_json(*args, "--body-file", self.body_file(BODY))
         self.assertEqual((rc, out["sent"]), (0, True), out)
 
     def test_an_attached_reply_to_the_sender_waits_for_an_approval(self):

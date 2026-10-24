@@ -130,8 +130,10 @@ def released_edits(root):
     """Released versions whose CHANGELOG section here differs from the one at their tag, or None when no tag is readable.
 
     A release whose section is not here yet (tagged on its release branch, notes not merged back to main) is not an
-    edit: lines main gains meanwhile stay under Unreleased. A pull request whose line would land in a released section
-    once merged is refused by test_pr_changelog_lines_stay_under_unreleased instead.
+    edit: lines main gains meanwhile stay under Unreleased. A release tagged before its notes were written (the
+    Technical Writer adds them after publication) is held to the section as first written on main instead. A pull
+    request whose line would land in a released section once merged is refused by
+    test_pr_changelog_lines_stay_under_unreleased instead.
     """
     git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
     text = (root / "CHANGELOG.md").read_text()
@@ -146,6 +148,11 @@ def released_edits(root):
             size = int(header.split()[2])
             shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1:]
             read += 1
+            if not shipped and tag[1:] in here:
+                added = git("log", "--reverse", "--format=%H", "-S", f"## [{tag[1:]}]", "--", "CHANGELOG.md")
+                first = added.stdout.decode().split()[:1]
+                if first:
+                    shipped = section(git("show", f"{first[0]}:CHANGELOG.md").stdout.decode(), tag[1:])
             if tag[1:] in here and section(text, tag[1:]) != shipped:
                 edited.append(tag[1:])
     return edited if read else None
@@ -319,6 +326,14 @@ def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
     assert released_edits(tmp_path) == []
     commit(notes.replace("- Search tasks.", "- Search tasks across the team."))
     assert released_edits(tmp_path) == ["1.1.0"]
+    # A release tagged with no notes: the Technical Writer's section added after publication is its baseline.
+    tagged = notes.replace("## [Unreleased]\n", "## [Unreleased]\n- Pin tasks.\n")
+    commit(tagged)
+    git("tag", "v1.2.0")
+    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin tasks.\n"))
+    assert released_edits(tmp_path) == []
+    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin a task.\n"))
+    assert released_edits(tmp_path) == ["1.2.0"]
 
 
 def test_guard_refuses_lines_that_landed_in_released_sections():

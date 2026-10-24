@@ -76,8 +76,8 @@ def ensure(c):
             ('Suggested', 'open'), ('Exploring', 'doing'), ('Spec', 'review'),
             ('Approved', 'review'), ('Building', 'doing'), ('Shipped', 'done'), ('Declined', 'declined')]),
         (ENGINEERING, 'Engineering', LEGACY_MANAGERS[ENGINEERING], [
-            ('Todo', 'open'), ('Doing', 'doing'), ('Waiting', 'waiting'),
-            ('In review', 'review'), ('Ready to ship', 'ready'), ('Done', 'closed'), ('Declined', 'declined')]),
+            ('Todo', 'open'), ('Doing', 'doing'),
+            ('In review', 'review'), ('Ready to ship', 'ready'), ('Done', 'closed')]),
     ):
         existing = role_type(c, ident)
         if not existing and ident == ENGINEERING:

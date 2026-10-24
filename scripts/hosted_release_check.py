@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual validation controls, separate from the immutable candidate.
 
-Only ephemeral GitHub Ubuntu VMs may reclaim the fixed unused SDKs.
+Only ephemeral GitHub-hosted or RunsOn Ubuntu VMs may reclaim the fixed unused SDKs.
 Never tags, publishes, deploys, or uses a production installation.
 """
 import argparse
@@ -33,11 +33,19 @@ def inputs(env):
     return sha, previous
 
 
+def runs_on(env):
+    """A RunsOn VM: one EC2 instance launched for this one job and terminated after it."""
+    instance = env.get("RUNS_ON_INSTANCE_ID", "")
+    return (re.fullmatch(r"i-[0-9a-f]{8,17}", instance) is not None
+            and env.get("RUNNER_NAME", "").startswith(f"runs-on--{instance}--"))
+
+
 def hosted(env):
-    require(env.get("GITHUB_ACTIONS") == "true" and env.get("TICO_HOSTED_ENVIRONMENT") == "github-hosted"
+    kind = env.get("TICO_HOSTED_ENVIRONMENT")
+    require(env.get("GITHUB_ACTIONS") == "true" and (kind == "github-hosted" or (kind == "runs-on" and runs_on(env)))
             and env.get("RUNNER_OS") == "Linux" and env.get("RUNNER_ARCH") == "X64"
             and platform.system() == "Linux" and platform.machine() == "x86_64",
-            "requires an ephemeral GitHub-hosted Linux x64 VM; never run on a user or bot host")
+            "requires an ephemeral GitHub-hosted or RunsOn Linux x64 VM; never run on a user or bot host")
 
 
 def output(command, cwd=None):
@@ -101,22 +109,25 @@ def native_binaries(root):
     return result
 
 
-PARTS = ("product", "python", "browser")
+PARTS = ("product", "python", "browser", "desktop")
 
 
 def gate_command(root, previous, part, shard):
     """The candidate's own gate command for this VM's slice, or None when another VM covers it.
 
     A candidate frozen before `--part` existed runs its whole unchanged gate on the product VM; the other VMs then
-    have nothing of their own to check."""
+    have nothing of their own to check. A candidate frozen before the desktop part has no desktop test to run."""
     require(part in PARTS or part is None, "unknown gate part")
     require(shard is None or (part == "python" and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
             "a shard must be K/N and only for the python part")
     command = [sys.executable, "scripts/release_checks.py", "--release", "--previous", previous]
     if part is None:
         return command
-    if "add_argument('--part'" not in (root / "scripts/release_checks.py").read_text():
+    gate = (root / "scripts/release_checks.py").read_text()
+    if "add_argument('--part'" not in gate:
         return command if part == "product" else None
+    if part == "desktop" and "'desktop'" not in gate:
+        return None
     return command + ["--part", part] + (["--shard", shard] if shard else [])
 
 
@@ -185,9 +196,10 @@ def main():
             return 0
         command = gate_command(root, previous, args.part, args.shard)
         if command is None:
-            receipt.update({"gate_state": "covered elsewhere", "success": True,
-                            "note": "candidate predates split gates; the product VM runs its whole gate"})
-            print("This candidate predates split gates; the product VM runs its whole unchanged gate.", flush=True)
+            note = ("candidate predates the desktop part; it has no desktop test" if args.part == "desktop"
+                    else "candidate predates split gates; the product VM runs its whole gate")
+            receipt.update({"gate_state": "covered elsewhere", "success": True, "note": note})
+            print(f"Nothing to run on this VM: {note}.", flush=True)
             return 0
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
