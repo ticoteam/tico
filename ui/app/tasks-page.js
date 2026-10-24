@@ -563,7 +563,11 @@ function tasksRender(state) {
       : state.view === 'board' ? tasksBoardHTML(items, state)
       : tasksListHTML(items, state);
   }
+  // Needs you holds the server's list a page at a time: its order, groups, approvals and questions come with each page.
+  const paged = tasksNeedsQueue(state) && !state.loading;
+  if (paged) html += needsMoreButton();
   if (state.view === 'recurring') el.innerHTML = html; else tasksPatch(el, html);
+  needsMoreWatch(paged ? el : null);
   if (focusWhat && !el.contains(document.activeElement)) {
     const host = focusKey ? el.querySelector(`[data-task-key="${CSS.escape(focusKey)}"]`) : el;
     host?.querySelector(focusWhat)?.focus({preventScroll: true});

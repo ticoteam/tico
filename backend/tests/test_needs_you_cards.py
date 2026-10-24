@@ -221,3 +221,31 @@ def test_an_approval_keeps_its_needs_you_mark_while_only_the_clock_moves(api, mo
     current = get(api, "needs-you")["version"]
     post(api, f"approvals/{approval['id']}", {"decision": "declined"})
     assert get(api, f"needs-you?version={current}").get("unchanged") is None   # a decision is a change
+
+
+def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_again(api):
+    _, _, finance = setup_attempt(api, "finance")
+    for n in range(4):
+        post(api, "tasks", {"title": f"Sign form {n}", "body": "x", "owner": "human:ana",
+                            "due": H.shift(H.now(), days=n + 1)}, token=finance["token"])
+    approval_for_ana(api, token=finance["token"])
+    post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
+    whole = get(api, "needs-you")
+    assert whole["next"] is None and whole["count"] == len(whole["items"]) >= 6 and "bots" not in whole
+    seen, cursor, page = [], None, None
+    while True:
+        page = get(api, "needs-you?limit=2" + (f"&cursor={cursor}" if cursor else ""))
+        assert page["version"] == whole["version"] and page["count"] == whole["count"] and len(page["items"]) <= 2
+        seen += page["items"]
+        cursor = page["next"]
+        if not cursor:
+            break
+    ids = lambda xs: [x["id"] for x in xs]  # noqa: E731     (an approval's age_s moves with the clock)
+    assert ids(seen) == ids(whole["items"])           # the same items, in the same order, as the whole read
+    assert page["bots"] == views.needs_bots(whole["items"], "human:ana") and page["bots"]["bot:finance"] >= 4
+
+    held = get(api, "needs-you?limit=2")["next"]
+    post(api, "tasks", {"title": "Call the bank", "body": "x", "owner": "human:ana"})
+    again = get(api, f"needs-you?limit=2&cursor={held}")
+    assert again["restart"] is True and ids(again["items"]) == ids(get(api, "needs-you")["items"][:2])
+    get(api, "needs-you?limit=2&cursor=nonsense", expected=422)

@@ -757,6 +757,16 @@ function taskQuietHTML(t) {
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
   return `<p class="task-wait task-quiet" data-task-quiet="${esc(q.resume ? 'deferred' : q.state)}"><span class="lbl">Quiet work: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
+// A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
+// plain ask's place once it lands.
+function taskQcardWait(t) {
+  if (needsAll() || needsOneHeld(t.id)) return '';
+  void v2NeedsOne(t.id).then(() => {
+    const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
+    if (el) el.outerHTML = qcardBoxHTML(t);
+  });
+  return ` data-qcard-wait="${esc(String(t.id))}"`;
+}
 // The task in full or in the peek. The header: its status, its age, Done and Close task for whoever may use them (the
 // two most common actions) as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
 // The owner and who asked are properties, so the header does not repeat them; who added it and when is the age's
@@ -796,7 +806,7 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
-      ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
+      ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskQuietHTML(t)}
       ${original ? (waitText ? `<details class="task-orig"><summary>Original request</summary><div class="tdesc md">${safeMd(original)}</div></details>`

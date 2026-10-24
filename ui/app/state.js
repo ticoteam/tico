@@ -178,9 +178,13 @@ function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
     && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug));
 }
-function needsMeCount(slug) { return botNeeds(slug).length; }
+// While only some pages are held, the counts are the server's over the whole list (its `bots`).
+const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
+function needsMeCount(slug) { const whole = needsBotsWhole(); return whole ? whole['bot:' + slug] || 0 : botNeeds(slug).length; }
 // needsMeCount for every bot in one pass over the needs list ("bot:<slug>" -> count), for views that count many rows.
 function needsMeCounts() {
+  const whole = needsBotsWhole();
+  if (whole) return new Map(Object.entries(whole));
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)

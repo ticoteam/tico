@@ -8,6 +8,7 @@
 
 let DEC = null;                 // the open Decide page's state, null elsewhere
 const DEC_UNDO_MS = 4000;
+const DEC_MORE_AT = 10;         // cards left when the next page of Needs you is read
 // A card's comment Send is disabled until there is a comment; its hover title says so.
 const DC_SEND_WHY = 'Type a comment to send';
 
@@ -57,7 +58,9 @@ function decideFromPerson(it, shown) {
   if (!p || p === shown) return '';
   return p === myActor() ? 'You asked' : `From ${actorLabel(p)}`;
 }
-const decideCount = () => S.me?.role === 'bot' ? 0 : decideCards(S.v2?.needs).length;
+// Past the pages held, every item counts as a card.
+const needsUnread = () => needsAll() ? 0 : Math.max(0, (S.v2.needsCount || 0) - (S.v2.needs || []).length);
+const decideCount = () => S.me?.role === 'bot' ? 0 : decideCards(S.v2?.needs).length + needsUnread();
 // The Tasks page's way in: "Decide · N", only when there is something. A phone has it in the header, a wide
 // screen in the filter bar, where the header's search keeps its room.
 function decidePaintButton() {
@@ -159,7 +162,8 @@ const decideDecision = c => c.type !== 'task' || !!c.yn;
 function decidePaintHead(st) {
   const root = $('.decide');
   if (!root) return;
-  const n = st.queue.length, d = st.queue.filter(k => decideDecision(st.cards.get(k))).length, c = decideCurrent(st);
+  if (st.queue.length <= DEC_MORE_AT) void needsMoreShow();     // the next page of cards, before the last one is reached
+  const n = st.queue.length + needsUnread(), d = st.queue.filter(k => decideDecision(st.cards.get(k))).length, c = decideCurrent(st);
   // How many cards the current group has left, so a sitting of decisions can be seen to end.
   const need = c?.it.need || 'do', inGroup = st.queue.filter(k => (st.cards.get(k)?.it.need || 'do') === need).length;
   $('.dc-count', root).innerHTML = n ? `<span class="tnum">${n} left</span>${c ? `<small class="tnum">${esc(needLabel(need))} · ${inGroup}</small>`

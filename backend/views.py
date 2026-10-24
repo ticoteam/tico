@@ -1555,6 +1555,51 @@ def needs_marks(items):
 
 FLEET_CACHE_S = 15
 NEEDS_IDS_MAX = 100     # the most a live `needs` event names; more changed than that reads the list whole
+NEEDS_PAGE = 50         # a page of Needs you when `cursor` comes without `limit`
+NEEDS_PAGE_MAX = 200
+
+
+def needs_cursor(version, offset):
+    """The `next` of a Needs-you page: where the next page starts in the list at `version`. The app's hub-v2.js
+    needsCursor writes the same, to page on from a held list it mended."""
+    return f"{version}.{offset}"
+
+
+def needs_page(items, version, limit, cursor):
+    """(page, next cursor, restarted) of a Needs-you list. A cursor names the version it was read from: once the list
+    moved, its offset points nowhere, so the page starts from the top again (`restarted`)."""
+    offset, restarted = 0, False
+    if cursor:
+        held, _, at = cursor.partition(".")
+        if not at.isdigit():
+            raise Problem("validation", "Unknown cursor", 422)
+        offset, restarted = (int(at), False) if held == version else (0, True)
+    limit = max(1, min(int(limit or NEEDS_PAGE), NEEDS_PAGE_MAX))
+    end = offset + limit
+    return items[offset:end], (needs_cursor(version, end) if end < len(items) else None), restarted
+
+
+def needs_bots(items, me):
+    """How many Needs-you items each bot is behind ({"bot:slug": n}), the way the app groups them (ui/app/state.js
+    needsMeCounts): a task waiting on me goes with the bot that owns it; another task or question with the bot that
+    asked; a question asked outside any task with the bot that asked it. A page carries this for the whole list, so
+    the sidebar's numbers do not wait for every page."""
+    counts = {}
+    for it in items:
+        actor = None
+        if it.get("kind") == "ask":
+            actor = it.get("requester")
+        elif it.get("kind") in ("task", "question", "waiting"):
+            ask = it.get("ask") or {}
+            on = it.get("waiting_on") if it.get("status") == "waiting" and H.is_human(it.get("waiting_on")) else None
+            if it.get("owner") == me or ask.get("to_actor") == me or on == me:
+                asked = (it.get("origin_actor") or "keeper") if it.get("requester") == "keeper" else it.get("requester")
+                options = [it.get("owner")] if on == me else [ask.get("from_actor"), asked, it.get("owner")]
+                actor = (next((a for a in options if H.is_bot(a) and a != me), None)
+                         or next((a for a in options if a and a != me), None))
+        if H.is_bot(actor):
+            counts[actor] = counts.get(actor, 0) + 1
+    return counts
 _FLEET_CACHE = {}
 
 
@@ -2258,11 +2303,16 @@ def install_views(app, store, auth, mutate, task_view):
                     "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view))}
 
     @app.get("/api/v2/needs-you")
-    def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None):
+    def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
+              limit: int | None = None, cursor: str | None = None):
         """`count=1` is the number alone: the desktop app asks every 30 s and shows only
         that, where the full list is over 100 KB. The list's `version` changes whenever an item or its place does:
         `version=<the one held>` answers `unchanged` with no items when it still holds, and `ids=a,b` sends only those
-        items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event."""
+        items, with each one's place in the whole list (`positions`), to mend a held copy after a live `needs` event.
+        `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
+        each bot's count over the whole list; a cursor from an older version starts again from the top (`restart`).
+        Without either, the whole list. Every page is cut from the list built whole, so its `version` and each
+        item's place are the same as the full read's and the live event's."""
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:
@@ -2271,7 +2321,7 @@ def install_views(app, store, auth, mutate, task_view):
             older = []
             items = needs_items(c, auth, who, task_view, older)
             current = needs_marks(items)[1]
-            if version and version == current:
+            if version and version == current and not cursor:
                 return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True,
                         "went_away": went_away(c, who.actor)}
             if ids is not None:
@@ -2281,8 +2331,14 @@ def install_views(app, store, auth, mutate, task_view):
                 positions = {str(x["id"]): n for n, x in enumerate(items) if str(x["id"]) in wanted}
                 return {"actor": who.actor, "count": len(items), "version": current, "positions": positions,
                         "items": [x for x in items if str(x["id"]) in positions]}
-            return {"actor": who.actor, "items": items, "older": older, "went_away": went_away(c, who.actor),
-                    "version": current}
+            out = {"actor": who.actor, "count": len(items), "items": items, "older": older,
+                   "went_away": went_away(c, who.actor), "version": current, "next": None}
+            if limit is not None or cursor:
+                out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
+                out["bots"] = needs_bots(items, who.actor)
+                if restarted:
+                    out["restart"] = True
+            return out
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):
