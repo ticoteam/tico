@@ -235,6 +235,9 @@ def _bot_line(c, bot, ctx):
             return {**line, 'signed_in': None, 'problem': bot_report['data_problem'], 'detail': {'runtime': runtime}}, config
         state = bot_report.get('sign_in') or report.get('runtimes', {}).get(runtime, {}).get('authenticated')
         signed_in = True if state == 'ready' else False if state in ('missing', 'failed', 'rejected') else None
+        from .readiness import login_warning
+        if warning := login_warning(report, runtime, config.get('harness') or ''):
+            line['warning'] = warning
     return {**line, 'signed_in': signed_in, 'problem': ''}, config
 
 
