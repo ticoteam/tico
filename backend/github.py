@@ -213,6 +213,7 @@ def record_health_wait(link, detail):
 
 
 def pull_request(c, payload, review_role="", release_repo=""):
+    from .review_gate import engineering
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
@@ -227,7 +228,9 @@ def pull_request(c, payload, review_role="", release_repo=""):
         if link["state"] == "shipped" and state == "merged":
             state = "shipped"
         detail = H._json(link.get("detail_json"), {}) or {}
-        if action == "opened" or link["id"] in registered:
+        if not engineering(c, task):
+            detail.pop("qa_default_pending", None)
+        elif action == "opened" or link["id"] in registered:
             detail["qa_default_pending"] = True
         head_sha = (pr.get("head") or {}).get("sha")
         new_head = head_sha and detail.get("head_sha") != head_sha
