@@ -5616,6 +5616,8 @@ def create_app(settings=None):
 
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
+    from .bot_task_tabs import install as install_bot_task_tabs
+    install_bot_task_tabs(app, store, auth, mutate, settings)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

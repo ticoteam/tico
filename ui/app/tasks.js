@@ -298,7 +298,7 @@ function taskCard(it) {
   const t = it.task, st = TASKS_ST;
   const chips = t ? taskChipsHTML(t, {maxTags: 2}) : '';
   void st;   // selection, cursor and peek are painted on (task-list.js), so the card's signature only changes with its content
-  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskCoverHTML(t) : ''}
+  return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
     <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
@@ -333,25 +333,37 @@ function taskStatusGroups(items, {always = []} = {}) {
     kind: key === 'needsme' ? 'needsme' : key.startsWith('needs') ? 'needs' : key,
     owner: key === 'needsme' ? myActor() : key.startsWith('needs:') ? key.slice(6) : ''}));
 }
-// columns: [{id, name, hint, kind, items}] — readable columns share spare width; an empty one is a 34px strip.
-function boardColumnsHTML(columns) {
+// columns: [{id, name, hint, kind, items, drop, fold, foldable}] — readable columns share spare width; an empty one is
+// a 34px strip, and so is a folded run of backlog or finished steps (`fold`, ui/app/task-board.js). `drop` is the step
+// a card dropped on the column moves to; a board with any is one cards are dragged on.
+function boardColumnsHTML(columns, {head = ''} = {}) {
   const anyWork = columns.some(c => c.items.length);
-  const sizes = columns.map(c => anyWork && !c.items.length ? '34px' : 'minmax(260px,1fr)').join(' ');
-  return `<div class="board work" style="--board-cols:${esc(sizes)}">${columns.map(column => {
-    const empty = anyWork && !column.items.length;
-    return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}" aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${column.items.length}</span></header>
+  const narrow = c => c.fold || anyWork && !c.items.length;
+  const sizes = columns.map(c => narrow(c) ? '34px' : 'minmax(260px,1fr)').join(' ');
+  const drag = columns.some(c => c.drop);
+  return `${head}<div class="board work"${drag ? ' data-board-drag' : ''} style="--board-cols:${esc(sizes)}">${columns.map(column => {
+    const empty = !column.fold && anyWork && !column.items.length;
+    const count = column.fold ? column.count ?? '' : column.items.length;
+    const drop = column.drop ? ` data-drop-step="${esc(column.drop)}"` : '';
+    if (column.fold) return `<section class="bcol is-empty bfold" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}">
+      <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>
+    </section>`;
+    const fold = column.foldable ? `<button type="button" class="bfold-x" data-board-fold="${esc(column.foldable)}" aria-label="Fold" title="Fold">${TL_ICON.caret}</button>` : '';
+    return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${fold}</header>
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;
   }).join('')}</div>`;
 }
-// Board: every open task in its column (the filters above still apply).
+// Board: every open task in its column (the filters above still apply, and the blocked focus when one is on).
 function tasksBoardHTML(items, state) {
-  const pipeline = taskPipelineBoard(items, state);
+  const head = taskBoardHead(items, state);
+  items = taskBoardFocused(items, state);
+  const pipeline = taskPipelineBoard(items, state, head);
   if (pipeline !== null) return pipeline;
   const hints = Object.fromEntries(COMPANY_COLS.map(([k, , hint]) => [k, hint]));
   return boardColumnsHTML(taskStatusGroups(items, {always: ['needsme', 'waiting', 'doing', 'scheduled']}).map(g =>
-    ({id: g.key, name: g.label, hint: hints[g.key] || '', kind: g.kind, items: g.items})));
+    ({id: g.key, name: g.label, hint: hints[g.key] || '', kind: g.kind, items: g.items})), {head});
 }
 // When a task was done, in the Done list's quiet right-hand column: "2h ago" today, then "Sep 26".
 function doneWhen(when) {

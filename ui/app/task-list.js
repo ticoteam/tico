@@ -189,8 +189,8 @@ function taskItems(state, view = state.view) {
     if (!taskPipelineMatches(it.task, state)) return false;
     if (state.q && !taskMatches(it, state.q)) return false;
     if (taskSnoozed(it.task) !== (view === 'snoozed')) return false;
-    // A type's board has its working steps only: a finished or declined task has left it.
-    if (view === 'board' && pipelineSelectedType(state)) return it.col !== 'done' && it.task.status !== 'declined';
+    // A type's board has its working steps only, unless its finished steps are unfolded (taskBoardShows).
+    if (view === 'board' && pipelineSelectedType(state)) return taskBoardShows(it, state);
     if (tasksFinishedView(view)) return it.col === 'done' && it.task.status === view;
     if (it.col === 'done') return false;
     return view === 'foryou' ? tasksFirstTabHas(state, it) : true;
