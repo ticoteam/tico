@@ -5733,6 +5733,8 @@ def create_app(settings=None):
     from .views import install_views
     from .task_types import install_task_types
     install_task_types(app, store, auth, mutate, mover)
+    from .pipeline_stats import install as install_pipeline_stats
+    install_pipeline_stats(app, store, auth)
     from .roadmaps import install_internal
     install_internal(app, store, auth, mutate, mover)
     from .public_roadmaps import install as install_public_roadmaps

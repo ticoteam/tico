@@ -508,6 +508,15 @@ in order. Add `updated_since=<ISO-8601 time with timezone>` to poll only changed
 leaves out bodies and acceptance criteria. `hub task list` and `hub_task_list` accept the same filters,
 including with `--all`/`all`, and support `number` lookup.
 
+`GET /api/v2/pipeline` (`hub pipeline`, `hub_pipeline`) is a board's numbers in one read, counted over the same
+tickets the board shows the caller: per working step the count, how many are snoozed, the oldest and median time
+since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
+open pull requests. It also gives each bot the caller may read its running, queued, held, `dead` and uncertain jobs
+(a dead job is queued behind an interrupted run nobody has reviewed, so it never runs until that run is resumed or
+dismissed) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped). Filters:
+`type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
+`bot`, and `since` up to 7 days. Counts and ids only; no titles or bodies.
+
 Type create and update also accept `bots` (`parties`, `read` or `work`). With `work`, any bot may
 change a task of that type and close it once it is in a ready step, so a deploy bot can move shipped
 tickets to Done; moving a task into ready stays with people.
