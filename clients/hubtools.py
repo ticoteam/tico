@@ -2233,6 +2233,13 @@ def seat_update(api, args):
     return api.patch(f"seats/{args['seat']}", body, key=_key(args))
 
 
+@tool("hub_seat_draft", "The CEO Bot's draft of a Recruiting seat's job description, on the task that asks for it "
+      "(the owner opened the seat). A description a person wrote is kept; Tico says so.",
+      {"seat": _s("The seat id"), "text": _s("The job description")}, required=("seat", "text"), writes=True)
+def seat_draft(api, args):
+    return api.post(f"seats/{args['seat']}/draft", {"text": args.get("text") or ""}, key=_key(args))
+
+
 @tool("hub_seat_close", "Take a Recruiting seat off the org chart, as a person it reports up to (or the owner).",
       {"seat": _s("The seat id")}, required=("seat",), writes=True)
 def seat_close(api, args):

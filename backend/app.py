@@ -25,7 +25,7 @@ from clients.agent_skill import WHO_NEEDS_ME
 from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
-from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import ceo_bot, owner_link
 from . import login_holds
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
@@ -3860,6 +3860,45 @@ def create_app(settings=None):
         auth.domain(who)
         return mutate(request, body, lambda c: lifecycle.update_seat(auth, c, who, seat_id,
                                                                      body.model_dump(exclude_unset=True)))
+
+    @app.get("/api/v2/seats/{seat_id}")
+    def seat_show(request: Request, seat_id: str):
+        """One Recruiting seat, with whether the CEO Bot's draft of its job description is done (backend/recruiting.py)."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return recruiting.show(auth, c, who, seat_id)
+
+    @app.post("/api/v2/seats/{seat_id}/open")
+    def seat_open(request: Request, seat_id: str, body: M.Empty):
+        """Open a seat: the owner opening it asks the CEO Bot to draft its job description, unless a person wrote it."""
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: recruiting.open_seat(auth, c, who, seat_id))
+
+    @app.post("/api/v2/seats/{seat_id}/draft")
+    def seat_draft(request: Request, seat_id: str, body: M.SeatDraft):
+        """The CEO Bot's draft of the job description the owner asked for by opening the seat (`hub seat draft`)."""
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: recruiting.draft(auth, c, who, seat_id, body.text))
+
+    @app.post("/api/v2/seats/{seat_id}/recruit")
+    def seat_recruit(request: Request, seat_id: str, body: M.Empty):
+        """Recruit: up to three Tico templates for the seat at once, each with a one-line reason and a suggested model,
+        exactly one recommended. Local: nothing leaves this server."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return recruiting.candidates(auth, onboarding, c, who, seat_id)
+
+    @app.post("/api/v2/seats/{seat_id}/hire")
+    def seat_hire(request: Request, seat_id: str, body: M.SeatHire):
+        """Pick a candidate: the bot is created in Onboarding in the seat's place with its reporting line, and only
+        then its repository (by its computer for a starter, else BotOps)."""
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: recruiting.hire(auth, onboarding, c, who, seat_id, body))
 
     @app.post("/api/v2/seats/{seat_id}/close")
     def seat_close(request: Request, seat_id: str, body: M.Empty):

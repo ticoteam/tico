@@ -1425,6 +1425,17 @@ class SeatUpdate(Contract):
     team: Annotated[str, Field(max_length=100)] | None = None
 
 
+class SeatDraft(Contract):
+    """The CEO Bot's draft of a seat's job description (backend/recruiting.py)."""
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
+
+
+class SeatHire(Contract):
+    """The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another."""
+    template: Annotated[str, Field(min_length=1, max_length=80)]
+    model: Annotated[str, Field(max_length=200)] = ""
+
+
 class BotArchive(Contract):
     successor: ID | None = None          # a bot that takes its open tasks and any team it roots
     expected_revision: int = Field(ge=1)

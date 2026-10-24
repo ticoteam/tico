@@ -12301,6 +12301,56 @@
         "tags": [
           "Team chart"
         ]
+      },
+      "get": {
+        "summary": "One seat, with whether the CEO Bot's draft of its job description is done and whether the caller may edit it",
+        "operationId": "getSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
       }
     },
     "/api/v2/seats/{seat_id}/close": {
@@ -12344,6 +12394,290 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SeatClosed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/draft": {
+      "post": {
+        "summary": "The CEO Bot's draft of the job description the owner asked for; a person's own words are kept",
+        "operationId": "draftSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/hire": {
+      "post": {
+        "summary": "Pick a candidate: the bot is created in Onboarding in the seat's place, then its repository",
+        "operationId": "hireSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatHire"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatHired"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/open": {
+      "post": {
+        "summary": "Open a seat: the owner opening it asks the CEO Bot to draft its job description, unless a person wrote it",
+        "operationId": "openSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/recruit": {
+      "post": {
+        "summary": "Up to three Tico templates for the seat at once, each with a one-line reason and a suggested model, exactly one recommended, and the models one may choose instead. Local: nothing leaves the server",
+        "operationId": "recruitSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatCandidates"
                 }
               }
             }
@@ -26941,6 +27275,92 @@
         ],
         "additionalProperties": true
       },
+      "SeatCandidate": {
+        "type": "object",
+        "properties": {
+          "template": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "department": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "effort": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "model_name",
+          "name",
+          "reason",
+          "recommended",
+          "template"
+        ],
+        "additionalProperties": true
+      },
+      "SeatCandidates": {
+        "type": "object",
+        "properties": {
+          "seat": {
+            "$ref": "#/components/schemas/SeatDetail"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatCandidate"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "candidates",
+          "models",
+          "seat"
+        ],
+        "additionalProperties": true
+      },
       "SeatClosed": {
         "type": "object",
         "properties": {
@@ -26991,6 +27411,169 @@
         ],
         "title": "SeatCreate",
         "description": "A Recruiting seat: a role on the org chart with its job description and reporting line, and no bot."
+      },
+      "SeatDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "seat"
+            ]
+          },
+          "stage": {
+            "enum": [
+              "recruiting"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reports_to": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "description_by": {
+            "enum": [
+              "ceo_bot",
+              "chart",
+              "person"
+            ]
+          },
+          "draft": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "enum": [
+                  "none",
+                  "drafting",
+                  "drafted"
+                ]
+              },
+              "by": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "at",
+              "by",
+              "state"
+            ],
+            "additionalProperties": true
+          },
+          "can_edit": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_edit",
+          "description",
+          "draft",
+          "id",
+          "kind",
+          "reports_to",
+          "stage",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "SeatDraft": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 8000,
+            "minLength": 1,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "SeatDraft",
+        "description": "The CEO Bot's draft of a seat's job description (backend/recruiting.py)."
+      },
+      "SeatHire": {
+        "properties": {
+          "template": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Template"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Model",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template"
+        ],
+        "title": "SeatHire",
+        "description": "The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another."
+      },
+      "SeatHired": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "seat": {
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "onboarding"
+            ]
+          },
+          "reports_to": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "setup_task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "reports_to",
+          "seat",
+          "slug",
+          "stage",
+          "template"
+        ],
+        "additionalProperties": true
       },
       "SeatList": {
         "type": "object",

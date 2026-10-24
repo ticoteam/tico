@@ -30,10 +30,21 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
           "updated TEXT NOT NULL, updated_by TEXT NOT NULL, closed_at TEXT, closed_by TEXT)")
 
 
+# Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for a
+# chart model's text, the CEO Bot's actor for its draft), when the CEO Bot drafted it and the task that asked it to, and
+# the bot that filled the seat.
+COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
+           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
+
+
 def ensure(c):
-    """Unversioned and idempotent, like the task trash: an older release never reads the table."""
+    """Unversioned and idempotent, like the task trash: an older release never reads the table or its new columns."""
     c.execute(SCHEMA)
     c.execute("CREATE INDEX IF NOT EXISTS seats_open ON seats(reports_to) WHERE closed_at IS NULL")
+    have = {row[1] for row in c.execute("PRAGMA table_info(seats)")}
+    for name, kind in COLUMNS:
+        if name not in have:
+            c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")
 
 
 # ------------------------------------------------------------------ stages
@@ -183,13 +194,17 @@ def _clean_title(value):
     return title
 
 
-def create_seat(auth, c, who, title, description="", reports_to="", team=""):
+def create_seat(auth, c, who, title, description="", reports_to="", team="", description_by=None):
+    """`description_by` says whose words the job description is: the caller's by default when they wrote one, `chart`
+    for a chart model's text. Only a description no person wrote is replaced by the CEO Bot's draft (recruiting.py)."""
     reports_to = _reports_to(c, reports_to or who.actor)
     _may_place(auth, c, who, reports_to)
     now, seat_id = H.now(), uuid.uuid4().hex
-    c.execute("INSERT INTO seats(id,title,description,reports_to,team,created,created_by,updated,updated_by) "
-              "VALUES(?,?,?,?,?,?,?,?,?)", (seat_id, _clean_title(title), str(description or "")[:DESCRIPTION_MAX],
-                                            reports_to, str(team or "").strip(), now, who.actor, now, who.actor))
+    description = str(description or "")[:DESCRIPTION_MAX]
+    by = (who.actor if description.strip() else "") if description_by is None else str(description_by)
+    c.execute("INSERT INTO seats(id,title,description,reports_to,team,created,created_by,updated,updated_by,description_by) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?)", (seat_id, _clean_title(title), description, reports_to,
+                                              str(team or "").strip(), now, who.actor, now, who.actor, by))
     H.event(c, who.actor, "seat.created", seat_id, {"reports_to": reports_to})
     return _seat(seat(c, seat_id))
 
@@ -202,6 +217,7 @@ def update_seat(auth, c, who, seat_id, fields):
         values["title"] = _clean_title(fields["title"])
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
+        values["description_by"] = who.actor          # a person's words now: the CEO Bot's draft never replaces them
     if fields.get("team") is not None:
         values["team"] = str(fields["team"]).strip()
     if fields.get("reports_to") is not None:
@@ -210,7 +226,11 @@ def update_seat(auth, c, who, seat_id, fields):
     if values:
         values.update(updated=H.now(), updated_by=who.actor)
         c.execute("UPDATE seats SET " + ",".join(k + "=?" for k in values) + " WHERE id=?", (*values.values(), seat_id))
-        H.event(c, who.actor, "seat.updated", seat_id, {"fields": sorted(k for k in values if k not in ("updated", "updated_by"))})
+        if "description" in values:
+            from .recruiting import end_draft
+            end_draft(c, row, "Someone wrote the job description themselves, so theirs stays")
+        H.event(c, who.actor, "seat.updated", seat_id,
+                {"fields": sorted(k for k in values if k not in ("updated", "updated_by", "description_by"))})
     return _seat(seat(c, seat_id))
 
 
@@ -218,6 +238,8 @@ def close_seat(auth, c, who, seat_id):
     row = seat(c, seat_id)
     _may_place(auth, c, who, row["reports_to"])
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
+    from .recruiting import end_draft
+    end_draft(c, row, "The seat was taken off the org chart")
     H.event(c, who.actor, "seat.closed", seat_id, {})
     return {"id": seat_id, "closed": True}
 
