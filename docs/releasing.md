@@ -142,8 +142,12 @@ the manifests and files it would publish, and pushes nothing.
 
 The reviewed workflow controls and selected candidate have separate checkouts: a workflow merged after a candidate was
 frozen can check that candidate without changing it. The candidate's `scripts/release_checks.py --release` is unchanged.
-It can also run one slice of the gate (`--part product|browser|python`, with `--shard K/N` splitting the Python test
-files into N groups balanced by test count). The hosted workflow selects product, browser and three Python shards; without `--part`, the command runs the whole gate.
+It can also run one slice of the gate (`--part product|browser|python|desktop`, with `--shard K/N` splitting the Python test
+files into N groups balanced by test count). The hosted workflow selects product, browser, three Python shards and
+desktop; without `--part`, the command runs the whole gate, with desktop only where the Linux app builds. The desktop
+part runs the Tauri app's tests on Linux, among them a company app updating from a feed this candidate publishes
+(`scripts/app_release.py`) and serves (`backend/downloads.py`) behind a hub session: it must find, download, verify and
+install the update. It does not cover the macOS or Windows installers.
 Native runner/relay prerequisites are the run's own builds, and their fingerprints are checked before tests. Python and
 Node Playwright browsers (Chromium and WebKit) are installed explicitly. The run records both SHAs, source-tree identity,
 architecture, capacity, worker settings, phase exits and bounded log tails as a three-day artifact; the candidate must
