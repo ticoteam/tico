@@ -9,7 +9,8 @@
 #   scripts/journey-test.sh --release           # the release gate's run (python scripts/release_checks.py --release)
 #
 # Each run's containers, volume and compose project end in its own run id, and cleanup removes only those. A run
-# killed before its cleanup leaves them behind: `docker ps -a --filter name=journey` lists them.
+# killed before its cleanup leaves them behind: `docker ps -a --filter name=journey` lists its containers and
+# `docker volume ls --filter name=journey-runner` its volume.
 #
 # --release keeps the stages nothing else covers and drops the ones docker/smoke.sh already proves (server restart)
 # or that run on demand (replica restore, runner restart, backup). With TICO_JOURNEY_IMAGES_READY=<file> the candidate
