@@ -197,3 +197,35 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
     post(api, f"tasks/{task['id']}/links", {"url": "ops/new", "kind": "session"})
     post(api, f"tasks/{task['id']}/comments", {"text": "Check it again"})
     assert turn(task, "new") == {"session:ops/old": False, "session:ops/new": True}
+
+
+def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_it_runs(api):
+    # A run that left a large thread starts on the task's old one and names the new one once its session is up
+    # (runner-rs execute.rs Fresh): the run, the bot's session and the task's primary session all move to it.
+    r = runner(api, "ana")
+    assign(api, r, "ops")
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"ops": True},
+                                    "capabilities": ["task_lanes_v2"]}, token=r["token"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the Acme release", "body": "Watch build 41"})
+    attempt = claim(api, r)
+    path = f"attempts/{attempt['id']}/"
+    post(api, path + "started", {"thread_id": "old-thread"}, r["token"])
+
+    def threads():
+        with api.app.state.store.read() as c:
+            links = {link["url"]: json.loads(link["detail_json"])["primary"]
+                     for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
+            ran = c.execute("SELECT a.thread_id, t.thread_id FROM attempts a JOIN turns t ON t.id=a.id WHERE a.id=?",
+                            (attempt["id"],)).fetchone()
+            session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops'").fetchone()
+            return links, tuple(ran), session[0]
+
+    assert threads() == ({"session:ops/old-thread": True}, ("old-thread", "old-thread"), "old-thread")
+    assert post(api, path + "thread", {"thread_id": "new-thread"}, r["token"], key="thread") == {"thread_id": "new-thread"}
+    assert threads() == ({"session:ops/new-thread": True}, ("new-thread", "new-thread"), "new-thread")
+    # Another computer cannot move it, and a finished run keeps the thread it ended on.
+    other = runner(api, "ana", label="Other Mac")
+    post(api, path + "thread", {"thread_id": "stray-thread"}, other["token"], expected=403)
+    finish(api, r, attempt)
+    post(api, path + "thread", {"thread_id": "late-thread"}, r["token"], expected=409)
+    assert threads()[1] == ("new-thread", "new-thread")

@@ -2280,18 +2280,27 @@ class Execution:
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
-        c.execute("UPDATE attempts SET state='running',started=?,thread_id=? WHERE id=?",
-                  (H.now(), body.thread_id, aid))
+        c.execute("UPDATE attempts SET state='running',started=? WHERE id=?", (H.now(), aid))
         from .performance import stamp_attempt
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
-        c.execute("UPDATE turns SET thread_id=? WHERE id=?", (body.thread_id, aid))
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "started")
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
+        msg = self.record_thread(c, who, row, body.thread_id)
+        H.mark_delivered(c, H.KEEPER, msg)
+        settle_status(c, row["bot"], "running", "Responding to queued work",
+                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
+        return {"started": True}
+
+    def record_thread(self, c, who, row, thread_id):
+        """The provider thread a running attempt is on: the run's, the bot's session under the model it ran, and the
+        task's primary session. Returns the attempt's message id."""
+        c.execute("UPDATE attempts SET thread_id=? WHERE id=?", (thread_id, row["id"]))
+        c.execute("UPDATE turns SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        if ran := task_models.handed_out(c, aid):
+        if ran := task_models.handed_out(c, row["id"]):
             # Its thread is the task model's, kept under that model, never as the bot's own session.
             runtime, model = ran["runtime"], ran["model"]
         if not ran and ran_another_model(c, self.store.settings, row):
@@ -2301,13 +2310,20 @@ class Execution:
             c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
                       "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
                       "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
-                      (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
+                      (row["bot"], runtime, model, thread_id, who.runner_id, H.now()))
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
-        H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
-        H.mark_delivered(c, H.KEEPER, msg)
-        settle_status(c, row["bot"], "running", "Responding to queued work",
-                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
-        return {"started": True}
+        H.task_session_started(c, row["bot"], row["lane"], msg, thread_id, runtime)
+        return msg
+
+    def thread(self, c, who, aid, body):
+        """A running attempt's new provider thread, once its harness confirmed the session (runner-rs execute.rs
+        Fresh): a run that left a large thread starts on the old one and moves here, so one whose new session never
+        came up leaves the task on the old thread."""
+        row = self.attempt(c, who, aid)
+        if row["state"] != "running":
+            raise Problem("not_running", "This attempt is not running", 409)
+        self.record_thread(c, who, row, body.thread_id)
+        return {"thread_id": body.thread_id}
 
     @staticmethod
     def input_reply(c, attempt):

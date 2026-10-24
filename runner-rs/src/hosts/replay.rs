@@ -277,12 +277,15 @@ pub async fn drive(harness: &str, host: &Under, mut rx: mpsc::UnboundedReceiver<
                         break;
                     }
                     match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
-                        Ok(Some(ev)) if ev.get("stderr_tail").is_some() || ev["process_exit"] == true => continue,
+                        // The host's word to the runner that a new session is up is not in a recording; the host
+                        // fixtures check it.
+                        Ok(Some(ev)) if ev.get("stderr_tail").is_some() || ev["process_exit"] == true || ev["kind"] == "thread_confirmed" => continue,
                         Ok(Some(ev)) => got.push(normalize(harness, &transcript(), ev)),
                         _ => break,
                     }
                 }
                 Pace::Record { log, until, .. } => match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
+                    Ok(Some(ev)) if ev["kind"] == "thread_confirmed" => continue,
                     Ok(Some(ev)) => {
                         got.push(ev);
                         quiet_since = None;
