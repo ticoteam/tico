@@ -15,6 +15,8 @@ bots, tasks, people or accounts. The bot list still follows each viewer's access
 
 During an update, server and runner negotiate the new start protocol. Older runners retain their existing delivery
 leases, including preparation already underway, until they update; those starts are not cut off after three minutes.
+Legacy waiting turns retain their place too, because those runners cannot obtain a fresh grant before starting.
+Update the runner to release those places safely and enable the four-count capacity rules for its turns.
 Upgraded runners opt in after a successful heartbeat. They hold a place throughout active preparation, release it
 while waiting for a lane or login, and obtain a fresh atomic place before continuing. Repeated missed start deadlines
 use the existing pre-start retry limit and report a failure instead of retrying forever.

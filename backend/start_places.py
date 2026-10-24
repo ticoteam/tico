@@ -32,12 +32,12 @@ def ready_waiting(c, runner_id):
 
 
 def held(c, runner_id):
-    """Running work and unexpired starts; an idle worker owns no computer capacity."""
+    """Running work and unexpired starts; legacy workers retain their original lease capacity."""
     now = H.now()
     return {r[0]: r[1] for r in c.execute(
         "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.runner_id=? AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
-        "AND (p.start_until>? OR p.attempt_id IS NULL OR (p.managed=0 AND p.wait_reason='')))) GROUP BY a.bot",
+        "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot",
         (runner_id, now, now))}
 
 
@@ -59,6 +59,10 @@ def waiting(c, aid, reason):
 
 def managed(c, aid):
     return bool(c.execute("SELECT 1 FROM start_places WHERE attempt_id=? AND managed=1", (aid,)).fetchone())
+
+
+def is_waiting(c, aid):
+    return bool(c.execute("SELECT 1 FROM start_places WHERE attempt_id=? AND wait_reason<>''", (aid,)).fetchone())
 
 
 def overdue(c):

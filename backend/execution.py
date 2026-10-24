@@ -2190,10 +2190,11 @@ class Execution:
             until = H.shift(now, seconds=seconds)
             c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, aid))
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
-        # task ended meanwhile is stopped only while it waits for its login; one preparing or under way runs on.
+        # task ended meanwhile is stopped while it waits before starting; one preparing or under way runs on.
         from .login_waits import wait
         return {"lease_until": until, "lease_seconds": seconds,
-                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and wait(c, aid) else {})}
+                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and
+                   (wait(c, aid) or start_places.is_waiting(c, aid)) else {})}
 
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
@@ -2252,7 +2253,11 @@ class Execution:
             raise Problem("already_started", "This attempt was already started", 409)
         if body.waiting:
             start_places.waiting(c, aid, body.waiting)
-            return {"reserved": False}
+        # Check before reserve clears the wait, including when the last renewal preceded task completion.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            return {"reserved": False, "stop": True}
+        if body.waiting:
+            return {"reserved": False, **({"stop": True} if row["stop_requested"] else {})}
         return start_places.reserve(c, row)
 
     def started(self, c, who, aid, body):
@@ -2260,6 +2265,8 @@ class Execution:
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            raise Problem("start_wait", "Task finished while this turn was waiting", 409)
         reserved = start_places.reserve(c, row) if start_places.managed(c, aid) else {"reserved": not row["stop_requested"]}
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)

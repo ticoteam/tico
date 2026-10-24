@@ -17,6 +17,8 @@ def waiters(api, n=37, running=3):
         for i in range(n):
             c.execute("UPDATE attempts SET state='leased' WHERE id=?", (f'attempt-{i}',))
             c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (f'attempt-{i}',))
+            from backend import start_places
+            start_places.claim(c, f'attempt-{i}')
     for i in range(n):
         post(api, f'attempts/attempt-{i}/events', {'events': [
             {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'Waiting for the shared ChatGPT login', 'login': 'ChatGPT'}}
@@ -146,7 +148,7 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api):
                   "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
-        assert sum(start_places.held(c, computer['runner_id']).values()) == 2
+        assert sum(start_places.held(c, computer['runner_id']).values()) == 3
         counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
         assert counts['running'] == 1 and counts['waiting'] == 1
         assert counts['waits'][0]['oldest'] == old
@@ -206,6 +208,48 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
     assert fresh['start_reservation_seconds'] == 180
     with api.app.state.store.read() as c:
         assert start_places.managed(c, fresh['id'])
+
+
+def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
+    """A worker without start-place support cannot release capacity then start over the limit."""
+    from backend.tests.test_api import runner
+    computer = runner(api)
+    assign(api, computer, 'ops')
+    assign(api, computer, 'finance')
+    ready(api, computer, ['ops', 'finance'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+    post(api, 'chat/ops', {'text': 'Legacy work'})
+    old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
+    post(api, f"attempts/{old['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}
+    ]}, computer['token'])
+    post(api, 'chat/finance', {'text': 'New protocol contender'})
+    assert claim(api, computer, 'finance') is None
+    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
+    assert claim(api, computer, 'finance') is None
+    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
+    from backend.tests.test_task_lanes import task_bot, new_task
+    computer = task_bot(api, lanes=True)
+    task = new_task(api, 'Work finished while its turn waits')
+    attempt = claim(api, computer)
+    aid = attempt['id']
+    post(api, f'attempts/{aid}/start-place', {'waiting': 'pre-start requirements'}, computer['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+    assert post(api, f'attempts/{aid}/renew', {}, computer['token'])['stop'] is True
+    # The grant and started endpoints must fence the race even without another renewal.
+    assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == {'reserved': False, 'stop': True}
+    post(api, f'attempts/{aid}/started', {'thread_id': 'must-not-start'}, computer['token'], expected=409)
+    post(api, f'attempts/{aid}/complete', {'outcome': 'interrupted', 'text': '', 'last_seq': 0}, computer['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state,started FROM attempts WHERE id=?', (aid,)).fetchone()[:] == ('interrupted', None)
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'cancelled'
+        assert c.execute('SELECT status FROM tasks WHERE id=?', (task['id'],)).fetchone()[0] == 'done'
 
 
 def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api):
