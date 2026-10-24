@@ -1,0 +1,258 @@
+"""Pipeline stats for a task type in one read (`GET /api/v2/pipeline`, `hub pipeline`, the `hub_pipeline` tool).
+
+The tickets are the Tasks board's own read: `H.tasks` over the caller's `Auth.task_sql`, the company lane and the live
+statuses, so a private ticket counts only for a reader who may open it and a closed one never counts. Each step
+says how many tickets sit in it, how long they have (from the step event that put them there), whose they are and whom
+they wait on (`H.wait_detail`, the same reasons a ticket's Waiting tag gives), and their open pull requests.
+
+The queue is told apart honestly: a queued job behind an interrupted run nobody reviewed (`execution.unfenced_sql`)
+is never handed out until that run is resumed or dismissed, so it is `dead`, never `queued`; a job its wake preset
+holds is `held`. Failed attempts in the window are counted by cause with their first and last time. Every job and
+attempt counts only when the caller may read it (backend/task_privacy.py), as on a bot's page.
+
+Counts and ids only: no titles, bodies or run text.
+"""
+
+import json
+import re
+from statistics import median
+
+from fastapi import Request
+
+from . import task_privacy as privacy
+from .store import H, Problem
+
+TASK_CAP = 5000            # tickets read for one report; `truncated` says when a type holds more live ones
+IDS_PER_STEP = 50          # ticket ids listed per step; the count is always whole
+DEAD_IDS = 20              # dead job ids listed per bot
+ATTEMPT_CAP = 5000         # readable failed attempts counted for one window; past it `complete_after` says how far back counts are whole
+ATTEMPT_SCAN = 50000       # failed attempts read for one window, readable or not
+ATTEMPT_PAGE = 1000
+WINDOW_MAX_DAYS = 7
+CAUSES = ("quota", "capacity", "restart", "timeout", "crash", "stopped")
+QUOTA = re.compile(r"(?i)quota|usage limit|rate.?limit|\b429\b|billing|credit balance|insufficient_quota")
+TIMEOUT = re.compile(r"(?i)timed? ?out|timeout|time limit|lease expired|heartbeat stopped")
+RESTART = re.compile(r"(?i)restart")
+
+
+def default_type(c):
+    """The engineering board's type (Dev tickets on a factory team), else the only numbered type."""
+    row = c.execute("SELECT id FROM task_types WHERE role='engineering' ORDER BY created, id LIMIT 1").fetchone()
+    if not row:
+        numbered = c.execute("SELECT id FROM task_types WHERE numbered=1 LIMIT 2").fetchall()
+        row = numbered[0] if len(numbered) == 1 else None
+    return H.type_get(c, row[0]) if row else None
+
+
+def hours(since, now):
+    a, b = H.parse_ts(since), H.parse_ts(now)
+    return round((b - a).total_seconds() / 3600, 1) if a and b else None
+
+
+def waits_kind(on):
+    if not on:
+        return "nothing"
+    on = str(on)
+    if on.startswith("bot:"):
+        return "bot"
+    if on.startswith("human:") or on == "person":
+        return "person"
+    return "external"
+
+
+def steps_report(c, typ, rows, now):
+    ids = [r["id"] for r in rows]
+    entered, prs = {}, {}
+    if ids:
+        listed = json.dumps(ids)
+        for task_id, at in c.execute(
+                "SELECT e.task_id, max(e.ts) FROM task_events e JOIN tasks t ON t.id=e.task_id "
+                "WHERE e.task_id IN (SELECT value FROM json_each(?)) AND e.field='step' AND e.new=t.step_id "
+                "GROUP BY e.task_id", (listed,)):
+            entered[task_id] = at
+        for task_id, created in c.execute(
+                "SELECT task_id, created FROM task_links WHERE kind='pr' AND state IN ('open','draft') "
+                "AND task_id IN (SELECT value FROM json_each(?))", (listed,)):
+            prs.setdefault(task_id, []).append(created)
+    known = {s["id"] for s in typ["steps"]}
+    by_step = {}
+    for r in rows:
+        by_step.setdefault(r["step_id"] if r["step_id"] in known else None, []).append(r)
+
+    def one(items):
+        ages = [hours(entered.get(r["id"]) or r["created"], now) for r in items]
+        ages = [a for a in ages if a is not None]
+        owners, waits, on = {}, {"bot": 0, "person": 0, "external": 0, "nothing": 0}, {}
+        open_prs = [at for r in items for at in prs.get(r["id"], [])]
+        for r in items:
+            owners[r["owner"]] = owners.get(r["owner"], 0) + 1
+            target = (H.wait_detail(c, r) or {}).get("on")
+            waits[waits_kind(target)] += 1
+            if target:
+                on[target] = on.get(target, 0) + 1
+        oldest = max(items, key=lambda r: (hours(entered.get(r["id"]) or r["created"], now) or 0), default=None)
+        label = (lambda r: r["number"]) if typ["numbered"] else (lambda r: r["id"])
+        return {"count": len(items), "snoozed": sum(1 for r in items if H.TS.snoozed(r)),
+                "oldest_hours": max(ages) if ages else None, "median_hours": round(median(ages), 1) if ages else None,
+                "oldest": label(oldest) if oldest else None,
+                "ids": [label(r) for r in items[:IDS_PER_STEP]], "ids_more": max(0, len(items) - IDS_PER_STEP),
+                "by_owner": dict(sorted(owners.items(), key=lambda kv: (-kv[1], kv[0]))),
+                "waits_on": waits, "waits_on_actor": dict(sorted(on.items(), key=lambda kv: (-kv[1], kv[0]))),
+                "prs": {"open": len(open_prs), "oldest_hours": max(hours(at, now) or 0 for at in open_prs) if open_prs else None}}
+    steps = [{"id": s["id"], "name": s["name"], "status": s["status"], **one(by_step.get(s["id"], []))}
+             for s in typ["steps"] if s["status"] in H.ACTIVE_STATUSES]
+    loose = by_step.get(None, [])
+    return steps, ({"no_step": one(loose)} if loose else {})
+
+
+def readable_bots(c, auth, who, bot=None):
+    access = auth.bot_accesses(c, who, [bot] if bot else None)
+    return sorted(slug for slug, level in access.items() if level.get("read"))
+
+
+def queues_report(c, who, bots, now):
+    from .execution import unfenced_sql
+    actor = privacy.actor(who)
+    memo = {}
+    out = {b: {"running": 0, "queued": 0, "held": 0, "dead": 0, "uncertain": 0, "stalled": 0,
+               "oldest_queued_hours": None, "dead_ids": []} for b in bots}
+    for part in H.chunks(list(out)):
+        marks = ",".join("?" * len(part))
+        for row in c.execute(f"SELECT a.id, a.bot, d.stalled_at FROM attempts a LEFT JOIN attempt_diagnostics d "
+                             f"ON d.attempt_id=a.id WHERE a.state IN ('leased','running') AND a.bot IN ({marks})", part):
+            if privacy.attempt_readable(c, actor, row["id"], memo):
+                out[row["bot"]]["running"] += 1
+                out[row["bot"]]["stalled"] += bool(row["stalled_at"])
+        for row in c.execute(
+                f"SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, j.created AS job_created, "
+                f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
+                "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+                f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created, j.id", part):
+            if not privacy.message_readable(c, actor, row, current=True) or (
+                    row["job_attempt"] and not privacy.attempt_readable(c, actor, row["job_attempt"], memo)):
+                continue
+            q = out[row["job_bot"]]
+            if row["job_state"] == "uncertain":
+                q["uncertain"] += 1
+            elif not row["free"]:
+                q["dead"] += 1
+                if len(q["dead_ids"]) < DEAD_IDS:
+                    q["dead_ids"].append(row["job_id"])
+            elif row["job_held"]:
+                q["held"] += 1
+            else:
+                q["queued"] += 1
+                if q["oldest_queued_hours"] is None:
+                    q["oldest_queued_hours"] = hours(row["job_created"], now)
+    return out
+
+
+def cause_of(row):
+    """Why one failed, interrupted or expired attempt ended, as one of CAUSES."""
+    try:
+        result = json.loads(row["result_json"] or "{}")
+    except (TypeError, ValueError):
+        result = {}
+    result = result if isinstance(result, dict) else {}
+    text = " ".join(str(v) for v in (row["end_reason"], result.get("text"), result.get("error"), result.get("reason")) if v)
+    source = result.get("limit_source") if isinstance(result.get("limit_source"), dict) else {}
+    if row["stop_requested"]:
+        return "stopped"
+    if source.get("kind") == "capacity":
+        return "capacity"
+    if source or result.get("limited") or result.get("primary_limited") or QUOTA.search(text):
+        return "quota"
+    if row["state"] == "interrupted" or RESTART.search(text):
+        return "restart"
+    if row["state"] == "expired" or TIMEOUT.search(text):
+        return "timeout"
+    return "crash"
+
+
+def failures_report(c, who, bots, since):
+    # Pages walk back from the newest and skip unreadable rows before counting, so unreadable newer runs never push
+    # readable older ones out of the window; a stop at a cap says from when the counts are whole.
+    actor = privacy.actor(who)
+    memo = {}
+    causes, per_bot, total, scanned, complete_after = {}, {}, 0, 0, None
+    at = "coalesce(a.finished, a.created)"
+    for part in H.chunks(list(bots)):
+        marks = ",".join("?" * len(part))
+        before = None
+        while True:
+            page = c.execute(
+                f"SELECT a.id, a.bot, a.state, a.result_json, a.stop_requested, {at} AS at, d.end_reason "
+                "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
+                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) AND {at}>=? "
+                + (f"AND ({at}<? OR ({at}=? AND a.id<?)) " if before else "")
+                + f"ORDER BY {at} DESC, a.id DESC LIMIT ?",
+                (*part, since, *((before[0], before[0], before[1]) if before else ()), ATTEMPT_PAGE)).fetchall()
+            stop = False
+            for row in page:
+                if total >= ATTEMPT_CAP or scanned >= ATTEMPT_SCAN:
+                    complete_after, stop = max(complete_after or row["at"], row["at"]), True
+                    break
+                scanned += 1
+                before = (row["at"], row["id"])
+                if not privacy.attempt_readable(c, actor, row["id"], memo):
+                    continue
+                total += 1
+                cause = cause_of(row)
+                seen = causes.setdefault(cause, {"n": 0, "first": row["at"], "last": row["at"]})
+                seen["n"] += 1
+                seen["first"], seen["last"] = min(seen["first"], row["at"]), max(seen["last"], row["at"])
+                per_bot.setdefault(row["bot"], {}).setdefault(cause, 0)
+                per_bot[row["bot"]][cause] += 1
+            if stop or len(page) < ATTEMPT_PAGE:
+                break
+    return {"since": since, "total": total, "truncated": complete_after is not None, "complete_after": complete_after,
+            "by_cause": {k: causes[k] for k in CAUSES if k in causes},
+            "by_bot": dict(sorted(per_bot.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])))}
+
+
+def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=None, snoozed="all", bot=None,
+           since="24h"):
+    from .views import since_time
+    auth.domain(who)
+    typ = H.type_get(c, type) if type else default_type(c)
+    if not typ:
+        raise Problem("type", f"No task type {type}" if type else "Name a task type: this team has no engineering board", 422)
+    if snoozed not in ("all", "hide", "only"):
+        raise Problem("snoozed", "snoozed is all, hide or only", 422)
+    owner_actor = H.resolve_actor(c, owner) if owner else None
+    if owner and not owner_actor:
+        raise Problem("owner", "owner is a person or a bot on the roster", 422)
+    changed = since_time(updated_since) if updated_since else None
+    window = since_time(since or "24h")
+    if window < H.shift(H.now(), days=-WINDOW_MAX_DAYS):
+        raise Problem("since", f"since reaches back at most {WINDOW_MAX_DAYS} days", 422)
+    now = H.now()
+    rows = H.tasks(c, owner=owner_actor, status=H.ACTIVE_STATUSES, lane="company", label=label, limit=TASK_CAP + 1,
+                   type_id=typ["id"], updated_since=changed, visible=auth.task_sql(c, who),
+                   snoozed=None if snoozed == "all" else snoozed, order="step")
+    truncated = len(rows) > TASK_CAP
+    rows = rows[:TASK_CAP]
+    steps, loose = steps_report(c, typ, rows, now)
+    bots = readable_bots(c, auth, who, bot) if not bot or H.bot(c, bot) else []
+    if bot and not bots:
+        raise Problem("not_found", "Bot not found", 404)      # unknown, or not one whose runs the caller may read
+    queues = queues_report(c, who, bots, now)
+    failures = failures_report(c, who, bots, window)
+    busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "dead", "uncertain"))}
+    busy |= set(failures["by_bot"])
+    return {"now": now, "type": {"id": typ["id"], "name": typ["name"]},
+            "filters": {"owner": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
+                        "bot": bot, "since": window},
+            "total": len(rows), "truncated": truncated, "steps": steps, **loose,
+            "queues": {b: queues[b] for b in sorted(busy)}, "failures": failures}
+
+
+def install(app, store, auth):
+    @app.get("/api/v2/pipeline")
+    def pipeline(request: Request, type: str | None = None, owner: str | None = None, label: str | None = None,
+                 updated_since: str | None = None, snoozed: str = "all", bot: str | None = None, since: str = "24h"):
+        """A task type's pipeline in one read: per step the count, age, owners, whom it waits on and open PRs; each
+        readable bot's running, queued, held, dead and uncertain jobs; failed attempts by cause since `since`."""
+        with store.read() as c:
+            return report(c, auth, request.state.identity, type=type, owner=owner, label=label,
+                          updated_since=updated_since, snoozed=snoozed, bot=bot, since=since)

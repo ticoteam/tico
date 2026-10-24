@@ -1502,6 +1502,16 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="approval decline")
 
+    s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
+                       "running, queued, held and dead jobs, and failed runs by cause")
+    s.add_argument("--type", help="task type id or name; default the engineering board")
+    s.add_argument("--owner")
+    s.add_argument("--label")
+    s.add_argument("--updated-since", help="ISO date-time or a window like 7d")
+    s.add_argument("--snoozed", choices=["all", "hide", "only"], help="default all")
+    s.add_argument("--bot", help="queues and failures for this bot only")
+    s.add_argument("--since", help="failure window: 24h (default), up to 7d, or an ISO date-time")
+    s.set_defaults(fn="pipeline")
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
     s.set_defaults(fn="brief")
