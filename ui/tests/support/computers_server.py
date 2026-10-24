@@ -45,7 +45,7 @@ def free_port():
         return s.getsockname()[1]
 
 
-def fake_computer(base, admin, label, received, ready, works=True):
+def fake_computer(base, admin, label, received, ready, works=True, shared_fetch=None):
     def call(method, path, body=None, token=admin, **params):
         r = httpx.request(method, base + "/api/v2/" + path, json=body, params=params or None, timeout=20,
                           headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()})
@@ -87,6 +87,13 @@ def fake_computer(base, admin, label, received, ready, works=True):
             elif job["kind"] == "use_shared_key":
                 state = "done"    # the key fetch below signs it in
             call("POST", f"runner-logins/{job['id']}/report", {"state": state, "message": ""}, token=token)
+            if job["kind"] == "use_shared_key" and shared_fetch:
+                # A real runner can heartbeat its cleared state before it fetches the newly requested shared key.
+                beat()
+                paused, release = shared_fetch
+                paused.set()
+                if not release.wait(30):
+                    raise RuntimeError("the test did not release the shared-key fetch")
         found = call("GET", "runner-model-credentials", token=token, runtime="claude")
         keys = found["credentials"]
         if found.get("signed_out") or found.get("key_off"):
@@ -112,6 +119,16 @@ def main():
                         credential_kms_key="test-key", credential_admins=(OWNER,),
                         test_identities={"admin": Identity("human:ana", "owner", OWNER)})
     app = create_app(settings)
+    paused, release = threading.Event(), threading.Event()
+    if "--hold-shared-fetch" in sys.argv:
+        @app.get("/test/shared-fetch")
+        def shared_fetch_state():
+            return {"waiting": paused.is_set()}
+
+        @app.post("/test/shared-fetch")
+        def shared_fetch_release():
+            release.set()
+            return {"released": True}
     app.state.vault.cipher = CredentialCipher("test-key", FakeKMS())
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
@@ -125,7 +142,8 @@ def main():
     received, ready = tmp / "received.txt", {}
     received.write_text("")
     for label in ("Team box", "Lab box", "Spare box"):
-        threading.Thread(target=fake_computer, args=(url, "admin", label, received, ready, label != "Spare box"),
+        gate = (paused, release) if label == "Team box" and "--hold-shared-fetch" in sys.argv else None
+        threading.Thread(target=fake_computer, args=(url, "admin", label, received, ready, label != "Spare box", gate),
                          daemon=True).start()
     while len(ready) < 3:
         time.sleep(0.05)

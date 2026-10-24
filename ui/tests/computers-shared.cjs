@@ -21,7 +21,7 @@ const SHARED = 'sk-ant-api03-shared-test-key-0123456789';
 const ROTATED = 'sk-ant-api03-rotated-test-key-987654321';
 
 function start() {
-  const child = spawn(PYTHON, ['ui/tests/support/computers_server.py'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(PYTHON, ['ui/tests/support/computers_server.py', '--hold-shared-fetch'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
   let err = '';
   child.stderr.on('data', d => { err += d; });
   return new Promise((resolve, reject) => {
@@ -158,10 +158,20 @@ function start() {
     assert.equal(await spareChip.evaluate(el => el.classList.contains('attention')), false);
     await neverShown(SHARED);
 
+    // Hold the runner after its cleared heartbeat, before it fetches the shared key. The dialog must use vault
+    // metadata for the kind, even though this computer's report does not name the key yet.
+    await page.waitForFunction(async () => (await (await fetch('/test/shared-fetch')).json()).waiting, null, {timeout: 20000});
+
     // 20: Replace key from Team box, for all listed computers: warned first; both computers take the new key.
     await openDetail(team);
+    const keyInfoRead = page.waitForResponse(response => response.url().includes(`/api/v2/computers/${team}/keys?`) && response.request().method() === 'GET');
     await line.locator('[data-model-key-replace]').click();
+    const keyInfo = await (await keyInfoRead).json();
+    assert.equal(keyInfo.source, 'shared');
+    assert.equal(keyInfo.name, '', 'the runner has not reported its shared key yet');
+    assert.equal(keyInfo.shared.env, 'ANTHROPIC_API_KEY');
     await keyDialog.locator('[data-key-scope]').waitFor();
+    assert.equal(await keyDialog.locator('[name=env]').inputValue(), keyInfo.shared.env, 'Kind defaults to the shared key before the runner reports it');
     assert.match(await keyDialog.locator('[data-key-scope] legend').innerText(), /shared with 3 computers/);
     assert.equal(await keyDialog.locator('[data-key-scope-warn]').isHidden(), true);
     await keyDialog.locator('[name=key-scope][value=all]').check();
@@ -202,6 +212,7 @@ function start() {
       throw error;
     });
     await page.unroute(rotationURL);
+    assert.equal((await page.request.post(server.url + '/test/shared-fetch')).status(), 200);
     await keyDialog.locator('[data-close]').last().click();
     for (const id of [team, lab]) await lineShows(id, '.machine-key', 'sk-…321');
     await neverShown(ROTATED);
