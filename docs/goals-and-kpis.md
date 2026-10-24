@@ -275,8 +275,9 @@ edited or logged to.
 
 The goals tree is the main column; the CEO Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
-last run with the first line of its result. The chat box at the bottom of the rail is your own chat with the CEO Bot, the one on its bot
-page: ask it to change a goal and its latest reply shows there, earlier messages under **History**, and the tree is drawn
+last run with the first line of its result. For the owner, the chat box at the bottom of the rail is their one chat with the CEO Bot,
+the same as their **CEO Bot** menu tab; everyone else is pointed to their Assistant, since only the owner talks to the CEO Bot
+(see [the CEO Bot](ceo-bot.md)): ask it to change a goal and its latest reply shows there, earlier messages under **History**, and the tree is drawn
 again when it answers. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 

@@ -105,8 +105,7 @@ function frNextStepHTML(state) {
     : `${onbMachineStatus(state.record)}${waiting === 'provider' ? '. Waiting for an AI provider.' : ''}`;
   const button = waiting === 'computer' ? '<button class="primary" type="button" data-onb-go="devices">Add a computer</button>'
     : waiting === 'provider' ? '<button class="primary" type="button" data-onb-go="models">Add an AI provider</button>' : '';
-  return `<p class="onb-machine" id="onb-next-status" role="status">${esc(line)}</p>${button}
-    <button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button>`;
+  return `<p class="onb-machine" id="onb-next-status" role="status">${esc(line)}</p>${button}`;
 }
 // A row's one status: a word, or the one thing to do there (Set up, Activate, the setup task BotOps is working).
 function frBotStatusHTML(state, bot, botOps) {
@@ -153,28 +152,35 @@ function frBotGroups(bots) {
     .sort((a, b) => helperRank({name: a.slug}) - helperRank({name: b.slug}))});
   return groups.filter(group => group.bots.length);
 }
+// The saved choice, with provider names for older installs that predate presets.
+function frProvidersName(state) {
+  const view = state.providers;
+  if (!view) return 'See provider settings';
+  const preset = {'subscriptions-gateway': 'subscriptions plus Tico Gateway', subscriptions: 'subscriptions only',
+    gateway: 'Tico Gateway only'}[view.preset];
+  if (preset) return preset;
+  return (view.enabled || []).map(id => (view.providers || []).find(row => row.id === id)?.label || id).join(', ') || 'None chosen';
+}
 function frNextHTML(state) {
-  const bots = (state.record.bots || []).filter(bot => bot.slug !== assistantBot() && bot.slug !== 'botops' && bot.slug !== 'librarian' && bot.slug !== 'goal-manager');
+  const bots = state.record.bots || [];
   const owners = bots.map(bot => `<div class="fr-owner" data-fr-owner-row="${esc(bot.slug)}"><span>${esc(bot.display_name || bot.slug)}</span>
       <select data-fr-owner="${esc(bot.slug)}" aria-label="Add an owner for ${esc(bot.display_name || bot.slug)}"><option value="">Add an owner…</option>${frPeople().map(person =>
         `<option value="${esc(person.id)}">${esc(person.name || person.id)}${('human:' + person.id) === frOwner() ? ' (you)' : ''}</option>`).join('')}</select>
       <span class="muted" data-fr-owned="${esc(bot.slug)}">${esc(frPersonName(S.me?.id))} owns it</span></div>`).join('');
-  return `<section class="card fr-card" id="fr-providers"><header><h2>AI providers</h2></header>
-      ${S.config?.providers_configured === false ? '<a href="#/settings" data-gs-tab="models">Add an AI provider</a>'
-        : '<p>Chosen. <a href="#/settings" data-gs-tab="models">Change them</a></p>'}</section>
-    <section class="card fr-card" id="fr-admin"><header><h2>Add an admin</h2></header>
-      <form id="fr-admin-form" class="fr-form"><label class="onb-field"><span class="k">Name</span><input name="name" autocomplete="off" placeholder="Sam"></label>
-        <label class="onb-field"><span class="k">Email</span><input name="email" type="email" autocomplete="off" required placeholder="sam@example.com"></label>
+  return `<p class="fr-providers" id="fr-providers"><strong>AI providers:</strong> ${esc(frProvidersName(state))}.
+      <a href="#/settings" data-gs-tab="models">${S.config?.providers_configured === false ? 'Add an AI provider' : 'Change'}</a></p>
+    <details class="fr-owners" id="fr-owners"><summary><span>${bots.length ? `You own all ${bots.length} bots.` : 'No bots yet.'}</span> <span class="linkish">Change</span></summary>
+      <div class="fr-owner-list">${owners}</div></details>
+    <details class="fr-admin" id="fr-admin"><summary>Add an admin <span class="muted">(optional)</span></summary>
+      <form id="fr-admin-form" class="fr-form"><label class="onb-field"><span class="k">Name</span><input name="name" autocomplete="off" placeholder="e.g. Alex Chen"></label>
+        <label class="onb-field"><span class="k">Email</span><input name="email" type="email" autocomplete="off" required placeholder="alex@company.example"></label>
         <div class="onb-actions"><button class="ghost" type="submit">Add admin</button><span class="muted" id="fr-admin-status" role="status"></span></div></form>
-      <small class="muted">Tico sends no email: tell them.${S.config?.local ? ' Only you can sign in until you add a domain and sign-in.' : ''}</small></section>
-    <section class="card fr-card" id="fr-owners"><header><h2>Who owns each bot</h2></header>
-      ${owners || '<p class="muted">No bots yet.</p>'}</section>
-    <section class="card fr-card" id="fr-tools"><header><h2>Tools</h2></header>
-      <ul class="fr-tools">
-        <li><a href="#/credentials" data-fr-link="credentials">Credentials</a></li>
-        <li><a href="#/integrations" data-fr-link="integrations">Tools</a></li></ul>
-      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials on the Credentials page, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></section>`;
+      <small class="muted">Tico sends no email: tell them.${S.config?.local ? ' Only you can sign in until you add a domain and sign-in.' : ''}</small></details>
+    <details class="fr-connections"><summary>Connect tools and credentials</summary>
+      <p><a href="#/credentials" data-fr-link="credentials">Credentials</a> · <a href="#/integrations" data-fr-link="integrations">Tools</a></p>
+      <p class="fr-secrets" data-fr-secrets><strong>Enter credentials on the Credentials page, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
 }
+
 function frWireDone(state) {
   document.querySelectorAll('[data-fr-start]').forEach(button => button.onclick = () => void frStartSetup(button.dataset.frStart, button));
   // Add a computer and Add an AI provider open their Settings tab.
@@ -232,26 +238,29 @@ function frWireNext(state) {
 // ----------------------------------------------------------------- the bot page and the org chart
 const frNeedsSetup = e => !!e && ['needs_setup', 'needs_onboarding'].includes(e.onboarding_state);
 // The org chart's mark: small, beside the name, a gear so the name keeps the row; it says the bot page's words on hover.
-const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Needs setup" title="Needs setup: set it up together before it does anything on its own"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
+const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Onboarding" title="Onboarding: it learns in chat and takes no work until someone above it marks onboarding complete"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
+// Onboarding (backend/lifecycle.py): the bot learns in chat; a person above it on the org chart marks it complete.
 function frBotBannerHTML(e) {
   if (!frNeedsSetup(e)) return '';
   const manager = typeof settingsCanManageBot === 'function' && settingsCanManageBot(e);
   const planned = e.status === 'planned';
   const can = e.can_chat && (!planned || manager);
-  return `<section class="bot-onboard" id="bot-onboard" role="status" aria-label="Needs setup">
-      <span class="pill needs">Needs setup</span>
-      ${can ? '<button class="primary" type="button" id="bot-start-setup">Set up</button>'
-        : `<span class="muted">${planned ? 'Setting up.' : 'Ask someone who can write to it to start.'}</span>`}
-      ${manager ? '<button type="button" id="bot-finish-setup">Mark setup done</button>' : ''}
-      <button class="ghost" type="button" data-setup-help="bot">Want help setting up?</button>
+  const ready = e.onboarding_ready?.summary;
+  return `<section class="bot-onboard" id="bot-onboard" role="status" aria-label="Onboarding">
+      <span class="pill needs">Onboarding</span>
+      ${can ? '<button class="primary" type="button" id="bot-start-setup">Start onboarding</button>'
+        : `<span class="muted">${planned ? 'Getting ready.' : 'It learns in chat with its manager before it takes any work.'}</span>`}
+      ${e.can_complete_onboarding ? '<button type="button" id="bot-finish-setup">Mark onboarding complete</button>' : ''}
+      <button class="ghost" type="button" data-setup-help="bot">Want help onboarding it?</button>
+      ${ready ? `<p class="muted bot-ready" id="bot-ready">It says it is ready: ${esc(ready)}</p>` : ''}
     </section>`;
 }
 function frBotWire(slug) {
   const button = $('#bot-start-setup');
   if (button) button.onclick = async () => {
     button.disabled = true; button.textContent = 'Starting…';
-    try { await frSendSetup(slug); button.textContent = 'Setup started'; showBotTab('chat'); }
-    catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Set up'; }
+    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('chat'); }
+    catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Start onboarding'; }
   };
   const finish = $('#bot-finish-setup');
   if (finish) finish.onclick = async () => {
@@ -259,13 +268,13 @@ function frBotWire(slug) {
     try {
       const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
       const bot = S.emps.find(e => e.name === slug);
-      if (bot) bot.onboarding_state = result.onboarding_state;
+      if (bot) Object.assign(bot, {onboarding_state: result.onboarding_state, stage: result.stage});
       if (BOT?.slug === slug) frBotRefresh(slug);
       renderTree();
-      toast('Setup marked done');
+      toast('Onboarding marked complete');
     } catch (error) {
       toast(error.message, true);
-      finish.disabled = false; finish.textContent = 'Mark setup done';
+      finish.disabled = false; finish.textContent = 'Mark onboarding complete';
     }
   };
 }

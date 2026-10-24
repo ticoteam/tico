@@ -205,7 +205,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     assert row["outcome"] == ("acted" if case in WRITES else NO_WRITES[case])
     assert row["did_nothing"] == (0 if case in WRITES else 1)
     assert (row["writes"] > 0) == (case in WRITES)
-    assert (row["tokens_in"], row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1200, 1000, 200, 30)
+    assert (row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1000, 200, 30)
 
 
 def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
@@ -254,6 +254,24 @@ def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
     row = turn(api, attempt)
     assert (row["writes"], row["outcome"], row["did_nothing"]) == (
         (2, "acted", 0) if case == "own_task" else (0, "no_change", 1))
+
+
+@pytest.mark.parametrize("case", ["rotated", "resumed"])
+def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api, case):
+    """The runner reports a session left behind for its size (runner-rs/src/rotate.rs); the token table counts it."""
+    r = machine(api)
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    if case == "rotated":
+        body["rotated"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
+    post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
+    row = turn(api, attempt)
+    assert row["rotated"] == ("tokens" if case == "rotated" else None)
+    rows = weekly(api, where="bot='ops'")
+    assert {bucket["purpose"] for bucket in rows} == {row["purpose"]}
+    assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
 
 
 def test_a_restore_ends_open_runs_with_an_outcome(api):

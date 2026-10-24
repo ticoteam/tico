@@ -154,21 +154,39 @@ def _site(frames):
     return None
 
 
-def begin(conn, recorder=None):
+def begin(conn, recorder=None, *, gate=None, checkout=None):
     """`BEGIN IMMEDIATE`, timed for the flight recorder: how long the write lock took to get (counted while it is still
     being waited for, so a stall can see it) and, when the returned `done` is called after COMMIT or ROLLBACK, how
-    long it was held."""
+    long it was held. `checkout` borrows a connection after queue admission, so waiters do not drain the read pool."""
     rec = recorder or getattr(conn, "recorder", None) or ACTIVE
     if rec is None:
-        conn.execute("BEGIN IMMEDIATE")
-        return _nothing
+        if gate is not None:
+            gate.acquire()
+        try:
+            if checkout is not None:
+                conn = checkout()
+            conn.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            if gate is not None:
+                gate.release()
+            raise
+        return gate.release if gate is not None else _nothing
     token = next(_TOKENS)
     started = time.monotonic()
     rec.waiting[token] = started
+    acquired = False
     try:
+        if gate is not None:
+            gate.acquire()
+            acquired = True
+        if checkout is not None:
+            conn = checkout()
         conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as exc:
-        rec.transaction((time.monotonic() - started) * 1000, 0.0, "locked" in str(exc))
+    except BaseException as exc:
+        if acquired:
+            gate.release()
+        rec.transaction((time.monotonic() - started) * 1000, 0.0,
+                        isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc))
         raise
     finally:
         rec.waiting.pop(token, None)
@@ -179,6 +197,8 @@ def begin(conn, recorder=None):
     def done():
         rec.holding.pop(token, None)
         hold_ms = (time.monotonic() - held) * 1000
+        if gate is not None:
+            gate.release()
         rec.transaction((held - started) * 1000, hold_ms)
         if hold_ms >= LONG_HOLD_MS:             # who held it: the call site is read only for a long hold
             rec.long_hold(route, _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
@@ -653,6 +673,18 @@ def last_start(c):
 
 # ---------------------------------------------------------------------------- the database itself
 
+def _rows(c, table):
+    """About how many rows `table` holds, from its rowid span: exact for a log pruned from its oldest end, a little
+    high for one deleted from the middle. count(*) read every page of a table of millions of rows each hour, for
+    minutes, holding a read snapshot that kept the WAL from resetting. A table without rowids is counted."""
+    try:
+        # One aggregate per SELECT: SQLite answers min() or max() from the b-tree's end only when it is alone.
+        low, high = c.execute(f"SELECT (SELECT min(rowid) FROM {table}), (SELECT max(rowid) FROM {table})").fetchone()
+    except sqlite3.OperationalError:
+        return c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    return 0 if high is None else high - low + 1
+
+
 def db_stats(store, use_dbstat=True):
     path = str(store.settings.db_path)
     size = os.path.getsize(path) if os.path.exists(path) else 0
@@ -672,7 +704,7 @@ def db_stats(store, use_dbstat=True):
         for table, column in BIG.items():
             if table not in present:
                 continue
-            detail["rows"][table] = c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            detail["rows"][table] = _rows(c, table)
             if column:
                 row = c.execute(f"SELECT {column} FROM {table} ORDER BY rowid LIMIT 1").fetchone()
                 detail["oldest"][table] = row[0] if row else None

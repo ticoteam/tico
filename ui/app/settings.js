@@ -97,6 +97,7 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
@@ -354,6 +355,7 @@ async function loadSettings() {
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
+    void renderSettingsHosted();
     if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
@@ -392,7 +394,8 @@ const STOPPED_PICK = {
   unknown: {retry: false, what: () => 'before answering',
     say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
 };
-async function executionReview(bot) {
+// `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
+async function executionReview(bot, after = loadSettings) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal';
   dialog.innerHTML = `<header><h2>Stopped runs</h2><button class="ghost" data-close>Close</button></header><div data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
@@ -436,7 +439,7 @@ async function executionReview(bot) {
           acknowledge_uncertain_effects:true
         });
         form.innerHTML = `<p role="status">${decision === 'resume' ? 'Got it. Tico will try this request again.' : 'Got it. Tico won’t retry it; the task stays as it is.'}</p>`;
-        await loadSettings();
+        await after();
       } catch(error) {
         form.querySelector('[data-result]').textContent=error.message;
         buttons.forEach(button=>button.disabled=false);

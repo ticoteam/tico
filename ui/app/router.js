@@ -67,6 +67,7 @@ function route() {
   else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) pageNotes();
   else if (S.route.startsWith('#/bot/')) { const [slug, tab] = S.route.slice(6).split('/'); pageBot(slug, tab); }
   else if (S.route === ASSISTANT) pageAssistant();
+  else if (S.route === LEARNED) pageLearned();
   else if (S.route.startsWith('#/person/')) {
     const parts = S.route.slice(9).split('/').map(decodeURIComponent);
     pagePerson(parts[0], parts[1]);

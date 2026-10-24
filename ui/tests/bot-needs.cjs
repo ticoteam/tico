@@ -2,7 +2,8 @@
 // person: its own tasks for them, a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (every open task it holds, newest first), Blocked (each saying
 // what it waits on) and Done Recently (the last 14 days). Assigned to others follows. The org tree's number is the
-// Needs you rows, and stays so when the list moves. Fixtures only, no network.
+// Needs you rows, and stays so when the list moves. The Tasks header's board icon opens the board filtered to the bot as
+// owner; a bot with one tab shows that list with no tab bar. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -61,10 +62,16 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') {
         const all = Object.values(T);
-        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead')});
+        // The rail reads open and finished tasks apart, finished ones since a day; the server filters both.
+        const st = q.get('status'), since = q.get('updated_since');
+        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated >= since);
+        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead' && fits(t))});
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
+      // The four built-in tabs, which Ana may change on Head of Engineering only.
+      const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
+      if (tabs) return json({bot: tabs[1], tabs: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -105,7 +112,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.deepEqual((await rail.locator('#t-blocked .trow-waits').allInnerTexts()).map(s => s.trim()),
       ["Waiting for the vendor's invoice.", 'Waits on QA Engineer', 'Waits on you']);
 
-    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed.
+    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
+    // tab opens, 50 rows at a time (paging, at the end).
+    assert.equal(await rail.locator('#t-done .trow').count(), 0, 'Done is drawn when its tab opens');
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
@@ -149,6 +158,60 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
     assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()).sort(), ['Pick the release day', 'Run the release check']);
+
+    // Done Recently pages 50 rows at a time.
+    await tab('done').click();
+    await page.evaluate(() => { const d = BOT_DONE.get('lead'), row = d.rows[0]; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
+    assert.equal(await rail.locator('#t-done .trow').count(), 50);
+    await rail.getByRole('button', {name: 'Show 50 more'}).click();
+    assert.equal(await rail.locator('#t-done .trow').count(), 100);
+    await rail.getByRole('button', {name: 'Show 20 more'}).click();
+    assert.equal(await rail.locator('#t-done .trow').count(), 120);
+    assert.equal(await rail.locator('.bot-done-more').count(), 0);
+
+    // The Tasks header: "Tasks", then a board icon, then the tab settings (Task-list tabs 2/3) for whoever may change
+    // this bot's tabs; Ana manages Head of Engineering here. It opens the settings for this bot.
+    const boardIcon = rail.locator('#bot-tasks .rail-head #bot-tasks-board');
+    assert.equal(await boardIcon.getAttribute('href'), '#/tasks?owner=bot:lead&view=board');
+    assert.equal(await boardIcon.getAttribute('aria-label'), "Open Head of Engineering's tasks on the board");
+    const reopen = async () => {
+      await page.evaluate(() => { location.hash = '#/bot/qa'; });
+      await page.waitForFunction(() => BOT?.slug === 'qa');
+      await page.evaluate(() => { location.hash = '#/bot/lead/tasks'; });
+      await rail.locator('#t-open .trow').first().waitFor({state: 'attached'});
+    };
+    await rail.locator('#bot-tasks .rail-head #bot-tasks-settings:not([hidden])').click();
+    await page.locator('#bot-task-tabs-dialog').waitFor();
+    assert.equal((await page.locator('#bot-task-tabs-title').innerText()).trim(), "Head of Engineering's tabs");
+    await page.locator('#bot-task-tabs-dialog [data-tabs-close]').first().click();
+    await page.locator('#bot-task-tabs-dialog').waitFor({state: 'hidden'});
+
+    // Spec test 11: a bot with one tab shows that one list, with no tab bar over it.
+    await page.evaluate(() => { window.fourTabs = botTaskTabs; window.botTaskTabs = () => [['active', 'Doing', 'cnt-active']]; });
+    await reopen();
+    assert.equal(await rail.locator('.bot-task-tabs').isHidden(), true, 'no tab bar over a single list');
+    assert.equal(await rail.locator('#bot-active').isVisible(), true);
+    for (const key of ['needs', 'blocked', 'done']) assert.equal(await rail.locator(`#bot-${key}`).isHidden(), true, key);
+    assert.equal(await rail.locator('#t-open .trow').count(), 5);
+    await page.evaluate(() => { window.botTaskTabs = window.fourTabs; });
+    await reopen();
+    assert.equal(await rail.locator('.bot-task-tabs').isVisible(), true);
+    assert.equal(await rail.locator('[data-bot-task-tab]').count(), 4);
+
+    // Spec test 10: the board icon opens the board with the owner pre-selected to this bot, and the owner can be changed.
+    await rail.locator('#bot-tasks-board').click();
+    // The tasks page then names its default type in the address, so read the owner and view out of it.
+    await page.waitForFunction(() => {
+      const [route, query] = location.hash.split('?');
+      const params = new URLSearchParams(query || '');
+      return route === '#/tasks' && params.get('owner') === 'bot:lead' && params.get('view') === 'board';
+    });
+    await page.locator('#task-chips [data-chip="owner"]').waitFor();
+    assert.equal(await page.locator('#task-view [aria-selected="true"], #task-view .cur').first().innerText().then(s => s.replace(/\s+\d+$/, '').trim()), 'Board');
+    assert.equal((await page.locator('#task-chips [data-chip="owner"] .v').innerText()).trim(), 'Head of Engineering');
+    await page.locator('#task-chips [data-chip-drop="owner"]').click();
+    await page.waitForFunction(() => !location.hash.includes('owner='));
+    assert.equal(await page.locator('#task-chips [data-chip="owner"]').count(), 0);
     assert.deepEqual(errors, []);
     console.log('bot-needs: ok');
   } finally { await browser.close(); }

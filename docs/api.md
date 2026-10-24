@@ -155,7 +155,9 @@ checks and reviews, does not), and `brief=true` to leave out bodies and acceptan
 
 `POST /api/v2/tasks/{tid}/comments/{mid}` with `{"text": "..."}` changes the text of a comment the caller
 wrote; `POST /api/v2/tasks/{tid}/comments/{mid}/delete` with `{}` deletes it. `mid` is the comment's `id` in
-`GET /api/v2/tasks/{tid}`. Both answer as commenting does, `{"comment": {...}, "comments": [...], "woke": false}`:
+`GET /api/v2/tasks/{tid}`. Both answer as commenting does, `{"comment": {...}, "comments": [...], "woke": false}`
+(`woke` is true only when the write queued a bot turn; comments and review answers also carry `delivered`, true when the
+comment reached a person, so a bot's comment to a person is `woke: false, delivered: true`):
 the comment with `edited_at`, or a tombstone with an empty body and `deleted_at` after a delete, and then
 the task's comments as the task lists them. Neither wakes anyone or sends anything.
 

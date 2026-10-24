@@ -112,7 +112,8 @@ def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api
     # A branch bot: its fallback is its original's (shared_bots.follow), as the runner reads it.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config_json=? WHERE bot='finance'", (encode(
-            {"name": "finance", "fallback": {"harness": "gemini", "model": "gemini-3-pro"}}),))
+            {"name": "finance", "fallback": {"harness": "gemini", "model": "gemini-3-pro"},
+             "task_model": {"harness": "grok", "runtime": "grok", "model": "grok-4.6"}}),))
         c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'", (encode({"name": "cpo", "shared_from": "finance"}),))
     beat(api, r, codex=HARNESS, **{"gemini-cli": {**HARNESS, "name": "Gemini CLI", "runtime": "gemini"}},
          grok={**HARNESS, "name": "Grok Build", "runtime": "grok"})
@@ -121,10 +122,10 @@ def test_what_a_bot_there_runs_on_its_fallback_included_cannot_be_turned_off(api
     choose("codex", False, expected=409)                          # the bot's own
     choose("gemini-cli", False, expected=409)                     # its fallback
     assert choose("gemini-cli", True)["enabled"] is True
-    choose("grok", False)
-    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"gemini-cli": True, "grok": False}
-    # The page locks both; the fallback alone is not needed for the computer to be ready.
-    assert (machine(api, r)["bot_runtimes"], machine(api, r)["needed_runtimes"]) == (["codex", "gemini"], ["codex"])
+    choose("grok", False, expected=409)                           # its inherited task model
+    assert get(api, "runner-harness-actions", token=r["token"])["choices"] == {"gemini-cli": True}
+    # All three are required installs; only the primary is needed for the computer to be ready (tasks can fall back).
+    assert (machine(api, r)["bot_runtimes"], machine(api, r)["needed_runtimes"]) == (["codex", "gemini", "grok"], ["codex"])
     assert machine(api, runner(api))["bot_runtimes"] == []
 
 

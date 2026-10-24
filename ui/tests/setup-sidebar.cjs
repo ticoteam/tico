@@ -1,6 +1,6 @@
 // Offline regression for the sidebar around the first-run wizard. Fixtures only.
 //  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
-//    "What's new · 103 updates", and the phone's bottom bar drops Tasks and Updates; anywhere else, and once setup is
+//    "What's new · 103 updates", and the phone's bottom bar is hidden; anywhere else, and once setup is
 //    done, everything is back;
 //  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, reads as distinct names
 //    at desktop width: the words the names share give way first, and each row's tooltip has the whole name.
@@ -121,15 +121,21 @@ async function wizard(browser, theme) {
 
   const phone = await open(browser, {theme, phone: true, needed: true, route: '#/welcome'});
   await phone.page.locator('#onb-company').waitFor();
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-support', 'more']);
+  assert.equal(await phone.page.locator('#mobile-nav').isVisible(), false, 'no phone navigation during setup');
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), []);
   await noNotice(phone);
   await shot(phone.page, `wizard-phone-${theme}`);
+  // Leaving setup restores the bar and makes the normal drawer reachable again.
+  await phone.page.evaluate(() => { location.hash = '#/tasks'; });
+  await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
-  assert.deepEqual(await shown(phone.page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row'), ['welcome']);
-  assert.equal(await phone.page.locator('#changelog-notice').isVisible(), false);
-  await shot(phone.page, `wizard-phone-drawer-${theme}`);
-  await noNotice(phone);
+  assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
+  assert.equal(await phone.page.locator('#changelog-notice').isVisible(), true);
+  await phone.page.locator('#usage-notice').waitFor({state: 'visible'});
+  assert.deepEqual(phone.notices, ['shown'], 'the phone also waits until setup is left');
+  await shot(phone.page, `left-setup-phone-drawer-${theme}`);
   assert.deepEqual(phone.errors, []);
   await phone.close();
 }
@@ -183,6 +189,8 @@ async function created(browser, theme) {
 
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
   await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
+  assert.equal(await phone.page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
   await noNotice(phone);
   await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();

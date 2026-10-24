@@ -278,7 +278,11 @@ repositories or recent logs. Full detail, placement and change controls keep the
 CPU here is the one-minute load divided by available cores, times 100; it may exceed 100%. These minute
 samples are retained for 48 hours. Six consecutive readings spanning five minutes above 90% CPU or memory
 set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
-turning diagnostics off clears it and hides `latest_sample`. No automatic action or notification follows.
+turning diagnostics off clears it and hides `latest_sample`.
+
+**Unreleased:** this sustained-load flag holds new starts on that computer, including reservations that have not
+started yet. Running turns continue, and new starts resume when the flag clears
+([Turn counts](computers.md#turn-counts)).
 
 Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
 `hub run list`. Current computers take a reading at start and completion; older computers use a recent
@@ -289,7 +293,7 @@ also removes saved snapshots for that computer.
 Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%) or under 5%
 disk free record an overload: when, why, which bots' turns were running and the busiest processes. Health shows it as a
 warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
-diagnostic swapping rule because its swap total grows with use. An overload changes nothing on its own; it is there to explain a slow day.
+diagnostic swapping rule because its swap total grows with use. This ten-minute diagnostic record explains past load; the separate five-minute flag above controls new starts.
 
 ## BotOps uses the requester’s rights
 

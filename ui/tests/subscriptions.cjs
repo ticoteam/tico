@@ -162,7 +162,7 @@ async function computers(browser) {
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   // One connection per AI tool, the computer's own login: the named subscriptions it still reports are not shown.
   assert.deepEqual(await detail.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex']);
-  assert.match(await detail.locator('[data-connection="own:codex"]').innerText(), /Codex\s+Computer's login/);
+  assert.equal(await detail.locator('[data-connection="own:codex"] .computer-conn-head').innerText(), 'Codex');
   assert.doesNotMatch(await detail.innerText(), /acme-|Subscription ·|Rename/, 'no named subscription, nor its controls');
   // The bots on the computer's Codex login take turns on it.
   assert.equal(await detail.locator('[data-connection="own:codex"] [data-shared-login]').innerText(), '2 bots share this sign-in. They take turns: one Codex run at a time.');

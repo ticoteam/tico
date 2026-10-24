@@ -17,6 +17,8 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 
+- `rotated`: `tokens` or `turns` when the run started a fresh provider session because the bot's last one had
+  grown past its limit (runner-rs/src/rotate.rs), reported with the result (`rotation`); NULL otherwise.
 - `purpose`: a short stable label for the work (`review PR`, `answer person message`), so a week of runs can be
   grouped by what they were for. The place that writes a wake may name it (`stamp(..., purpose=)`); a run nobody
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
@@ -132,3 +134,11 @@ def pushed(conn, turn_id, computer, pushes):
     if count:
         conn.execute("UPDATE turns SET writes=coalesce(writes,0)+? WHERE id=?", (count, turn_id))
     return count
+
+
+def rotation(conn, turn_id, rotated):
+    """Record why a run left its session for a fresh one, while the run is open. A runner that reports none (an
+    older one, or a run that resumed) leaves `rotated` NULL."""
+    if rotated is None:
+        return 0
+    return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished IS NULL", (rotated.reason, turn_id)).rowcount

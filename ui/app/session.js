@@ -102,8 +102,16 @@ const sessionScope = el => {
   const task = el.closest('[data-task]')?.dataset.task, d = el.closest('dialog');
   return task ? 'task:' + task : location.hash + (d ? '|' + (d.id || d.getAttribute('aria-label') || '') : '');
 };
+// A bot's or the Assistant's chat box keeps its own draft (pill.js chatDraftSave, by slug) and clears it once the
+// message is sent; kept here too, its text came back into the emptied box after sign-in, ready to send a second time.
+// A chat box with no slug has no draft of its own and stays kept here. In the bundled UI this file runs before
+// pill.js declares PILLS, so reading it during boot throws rather than being undefined.
+const chatBox = el => {
+  let pills; try { pills = PILLS; } catch { return false; }
+  return [...pills].some(P => P.mode === 'chat' && P.slug && P.el?.contains(el));
+};
 const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="text"]')]
-  .filter(el => !el.readOnly && !el.disabled && !/search|filter/i.test(sessionKey(el)));
+  .filter(el => !el.readOnly && !el.disabled && !/search|filter/i.test(sessionKey(el)) && !chatBox(el));
 const sessionSave = kept => {
   try {
     if (kept.fields.length || kept.task || kept.hash) sessionStorage.setItem(SESSION_RETURN, JSON.stringify(kept));

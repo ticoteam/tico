@@ -188,7 +188,32 @@ def register_worktree_pr(c, pr):
     return made
 
 
+def health_wait_reason(link, detail):
+    """The PR condition whose age Health measures, from the already synced link only."""
+    if link.get("state") not in ("open", "draft"):
+        return ""
+    if link.get("mergeable") == "conflict":
+        return "conflict"
+    reviewed = (detail.get("health_reviewed_head") == detail.get("head_sha")
+                if "health_reviewed_head" in detail else bool(link.get("review_state")))
+    if link.get("state") == "open" and link.get("mergeable") == "clean" and link.get("checks") == "passing" and not reviewed:
+        return "review"
+    return ""
+
+
+def record_health_wait(link, detail):
+    """Keep the first observation through refreshes; a resolved condition clears its clock."""
+    reason = health_wait_reason(link, detail)
+    old = detail.get("health_wait") or {}
+    head = detail.get("head_sha") or ""
+    if not reason:
+        detail.pop("health_wait", None)
+    elif old.get("reason") != reason or reason == "review" and old.get("head") != head:
+        detail["health_wait"] = {"reason": reason, "since": H.now(), "head": head}
+
+
 def pull_request(c, payload, review_role="", release_repo=""):
+    from .review_gate import engineering
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
@@ -203,6 +228,10 @@ def pull_request(c, payload, review_role="", release_repo=""):
         if link["state"] == "shipped" and state == "merged":
             state = "shipped"
         detail = H._json(link.get("detail_json"), {}) or {}
+        if not engineering(c, task):
+            detail.pop("qa_default_pending", None)
+        elif action == "opened" or link["id"] in registered:
+            detail["qa_default_pending"] = True
         head_sha = (pr.get("head") or {}).get("sha")
         new_head = head_sha and detail.get("head_sha") != head_sha
         mergeable = "unknown" if action == "synchronize" or new_head else link.get("mergeable") or "unknown"
@@ -228,6 +257,7 @@ def pull_request(c, payload, review_role="", release_repo=""):
                 detail.pop("checks", None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
+                detail["health_reviewed_head"] = ""
                 c.execute("UPDATE task_links SET checks='pending' WHERE id=?", (link["id"],))
             detail["head_sha"] = head_sha
             login = (str((payload.get("sender") or {}).get("login") or "").lower()
@@ -249,6 +279,8 @@ def pull_request(c, payload, review_role="", release_repo=""):
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
             detail.pop("conflict_head", None)
+        record_health_wait({**link, "state": state, "mergeable": mergeable,
+                            **({"checks": "pending"} if new_head else {})}, detail)
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         if any(current[field] != link.get(field) for field in ("state", "mergeable", "repo", "number", "branch", "checks")):
@@ -388,6 +420,8 @@ def pr_signal(c, event, payload):
                 reviews[review_id] = signature
                 detail["reviews"] = dict(list(reviews.items())[-100:])
             fields["review_state"] = state
+            if payload.get("action") != "dismissed" and not _own_comment(c, task, payload, "review", detail):
+                detail["health_reviewed_head"] = review.get("commit_id") or detail.get("head_sha") or ""
             wake = fresh and payload.get("action") != "dismissed" and (
                 state == "changes_requested" or state == "commented" and not _own_comment(c, task, payload, "review", detail))
             item = f"Review {state.replace('_', ' ')} on {label}"
@@ -415,6 +449,7 @@ def pr_signal(c, event, payload):
             item = f"{fields['pending_comments']} review comments on {label}"
             batch = "review"
         changed = any(value != link.get(field) for field, value in fields.items())
+        record_health_wait({**link, **fields}, detail)
         fields.update(detail_json=json.dumps(detail), updated=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
@@ -423,6 +458,56 @@ def pr_signal(c, event, payload):
         if wake:
             queue_wake(c, task, item, batch)
     return {"tasks": len({l["task_id"] for l in links})}
+
+
+def creation_paths(service, pr, headers):
+    """None until the first PR registration; a complete file list or an explicit retry."""
+    with service.store.read() as c:
+        links = _links_for(c, pr.get("html_url", ""))
+        from .review_gate import engineering
+        if links:
+            needed = any(engineering(c, H.task(c, l["task_id"])) and
+                         (H._json(l.get("detail_json"), {}) or {}).get("qa_default_pending") for l in links)
+        else:
+            head = pr.get("head") or {}
+            repo = (head.get("repo") or {}).get("full_name")
+            needed = any(engineering(c, H.task(c, r[0])) for r in c.execute(
+                "SELECT task_id FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
+                (repo, head.get("ref"))))
+    if not needed:
+        return None
+    match = PR_LINK.match(pr.get("html_url", ""))
+    if not match:
+        return None
+    paths, count = [], 0
+    for page in range(1, 31):
+        response = service._call("GET", f"/repos/{match[1]}/{match[2]}/pulls/{match[3]}/files",
+                                 headers=headers, params={"per_page": 100, "page": page})
+        if response.status_code != 200:
+            raise ValueError("PR files unavailable for QA default")
+        files = response.json()
+        count += len(files)
+        paths.extend(f["filename"] for f in files)
+        paths.extend(f["previous_filename"] for f in files if f.get("previous_filename"))
+        total = pr.get("changed_files")
+        if total is not None and count >= total:
+            return paths
+        if len(files) < 100:
+            if total is not None and count != total:
+                raise ValueError("PR files incomplete for QA default")
+            return paths
+    raise ValueError("PR files incomplete for QA default")
+
+
+def apply_creation_qa(c, pr, paths):
+    if paths is None:
+        return
+    from . import qa_defaults
+    qa_defaults.pr_created(c, pr, paths)
+    for link in _links_for(c, pr["html_url"]):
+        detail = H._json(link.get("detail_json"), {}) or {}
+        detail.pop("qa_default_pending", None)
+        c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
 
 
 def refresh_task_prs(service, task_id):
@@ -463,6 +548,7 @@ def refresh_task_prs(service, task_id):
                     if response.status_code == 200:
                         pr = response.json()
                         pr["html_url"] = link["url"]
+                        paths = creation_paths(service, pr, {"Authorization": "Bearer " + token})
                         head = (pr.get("head") or {}).get("sha")
                         head_login = None
                         if head:
@@ -484,6 +570,7 @@ def refresh_task_prs(service, task_id):
                             pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
                                          review_role=service.settings.github_review_role,
                                          release_repo=service.settings.release_repo)
+                            apply_creation_qa(c, pr, paths)
                         success = True
                 except Exception:
                     logging.getLogger("tico.github").exception("PR refresh failed for %s #%s", *key)
@@ -579,8 +666,9 @@ def reconcile_worktree_prs(service):
             links = H._rows(c.execute(
                 "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
                 "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
-                " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
-                "AND coalesce(w.state,'unknown')<>'removed')", (org,)))
+                " AND (json_extract(p.detail_json,'$.qa_default_pending')=1 OR EXISTS "
+                "(SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
+                "AND coalesce(w.state,'unknown')<>'removed'))", (org,)))
             branches = {}
             for w in H._rows(c.execute(
                 "SELECT w.repo,w.branch,w.detail_json,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
@@ -638,6 +726,7 @@ def reconcile_worktree_prs(service):
                             if ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
+                    paths_by_url = {p.get("html_url"): creation_paths(service, p, auth) for p in found}
                     registering = kind == "branch" and found
                     try:
                         with service.store.transaction() as c:
@@ -658,6 +747,7 @@ def reconcile_worktree_prs(service):
                                 pull_request(c, {"action": "refresh", "pull_request": pr},
                                              review_role=service.settings.github_review_role,
                                              release_repo=service.settings.release_repo)
+                                apply_creation_qa(c, pr, paths_by_url.get(pr.get("html_url")))
                     except Exception:
                         if registering:
                             _pr_error(service, repo, key, f"The pull request for {key} was found but linking it to "

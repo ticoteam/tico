@@ -61,6 +61,19 @@ def test_manifests_load_and_reject_unknown_capabilities():
 
 def test_server_tables_come_from_the_manifests():
     from backend import model_login, providers
-    assert set(model_login.RUNTIMES) == {"codex", "claude", "musecode"}
+    assert set(model_login.RUNTIMES) == {"codex", "claude", "musecode", "grok", "cursor"}
     assert model_login.PASTE_RUNTIMES == ("claude",)
+    assert manifests.caps("musecode")["sign_out"] is True
+    assert "musecode" in model_login.SIGN_OUT_RUNTIMES
     assert providers.MODEL_KEYS["codex"] == ("OPENAI_API_KEY",) and "gemini" not in providers.MODEL_KEYS
+
+
+def test_grok_and_cursor_relay_computer_sign_in_and_sign_out():
+    for runtime in ("grok", "cursor"):
+        caps = manifests.caps(runtime)
+        assert caps["browser_sign_in"] and caps["sign_out"]
+        assert caps["profile_home"] == "HOME"
+        assert caps["paste_code"] is False
+        assert caps["sign_in_status"] != "none"
+
+    assert manifests.caps("cursor")["subscription_profiles"] is False

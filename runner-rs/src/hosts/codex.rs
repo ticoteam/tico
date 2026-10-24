@@ -115,6 +115,9 @@ struct Shared {
     children: Mutex<HashMap<String, String>>,
     /// Tool events already sent, by item id and status: a start or end is reported once.
     tools_sent: Mutex<HashSet<String>>,
+    /// Threads the app server has started a turn on, so they are written to its rollout: a `thread/start` answer
+    /// alone lives only in this app-server process, and a resume of it after the process is gone finds nothing.
+    confirmed: Mutex<HashSet<String>>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
 }
 
@@ -140,6 +143,7 @@ impl CodexHost {
             token_seen: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             tools_sent: Mutex::new(HashSet::new()),
+            confirmed: Mutex::new(HashSet::new()),
             capture: Mutex::new(None),
         }))
     }
@@ -355,6 +359,10 @@ impl CodexHost {
                 }
                 // `tool_events`: this run reports every tool call, so a run with none provably called none.
                 self.emit(event("status", t, started.as_deref(), json!({"state": "active", "tool_events": true})));
+                if tid.as_ref().is_some_and(|tid| self.0.confirmed.lock().unwrap().insert(tid.clone())) {
+                    // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                    self.emit(event("thread_confirmed", t, started.as_deref(), json!({"session_id": t})));
+                }
             }
             "item/agentMessage/delta" => {
                 self.emit(event("delta", t, u, json!({"text": p["delta"].as_str().unwrap_or_default()})));
@@ -422,7 +430,7 @@ impl CodexHost {
                     return;
                 }
                 if done["status"] == "failed" {
-                    let msg = done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string();
+                    let msg = with_kind(&done["error"], done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string());
                     self.emit(event("turn_failed", t, finished.as_deref(), json!({"limit": is_limit(&msg), "error": msg})));
                 } else {
                     let status = done["status"].as_str().filter(|s| !s.is_empty()).unwrap_or("completed");
@@ -431,7 +439,7 @@ impl CodexHost {
             }
             "error" => {
                 let err = &p["error"];
-                let msg = err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| py_dumps(err).chars().take(500).collect());
+                let msg = with_kind(err, err["message"].as_str().filter(|m| !m.is_empty()).map(String::from).unwrap_or_else(|| py_dumps(err).chars().take(500).collect()));
                 let will_retry = crate::util::truthy(p.get("willRetry"));
                 let fresh = turn.as_ref().is_some_and(|x| !self.0.done_turns.lock().unwrap().contains(x));
                 if turn.is_some() && !will_retry && fresh {
@@ -585,6 +593,11 @@ impl CodexHost {
         Ok(res["thread"]["id"].as_str().filter(|t| !t.is_empty()).unwrap_or(thread_id).to_string())
     }
 
+    /// A thread this host started a turn on (`turn/started`); None before.
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.0.confirmed.lock().unwrap().contains(thread_id).then(|| thread_id.to_string())
+    }
+
     pub async fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
         let mut params = json!({"threadId": thread_id, "input": [{"type": "text", "text": text}]});
         if let Some(e) = effort.filter(|e| !e.is_empty()) {
@@ -663,6 +676,29 @@ impl CodexHost {
     }
 }
 
+// Codex names an overload or quota refusal in the error's structure (`codexErrorInfo`, or the API's `type`), and its
+// message may say neither ("Server busy"). Name the kind in the text the limit rules read; a message that already
+// reads as a limit is kept as it is, so a genuine quota is never relabelled as capacity.
+fn with_kind(err: &Value, msg: String) -> String {
+    let info = &err["codexErrorInfo"];
+    let kind = info.as_str().map(String::from).or_else(|| info.as_object().and_then(|o| o.keys().next().cloned()))
+        .or_else(|| err["type"].as_str().map(String::from)).or_else(|| err["error"]["type"].as_str().map(String::from))
+        .unwrap_or_default().to_lowercase();
+    let status = info.as_object().and_then(|o| o.values().next()).and_then(|v| v["httpStatusCode"].as_u64());
+    let tag = if kind.contains("overloaded") {
+        "overloaded"
+    } else if kind.contains("usagelimit") || kind.contains("usage_limit") {
+        "usage limit"
+    } else if status == Some(429) {
+        "status 429"
+    } else if status == Some(503) {
+        "status 503"
+    } else {
+        return msg;
+    };
+    if is_limit(&msg) { msg } else { format!("{msg} ({tag})") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +735,42 @@ mod tests {
     fn no_thread_keeps_a_codex_memory_outside_the_repository() {
         let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
         assert_eq!(host.thread_params(&Settings::default())["config"]["features.memories"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn a_thread_is_confirmed_by_its_first_turn_not_by_thread_start() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_n"}}})).await;
+        assert_eq!(host.confirmed("thr_n"), None, "a thread/start alone is only in this app server");
+        // A subagent's turn confirms nothing of the parent's.
+        host.on_message(json!({"method": "thread/started", "params": {"thread": {"id": "thr_sub", "parentThreadId": "thr_n"}}})).await;
+        host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr_sub", "turn": {"id": "turn_s"}}})).await;
+        assert_eq!(host.confirmed("thr_sub"), None);
+        for turn in ["turn_1", "turn_2"] {
+            host.on_message(json!({"method": "turn/started", "params": {"threadId": "thr_n", "turn": {"id": turn}}})).await;
+        }
+        assert_eq!(host.confirmed("thr_n").as_deref(), Some("thr_n"));
+        let confirmed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "thread_confirmed").collect();
+        assert_eq!(confirmed, vec![json!({"kind": "thread_confirmed", "thread_id": "thr_n", "turn_id": "turn_1", "session_id": "thr_n"})]);
+    }
+
+    #[tokio::test]
+    async fn a_structured_overload_is_capacity_and_a_quota_stays_a_quota() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        for line in [
+            r#"{"method": "turn/started", "params": {"threadId": "thr_o", "turn": {"id": "turn_1"}}}"#,
+            r#"{"method": "error", "params": {"threadId": "thr_o", "turnId": "turn_1", "willRetry": false, "error": {"message": "Server busy", "codexErrorInfo": "serverOverloaded"}}}"#,
+            r#"{"method": "turn/started", "params": {"threadId": "thr_o", "turn": {"id": "turn_2"}}}"#,
+            r#"{"method": "turn/completed", "params": {"threadId": "thr_o", "turn": {"id": "turn_2", "status": "failed", "error": {"message": "Quota exceeded. Check your plan and billing details.", "codexErrorInfo": "serverOverloaded"}}}}"#,
+        ] {
+            host.on_message(serde_json::from_str(line).unwrap()).await;
+        }
+        let failed: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["kind"] == "turn_failed").collect();
+        assert_eq!(failed.len(), 2);
+        let (busy, quota) = (failed[0]["error"].as_str().unwrap(), failed[1]["error"].as_str().unwrap());
+        assert!(failed[0]["limit"] == true && crate::hosts::is_capacity(busy), "{busy}");
+        assert!(failed[1]["limit"] == true && !crate::hosts::is_capacity(quota), "{quota}");
     }
 }

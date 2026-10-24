@@ -41,6 +41,30 @@ def task_turn(api, machine, title="Tidy the changelog"):
     return task, turn
 
 
+def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_sync(api):
+    machine = ops_on_sonnet(api)
+    grok = {"harness": "grok", "model": "grok-4.6", "effort": "low"}
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "grok": {"installed": False, "authenticated": "missing"}})
+    set_task_model(api, grok)
+    assigned = next(a for a in get(api, "runners/assignments", machine["token"]) if a["bot"] == "ops")
+    assert assigned["config"]["task_model"]["runtime"] == "grok"
+    shown = lambda: next(m for m in get(api, "operations")["machines"] if m["id"] == machine["runner_id"])
+    assert "grok" in shown()["bot_runtimes"]
+    # Just like the bot's primary and fallback, the task runtime cannot be switched off while required.
+    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False}, expected=409)
+    # Grok's actual runner readiness has no sign-in check; installed + unknown must still run.
+    rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
+                                  "grok": {"installed": True, "authenticated": "unknown"}})
+    task, turn = task_turn(api, machine)
+    assert turn["config"]["runtime"] == "grok" and not turn["config"].get("task_model_fallback")
+    finish(api, machine, turn, {"runtime": "grok", "harness": "grok", "model": "grok-4.6", "effort": "low"})
+    assert get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["source"] == "task"
+    set_task_model(api, None)
+    assert "grok" not in shown()["bot_runtimes"]
+    post(api, f"runners/{machine['runner_id']}/harness-choices", {"harness": "grok", "enabled": False})
+
+
 def test_with_no_task_model_a_task_runs_on_the_bots_own_model_and_effort(api):
     machine = ops_on_sonnet(api)
     assert get(api, "bots/ops")["task_model"] is None
@@ -87,6 +111,7 @@ def test_session_bot_keeps_tasks_on_the_bots_model(api):
     set_task_model(api, HAIKU)
     _, turn = task_turn(api, machine)
     assert turn["config"]["model"] == "claude-sonnet-5-5"
+    assert not turn["config"].get("task_model_fallback")
 
 
 def test_changing_the_bots_model_leaves_a_set_task_model_and_clearing_returns_to_the_bots(api):
@@ -244,6 +269,7 @@ def test_a_task_model_its_computer_has_not_installed_falls_back_rather_than_wait
     assert saved["readiness"]["problem"] == "grok is not installed on Test Mac"
     assert saved["readiness"]["fix"] == "Install grok on Test Mac, or choose a model it already runs"
     task, turn = task_turn(api, machine)
+    assert turn["config"]["task_model_fallback"] is True
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "high")
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])

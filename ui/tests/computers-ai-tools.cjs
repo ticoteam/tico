@@ -10,6 +10,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+// Read shipped capabilities so the browser flow cannot drift from its manifest.
+const manifestCaps = JSON.parse(require('node:child_process').execFileSync('python3', ['-c',
+  'import json; from clients.harness_manifests import load; print(json.dumps({k: v["capabilities"] for k, v in load().items()}))'],
+  {cwd: require('node:path').resolve(__dirname, '../..'), encoding: 'utf8'}));
+
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -20,6 +25,7 @@ const {unrouted} = require('./support/routes.cjs');
     const tool = (name, runtime, version) => ({name, runtime, installed: true, version, managed: true, state: 'idle',
       wanted: true, pinned: false, update_available: false, detail: ''});
     const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['helper', 'ops', 'writer'], platform: 'linux', version: '0.3.52',
+      turn_summary: '3 running · 1 starting · 37 waiting for shared login (oldest 2 h) · 5 queued',
       last_seen: at(-3000), needed_runtimes: ['claude', 'codex'], bot_runtimes: ['claude', 'codex'], harness_choices: {grok: false},
       update: {state: 'needs_update', label: 'Needs update', target: '0.3.53'}, inbox_only: false,
       readiness: {
@@ -79,8 +85,8 @@ const {unrouted} = require('./support/routes.cjs');
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
-        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: {account: '', weekly_usage: 'manual', terminal_login: 'grok login'}},
-        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: {account: '', weekly_usage: '', terminal_login: 'cursor-agent login', api_keys: 'computer'}},
+        {id: 'grok', runtime: 'grok', name: 'Grok Build', capabilities: manifestCaps.grok},
+        {id: 'cursor', runtime: 'cursor', name: 'Cursor Agent', capabilities: manifestCaps.cursor},
         {id: 'musecode', runtime: 'musecode', name: 'Muse Code', capabilities: {account: '', weekly_usage: ''}}]});
       if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -95,7 +101,7 @@ const {unrouted} = require('./support/routes.cjs');
     // 1. Two cells per row, and nothing else inline: no bots, tool table, sign-in rows or menu.
     assert.deepEqual(await page.locator('#set-machines thead th').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
       ['computer', 'ai tools']);
-    assert.equal((await cells(row('box')))[0], 'Team box online Ana · Tico 0.3.52 Update');
+    assert.equal((await cells(row('box')))[0], `Team box online ${box.turn_summary} Ana · Tico 0.3.52 Update`);
     assert.equal((await cells(row('empty')))[0].endsWith('Tico 0.3.53'), true, 'Update only when one waits');
     assert.equal(await page.locator('#set-machines table [role=table], #set-machines table .people-more, #set-machines table [data-model-login]').count(), 0);
 
@@ -119,27 +125,28 @@ const {unrouted} = require('./support/routes.cjs');
     await row('box').locator('.machine-facts').click();
     const dialog = page.locator('#set-machines dialog.computer-detail[open]');
     await dialog.waitFor();
+    assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
+    assert.equal(await row('box').locator('.machine-turn-counts').innerText(), box.turn_summary);
     assert.deepEqual(await dialog.locator('section h3').allInnerTexts().then(a => a.map(t => t.toLowerCase())),
       ['connections', 'screen', 'bots on this computer', 'versions and updates', 'settings']);
     // 7. One line per AI tool, the computer's login, used by all its bots on that tool.
     const conns = dialog.locator('[data-connection]');
     assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex', 'own:musecode']);
     const codex = dialog.locator('[data-connection="own:codex"]');
-    assert.match(await codex.innerText(), /Codex\s+Computer's login/);
+    assert.deepEqual(await conns.locator('.computer-conn-head').allInnerTexts(), ['Claude Code', 'Codex', 'Muse Code']);
     assert.match(await codex.innerText(), /Weekly 30% left/);
     assert.match(await codex.innerText(), /Bots: Ops, Writer/);
     assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '30');
     assert.match(await dialog.locator('[data-connection="own:musecode"]').innerText(), /Login expired or rejected[\s\S]*The provider refused the login/);
     assert.equal(await dialog.locator('[data-detail-section=connections] > :last-child [data-add-connection=box]').isEnabled(), true, 'Add connection at the end');
-    // Installed tools no bot uses, signed in only from a terminal: their command is in the Add connection pop-up, with no
-    // chip and no line.
+    // Both tools can sign in the computer's one login from Add connection.
     const add = page.locator('dialog.computer-add-dialog[open]');
-    for (const [tool, command] of [['grok', 'grok login'], ['cursor', 'cursor-agent login']]) {
+    for (const tool of ['grok', 'cursor']) {
       await dialog.locator('[data-add-connection=box]').click();
       await add.locator(`[data-add-tool=${tool}]`).click();
-      const line = add.locator(`[data-add-terminal=${tool}]`);
-      assert.deepEqual([await line.locator('code').textContent(), await line.locator('[data-machine-copy-login]').getAttribute('data-machine-copy-login')], [command, command]);
-      assert.equal(await add.locator('[data-add-own]').isDisabled(), true);
+      assert.equal(await add.locator(`[data-add-terminal=${tool}]`).count(), 0);
+      assert.equal(await add.locator('[data-add-own]').isEnabled(), true);
+      assert.equal(await add.locator('input[name=profile]').count(), 0);
       await add.locator('[data-add-close]').first().click();
       await add.waitFor({state: 'detached'});
     }
@@ -213,8 +220,21 @@ const {unrouted} = require('./support/routes.cjs');
     await page.setViewportSize({width: 390, height: 844});
     assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
     assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
+    assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
+    assert.ok(await dialog.locator('[data-turn-counts]').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'turn counts wrap on a phone');
     await page.setViewportSize({width: 1440, height: 900});
     await page.keyboard.press('Escape');
+
+    // The list's stacked phone cards must expose the same counts as the pop-up.
+    await page.setViewportSize({width: 390, height: 844});
+    const phoneCounts = row('box').locator('.machine-turn-counts');
+    assert.equal(await phoneCounts.innerText(), box.turn_summary);
+    assert.ok(await phoneCounts.evaluate(el => {
+      const cell = el.closest('td'), card = el.closest('tr');
+      return cell.clientWidth >= card.clientWidth - 1 &&
+        el.scrollWidth <= el.clientWidth + 1 && cell.scrollWidth <= cell.clientWidth + 1;
+    }), 'computer row exposes the full counts, wait age and queue on a phone');
+    await page.setViewportSize({width: 1440, height: 900});
 
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();

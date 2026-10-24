@@ -168,17 +168,18 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     its setup in a person's Needs you once instead of waking it; finishing setup clears that."""
     from backend.tests.test_api import headers, post
     store = api.app.state.store
+    # Work it held from before an upgrade, when "Set up" bots still took tasks; onboarding bots take none now.
+    task = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
+                    headers=headers()).json()["task"]
     with store.transaction() as c:
+        secret = H.task_create(c, "human:cara", "Review the salary bands", "Only for Cara.", "bot:finance", private=True)
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-    created = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
-                       headers=headers()).json()
-    assert "hasn't finished its setup" in created.get("warning", ""), created
-    task = created["task"]
+    refused = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Another one", "body": "x"}, headers=headers())
+    assert refused.status_code >= 400 and "still onboarding" in refused.text
     refused = api.post(f"/api/v2/tasks/{task['id']}/run-now", json={}, headers=headers())
-    assert refused.status_code >= 400 and "hasn't finished its setup" in refused.text
+    assert refused.status_code >= 400 and "still onboarding" in refused.text
     with store.transaction() as c:
         c.execute("UPDATE tasks SET requester='bot:ops' WHERE id=?", (task["id"],))   # a bot asked for it
-        secret = H.task_create(c, "human:cara", "Review the salary bands", "Only for Cara.", "bot:finance", private=True)
         assert not H.task_private_readable(c, "human:ana", H.task(c, secret["id"]))
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued'").fetchone()[0] == 2
         aged(c, task["id"], 6)
@@ -188,7 +189,7 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued'").fetchone()[0] == 2
         told = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE '%setup_held%'").fetchone()[0]
         assert told == 1, "the bot that asked is told why"
-        reminder = [t for t in H.needs_you(c, "ana")["tasks"] if t["title"].startswith("Finish setting up finance")]
+        reminder = [t for t in H.needs_you(c, "ana")["tasks"] if t["title"].startswith("Finish onboarding finance")]
         assert len(reminder) == 1 and task["id"] in reminder[0]["body"]
         assert "salary" not in reminder[0]["body"] and secret["id"] not in reminder[0]["body"]
         assert "1 you can't see" in reminder[0]["body"], "a private task is only counted"

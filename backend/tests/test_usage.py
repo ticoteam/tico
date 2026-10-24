@@ -3,6 +3,8 @@ catalog's price table, the API groups them by bot, day or routine over a date ra
 only the bots they run or own. Subscription runs are counted apart from API spend."""
 
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -112,6 +114,32 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
     assert sum(r["share"] for r in got["rows"]) == pytest.approx(1, abs=1e-3) and cpo["share"] > 0.99
 
 
+def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO turns(id,bot,started,finished,input_tokens,cached_tokens,output_tokens,"
+                      "est_cost_usd,billing,usage_reason) VALUES(?,'ops',?,?,0,0,0,0,?,?)", [
+            (reason, DAY + "T10:00:00Z", DAY + "T10:05:00Z", billing, reason)
+            for reason, billing in (("usage_unreported", "api"), ("usage_limited", None), ("no_result", "api"))])
+    def amounts():
+        grouped = usage(api)
+        detail = usage(api, bot="ops")
+        return [grouped["totals"], *grouped["rows"], detail["totals"], *detail["routines"],
+                *[r for r in detail["daily"] if r["runs"]]]
+    assert all(r["est_cost_usd"] is None and r["unpriced_runs"] == 3 for r in amounts())
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished,input_tokens,est_cost_usd,billing,usage_reason) "
+                  "VALUES('unknown','ops',?,?,100,NULL,'api','cost_unpriced')",
+                  (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
+    assert all(r["est_cost_usd"] is None and r["input_tokens"] == 100 for r in amounts())
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) "
+                  "VALUES('measured','ops',?,?,2.5,'api')", (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
+    assert all(r["est_cost_usd"] == 2.5 for r in amounts())
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id='measured'")
+    assert all(r["est_cost_usd"] == 0 for r in amounts())
+
+
 def test_the_owner_and_admins_see_every_bot_and_a_member_only_the_ones_they_run(api):
     seed(api)
     assert {r["bot"] for r in usage(api, "ben-test")["rows"]} == {"ops", "cpo"}        # Ben is an administrator
@@ -192,3 +220,97 @@ def test_a_tico_run_prices_each_request_on_its_own_tier_and_other_tico_models_ke
         expected = price(model, 6_000, 165_000, 2_800)
     assert turn(api, attempt["id"])["est_cost_usd"] == pytest.approx(expected)
     assert today(api)["low_estimate_runs"] == 0
+
+
+def zero_usage(row, reason):
+    assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"], row["est_cost_usd"],
+            row["usage_reason"]) == (0, 0, 0, 0, reason)
+    assert all(row[key] is None for key in ("tokens_in", "tokens_out", "cost"))
+
+
+@pytest.mark.parametrize("outcome,limited,reason", [
+    ("failed", False, "usage_unreported"),
+    ("interrupted", False, "usage_unreported"),
+    ("failed", True, "usage_limited"),
+])
+def test_results_with_no_counts_end_with_zero_usage_and_their_reason(api, outcome, limited, reason):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, outcome=outcome, limited=limited, tokens_in=None, tokens_out=None)
+    row = turn(api, attempt["id"])
+    assert row["finished"] and row["exit"] == outcome
+    zero_usage(row, reason)
+
+
+def test_a_run_whose_lease_runs_out_ends_with_zero_usage_and_no_result(api):
+    from backend.tests.test_api import expire
+    r, _, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread-1"}, token=r["token"])
+    expire(api, attempt["id"])
+    with api.app.state.store.transaction() as c:
+        api.app.state.execution.expire(c)
+    row = turn(api, attempt["id"])
+    assert row["finished"] and row["exit"] in ("interrupted", "failed")
+    zero_usage(row, "no_result")
+
+
+def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(api):
+    from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
+    r, _, attempt = finished_then_lapsed(api)
+    aged(api, attempt["id"])
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {
+        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "acknowledge_uncertain_effects": True})
+    result = post(api, f"attempts/{attempt['id']}/complete", {
+        "outcome": "failed", "text": "Usage limit reached.", "last_seq": 3, "limited": True}, token=r["token"])
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    zero_usage(turn(api, attempt["id"]), "usage_limited")
+
+
+def test_a_late_completed_result_keeps_measured_usage_without_reopening_the_dismissed_job(api):
+    from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
+    r, _, attempt = finished_then_lapsed(api)
+    aged(api, attempt["id"])
+    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {
+        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "acknowledge_uncertain_effects": True})
+    result = post(api, f"attempts/{attempt['id']}/complete", {
+        "outcome": "completed", "text": "Done.", "last_seq": 3,
+        "usage": {"input_tokens": 10, "cached_tokens": 20, "output_tokens": 5,
+                  "model": "gpt-6-sol", "runtime": "codex", "billing": "api"}}, token=r["token"])
+    assert result["filed"] is True and settled(api, attempt) == ("expired", "cancelled")
+    row = turn(api, attempt["id"])
+    assert (row["input_tokens"], row["cached_tokens"], row["output_tokens"]) == (10, 20, 5)
+    assert row["est_cost_usd"] == pytest.approx(price("gpt-6-sol", 10, 20, 5))
+    assert row["usage_reason"] is None
+
+
+def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tmp_path):
+    from backend.backup import restore_snapshot, snapshot
+    r, _, done = setup_attempt(api)
+    complete(api, r, done, {"input_tokens": 10, "cached_tokens": 20, "output_tokens": 5,
+                            "model": "gpt-6-sol", "runtime": "codex", "billing": "api"})
+    before = turn(api, done["id"])
+    post(api, "chat/ops", {"text": "One more."})
+    from backend.tests.test_api import claim
+    open_run = claim(api, r)
+    post(api, f"attempts/{open_run['id']}/started", {"thread_id": "pre-disaster"}, token=r["token"])
+    backup, restored = tmp_path / "backup.sqlite", tmp_path / "restored.sqlite"
+    snapshot(api.app.state.store.settings.db_path, backup)
+    restore_snapshot(backup, restored)
+    with closing(sqlite3.connect(restored)) as db:
+        db.row_factory = sqlite3.Row
+        rows = {x["id"]: dict(x) for x in db.execute("SELECT * FROM turns")}
+    zero_usage(rows[open_run["id"]], "no_result")
+    assert rows[open_run["id"]]["exit"] == "interrupted"
+    kept = rows[done["id"]]
+    assert {k: kept[k] for k in ("input_tokens", "cached_tokens", "output_tokens", "est_cost_usd", "usage_reason")} \
+        == {k: before[k] for k in ("input_tokens", "cached_tokens", "output_tokens", "est_cost_usd", "usage_reason")}
+    assert kept["usage_reason"] is None
+
+
+def test_a_measured_run_has_no_usage_reason(api):
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, {"input_tokens": 10, "cached_tokens": 0, "output_tokens": 5,
+                               "model": "gpt-6-sol", "runtime": "codex", "billing": "api"})
+    assert turn(api, attempt["id"])["usage_reason"] is None

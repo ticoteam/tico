@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,27 @@ NOTES = """# Changelog
 ## [0.1.0] - 2026-10-01
 - Browse the team.
 """
+
+
+def test_a_prerelease_uses_its_own_notes_or_only_its_matching_base():
+    text = "## [1.2.3-rc.2]\n- Another candidate.\n## [1.2.3]\n- This release.\n## [1.2.2]\n- Older.\n"
+    assert section("## [1.2.3-rc.1]\n- This candidate.\n" + text, "v1.2.3-rc.1") == "- This candidate."
+    assert section("## [1.2.3-rc.1]\n\n" + text, "v1.2.3-rc.1") == ""  # an explicit empty section still fails
+    assert section(text, "v1.2.3-rc.1") == "- This release."
+    assert section(text, "v1.2.3") == "- This release."
+    assert section(text, "v1.2.4-rc.1") == ""
+
+
+def test_prerelease_notes_cli_uses_matching_base_and_refuses_missing_notes(tmp_path):
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("## [1.2.3]\n- This release.\n")
+    def extract(version):
+        return subprocess.run([sys.executable, str(ROOT / "scripts/changelog_notes.py"), version, str(changelog)],
+                              capture_output=True, text=True)
+    candidate = extract("v1.2.3-rc.1")
+    assert candidate.returncode == 0 and candidate.stdout == "- This release.\n" and not candidate.stderr
+    missing = extract("v1.2.4-rc.1")
+    assert missing.returncode != 0 and not missing.stdout and "has no notes" in missing.stderr
 
 
 def test_bundled_history_api_and_mcp(api, monkeypatch, tmp_path):
@@ -108,8 +130,10 @@ def released_edits(root):
     """Released versions whose CHANGELOG section here differs from the one at their tag, or None when no tag is readable.
 
     A release whose section is not here yet (tagged on its release branch, notes not merged back to main) is not an
-    edit: lines main gains meanwhile stay under Unreleased. A pull request whose line would land in a released section
-    once merged is refused by test_pr_changelog_lines_stay_under_unreleased instead.
+    edit: lines main gains meanwhile stay under Unreleased. A release tagged before its notes were written (the
+    Technical Writer adds them after publication) is held to the section as first written on main instead. A pull
+    request whose line would land in a released section once merged is refused by
+    test_pr_changelog_lines_stay_under_unreleased instead.
     """
     git = lambda *args, **kw: subprocess.run(["git", "-C", str(root), *args], capture_output=True, **kw)
     text = (root / "CHANGELOG.md").read_text()
@@ -124,6 +148,11 @@ def released_edits(root):
             size = int(header.split()[2])
             shipped, out = section(out[:size].decode(), tag[1:]), out[size + 1:]
             read += 1
+            if not shipped and tag[1:] in here:
+                added = git("log", "--reverse", "--format=%H", "-S", f"## [{tag[1:]}]", "--", "CHANGELOG.md")
+                first = added.stdout.decode().split()[:1]
+                if first:
+                    shipped = section(git("show", f"{first[0]}:CHANGELOG.md").stdout.decode(), tag[1:])
             if tag[1:] in here and section(text, tag[1:]) != shipped:
                 edited.append(tag[1:])
     return edited if read else None
@@ -297,6 +326,14 @@ def test_tag_before_its_notes_reach_main_is_not_an_edit(tmp_path):
     assert released_edits(tmp_path) == []
     commit(notes.replace("- Search tasks.", "- Search tasks across the team."))
     assert released_edits(tmp_path) == ["1.1.0"]
+    # A release tagged with no notes: the Technical Writer's section added after publication is its baseline.
+    tagged = notes.replace("## [Unreleased]\n", "## [Unreleased]\n- Pin tasks.\n")
+    commit(tagged)
+    git("tag", "v1.2.0")
+    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin tasks.\n"))
+    assert released_edits(tmp_path) == []
+    commit(tagged.replace("## [Unreleased]\n- Pin tasks.\n", "## [Unreleased]\n\n## [1.2.0] - 2026-10-03\n- Pin a task.\n"))
+    assert released_edits(tmp_path) == ["1.2.0"]
 
 
 def test_guard_refuses_lines_that_landed_in_released_sections():

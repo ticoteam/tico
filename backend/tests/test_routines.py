@@ -159,7 +159,7 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
     attempt = claim(api, r)
     post(api, "routines/ops:audit/delete", {})
     with api.app.state.store.read() as c:
-        assert H.task(c, attempt["task"]["id"])["status"] == "open"
+        assert H.task(c, attempt["task"]["id"])["status"] == "doing"
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "leased"
 
 
@@ -212,14 +212,14 @@ def test_pausing_a_bot_holds_its_routines_and_resuming_brings_back_the_enabled_o
     assert [get(api, "tasks/" + tid)["task"]["routine_id"] for tid in fired] == ["ops:audit"]
 
 
-def test_a_bot_still_in_setup_gets_no_timed_runs_and_keeps_its_event_runs(api):
+def test_an_onboarding_bot_runs_no_routines_timed_or_on_an_event(api):
     setup(api)
     create(api, "ops", DEBRIEF)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='ops'")
         from backend import routines
-        # A meeting's notes are announced once, so its run waits for the bot instead of being dropped.
-        assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
+        # Onboarding is learn-only (backend/lifecycle.py): no task is opened, so nothing is refused or held for it.
+        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
     assert tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"] == []
     assert {row["held_by_bot"] for row in rows(api)} == {"needs_setup"}
     post(api, "routines/ops:audit/run", {}, expected=409)     # as the page, which offers no Run now
