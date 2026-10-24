@@ -24,7 +24,7 @@ impl Fixture {
             .output()
             .unwrap();
         let python = String::from_utf8(python.stdout).unwrap();
-        for name in ["git", "gh", "python3"] {
+        for name in ["git", "gh", "python3", "hub"] {
             let path = root.join(name);
             fs::write(
                 &path,
@@ -58,16 +58,17 @@ impl Fixture {
         self.call(&["freeze", "--version", "v1.0.1", "--previous", "v1.0.0"])
     }
     fn publish(&self) -> Output {
-        self.call(&["publish", "--notes-commit", &"b".repeat(40)])
+        self.call(&["publish"])
+    }
+    fn writer_tasks(&self) -> usize {
+        fs::read_to_string(self.0.join("writer-tasks")).map_or(0, |t| t.lines().count())
     }
     fn recover_run(&self) {
         let path = self.0.join("freeze.json");
         let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        state["candidate"] = json!("b".repeat(40));
         state["run"] = json!(42);
         state["dispatching"] = json!(true);
         fs::write(path, state.to_string()).unwrap();
-        fs::write(self.0.join("main"), "b".repeat(40)).unwrap();
         fs::write(self.0.join("watched"), "").unwrap();
     }
 }
@@ -114,34 +115,32 @@ fn different_candidate_or_title_refuses_even_when_run_is_green() {
     }
 }
 #[test]
-fn red_nightly_blocks_until_a_newer_full_gate_is_green() {
-    let f = Fixture::new(json!({"red":true}));
-    refused(&f, f.freeze(), "Latest full gate on main is red");
-    assert!(!f.0.join("freeze.json").exists());
-    let f = Fixture::new(json!({"red":true,"newer_green":true}));
-    passed(f.freeze());
-    passed(f.publish());
-}
-#[test]
-fn happy_path_tags_exactly_the_validated_notes_commit_and_resumes_same_run() {
+fn happy_path_tags_the_frozen_commit_then_files_one_notes_task_and_resumes_without_repeats() {
     let f = Fixture::new(json!({}));
     passed(f.freeze());
     passed(f.publish());
     let tag: Value = serde_json::from_slice(&fs::read(f.0.join("tag")).unwrap()).unwrap();
-    assert_eq!(tag, json!({"sha":"b".repeat(40),"ref":"refs/tags/v1.0.1"}));
+    assert_eq!(tag, json!({"sha":"a".repeat(40),"ref":"refs/tags/v1.0.1"}));
+    assert_eq!(f.writer_tasks(), 1);
     fs::remove_file(f.0.join("dispatched")).unwrap();
     passed(f.publish());
     assert!(!f.0.join("dispatched").exists());
+    assert_eq!(f.writer_tasks(), 1);
 }
 #[test]
-fn post_freeze_code_and_failed_validation_never_tag() {
-    let f = Fixture::new(json!({"code_change":true}));
+fn a_lost_notes_task_response_is_reported_instead_of_filed_twice() {
+    let f = Fixture::new(json!({"hub_lost":true}));
     passed(f.freeze());
-    refused(&f, f.publish(), "Only CHANGELOG.md");
+    assert!(!f.publish().status.success());
+    assert!(f.0.join("tag").exists());
+    let again = f.publish();
+    assert!(String::from_utf8_lossy(&again.stderr).contains("may already have been filed"));
+    assert_eq!(f.writer_tasks(), 1);
+}
+#[test]
+fn failed_validation_never_tags() {
     let f = Fixture::new(json!({"failed":true}));
     passed(f.freeze());
     refused(&f, f.publish(), "validation failed");
-    let f = Fixture::new(json!({"red_during_validation":true}));
-    passed(f.freeze());
-    refused(&f, f.publish(), "Latest full gate on main is red");
+    assert_eq!(f.writer_tasks(), 0);
 }

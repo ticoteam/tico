@@ -730,8 +730,10 @@ def _messages(view, rows):
 
 
 def _readable_before_deletion(view, message):
+    from .live_privacy import sources
     try:
-        return view.privacy.readable(view.c, view.principal, view.privacy.message_tasks(view.c, message))
+        return (sources(view.c).message_readable(view.principal, message)
+                and view.privacy.readable(view.c, view.principal, view.privacy.message_tasks(view.c, message)))
     except Problem:
         return False
 

@@ -18,10 +18,11 @@ from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import visuals
-from . import app_delivery, providers, runner_versions
+from . import app_delivery, login_holds, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turn_limit, turn_share, turns_here
+from . import auto_tasks
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
 from pathlib import Path
 
 from . import read_cache
@@ -33,6 +34,7 @@ from . import task_relations as TR
 
 MIN_RUNNER_VERSION = (0, 2, 0)
 DOC_BOT = "doc-updater"         # the documentation agent: docs questions and doc PR reviews
+CEO_BOT = "goal-manager"       # the CEO Bot (backend/ceo_bot.py SLUG): of people, only the owner chats with it
 
 
 def runner_version_supported(value):
@@ -64,10 +66,10 @@ def attempt_details(c, turn):
             result = json.loads(attempt["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = result.get("error") or result.get("reason") or result.get("message") or (
+        reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
         details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
-                       failure_reason=details["end_reason"] or str(reason))
+                       failure_reason=login_holds.failure_line(result) or details["end_reason"] or str(reason))
     return details
 
 
@@ -95,7 +97,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             result = json.loads(row["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = (result.get("error") or result.get("reason") or result.get("message")
+        reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],
@@ -224,15 +226,21 @@ def may_chat(c, auth, who, bot):
         return True
     # The assistant is chatted with in one place only: each person's own Assistant room, through
     # /api/v2/assistant (backend/assistant.py). It has no chat with anyone else and no shared or
-    # per-bot chat, so every other route that asks "may I chat with it" says no.
-    return bot != auth.settings.assistant_bot
+    # per-bot chat, so every other route that asks "may I chat with it" says no. The CEO Bot the
+    # same: of people, only the owner talks to it, in the CEO Bot chat /api/v2/assistant gives them;
+    # an earlier chat with it anyone had stays readable, read-only.
+    return bot not in (auth.settings.assistant_bot, CEO_BOT)
 
 
 def require_chat(c, auth, who, bot):
     """Write on the bot, and a bot that has a chat of its own (the Assistant has only the room
-    /api/v2/assistant gives each person)."""
+    /api/v2/assistant gives each person, the CEO Bot only the owner's CEO Bot chat)."""
     auth.require_write(c, who, bot)
     if not may_chat(c, auth, who, bot):
+        if bot == CEO_BOT:
+            from . import ceo_bot
+            raise Problem("forbidden", "Of people, only the company's owner talks to the " + ceo_bot.name(c)
+                          + ", in their own chat with it (/api/v2/assistant); talk to your Assistant", 403)
         raise Problem("forbidden", auth.settings.assistant_name + " chats only in your own Assistant "
                       "(/api/v2/assistant); message one of your bots here", 403)
 
@@ -638,25 +646,19 @@ def own_sign_in(c, bot, settings=None):
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer a bot's queued work waits on for a free turn, or '': every turn there is taken, or this
-    bot already holds its share of them (execution.turn_share). A person's message is never held to the share."""
+    """The computer whose running work and short starts occupy all its places, or ''."""
     machine = location.get("machine") or {}
     row = c.execute("SELECT capacity FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
     held = turns_here(c, machine["runner_id"])
-    share = turn_share(c, machine["runner_id"], row["capacity"])
-    others = [r[0] for r in c.execute("SELECT DISTINCT j.bot FROM jobs j JOIN assignments a ON a.bot=j.bot "
-                                      "WHERE j.state='queued' AND a.runner_id=? AND j.bot!=?", (machine["runner_id"], bot))]
-    limit = turn_limit(share, row["capacity"], any(held.get(other, 0) < share for other in others))
-    full = (sum(held.values()) >= (row["capacity"] or 1)
-            or not human and held.get(bot, 0) >= limit)
-    return (machine.get("label") or "its computer") if full else ""
+    return (machine.get("label") or "its computer") if sum(held.values()) >= (row["capacity"] or 1) else ""
 
 
 def queued_label(c, bot, location, settings=None, human=False, behind=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation."""
+    from .performance import load_status
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -673,6 +675,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
+    elif (location.get("machine") or {}).get("runner_id") and load_status(
+            c, location["machine"]["runner_id"])["overloaded"]:
+        label = "Saved — waiting: computer busy"
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):
@@ -1640,7 +1645,7 @@ def install_views(app, store, auth, mutate, task_view):
                              "users": [P.brief(p) for p in P.primary_users(slug, people, configs)],
                              "icon": icon_of(configs.get(slug, {}) or {}),
                              "helper": helper(configs.get(slug, {}) or {}),
-                             "can_chat": level["write"] and slug != auth.settings.assistant_bot})
+                             "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, CEO_BOT)})
                 continue
             config = configs.get(slug, {})
             # Configuration contains connector requirements, never connector credentials.
@@ -1661,6 +1666,8 @@ def install_views(app, store, auth, mutate, task_view):
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
+                         "keep_tasks_going": auto_tasks.of(config),
+                         "task_flow": auto_tasks.counts(c, slug, who),
                          "team": P.team_of(slug, configs, people),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived),
                          "report_position": places.get("bot:" + slug),
@@ -1674,7 +1681,7 @@ def install_views(app, store, auth, mutate, task_view):
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
                          "wake": wake_presets.effective(config),
                          "my_access": level, **policy,
-                         "can_chat": level["write"] and slug != auth.settings.assistant_bot,
+                         "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, CEO_BOT),
                          # Labelled as on the bot list, so its computer is named to one who cannot see it.
                          "app_delivery": app_delivery.view(c, config),
                          "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime")))})
@@ -1690,7 +1697,7 @@ def install_views(app, store, auth, mutate, task_view):
             # Sign-in needs chat choices, not every bot's routines, machine and setup state.
             access = auth.bot_accesses(c, who)
             bots = [row["slug"] for row in H.bots(c)
-                    if row["state"] != "archived" and row["slug"] != store.settings.assistant_bot
+                    if row["state"] != "archived" and row["slug"] not in (store.settings.assistant_bot, CEO_BOT)
                     and access.get(row["slug"], auth.FULL)["see"]
                     and access.get(row["slug"], auth.FULL)["write"]]
             from .credentials import administrator, can_open
@@ -1818,6 +1825,9 @@ def install_views(app, store, auth, mutate, task_view):
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
                         if a[0] not in hidden]
                 value = dict(row)
+                from .start_places import summary, describe
+                value["turn_counts"] = summary(c, row["id"], store.settings)
+                value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.

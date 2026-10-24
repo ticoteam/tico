@@ -186,6 +186,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
 
 
 def answer_task(c, auth, who, task_id, body, wake):
+    mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
     version = None
@@ -264,7 +265,8 @@ def answer_task(c, auth, who, task_id, body, wake):
                          extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
     still_wanted.act(c, who.actor, task_id, picked)
     return {"comment": {**msg, "answer": value}, "answer": value,
-            "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": bool(wake)}
+            "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
+            **H.comment_delivery(c, msg, since=mark)}
 
 
 def task_covers(c, task_ids):

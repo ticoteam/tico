@@ -139,6 +139,90 @@ and keeps the bytes; the file returns when the bot publishes a changed version. 
 
 ## Storage
 
+### Prepared file-distribution edge
+
+`infra/files-edge/template.py` renders an **edge-only, disabled** CloudFormation template to stdout;
+it never calls AWS. This is preparation for managed file hosting, not an available storage option.
+The stand-up still requires the owner's cost approval, private bucket and bucket policy, certificate,
+logging and broker provisioning, HQ key synchronization and DNS. Do not create or deploy AWS resources
+before that approval. The template takes `FilesDomain`, `CertificateArn` and `BucketRegionalDomainName`;
+it creates the distribution, OAC, key store, functions and response policies. Its OAC needs a bucket
+policy restricted to this distribution's ARN. Keep Block Public Access on; never grant public reads.
+
+The v1 edge contract is:
+
+- Hosts are `<workspace>-files.<FilesDomain>`; HQ alone writes the lowercase host **label** as the
+  edge key-store key (for example `acme-files`). Its JSON value is
+  `{"v":1,"prefix":"c/<lowercase-v4-install-uuid>/","signing":{"key_id":"k1","secret":"<64-lowercase-hex>"}}`.
+  Host is lowercased before lookup and signature verification. Invalid record versions, prefixes,
+  key IDs or secrets fail closed. HQ derives the per-install secret from its master and writes it
+  before returning the address to the app; the edge never holds that master. HQ removes the record
+  with the company's stored prefix at the end of retention. HQ's `HQ_FILES_KVS_ARN` identifies the store.
+  Company S3 write credentials must never grant key-store writes. The signing secret is used as text,
+  not decoded as base64. Deleting or rotating the record revokes links; the app must refresh its key.
+- The only paths are `/blobs/<2hex>/<sha256>` and `/visuals/<2hex>/<sha256>`, all lowercase and with the
+  first two hash characters repeated in `<2hex>`. The request gate checks `e`, `k` and `s`, refusing
+  duplicates, expired links and expiry more than 300 seconds ahead. `s` is unpadded base64url
+  HMAC-SHA256 over `host + "\n" + original_path + "\n" + e`. It binds the host and namespace before
+  rewriting to `/c/<company-id>` plus the original path. Unknown paths get 404, invalid tokens 403.
+  Only GET/HEAD proceed. Query strings (including S3 response overrides) and cookies are removed.
+- Files always carry `default-src 'none'; sandbox`, `nosniff`, `Access-Control-Allow-Origin: *`,
+  `Cross-Origin-Resource-Policy: cross-origin` and `Referrer-Policy: no-referrer`.
+- Visuals have their own behavior and response function. The stored Content-Type selects HTML or SVG
+  (case-insensitive, before `;`); HTML is normalized to `text/html; charset=utf-8`, SVG to `image/svg+xml`.
+  Missing/unsupported type or `x-amz-meta-tico-visual-policy-version` other than exactly `1` returns an
+  empty 404. HTML without a charset is accepted and normalized. Partial visual responses and redirects
+  are refused. The app writes cleaned bytes, with its reporter script appended for HTML; the edge does
+  not clean or inspect the body.
+- Policy source is object metadata. `x-amz-meta-tico-visual-ancestors` supplies up to eight whitespace
+  separated tokens, each exactly `'self'`, an HTTPS origin matching
+  `https://[a-z0-9.-]+(:[0-9]{1,5})?`, or HTTP localhost/127.0.0.1 with an optional port.
+  `x-amz-meta-tico-visual-script` supplies up to four quoted SHA256 hashes matching
+  `^'sha256-[A-Za-z0-9+/]{43}='$`. Invalid tokens are dropped; an empty slot becomes `'none'`.
+  Metadata cannot supply a full CSP or sandbox tokens. Contract changes require a new version at
+  the edge first.
+
+The fixed visual templates (only `<script>` and `<ancestors>` are substituted) are:
+
+```text
+HTML: default-src 'none'; script-src <script>; img-src data:; font-src data:; media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors <ancestors>; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox
+SVG: default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; frame-ancestors <ancestors>; sandbox
+```
+
+Every visual response sets inline disposition, `nosniff`, `no-referrer`, CORP cross-origin and
+`Cache-Control: private, no-cache`, with no CORS. Response functions remove all object metadata,
+origin CSP/report-only values (including repeated values), and both header and CloudFront cookie-object
+representations of Set-Cookie. They replace CSP with exactly one header. Arbitrary object writers cannot
+introduce a directive or `allow-same-origin`: the document stays in an opaque origin. Body CSP meta tags
+can only restrict this policy; Set-Cookie meta tags do not set cookies. The app still owns body cleaning.
+
+Both behaviors also attach an overriding restrictive response policy and remove Set-Cookie/report-only
+at the policy layer. CloudFront applies policies **before** the viewer-response function, so the visual
+function replaces the fallback CSP without stacking it. When an S3 origin returns an error, CloudFront
+skips viewer-response; the restrictive fallback still applies. S3 errors have no object metadata. There
+are no custom error-page mappings. All cache TTLs are zero so a company cannot freeze mutable metadata
+with its own Cache-Control; the request gate still authenticates every request. Enabling caching later
+requires checking metadata invalidation and the same security boundaries.
+
+Run the synthetic handler and wiring checks with `node --test infra/files-edge/edge.test.cjs`.
+They execute the exact generated function code with only the key store and clock replaced. No AWS or
+team database is used. With Playwright and Chromium installed, the optional builder check
+`node infra/files-edge/browser-check.cjs` verifies that a hostile HTML fixture cannot read/write cookies
+or reach its same-host parent, even with body/meta/header/metadata attempts to add `allow-same-origin`.
+After approval, stand-up additionally needs actual CloudFront validation and
+origin-error/header readback before activation; a local harness cannot prove AWS runtime acceptance.
+
+The prepared Public Suffix List rule for the production base domain also covers `*-files` sibling
+hosts: each hyphenated name is one DNS label, so no extra wildcard entry is needed. Publication and
+browser uptake are separate deployment gates. The sandbox and cookie stripping remain mandatory
+regardless of PSL status.
+
+AWS references: [event and cookie structure](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/functions-event-structure.html),
+[error-event restrictions](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-function-restrictions-all.html),
+[policy ordering](https://aws.amazon.com/blogs/networking-and-content-delivery/amazon-cloudfront-introduces-response-headers-policies/).
+
+### Server storage
+
 Local disk is the default. The owner can put the company's files in its own bucket from Settings › General
 ([A company's own bucket](#a-companys-own-bucket)); the server's operator can set one with the steps below.
 To use S3:

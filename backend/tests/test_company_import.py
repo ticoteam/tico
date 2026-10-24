@@ -31,7 +31,8 @@ def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", 
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
 
 
-def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment):
+def test_a_seat_with_no_bot_yet_makes_no_bot_and_the_bots_under_it_report_one_step_up(environment, monkeypatch):
+    monkeypatch.setattr(C.draft, "OPEN_SEATS", {"controller"})  # every model seat has a template now
     api = environment()
     text = company_text(keep=("coo", "botops", "finance-lead", "controller", "bookkeeping"))
     assert "no_bot_yet: true" in text
@@ -235,7 +236,7 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     seats = sum(b["template"] in {s["slug"] for s in C.SEATS} for b in draft["bots"])  # no bot yet: no employee
-    assert seats and len(preview.json()["employees"]) == 300 - seats
+    assert len(preview.json()["employees"]) == 300 - seats
     done = api.post("/api/v2/onboarding/company/import", json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
                     headers=signed_in())
     assert done.status_code == 200, done.text
@@ -419,3 +420,91 @@ def test_a_300_seat_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp
         imported = {r["bot"] for r in rows(api, "SELECT bot FROM bot_config")}
         employees = [b["id"] for b in draft["bots"] if b["template"] not in seats]
         assert len(draft["bots"]) == 300 and employees and set(employees) <= imported
+
+
+# ------------------------------------------------------------------------- every goal setup's /goals writes (Dev 449)
+def starter_chart():
+    """The setup page's starter chart: the Assistant and BotOps, six department heads and 16 roles under them."""
+    from backend.tests.test_company_file import started
+
+    draft = started()
+    roles = {"engineering": 8, "finance": 2, "marketing": 2, "sales": 2, "support": 2, "product": 0}
+    keep = [b for b in draft["bots"] if b["core"] or (b["lead"] and b["dept"] in roles)]
+    for dept, count in roles.items():
+        keep += [b for b in draft["bots"] if b["dept"] == dept and not b["lead"] and not b["core"]][:count]
+    draft["bots"] = keep
+    draft["people"] = [{"id": "dana", "name": "Dana Ruiz", "role": "Founder", "dept": "leadership", "owner": True}]
+    draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
+    return C.Turn(draft).finish()
+
+
+def every_goal(draft):
+    """`draft` with every goal setup's `POST /goals` (tico-services recruiting/goals.py) writes for it: the company's 3,
+    2 for each department (its head's) and 1 for each bot that is neither built in nor a head, each title, measure and
+    unit as long as the file allows."""
+    def goal(owner, title):
+        return {"id": "goal-%d" % (len(draft["goals"]) + 1), "owner": owner,
+                "title": (title + ", every single week of the quarter" * 8)[:C.LIMITS["goal_title"]],
+                "measure": "m" * C.LIMITS["measure"], "unit": "u" * C.LIMITS["unit"], "direction": "up",
+                "target": 4, "baseline": None, "deadline": "2027-01-15"}
+
+    owner = next(p["id"] for p in draft["people"] if p["owner"])
+    for i in range(3):
+        draft["goals"].append(goal(owner, "Company goal %s" % "ABC"[i]))
+    for dept in dict.fromkeys(b["dept"] for b in draft["bots"] if not b["core"]):
+        head = next((b["id"] for b in draft["bots"] if b["lead"] and b["dept"] == dept), owner)
+        for i in range(2):
+            draft["goals"].append(goal(head, "%s goal %s" % (dept, "AB"[i])))
+    for bot in (b for b in draft["bots"] if not b["core"] and not b["lead"]):
+        draft["goals"].append(goal(bot["id"], "Goal for %s" % bot["id"]))
+    return draft
+
+
+def preview_and_import(api, text):
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    done = api.post("/api/v2/onboarding/company/import",
+                    json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    return preview.json()
+
+
+def test_the_starter_charts_full_company_file_with_all_31_goals_imports(environment):
+    """The page's full company file (tico.company.yaml) for the starter chart holds 23-31 goals; at 20 it was refused."""
+    draft = every_goal(starter_chart())
+    assert len(draft["goals"]) == 3 + 2 * 6 + 16 == 31
+    text = C.to_yaml(draft)
+    api = environment()
+    preview = preview_and_import(api, text)
+    assert len(preview["goals"]) == 31 and "goals" not in preview["deferred"]
+    assert len(rows(api, "SELECT id FROM goals")) == 31
+
+
+def test_a_325_goal_company_file_imports_and_a_326_goal_file_is_refused_plainly(environment):
+    """325 = 3 company goals + 2 for each department + 1 for each of the most bots a chart holds, as tico-services
+    allows; one past it is still refused, before anything is created."""
+    from backend.company_file import draft as D
+    from backend.tests.test_company_file import chart
+
+    assert C.LIMITS["goals"] == 325 >= 3 + 2 * len(D.DEPARTMENTS) + C.LIMITS["bots"]
+    draft = every_goal(chart(300))
+    draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
+    assert 20 < len(draft["goals"]) <= C.LIMITS["goals"]                 # every goal /goals writes for a full chart
+    while len(draft["goals"]) < C.LIMITS["goals"]:                     # a visitor's own goals fill the rest
+        draft["goals"].append({**draft["goals"][0], "id": "goal-%d" % (len(draft["goals"]) + 1)})
+    text = C.to_yaml(draft)
+    assert len(C.from_yaml(text)["goals"]) == 325
+    assert len(starter.canonical(starter.load(text)).encode()) <= starter.MAX_BYTES     # our largest file fits our own check
+    api = environment()
+    # Written by hand: our own writer refuses to make a 326-goal file.
+    extra = ("  - id: goal-326\n    title: One goal too many\n    owner: %s\n    measure: null\n    unit: ''\n"
+             "    direction: up\n" % draft["goals"][0]["owner"])
+    over = text.replace("\nrules:\n", "\n" + extra + "rules:\n", 1)
+    assert over != text
+    for path, body in (("preview", {}), ("import", {"fingerprint": "0" * 64})):
+        refused = api.post("/api/v2/onboarding/company/" + path, json={"company_yaml": over, **body}, headers=signed_in())
+        assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file", refused.text
+        assert "goals has more than 325 entries" in refused.text
+    assert not rows(api, "SELECT id FROM goals")
+    preview = preview_and_import(api, text)
+    assert len(preview["goals"]) == 325 and len(rows(api, "SELECT id FROM goals")) == 325
