@@ -103,16 +103,19 @@ async function check(engine) {
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     const origin = 'http://127.0.0.1:' + server.address().port;
-    const ready = () => page.waitForFunction(() => {
-      if (!SESSION.seen || !V2C?.loaded || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
+    const ready = (allowSignedOut = false) => page.waitForFunction(allowSignedOut => {
+      // Sign-in recovery deliberately closes the stream until identity is restored.
+      if (allowSignedOut && SESSION.out) return !LIVE.es && !liveConnected();
+      if (!SESSION.seen || !V2C?.loaded || !LIVE.conversations.has('c1') || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
       const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
       // Receiving ready changes the replay cursor without changing the subscription.
       subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
       return subscribed.href === expected.href;
-    });
+    }, allowSignedOut);
     const readsSettled = async () => {
       const deadline = Date.now() + 30000;
       do {
+        await ready(true);
         // Writes can forget reads still running, and schedule a later snapshot burst.
         await page.waitForFunction(() => !LIVE_SOON.size);
         if (reads.size) await new Promise((resolve, reject) => {
@@ -123,6 +126,9 @@ async function check(engine) {
         await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
         assert.ok(Date.now() < deadline, 'fixture reads settle before navigation');
       } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
+      assert.equal(await page.evaluate(() => SESSION.out ? !LIVE.es && !liveConnected() :
+        liveConnected() && LIVE.es?.readyState === EventSource.OPEN), true,
+        'the fixture stream is settled for the current session before navigation');
     };
     await page.goto(origin + '/#/bot/botops');
     const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
