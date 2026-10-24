@@ -6,7 +6,28 @@
    loaded in the order index.html lists them. */
 'use strict';
 
-const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
+const machineOnline = machine => !machine.revoked_at && !!machine.last_seen && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen) < 60000;
+const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
+  || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
+const machinePresenceWords = machine => machine.revoked_at ? 'revoked'
+  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
+// A presence paint can change the focused row too; restore its control by stable data attributes,
+// keeping positional selectors only for the unkeyed containers between them.
+function computerFocusRestore(root, active = document.activeElement) {
+  if (!root?.contains(active)) return () => {};
+  const path = [];
+  for (let node = active; node !== root; node = node.parentElement) {
+    const keys = [...node.attributes].filter(attr => attr.name === 'id' || attr.name.startsWith('data-'));
+    path.unshift(node.localName + (keys.length ? keys.map(attr => `[${attr.name}="${CSS.escape(attr.value)}"]`).join('')
+      : `:nth-of-type(${[...node.parentElement.children].filter(peer => peer.localName === node.localName).indexOf(node) + 1})`));
+  }
+  const caret = [active.selectionStart, active.selectionEnd, active.selectionDirection];
+  return () => {
+    const target = active.isConnected ? active : root.querySelector(path.join(' > '));
+    target?.focus({preventScroll: true});
+    if (target && typeof caret[0] === 'number') try { target.setSelectionRange(...caret); } catch { /* not a text field */ }
+  };
+}
 const machineToolName = (machine, runtime) => Object.values(machine.readiness?.harnesses || {}).find(tool => tool.runtime === runtime)?.name
   || harnessRow(runtime)?.name || harnessWords(runtime);
 // Whether the computer has reported its tools yet: before its first report the server sends empty `runtimes`.
@@ -223,6 +244,11 @@ function computerAddStepHTML(machine, step) {
 function computerAddOpen(id) {
   const machine = () => (SETTINGS_DATA?.machines || []).find(m => m.id === id);
   if (!machine()) return;
+  const root = $('#set-machines dialog.computer-detail[open]') || $('#set-machines');
+  const opener = root?.querySelector(`[data-add-connection="${CSS.escape(id)}"]`);
+  const restoreFocus = computerFocusRestore(root, opener);
+  // Mouse clicks need not focus buttons; give the native dialog the same stable opener.
+  opener?.focus({preventScroll: true});
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal model-login computer-add-dialog';
   dialog.setAttribute('aria-labelledby', 'computer-add-title');
@@ -233,7 +259,12 @@ function computerAddOpen(id) {
     signingIn = true;     // the sign-in owns the pop-up from here (its own Close cancels a sign-in still running)
     window.TicoModelLogin?.open({runnerId: id, runtime: step.runtime, machine: machine().label, profile: '', into: dialog});
   };
-  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('close', () => {
+    // A queued close must not take focus back from an action already opened elsewhere.
+    const returnFocus = document.activeElement === document.body || dialog.contains(document.activeElement);
+    dialog.remove();
+    if (returnFocus) restoreFocus();
+  });
   dialog.addEventListener('cancel', event => { if (signingIn) return; event.preventDefault(); dialog.close(); });
   dialog.addEventListener('click', event => {
     if (signingIn) return;
@@ -263,6 +294,7 @@ function computerAddOpen(id) {
   });
   paint();
   dialog.showModal();
+  void settingsMachinesRefresh();
   return dialog;
 }
 function machineBotsHTML(machine) {
@@ -346,13 +378,13 @@ function machineSettingsHTML(machine) {
 function computerDetailHTML(machine) {
   const online = machineOnline(machine), manage = !machine.revoked_at && machineCanSignIn(machine);
   const conns = machineShown(machine);
-  const status = machine.revoked_at ? 'revoked' : online ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`;
+  const status = machinePresenceWords(machine);
   const notes = [!machine.revoked_at && !online ? '<p class="computer-detail-note" role="status" data-computer-offline>Computer is offline. Sign-in, usage refresh, screen and updates wait until it is back.</p>' : '',
     machineWaiting(machine) ? `<p class="computer-detail-note" role="status" data-machine-waiting>Waiting for ${esc(machine.label)} to report.</p>` : ''].join('');
   const empty = machineReported(machine) && !conns.length && !machine.revoked_at
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key, title, body) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
-  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · ${esc(status)}</span></div>
+  return `<header class="computer-detail-head"><div><h2 id="computer-detail-title">${esc(machine.label)}</h2><span class="muted">${esc(settingsPersonName(machine.operator))} · <span data-computer-status>${esc(status)}</span></span></div>
       <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
@@ -371,12 +403,23 @@ function computerDetailOpen(id) {
     dialog = document.createElement('dialog');
     dialog.className = 'tmodal computer-detail';
     dialog.setAttribute('aria-labelledby', 'computer-detail-title');
-    dialog.onclose = () => { dialog.dataset.computer = ''; };
+    dialog.onclose = () => {
+      if (dialog.open) return;
+      dialog.dataset.computer = '';
+      if (document.activeElement === document.body || dialog.contains(document.activeElement)) dialog.restoreOpener?.();
+    };
     el.appendChild(dialog);
+  }
+  // Presence refreshes can replace the opener while this modal is open.
+  if (!dialog.open) {
+    const opener = el.querySelector(`[data-computer-open="${CSS.escape(id)}"]`);
+    dialog.restoreOpener = computerFocusRestore(el, opener);
+    opener?.focus({preventScroll: true});
   }
   dialog.dataset.computer = id;
   computerDetailPaint(true);
   if (!dialog.open) dialog.showModal();
+  void settingsMachinesRefresh();
 }
 // Redraw the open pop-up after Settings loads again. A connection, or Add connection, that someone is typing in is
 // carried over as it is (draft, focus and caret), and everything around it is redrawn; a save settles its own form
@@ -395,16 +438,13 @@ function computerDetailPaint(force = false) {
     && formBusy({querySelectorAll: selector => [field].filter(f => f.matches(selector))}))) return;
   const body = dialog.querySelector('.computer-detail-body'), scroll = body?.scrollTop || 0;
   const open = new Set([...dialog.querySelectorAll('details[open]')].map(node => node.dataset.machineDetails || node.dataset.profile || ''));
-  const active = document.activeElement, caret = [active?.selectionStart, active?.selectionEnd];
+  const restoreFocus = force ? () => {} : computerFocusRestore(dialog);
   const next = document.createElement('div');
   next.innerHTML = computerDetailHTML(machine);
   next.querySelectorAll('details').forEach(node => { node.open = open.has(node.dataset.machineDetails || node.dataset.profile || ''); });
   // A connection that is gone keeps no draft.
   for (const node of kept) next.querySelector(computerDetailKey(node))?.replaceWith(node);
   dialog.replaceChildren(...next.childNodes);
-  if (active && kept.some(node => node.contains(active))) {
-    active.focus({preventScroll: true});
-    if (typeof caret[0] === 'number') try { active.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
-  }
+  restoreFocus();
   if (!force) dialog.querySelector('.computer-detail-body').scrollTop = scroll;
 }

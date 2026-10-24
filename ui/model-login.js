@@ -494,7 +494,7 @@
     form.innerHTML = `${info.preview && !adding ? `<p>Now: key <code>${text(info.preview)}</code>, ${text(KEY_SOURCES[info.source] || '')}.</p>` : ''}
       ${adding ? shareHTML : scopeHTML(info, 'replace', where)}
       <label>New key <input name="secret" type="password" autocomplete="off" spellcheck="false" required maxlength="4000" aria-label="New ${text(name)} key"></label>
-      ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === info.name ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
+      ${names.length > 1 ? `<label>Kind <select name="env">${names.map(n => `<option value="${text(n)}"${n === (info.name || info.shared?.env) ? ' selected' : ''}>${text(n)}</option>`).join('')}</select></label>` : ''}
       <p class="muted">It is kept in Tico's credential vault and never shown again in full. ${toKey
         ? `The subscription stays signed in and in use while ${text(where)} checks the key; once it works there the subscription is signed out and the next turn uses the key. Bots keep this login, so nothing needs reassigning.`
         : 'The next turn uses it once the computer has checked it; the old key is then deleted.'}</p>`;

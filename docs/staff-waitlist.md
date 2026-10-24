@@ -1,6 +1,8 @@
 # Review the Hosting waitlist (staff)
 
-**Unreleased update:** Credit requests is merged, but the separate admin installation is still being verified.
+**Unreleased update:** approval, recovery controls, and Credit requests are merged.
+The grant-on-approval policy below is intended and unreleased; its runtime correction is unimplemented.
+The separate admin installation, HQ deployment, and live acceptance remain unverified.
 
 Only Tico staff see this page. Open **Waitlist** on the admin page (admin.tico.team). It sits behind Cloudflare Access, so customers never reach it, and HQ only takes changes from the admin page with the staff billing key. Customers see [Joining the Tico waitlist](waitlist.md).
 
@@ -36,9 +38,54 @@ If the person was decided already, HQ says "this person isn't waiting any more".
 
 When the email fails, the declined row says **Email not sent**. The decision stands. Click **Resend** on the row to send it again. Two Resends at once send one email.
 
-## Approve
+## Approve a sign-up
 
-The Waiting rows have an **Approve** form with a starting credit pre-filled at $20.00. Approve does nothing yet: it sends nothing to HQ and says "Approve comes with the next update (Waitlist 2/2)".
+1. Open **Waiting**.
+2. Open **Approve** on the customer’s row.
+3. Check **Starting credit (dollars)**. It starts at **20.00**. You can enter another positive amount, such as **5.00**.
+4. Select **Approve**.
+5. Open **Approved** to check **Credit** and **Status**.
+
+**Intended policy — unreleased:** approval commits one starting-credit grant before provisioning begins.
+HQ records the amount, approver, and original approval time once, with **Enforce**, **$0 minimum**, and **0-hour Hosting grace**.
+The grant belongs to the same account the Gateway bills and expires 30 days after the original approval time.
+Only after the approval and grant commit succeeds does HQ start both Starter servers and issue the Tico models key.
+If that commit fails, provisioning must not begin.
+
+**Known runtime gap — unimplemented:** the current runtime grants credit after the Tico server installs, rather than on approval.
+The current UI can therefore show credit as **pending** before installation. This is an implementation limitation, not the approved policy.
+This help correction does not fix the runtime or confirm release or activation.
+
+Both servers must be ready before HQ sends **You're in: your Tico is ready**.
+The email includes the balance and a sign-in link to [app.tico.dev](https://app.tico.dev/).
+Repeated approval requests do not create another grant, server, or completion email.
+
+## Recover a failed setup or email
+
+| Status under Approved | Meaning and action |
+|---|---|
+| **Approved, setting up** | Setup is still running. A pending installation confirmation keeps this status and delays the email. |
+| **Approved, setup failed: …** | Under the intended policy, the approval grant stays even if installation never succeeds. Read the reason, resolve it, and select **Retry setup**. Retry preserves the existing Tico server and account once installed. |
+| **Approved, setup failed: … ($20.00 credit pending)** in the current UI | Known runtime gap: the current install-time grant has not happened. This pending state does not satisfy the intended grant-on-approval policy above. |
+| **Email not sent** | Setup succeeded but the completion email failed. Select **Resend**. Do not approve again. |
+
+Under the intended policy, failed setup retains the committed grant.
+Repeated approval, **Retry setup**, and interrupted or concurrent retries reuse that single grant.
+They preserve its amount, approver, original approval time, and expiry; they do not grant again or reset the 30 days.
+Retry does not duplicate a working server.
+The current **Credit** cell may still label the approved amount **pending** because of the unimplemented runtime correction.
+For example, retrying a failed bot computer leaves the installed Tico server and its credit in place.
+No completion email goes out until both servers are ready and billing is configured.
+
+If the reason says a failed server is kept, recover or end that failed machine on **Hosting** before **Retry setup**.
+An already installed Tico server must be recovered in place. Retry cannot replace its billing account.
+
+If setup finishes after the original credit has expired, the row says **credit ended before setup**.
+Enforcement still applies with a $0 minimum and zero grace. Add credit through [Billing](staff-billing.md), then select **Retry setup**.
+The original expired grant is not renewed, and no completion email goes out before recovery.
+
+If HQ does not answer an action, use **Send again** on that same form.
+Repeated requests keep one grant and setup; concurrent Resends send one completion email.
 
 ## Handle a credit request
 
@@ -63,12 +110,20 @@ If credit was added but the request was not marked answered, the page says so. R
 
 Models resume within five minutes once enough credit covers usage and brings the balance above the minimum.
 Server restart follows separate billing coverage rules. Do not promise that adding $1 restarts both servers.
-Low-balance notices and server restart-shortfall amounts belong to separate updates still under review.
+See [starting credit and credit notices](account.md#your-starting-credit-and-what-happens-at-0) for the customer’s view.
+The account page and staff admin page show the same [amount needed to restart servers](account.md#more-credit-and-restarting) while credit is short.
 
 ## Who can do this
 
-Only people on the admin page's allow list see the Waitlist. HQ checks the staff keys on every call: any staff key can read the list, and only the billing key (or the full staff key) can decline or resend. Adding credit and dismissing requests also require the billing key or full staff key. Each change records the signed-in staff email.
+Only people on the admin page’s allow list see the Waitlist.
+HQ checks the staff keys on every call. Any staff key can read the list.
+Decline, Resend, Approve, Retry setup, Add credit, and Dismiss require the billing key or the full staff key.
+Each change records the signed-in staff email.
 
 *Sources: ticoteam/tico-internal admin/README.md "Waitlist" (Dev 342), ticoteam/tico-services#120 (squash 028ce6bc), 2026-10-22. Not seen live: no access to admin.tico.team.*
 
 *Credit requests sources checked 2026-10-23: ticoteam/tico-internal#16, admin/tico_admin/waitlist.py (Forms, credit_requests, submit_credit); ticoteam/tico-services#127, portal/account.py. Separate admin installation not verified.*
+
+*Approval sources checked 2026-10-23: services#132, hosting/approve.py (shown, approve, retry, on_installed, _grant, _send, SignupSetup); admin#17 reviewed head c7a0ab9c, admin/tico_admin/waitlist.py (Forms.approve/retry/youre_in, approval_credit, status_cell); Engineering’s accepted receipt ordering on Dev 344. Admin merge d47f5682; reviewed source has no subsequent delta per Builder’s receipt. No installation or real action verified.*
+
+*Policy correction, 2026-10-24: Product waitlist spec v3.5, section 2, Permissions and errors, tests 4 and 7, and Answer 17. This supersedes the earlier install-time grant ordering. Current hosting/approve.py (approve, on_installed, _grant) still grants after installation; the runtime correction remains unimplemented. No live recovery or backfill is authorized.*

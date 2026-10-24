@@ -100,6 +100,14 @@ async function providersSave(view, chosen) {
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
     ...('preset' in chosen ? {preset: chosen.preset} : {})});
 }
+let SETTINGS_PROVIDERS_VIEW = null;
+function renderSettingsProviderNext() {
+  const root = $('#set-provider-next');
+  if (!root || !SETTINGS_PROVIDERS_VIEW) return;
+  const restoreFocus = computerFocusRestore(root);
+  patchHTML(root, providersNextHTML(SETTINGS_PROVIDERS_VIEW, S.me?.role === 'owner'));
+  restoreFocus();
+}
 async function renderSettingsProviders() {
   const el = $('#set-providers'); if (!el) return;
   const owner = S.me?.role === 'owner';
@@ -108,8 +116,9 @@ async function renderSettingsProviders() {
     if (!$('#set-providers')) return;
     const gateway = await get('/v2/providers/gateway').catch(() => null);
     if (!$('#set-providers')) return;
+    SETTINGS_PROVIDERS_VIEW = view;
     el.innerHTML = `${providersFormHTML(view, SETTINGS_DATA.models, 'set-prov', owner)}
-      ${providersNextHTML(view, owner)}
+      <div id="set-provider-next">${providersNextHTML(view, owner)}</div>
       ${owner ? '<div class="onb-actions"><button class="primary" type="button" id="set-prov-save">Save</button><span class="spacer"></span><span class="muted" id="set-prov-status"></span></div>'
         : '<p class="muted">Only the owner can change this.</p>'}
       ${gateway ? gatewayHTML(gateway, owner) : ''}`;
@@ -197,7 +206,7 @@ function providersNextHTML(view, owner) {
   const wanted = new Set(SETTINGS_DATA.models.filter(model => view.enabled.includes(model.provider)).map(model => model.runtime));
   const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at);
   const rows = machines.flatMap(machine => [...wanted].filter(runtime => machine.readiness?.runtimes?.[runtime]?.authenticated !== 'ready').map(runtime => {
-    const online = machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
+    const online = machineOnline(machine);
     const ready = machine.readiness?.runtimes?.[runtime]?.installed;
     return `<li>${esc(machine.label)} · ${esc(runtime)}${owner && online && ready && harnessCaps(runtime).browser_sign_in
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}">Sign in</button>`

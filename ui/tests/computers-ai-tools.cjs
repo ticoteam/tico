@@ -60,6 +60,8 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       readiness: {runtimes: {claude: {installed: true, authenticated: 'ready'}}}};
     const me = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true};
     const writes = [];
+    let presenceMode = 'fixed', presenceReads = 0, presenceOffset = 0;
+    const heldPresence = [];
     await page.route('**/*', route => {
       const req = route.request(), p = new URL(req.url()).pathname;
       const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -79,9 +81,17 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
-      if (p === '/api/v2/operations') return json({machines: [box, empty, fresh, revoked], services: []});
+      if (p === '/api/v2/operations') {
+        presenceReads++;
+        if (presenceMode === 'slow') { heldPresence.push(route); return; }
+        if (presenceMode === 'failure') return json({error: 'Unavailable'}, 503);
+        if (presenceMode === 'live') box.last_seen = at(presenceOffset - 3000);
+        return json({machines: [box, empty, fresh, revoked], services: []});
+      }
       // The manifests' capabilities this page reads (runner/harnesses/*.toml).
-      if (p === '/api/v2/models') return json({models: [], harnesses: [
+      if (p === '/api/v2/providers') return json({enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'},
+        providers: [{id: 'openai', label: 'OpenAI'}]});
+      if (p === '/api/v2/models') return json({models: [{id: 'test-model', label: 'Test model', provider: 'openai', runtime: 'codex'}], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true, sign_out: ['logout']}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
@@ -207,7 +217,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     box.last_seen = at(-3 * 3600000);
     await page.evaluate(() => loadSettings());
     await row('box').locator('[data-machine-status]', {hasText: 'offline'}).waitFor();
-    assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline 3h ago');
+    assert.equal(await row('box').locator('[data-machine-status]').innerText(), 'offline · last seen 3h ago');
     assert.equal(await row('box').locator('.machine-chip meter').first().evaluate(m => m.value), 30);
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-computer-offline]').waitFor();
@@ -243,6 +253,202 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.setViewportSize({width: 1440, height: 900});
     await page.keyboard.press('Escape');
 
+    // Presence refresh protects the core recovery flow: cached heartbeats cannot disable a live computer.
+    box.readiness.runtimes.codex.authenticated = 'missing';
+    await page.clock.install({time: now});
+    await page.clock.pauseAt(now + 1000);
+    presenceMode = 'live';
+    await page.evaluate(() => { settingsMachinesWatch(); return settingsMachinesRefresh(); });
+    // Polling keeps keyboard focus on ordinary controls, including when the row's status changes.
+    const rowButton = row('box').locator('.machine-name');
+    await rowButton.focus();
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'list control keeps focus');
+    const beforeIdle = presenceReads;
+    presenceOffset = 65000;
+    await page.clock.fastForward(65000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    assert.ok(presenceReads > beforeIdle, 'Computers refreshes while visible');
+    await row('box').locator('.machine-name').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    const online = async () => {
+      assert.match(await row('box').locator('[data-machine-status]').innerText(), /^online/);
+      assert.match(await dialog.locator('[data-computer-status]').innerText(), /^online/);
+      assert.equal(await dialog.locator('[data-add-connection=box]').isEnabled(), true);
+      assert.equal(await dialog.locator('[data-model-login][data-runtime=codex]').isEnabled(), true);
+    };
+    await online();
+    const signIn = dialog.locator('[data-model-login][data-runtime=codex]');
+    await signIn.focus();
+    const openedReads = presenceReads;
+    presenceOffset = 130000;
+    await page.clock.fastForward(65000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await online();
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.evaluate(() => window.computerClosed);
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail opener');
+    // A row-area click has no focused button; close still returns to the computer name.
+    await row('empty').locator('.machine-name').focus();
+    await row('box').locator('[data-machine-status]').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.evaluate(() => window.computerClosed);
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'row-area Escape returns to the computer name');
+    // Dispatching click without focus also covers browsers that do not focus clicked buttons.
+    await row('empty').locator('.machine-name').focus();
+    await rowButton.dispatchEvent('click');
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.evaluate(() => window.computerClosed);
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'unfocused name click returns to the computer name');
+    // Add can open from either the list or the detail; polling replaces both openers.
+    const listAdd = row('box').locator('[data-add-connection=box]');
+    await rowButton.focus();
+    await listAdd.dispatchEvent('click');
+    await add.waitFor();
+    await page.evaluate(() => settingsMachinesRefresh());
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await add.waitFor({state: 'detached'});
+    assert.equal(await listAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed list Add opener');
+    await rowButton.click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    const detailAdd = dialog.locator('[data-add-connection=box]');
+    await signIn.focus();
+    await detailAdd.dispatchEvent('click');
+    await add.waitFor();
+    await page.evaluate(() => settingsMachinesRefresh());
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await add.waitFor({state: 'detached'});
+    assert.equal(await detailAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail Add opener');
+    assert.ok(presenceReads > openedReads, 'open and reopen read presence');
+    await online();
+
+    // Provider and gateway drafts are outside the presence guidance and never repainted by a poll.
+    const providerSignIn = page.locator('#set-provider-next [data-model-login][data-runner=box]');
+    assert.equal(await providerSignIn.count(), 1, 'provider guidance offers the same online sign-in');
+    const providerDraft = page.locator('#set-prov [data-provider-check]');
+    await providerDraft.evaluate(node => { node.value = 'unfinished model choice'; });
+
+    // Carry the actual draft node through repaint, including focus and the selected text range.
+    await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
+      const field = document.createElement('textarea'); field.dataset.presenceDraft = ''; node.appendChild(field);
+      field.value = 'unfinished connection'; field.focus(); field.setSelectionRange(3, 8);
+      window.presenceDraft = field;
+    });
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.deepEqual(await page.evaluate(() => {
+      const field = document.querySelector('[data-presence-draft]');
+      return [field === window.presenceDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+    }), [true, 'unfinished connection', true, 3, 8]);
+
+    await dialog.locator('[data-add-connection=box]').click();
+    await add.locator('[data-add-tool=codex]').click();
+    await add.locator('[data-add-step=kind]').evaluate(node => {
+      const field = document.createElement('textarea'); field.dataset.addDraft = ''; node.appendChild(field);
+      field.value = 'unfinished add connection'; field.focus(); field.setSelectionRange(2, 7);
+      window.addDraft = field;
+    });
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.deepEqual(await page.evaluate(() => {
+      const field = document.querySelector('[data-add-draft]');
+      return [field === window.addDraft, field.value, document.activeElement === field, field.selectionStart, field.selectionEnd];
+    }), [true, 'unfinished add connection', true, 2, 7]);
+    await add.locator('[data-add-close]').first().click();
+    await add.waitFor({state: 'detached'});
+    await signIn.focus();
+
+    // A slow/failed read preserves the last confirmed state, even when its heartbeat ages past a minute.
+    await page.evaluate(() => clearTimeout(SETTINGS_PRESENCE.timer));
+    presenceMode = 'slow';
+    await page.evaluate(() => { void settingsMachinesRefresh(); });
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.checking), true);
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives check start');
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
+    presenceOffset = 200000;
+    await page.clock.fastForward(70000);
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await online();
+    assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives deadline repaint');
+    presenceMode = 'failure';
+    await page.evaluate(() => settingsMachinesRefresh());
+    await online();
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
+    assert.equal(await providerSignIn.count(), 1, 'failed read cannot age provider sign-in offline');
+    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
+
+    // An outdated online computer remains in its banner while presence is stale.
+    await page.evaluate(() => {
+      SETTINGS_DATA.machines.find(machine => machine.id === 'box').update = {outdated: true, server_release: '0.3.53'};
+      renderSettingsMachines();
+    });
+    assert.equal(await page.locator('[data-runner-outdated-banner]').count(), 1);
+
+    // Only a successful read can confirm disconnect; both views recover from the next heartbeat.
+    presenceMode = 'fixed';
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.match(await row('box').locator('[data-machine-status]').innerText(), /^offline/);
+    assert.match(await dialog.locator('[data-computer-status]').innerText(), /^offline/);
+    assert.equal(await dialog.locator('[data-add-connection=box]').isDisabled(), true);
+    assert.equal(await providerSignIn.count(), 0, 'provider guidance follows confirmed disconnect');
+    presenceMode = 'live';
+    await page.evaluate(() => settingsMachinesRefresh());
+    await online();
+    assert.equal(await providerSignIn.count(), 1, 'provider guidance follows reconnect without a tab change');
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({machines: [{...box, last_seen: at(-3 * 3600000)}], services: []})});
+    await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
+    await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
+    await page.keyboard.press('Escape');
+    // Provider guidance is keyboard reachable too; a poll never replaces the editable provider form.
+    await providerSignIn.focus();
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.equal(await providerSignIn.evaluate(node => node === document.activeElement), true);
+    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
+
+    // A first-load presence timeout is local to Computers; the rest of Settings still loads.
+    presenceMode = 'slow';
+    await page.evaluate(() => {
+      SETTINGS_DATA.loaded = false; SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0;
+      window.initialSettingsLoad = loadSettings();
+    });
+    await page.clock.fastForward(10001);
+    await page.evaluate(() => window.initialSettingsLoad);
+    assert.equal(await page.evaluate(() => SETTINGS_DATA.loaded && SETTINGS_DATA.people.length > 0), true);
+    assert.equal(await page.locator('#machine-operator').count(), 1);
+    assert.match(await page.locator('[data-machines-list]').innerText(), /presence unavailable.*checking/);
+    assert.equal(await page.locator('#set-bots > .err, #set-machines > .err').count(), 0);
+    presenceMode = 'live';
+    await page.evaluate(() => settingsMachinesRefresh());
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({machines: [], services: []})});
+    // Leaving the tab stops its timer; returning starts it and requests fresh presence.
+    await page.locator('[data-settings-tab=bots]').click();
+    const afterLeaving = presenceReads;
+    await page.clock.fastForward(65000);
+    assert.equal(presenceReads, afterLeaving);
+    await page.locator('[data-settings-tab=devices]').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    assert.ok(presenceReads > afterLeaving);
+    await page.clock.resume();
+    presenceMode = 'fixed';
+
     // The list's stacked phone cards must expose the same counts as the pop-up.
     await page.setViewportSize({width: 390, height: 844});
     const phoneCounts = row('box').locator('.machine-turn-counts');
@@ -275,6 +481,6 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.keyboard.press('Escape');
 
     assert.deepEqual(errors, []);
-    console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins');
+    console.log('PASS: compact computer rows, connection chips, detail pop-up, one login per tool, bots, header fix, empty/offline/waiting/revoked/member, desktop apps, shared sign-ins, live/stale presence and draft preservation');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
