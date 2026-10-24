@@ -8,6 +8,7 @@
 const {chromium, webkit} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const launch = {
@@ -20,39 +21,60 @@ const engines = (process.env.TICO_UI_ENGINES || 'chromium,webkit').split(',');
 
 async function check(engine) {
   const browser = await launch[engine]();
+  let server;
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
     const errors = [], sends = [], keys = [], warnings = [], uploads = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'warning' && m.text().startsWith('chat send')) warnings.push(m.text()); });
     let answer = 'ok', busy = 0, hold = null, stopHold = null;
+    const reads = new Set(), readWaiters = new Set(), serverErrors = [];
+    page.on('request', request => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === 'GET' && path !== '/api/v2/events' && !path.endsWith('/watch')) reads.add(request);
+    });
+    const readFinished = request => {
+      reads.delete(request);
+      if (!reads.size) for (const done of [...readWaiters]) done();
+    };
+    page.on('requestfinished', readFinished);
+    page.on('requestfailed', readFinished);
     const delivered = new Map();                    // stored sends can lose their response before access is revoked
     const refusals = new Set();                     // like the server, replay a stored refusal for the same key
-    await page.route('**/*', async route => {
-      const url = new URL(route.request().url()), p = url.pathname;
-      const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    // Keep same-origin event streams open: a finite intercepted stream reconnects and probes
+    // identity during reload, which WebKit can report as an access-control page error.
+    server = http.createServer((request, response) => {
+      void (async () => {
+      const url = new URL(request.url, 'http://127.0.0.1'), p = url.pathname;
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      const body = Buffer.concat(chunks);
+      const reply = (body, contentType, status = 200) => { response.writeHead(status, {'Content-Type': contentType}); response.end(body); };
+      const json = (body, status = 200) => reply(JSON.stringify(body), 'application/json', status);
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1])))
-        return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
-      if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
-      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+        return reply(fs.readFileSync(uiFile(ui[1]), 'utf8'), ui[1].endsWith('.css') ? 'text/css' : 'application/javascript');
+      if (p.endsWith('.js')) return reply('', 'application/javascript');
+      if (p === '/') return reply(html, 'text/html');
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
         return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
       if (p.endsWith('/snapshot')) return json({messages: [], execution: null});
-      // Both live streams need SSE responses; WebKit reports a JSON catch-all as a page error.
-      if (p === '/api/v2/events' || p.endsWith('/watch'))
-        return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      if (p === '/api/v2/events' || p.endsWith('/watch')) {
+        response.writeHead(200, {'Content-Type': 'text/event-stream'});
+        response.write('event: ready\ndata: {"seq":0}\n\n');
+        return;
+      }
       if (p === '/api/v2/bots/botops/stop') { await stopHold; return json({ok: true}); }
       if (p === '/api/v2/uploads/chat/botops') {
-        uploads.push(route.request().postDataBuffer().toString());
+        uploads.push(body.toString());
         return json({conversation: {id: 'c1'}, message: {id: 'u' + uploads.length, from_actor: 'human:ana', body: 'With a file', created: new Date().toISOString()}});
       }
       if (p === '/api/v2/chat/botops') {
-        const text = route.request().postDataJSON().text;
-        const key = route.request().headers()['idempotency-key']; keys.push(key);
+        const text = JSON.parse(body).text;
+        const key = request.headers['idempotency-key']; keys.push(key);
         // Current access is checked before replay, and this denial does not overwrite the stored result.
         if (answer === 'signed-out') return json({error: {code: 'identity', detail: 'Invalid credential'}}, 401);
         if (answer === 'access-refused') return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
@@ -63,7 +85,7 @@ async function check(engine) {
           sends.push(text);
           delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
           if (answer === 'stored-privacy-refused') return json({error: {code: 'privacy', detail: 'Response access refused'}}, 403);
-          if (answer === 'stored-drop-refuse') return route.abort('failed');
+          if (answer === 'stored-drop-refuse') return response.destroy();
           if (answer === 'stored-busy-refuse') return json({error: {code: 'unavailable', detail: 'Proxy lost the answer'}}, 503);
           return;                                  // saved, but the response never reaches the page
         }
@@ -77,11 +99,35 @@ async function check(engine) {
         return json({conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
       }
       return json(unrouted(p));
+      })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });
     });
-    await page.goto('https://tico-ui.test/#/bot/botops');
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    const ready = () => page.waitForFunction(() => {
+      if (!SESSION.seen || !V2C?.loaded || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
+      const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
+      // Receiving ready changes the replay cursor without changing the subscription.
+      subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
+      return subscribed.href === expected.href;
+    });
+    const readsSettled = async () => {
+      const deadline = Date.now() + 30000;
+      do {
+        // Writes can forget reads still running, and schedule a later snapshot burst.
+        await page.waitForFunction(() => !LIVE_SOON.size);
+        if (reads.size) await new Promise((resolve, reject) => {
+          const done = () => { clearTimeout(timer); readWaiters.delete(done); resolve(); };
+          const timer = setTimeout(() => { readWaiters.delete(done); reject(new Error('Fixture reads did not settle')); }, Math.max(1, deadline - Date.now()));
+          readWaiters.add(done);
+        });
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        assert.ok(Date.now() < deadline, 'fixture reads settle before navigation');
+      } while (reads.size || await page.evaluate(() => LIVE_SOON.size > 0));
+    };
+    await page.goto(origin + '/#/bot/botops');
     const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
     const slow = page.locator('#chat-composer .p-slow');
-    await page.waitForFunction(() => V2C?.loaded);
+    await ready();
     await page.evaluate(() => { CHAT_SEND.slow = 300; });
 
     // The empty box dims Send; a send that is out shows a spinner at full strength, and after a moment says so in words.
@@ -181,8 +227,9 @@ async function check(engine) {
     assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*Invalid credential.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
     assert.ok(!(await page.locator('.toast.err').allInnerTexts()).some(t => /Not sent:/.test(t)), 'the UI does not claim the original was unsent');
     assert.equal(await box.inputValue(), uncertainText);
+    await readsSettled();
     await page.reload();
-    await page.waitForFunction(() => V2C?.loaded);
+    await ready();
     // The replay below must succeed, and the deadline covers the sign-in check too: a short one ends it unconfirmed on a busy computer.
     await page.evaluate(() => { CHAT_SEND.timeout = 30000; });
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, 'reload preserves the uncertain key');
@@ -273,8 +320,9 @@ async function check(engine) {
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'upload acknowledgement leaves no uncertain identity');
     assert.equal(await page.evaluate(signature => pendingWrites.has(signature), uploadSignature), false, 'the old text request leaves the cache');
     assert.equal(await page.evaluate(() => CHAT_PENDING.has('botops')), false, 'the old identity is removed from the per-tab map');
+    await readsSettled();
     await page.reload();
-    await page.waitForFunction(() => V2C?.loaded);
+    await ready();
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'reload cannot restore the acknowledged identity');
     await box.fill(uploadText); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
@@ -330,8 +378,9 @@ async function check(engine) {
     await toast.waitFor();
     assert.equal(keys.at(-1), expiredKey, 'a late failed retry keeps the first identity');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed.at), originalAt, 'retry does not restart replay retention');
+    await readsSettled();
     await page.reload();
-    await page.waitForFunction(() => V2C?.loaded);
+    await ready();
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), expiredKey, 'same-tab reload keeps the key with the draft');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.at), originalAt, 'reload keeps original replay age');
     await page.evaluate(() => { window.chatRealNow = Date.now; });
@@ -442,6 +491,14 @@ async function check(engine) {
       [true, 'Stopping…', 'Stopping…']);
     stopped();
     assert.deepEqual(errors, []);
-  } finally { await browser.close(); }
+    assert.deepEqual(serverErrors, [], 'no fixture server errors');
+  } finally {
+    try { await browser.close(); } finally {
+      if (server) {
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+    }
+  }
 }
 (async () => { for (const engine of engines) await check(engine); console.log('ok'); })().catch(e => { console.error(e); process.exit(1); });
