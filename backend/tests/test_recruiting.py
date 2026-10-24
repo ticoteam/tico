@@ -106,6 +106,10 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
 
+    below = post(api, "seats", {"title": "Support agent", "reports_to": "coo"})
+    with api.app.state.store.transaction() as c:   # a seat may report to another seat (the chart import makes these)
+        c.execute("UPDATE seats SET reports_to=? WHERE id=?", ("seat:" + seat["id"], below["id"]))
+
     hired = post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": other})
     slug = hired["slug"]
     bot = get(api, f"bots/{slug}")
@@ -120,7 +124,8 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
                                               (slug, seat["id"]))]
     assert kinds.index("bot.definition_created") < kinds.index("bot.needs_onboarding")
     # The seat is filled: off the Recruiting list, and a second pick is refused.
-    assert seat["id"] not in {s["id"] for s in get(api, "seats")["seats"]}
+    open_seats = {s["id"]: s for s in get(api, "seats")["seats"]}
+    assert seat["id"] not in open_seats and open_seats[below["id"]]["reports_to"] == slug
     assert [t["status"] for t in draft_tasks(api)] == ["done"]
     again = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": pick["template"]}, headers=headers())
     assert again.status_code == 409 and "Support lead" in again.text

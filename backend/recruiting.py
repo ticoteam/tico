@@ -278,6 +278,9 @@ def hire(auth, onboarding, c, who, seat_id, body):
     now = H.now()
     c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
               (now, who.actor, slug, now, who.actor, seat_id))
+    # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
+    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+              (slug, now, who.actor, "seat:" + seat_id))
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", seat_id, {"bot": slug, "template": card["template"], "model": model})
     # Only now its repository: a starter's computer builds it from this definition (`materialize`), any other

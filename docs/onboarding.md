@@ -403,7 +403,7 @@ Open a seat from its row on the team chart (`person_search` icon, **Recruiting**
   candidates.
 - **The pick** (`POST /api/v2/seats/{id}/hire`, `{template, model}`) creates the bot through the same checks as any new bot:
   named after the seat, in the seat's place on the chart (`reports_to`) and group, owned by the person who picked, with the
-  template's instructions plus the job description, and **Onboarding**. The seat is then filled and leaves the chart. Only
+  template's instructions plus the job description, and **Onboarding**. The seat is then filled and leaves the chart; open seats that reported to it move under the new bot. Only
   then is its repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task.
   A filled seat, a template that is not a candidate, or a model the team has not turned on is refused and nothing is made.
 - Who may recruit and pick: the owner for any seat; a person for a seat under themselves or someone below them. Bots open
