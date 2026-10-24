@@ -129,9 +129,11 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
   const onProp = d.contains(document.activeElement) ? document.activeElement.dataset.prop : '';
   if (onProp) d.focusProp = onProp;
+  // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
+  // even when Tasks is the first page opened), read once.
+  const reading = Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
-  // Session copy commands need the CLI's manifest even when Tasks is the first page opened.
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
   opening.pending = false;
@@ -157,7 +159,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (!peek) document.body.classList.add('task-modal-open');
   d.scrollTop = 0;
   // the list knows the task; the detail adds its parts, its parent and the comments
-  const [detail] = await Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad().catch(() => TASK_TYPES)]);
+  const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (!detail?.task) { d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id)); return; }
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer

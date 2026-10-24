@@ -47,7 +47,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     if (ui && fs.existsSync(uiFile(ui[1])))
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
-    // Not counted: boot.js re-reads the observability config every 30 s on a timer, events or not, and on a slow
+    // Not counted: boot.js re-reads the observability config on a timer, events or not, and on a slow
     // box that read can land inside a burst.
     if (p.startsWith('/api/') && p !== '/api/v2/observability') requests.push(p + url.search);
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
