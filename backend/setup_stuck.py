@@ -7,7 +7,7 @@ its routines' jobs and its tasks pile up where nobody looks. After a day it is l
 which also turns its template's first routine on, as starting setup would have. Nothing finishes setup on its own;
 setup answers are a person's to give or to skip.
 
-The person the "Finish setting up" reminder goes to (who added the bot, else its operator, else the default person)
+The person the "Finish onboarding" reminder goes to (who added the bot, else its operator, else the default person)
 gets one message saying so, once per bot, unless that reminder is still open.
 """
 
@@ -50,7 +50,7 @@ def held_for(since, at=None):
 
 
 def nudge(c, at=None):
-    """Tell each stuck bot's person once (a keeper event marks it): the same person the "Finish setting up"
+    """Tell each stuck bot's person once (a keeper event marks it): the same person the "Finish onboarding"
     reminder goes to (hubdb `_setup_person`), and nobody while that reminder is still open, so one bot never makes
     two asks. Returns {bot: [actors told]}."""
     told = {}

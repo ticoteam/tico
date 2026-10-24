@@ -41,7 +41,7 @@ const checklist = () => [
   item('github', 'GitHub is connected', false, {optional: true, why: 'Lets bots keep their work in your GitHub.', href: '#/settings', tab: 'cloud'}),
   item('botops', 'BotOps is active', true),
   item('first_bot', 'Create your first bot', false, {why: 'Say what it should do and BotOps builds it.', action: 'create-bot'}),
-  item('next_bot', 'Set up Support Triage', false, {why: 'Press Set up on its page and answer its questions; it drafts a first result for you to approve.', href: '#/bot/support'}),
+  item('next_bot', 'Set up Support Triage', false, {why: 'Press Start onboarding on its page and answer its questions; it drafts a first result for you to approve.', href: '#/bot/support'}),
   item('first_output', 'First approved output', false, {why: 'Set up a starter bot and approve the first thing it drafts. That is the point of the team.', href: '#/bot/support'}),
   item('first_update', 'Your first update arrived', false, {why: 'Each active bot posts a short update every day.', href: '#/updates'}),
 ];

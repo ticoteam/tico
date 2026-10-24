@@ -2186,17 +2186,57 @@ def bot_owners(api, args):
     return api.post(f"bots/{args['slug']}/co-owners", body, key=_key(args))
 
 
-@tool("hub_bot_setup_done", "A starter bot's own call, once its setup is done: it stops "
-      "being `needs_setup`, its routines may run and its work is claimed. Call it on yourself, once "
-      "your answers and first result are recorded; a person who manages the bot may call it for the bot. Repeating it "
-      "changes nothing. A member's bot counts toward their limit of active bots from here on, so this can "
-      "answer `bot_limit`: tell the person to archive a bot or ask an admin.",
+@tool("hub_bot_setup_done", "Mark a bot's onboarding complete, as a person above it on the org chart (its manager, their "
+      "managers or the owner): it becomes Active, its routines run and it takes tasks. Nobody else may. A bot calling it "
+      "on itself says it is ready instead, like hub_bot_ready, and stays Onboarding. Repeating it changes nothing. A "
+      "member's bot counts toward their limit of active bots from here on, so this can answer `bot_limit`: tell the "
+      "person to archive a bot or ask an admin.",
       {"slug": _s("The bot; you, when you leave it out")}, writes=True)
 def bot_onboarded(api, args):
     slug = args.get("slug") or str(api.get("me").get("actor", "")).removeprefix("bot:")
     if not slug:
         raise ValueError("Say which bot: hub bot setup-done <slug>")
     return api.post(f"bots/{slug}/onboarded", {}, key=_key(args))
+
+
+@tool("hub_bot_ready", "Say you are ready to start work, while you are onboarding, with a short summary of what you "
+      "learned. It is shown to the people above you on the org chart; one of them marks your onboarding complete. You "
+      "stay Onboarding until then.",
+      {"summary": _s("A few lines on what you learned and what you will do first")}, required=("summary",), writes=True)
+def bot_ready(api, args):
+    slug = str(api.get("me").get("actor", "")).removeprefix("bot:")
+    return api.post(f"bots/{slug}/onboarded", {"summary": args.get("summary") or ""}, key=_key(args))
+
+
+@tool("hub_seat_list", "The Recruiting seats: roles on the org chart with their job description and who they report "
+      "to, and no bot yet. A seat holds no work: work for its role stays with its manager.", {})
+def seat_list(api, args):
+    return api.get("seats")
+
+
+@tool("hub_seat_create", "Add a Recruiting seat, as a person: a role with its job description, reporting to you or "
+      "someone below you (the owner: anyone). It has no bot, repository or computer until it is filled.",
+      {"title": _s("The role's title"), "description": _s("Its job description"),
+       "reports_to": _s("A bot's slug or human:<id>; you when you leave it out"), "team": _s("Optional group id")},
+      required=("title",), writes=True)
+def seat_create(api, args):
+    body = {k: args[k] for k in ("title", "description", "reports_to", "team") if args.get(k) is not None}
+    return api.post("seats", body, key=_key(args))
+
+
+@tool("hub_seat_update", "Change a Recruiting seat's title, job description, reporting line or group, as a person "
+      "it reports up to (or the owner).",
+      {"seat": _s("The seat id"), "title": _s("New title"), "description": _s("New job description"),
+       "reports_to": _s("A bot's slug or human:<id>"), "team": _s("Group id")}, required=("seat",), writes=True)
+def seat_update(api, args):
+    body = {k: args[k] for k in ("title", "description", "reports_to", "team") if args.get(k) is not None}
+    return api.patch(f"seats/{args['seat']}", body, key=_key(args))
+
+
+@tool("hub_seat_close", "Take a Recruiting seat off the org chart, as a person it reports up to (or the owner).",
+      {"seat": _s("The seat id")}, required=("seat",), writes=True)
+def seat_close(api, args):
+    return api.post(f"seats/{args['seat']}/close", {}, key=_key(args))
 
 
 @tool("hub_human_add", "Add a person to the team roster and the sign-in list, as the person who asked you. A "
@@ -3941,6 +3981,9 @@ AUDIENCE = {
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
     "hub_update_create": BOTS,                      # only a bot posts an update
+    "hub_bot_ready": BOTS,                          # an onboarding bot's own "I'm ready" (backend/lifecycle.py)
+    # A seat is placed by a person under themselves (views and rights in backend/lifecycle.py).
+    **{name: PEOPLE for name in ("hub_seat_create", "hub_seat_update", "hub_seat_close")},
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
     **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import")},
     # Reads that go over POST, which the Assistant may not make on its own.

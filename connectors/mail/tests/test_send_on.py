@@ -81,15 +81,14 @@ class Chain(Stage2):
 
     def test_bot_yaml_alone_never_turns_sending_on(self):
         # bot.yaml says outbound_send: true and lists forward targets (a bot, or BotOps' own run, pushed it), but no
-        # person has turned sending on in Tico, or this run cannot reach Tico: every outside send needs an approval.
+        # person has turned sending on in Tico: every outside send needs an approval.
         reply = {"thread_id": THREAD, "thread_senders": [AVA]}
-        for server in ({"bot": "inbox", "set": False, "outbound_send": False, "forward_to": []}, None):
-            pl.SERVER_GET = lambda slug, row=server: row
-            for to, extra in (([AVA], reply), ([ME], {})):
-                d = self.decide(to, **extra)
-                self.assertEqual(d["gate"], "outbound_send", (server, d))
-                self.assertIn("Mail sending", d["reason"])
-            self.assertFalse(pl.is_forward(self.policy(), "inbox", [ME]))
+        pl.SERVER_GET = lambda slug: {"bot": slug, "set": False, "outbound_send": False, "forward_to": []}
+        for to, extra in (([AVA], reply), ([ME], {})):
+            d = self.decide(to, **extra)
+            self.assertEqual(d["gate"], "outbound_send", d)
+            self.assertIn("Mail sending", d["reason"])
+        self.assertFalse(pl.is_forward(self.policy(), "inbox", [ME]))
         # The owner's own per-message yes still sends that one message.
         pl.RUN = harness.gh_answer(body=f"Send to: {AVA}")
         self.assertTrue(self.decide([AVA], approval="77").allowed)
@@ -121,6 +120,29 @@ class Chain(Stage2):
         pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
         d = self.decide([STRANGER], approval="77")
         self.assertTrue(d.allowed, d)
+
+    def test_an_onboarding_bot_sends_nothing_even_with_a_matching_approval(self):
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        hub(owner_order())
+        off = {"set": True, "outbound_send": False, "forward_to": []}
+        for approval in ("77", ORDER):                                   # a GitHub Issue, the owner's message
+            pl.SERVER_GET = lambda slug: dict(off, bot=slug)
+            self.assertTrue(self.decide([STRANGER], approval=approval).allowed, approval)   # it lifts sending off
+            pl.SERVER_GET = lambda slug: dict(off, bot=slug, onboarding=True)
+            d = self.decide([STRANGER], approval=approval)
+            self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
+
+    def test_a_run_that_cannot_read_the_stage_sends_nothing_even_with_a_matching_approval(self):
+        # No credential, Tico unreachable or a bad answer: the run cannot tell an onboarding bot from an Active one.
+        pl.RUN = harness.gh_answer(body=f"Send to: {STRANGER}")
+        def unreachable(slug):
+            raise OSError("Tico is unreachable")
+        for server in (lambda slug: None, unreachable, lambda slug: ["not", "a", "setting"], lambda slug: {"bot": slug}):
+            pl.SERVER_GET = server
+            d = self.decide([STRANGER], approval="77")
+            self.assertEqual((d.allowed, d["gate"]), (False, "onboarding"), d)
+        # The owner sends on their own word, with or without Tico.
+        self.assertTrue(self.decide([STRANGER], slug=pl.OWNER, approval="77", verbs=["send"]).allowed)
 
     def test_with_sending_off_none_of_it_applies(self):
         p = self.root / "emp-inbox" / "employee.yaml"
