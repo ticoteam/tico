@@ -78,8 +78,8 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Done | done | QA | Post-release QA passed |
 | Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
 
-Done and Closed are not board columns: those tickets are under the Done and Closed tabs. A waiting ticket stays at its
-step with a Waiting tag.
+Done and Closed fold into one strip at the end of the board: those tickets are under the Done and Closed tabs. A waiting
+ticket stays at its step with a Waiting tag.
 
 - **Small changes** skip Review 2. Use Reviewer 2 for sign-in, permissions, customer data, billing and anything that
   sends.
