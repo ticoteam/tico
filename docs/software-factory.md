@@ -25,7 +25,11 @@ skip Reviewer 2, or let one bot cover Security and DevOps. Start with the Builde
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
-for example. Edit each bot's instructions to match its role here, or ask BotOps to do it.
+for example. Edit each bot's instructions to match its role here, or ask BotOps to do it. When reviewers
+are authorized to submit their own reviews, configure a [separate reviewer GitHub App](github-app.md#separate-identity-for-reviewers)
+and use `hub repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
+the review task as well. Required GitHub approvals are dismissed on push, so a changed head needs a current
+approval before merge even when the team's task review policy allows a fixes-only delta.
 
 ## Models and effort
 
