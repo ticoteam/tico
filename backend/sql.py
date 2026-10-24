@@ -45,6 +45,12 @@ SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_
 # backup_verified_blobs, _litestream_*, sqlite_* except sqlite_master) are denied outright.
 HIDDEN = {"task_requesters": {"token_hash"}, "bots": {"token_hash", "cwd", "thread_id"}, "attempts": {"token_hash"},
           "service_jobs": {"token_hash"}}
+# Columns read as an expression over the caller's own views: a column naming a task the caller may not read gives
+# its id to nobody. A bot's claim limit (bot_control.claim_task) on such a task reads '': a limit is on, as
+# GET /api/v2/bots says with `claim_scoped` and no `claim_task`.
+MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THEN NULL "
+                                        "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
+                                        "ELSE '' END"}}
 DENIED_FUNCTIONS = {"load_extension"}
 # Read-only views built over the caller's connection: name -> (base tables it reads, SELECT over `{table}`, the
 # caller's own filtered view of each, and `{all_table}`, its unfiltered inner view). A total adds up only rows the
@@ -432,15 +438,18 @@ def connect(path, c, auth, who, trace=None):
         conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 10_000_000)   # no randomblob(1e9) memory bombs
         conn.setlimit(sqlite3.SQLITE_LIMIT_ATTACHED, 0)
         conn.execute("PRAGMA busy_timeout=5000")
+        exposed = {}
         for table, (_, hidden) in tables.items():
-            exposed = [name for name in columns.get(table, ()) if name not in hidden
-                       and (table not in SAFE_COLUMNS or name in SAFE_COLUMNS[table])]
-            if not exposed:
+            exposed[table] = [name for name in columns.get(table, ()) if name not in hidden
+                              and (table not in SAFE_COLUMNS or name in SAFE_COLUMNS[table])]
+            if not exposed[table]:
                 raise Problem("schema", f"Table {table} is missing from this database", 500)
-            names = ",".join(f'"{column}"' for column in exposed)
+            names = ",".join(f'"{column}"' for column in exposed[table])
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         for table, (predicate, _) in tables.items():
-            projection = "*"
+            masked = MASKED.get(table, {})
+            projection = ",".join(f'({masked[name]}) AS "{name}"' if name in masked else f'source."{name}"'
+                                  for name in exposed[table]) if masked else "*"
             conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} AS source WHERE {predicate}')
         # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
         granted = {name: view for name, view in GRANTED.items() if outcome_stats.may_read(c, who)
