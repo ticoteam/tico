@@ -1031,6 +1031,9 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     still = move(step='Done')
     assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(16, branch, repo='ticoteam/tico-services')})
+    # Linking is necessary; the review gate also needs a current passing receipt.
+    assert move(note='Tests: head ' + 'b' * 40 + ': 9 passed, 0 failed') == 'waiting'
     assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
 
 

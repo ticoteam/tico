@@ -3112,7 +3112,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3207,7 +3207,9 @@ def create_app(settings=None):
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
                             number=body.number, mover=mover(c, who) or None,
-                            own_room=H.actor_id(owner) != settings.assistant_bot)
+                            own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
+                            change_paths=body.change_paths, qa=body.qa,
+                            qa_not_checkable_live=body.qa_not_checkable_live)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
@@ -3256,9 +3258,44 @@ def create_app(settings=None):
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
+    def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
+        from . import review_gate
+        # None is reserved for a genuinely unconfigured GitHub integration.
+        # If a skipped preflight becomes applicable during mutation, fail closed.
+        if child_title is not None and not review_gate.REVIEW.match(child_title):
+            return {}
+        if child_title is None and step is None and status is None and task_type is None:
+            return {}
+        with store.read() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            typ = H.type_get(c, task_type if task_type is not None else row.get("type_id") or H.GENERAL_TYPE)
+            if not typ:
+                return {}  # Mutation reports an invalid destination without trusting cached PR evidence.
+            row = {**row, "type_id": typ["id"]}
+            if child_title is None:
+                # Match _task_state's destination resolution, including a type-only
+                # move whose retained status selects a review step on the new board.
+                effective = status if status is not None else row.get("status") or "open"
+                current = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None)
+                if step is not None:
+                    named = next((s for s in typ["steps"] if s["id"] == step), None)
+                    named = named or next((s for s in typ["steps"] if s["name"] == step), None)
+                elif current and current["status"] == effective:
+                    named = current
+                else:
+                    named = next((s for s in typ["steps"] if s["status"] == effective), None)
+                if not named or named["name"] not in ("Review 1", "Review 2"):
+                    return {}
+            if not review_gate.engineering(c, row):
+                return {}
+            prs = review_gate.links(c, row)
+        return review_gate.snapshot(app.state.github_app, prs) if prs else {}
+
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body))
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
+        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots))
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -3272,6 +3309,7 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
+        snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         def work(c):
             # A person's request to BotOps can purge tasks that are not really needed, as that person.
             who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
@@ -3311,7 +3349,7 @@ def create_app(settings=None):
                 privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
-                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
             return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
                     **({"warnings": warnings} if warnings else {})}
