@@ -1405,6 +1405,26 @@ class BotBranch(Contract):
     runner_id: ID | None = None
 
 
+class OnboardingComplete(Contract):
+    """Mark onboarding complete (a person above the bot), or the bot's own "I'm ready" with what it learned."""
+    summary: Annotated[str, Field(max_length=2000)] = ""
+
+
+class SeatCreate(Contract):
+    """A Recruiting seat: a role on the org chart with its job description and reporting line, and no bot."""
+    title: Annotated[str, Field(min_length=1, max_length=120)]
+    description: Annotated[str, Field(max_length=8000)] = ""
+    reports_to: Annotated[str, Field(max_length=200)] = ""     # `human:<id>` or a bot's slug; the caller by default
+    team: Annotated[str, Field(max_length=100)] = ""
+
+
+class SeatUpdate(Contract):
+    title: Annotated[str, Field(min_length=1, max_length=120)] | None = None
+    description: Annotated[str, Field(max_length=8000)] | None = None
+    reports_to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    team: Annotated[str, Field(max_length=100)] | None = None
+
+
 class BotArchive(Contract):
     successor: ID | None = None          # a bot that takes its open tasks and any team it roots
     expected_revision: int = Field(ge=1)
@@ -1565,6 +1585,12 @@ class BotFallbackChoice(Contract):
 class BotFallback(Contract):
     fallback: BotFallbackChoice | None = None
     expected_revision: int = Field(ge=1)
+
+
+class BotKeepTasksGoing(Contract):
+    keep_tasks_going: int | None = Field(None, ge=0, le=1000, strict=True,
+        description="Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap.")
+    expected_revision: int
 
 
 class BotTaskModel(Contract):

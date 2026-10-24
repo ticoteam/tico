@@ -100,10 +100,11 @@ function taskBoardKeys(state, ev) {
 }
 function taskBoardClick(state, ev) {
   if (TASKS_ST !== state || state.view !== 'board') return;
-  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold]');
+  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold],[data-card-owner]');
   if (!hit) return;
   ev.stopPropagation(); ev.preventDefault();
-  if (hit.dataset.boardOwner) taskBoardOwnerToggle(state, hit.dataset.boardOwner);
+  if (hit.dataset.cardOwner) taskBoardOwnerMenu(state, hit);
+  else if (hit.dataset.boardOwner) taskBoardOwnerToggle(state, hit.dataset.boardOwner);
   else if (hit.dataset.boardBlocked) taskBoardFocus(state, hit.dataset.boardBlocked);
   else if (hit.hasAttribute('data-board-unfocus')) { state.boardFocus = null; tasksRender(state); }
   else if (hit.dataset.boardUnfold) taskBoardFoldSet(state, hit.dataset.boardUnfold, false);
@@ -249,8 +250,7 @@ function taskBoardEnd(state, drop) {
     setTimeout(() => window.removeEventListener('click', swallow, true), 0);
   };
   if (drop) arm(); else document.addEventListener('pointerup', arm, {capture: true, once: true});
-  if (drop && d.target) taskBoardDrop(state, d);
-  tasksRender(state);
+  if (!(drop && d.target && taskBoardDrop(state, d))) tasksRender(state);   // a saved drop draws itself
 }
 
 // ---- the move: the step and the place (step_rank) at once, drawn before the server answers. A refusal puts the card
@@ -265,8 +265,8 @@ function taskBoardDrop(state, d) {
   const type = pipelineSelectedType(state), stepId = d.target.dataset.dropStep;
   const step = type?.steps.find(s => s.id === stepId);
   const byId = tasksById(state), id = d.key.slice(1), t = byId.get(id);
-  if (!step || !t) return;
-  if (d.target === d.from && d.index === d.fromIndex) return;           // put back where it was
+  if (!step || !t) return false;
+  if (d.target === d.from && d.index === d.fromIndex) return false;           // put back where it was
   const rankOf = key => { const x = key && byId.get(key.slice(1)); return x ? taskBoardLive(state, {task: x}).task.step_rank ?? null : null; };
   let rank;
   if (d.prev || d.next) rank = taskBoardRank(rankOf(d.prev), rankOf(d.next));
@@ -276,14 +276,21 @@ function taskBoardDrop(state, d) {
     rank = ranks.length ? Math.max(...ranks) + 1 : 1;
   }
   const moving = stepId !== t.step_id;
-  if (!moving && rank == null) return;
+  if (!moving && rank == null) return false;
   const body = {version: t.version, ...(moving ? {step: stepId} : {}), ...(rank != null ? {step_rank: rank} : {}),
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
+  taskBoardSave(state, t, body, fields, 'Not moved');
+  return true;
+}
+// A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.
+function taskBoardSave(state, t, body, fields, refused) {
+  const id = String(t.id);
   state.boardMoves ||= new Map();
   state.boardMoves.set(id, {fields, version: Number(t.version), pending: true});
   state.tasks = state.tasks.map(x => x === t ? {...t, ...fields} : x);
+  tasksRender(state);
   void (async () => {
     try {
       const data = await post(`/v2/tasks/${encodeURIComponent(id)}`, body);
@@ -295,11 +302,25 @@ function taskBoardDrop(state, d) {
       if (TASKS_ST !== state) return;
       state.boardMoves.delete(id);
       state.tasks = state.tasks.map(x => String(x.id) === id && Number(x.version) <= Number(t.version) ? t : x);
-      toast(e.status === 409 ? 'Changed elsewhere. Showing the latest.' : `Not moved: ${e.message || 'refused'}`, true);
+      toast(e.status === 409 ? 'Changed elsewhere. Showing the latest.' : `${refused}: ${e.message || 'refused'}`, true);
       tasksRender(state);
     }
     void tasksLoad(state);
   })();
+}
+// The face on a card is its owner: pressing it picks another person or bot, saved from the card (the peek's Owner menu).
+function taskBoardOwnerMenu(state, button) {
+  const t = tasksById(state).get(button.dataset.cardOwner.slice(1));
+  if (!t || !taskPropRights(t).edit) return;
+  const opts = new DOMParser().parseFromString(`<select>${taskOwnerOptions('')}</select>`, 'text/html').querySelectorAll('option[value]:not([value=""])');
+  propMenu($('#task-card-pops'), button, {label: 'Owner', find: 'Find a person or bot', items: [...opts].map(o => {
+    const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
+    return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: t.owner === actor, actor};
+  }), onPick: it => {
+    const cur = tasksById(state).get(String(t.id));
+    if (!cur || it.actor === cur.owner) return;
+    taskBoardSave(state, cur, {version: cur.version, owner: it.value}, {owner: it.actor}, 'Not changed');
+  }});
 }
 // A card as the board draws it: with its move while the server has not said otherwise (a copy no newer than the one
 // it was moved from), else as loaded.
@@ -310,5 +331,5 @@ function taskBoardLive(state, item) {
     if (!move.pending) state.boardMoves.delete(id);
     return item;
   }
-  return {...item, task: {...item.task, ...move.fields}};
+  return {...item, task: {...item.task, ...move.fields}, ...(move.fields.owner ? {actor: move.fields.owner} : {})};
 }
