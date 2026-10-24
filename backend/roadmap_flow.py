@@ -229,10 +229,12 @@ def ready_step(c):
         c.execute('RELEASE roadmap_ready_step')
 
 
-def changed(c, task_id):
-    """A task changed: sync it, its parent and every task it blocks (a roadmap item waits on its Dev tickets)."""
+def changed(c, task_id, itself=True):
+    """A task changed: sync it, its parent and every task it blocks (a roadmap item waits on its Dev tickets).
+    `itself=False` leaves the task's own step alone: someone just moved it there by hand."""
     from . import task_relations as TR
-    sync(c, task_id)
+    if itself:
+        sync(c, task_id)
     for item in dict.fromkeys([TR.parent_of(c, task_id), *TR.blocked_ids(c, task_id)]):
         if item:
             sync(c, item)
