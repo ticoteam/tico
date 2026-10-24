@@ -3280,6 +3280,25 @@ def assistant_propose(api, args):
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
 
 
+@tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
+      "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
+      "what you saved. It is theirs alone and shows on What it has learned, where they edit or delete it. The CEO Bot "
+      "in the owner's chat saves what the owner teaches it about the company with layer company.",
+      {"text": _s("One short line, in their words"),
+       "layer": {"enum": ["personal", "company"], "default": "personal",
+                 "description": "personal (theirs), or company (the CEO Bot in the owner's chat only)"}},
+      required=("text",), writes=True)
+def assistant_learn(api, args):
+    return api.post("assistant/learned", {"layer": args.get("layer") or "personal", "text": args["text"]},
+                    key=_key(args))
+
+
+@tool("hub_assistant_learned", "What a person's chat bot has learned: their own layer, and for the owner the "
+      "company layer (vision, priorities, what they taught the CEO Bot about the company).", {})
+def assistant_learned(api, args):
+    return api.get("assistant/learned")
+
+
 # ----------------------------------------------------------------------------- sql, integrations
 @tool("hub_sql", "Read-only SQL over what you may see (docs/hub-sql.md). One SELECT, WITH or "
       "EXPLAIN QUERY PLAN; bind `:key` with `params`.",
@@ -3879,7 +3898,7 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
-                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose"}
+                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn"}
 AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
@@ -3903,6 +3922,8 @@ AUDIENCE = {
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
+    # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
+    "hub_assistant_learn": HUMANS_AND_ASSISTANT, "hub_assistant_learned": HUMANS_AND_ASSISTANT,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "hub_brief": HUMANS_AND_ASSISTANT, "hub_bot_recent": HUMANS_AND_ASSISTANT,
     "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTOPS,

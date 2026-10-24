@@ -10,6 +10,7 @@
 // live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). The room takes text only, so
 // the composer has no attach button. For the owner the page is their CEO Bot chat, by its name, with no "Assistant"
 // wording (ui/app/state.js meCeo); their own Assistant chats from before stay readable under "Earlier chats".
+// "What it has learned" at the top opens ui/app/learned.js.
 const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
 let ASSISTANT_PILL = null, ASSISTANT_DRAFT = '', ASSISTANT_LOAD = 0;
 // "Ask the Assistant…" in search: the words go into the box, now if the page is open, else when it opens.
@@ -34,7 +35,8 @@ async function pageAssistant() {
   $('#main').classList.add('chat-layout', 'bot-chat-layout');
   $('#main').innerHTML = `
   <div class="bot-top asst-top" id="bot-top"><div class="bot-ident">${avatar(slug, 36, stateOf(slug))}
-    <div class="botid"><div class="bot-nameline"><h1>${esc(myChatName())}</h1></div></div></div></div>
+    <div class="botid"><div class="bot-nameline"><h1>${esc(myChatName())}</h1></div></div></div>
+    <a class="ghost asst-learned" href="${LEARNED}">What it has learned</a></div>
   <div class="bot-work" id="bot-work"><div id="pane-chat">
     <details class="asst-earlier" id="asst-earlier" hidden><summary>Earlier chats</summary><div class="asst-earlier-list"></div></details>
     <section class="card conv" id="conv">

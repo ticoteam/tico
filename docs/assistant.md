@@ -179,6 +179,20 @@ Use `hub_assistant_read` and `hub_assistant_send` (CLI: `hub assistant read|send
 `hub_message_send` also accepts `assistant`; it uses your own private room. Other humans' rooms remain private,
 and Confirm and Cancel still require your own click in Tico.
 
+## What it has learned
+
+Tell it how you like things ranked and summarised ("launches matter more than hiring news", "numbers first") and it
+saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your chat
+(`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
+asks once more). Only you see this layer: not the owner, not administrators, not SQL, and not another person's
+Assistant. The audit log names an entry by id, never by its words. It goes with you: if you become the owner, your
+[CEO Bot](ceo-bot.md#what-it-has-learned) uses the same layer, and back again.
+
+Each turn in your chat is handed the layer as it is when the turn starts, so a line you delete is not used from the
+next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant
+only adds: editing and deleting are your own clicks. Nothing about the company is in it: only the owner's CEO Bot has
+that.
+
 ## API
 
 Stable v2 (`docs/openapi/v2.json`, tag **Assistant**). All signed-in humans; the confirm and cancel routes need your
@@ -198,6 +212,9 @@ own session, not a personal token.
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
 | `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your chat, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
+| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the CEO Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
+| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their CEO Bot chat; `403` for anyone else and any Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
+| `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 
 Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see
 [custom-frontend.md](custom-frontend.md)) can embed the Assistant with these routes alone.

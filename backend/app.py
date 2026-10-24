@@ -5695,6 +5695,8 @@ def create_app(settings=None):
     install_memory_history(app, store, auth, mutate)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)
+    from .learned import install as install_learned
+    install_learned(app, store, auth, mutate)
     from .mcp import install_mcp
     install_mcp(app, settings)
     from .github import install_github
