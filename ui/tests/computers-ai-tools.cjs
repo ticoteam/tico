@@ -268,9 +268,30 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await online();
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
+    const detailClosed = dialog.evaluate(node => new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true})));
     await page.keyboard.press('Escape');
-    await row('box').locator('.machine-name').click();
+    await page.clock.runFor(100);
+    await detailClosed;
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail opener');
+    // Add can open from either the list or the detail; polling replaces both openers.
+    const listAdd = row('box').locator('[data-add-connection=box]');
+    await listAdd.click();
+    await add.waitFor();
+    await page.evaluate(() => settingsMachinesRefresh());
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await add.waitFor({state: 'detached'});
+    assert.equal(await listAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed list Add opener');
+    await rowButton.click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    const detailAdd = dialog.locator('[data-add-connection=box]');
+    await detailAdd.click();
+    await add.waitFor();
+    await page.evaluate(() => settingsMachinesRefresh());
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await add.waitFor({state: 'detached'});
+    assert.equal(await detailAdd.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail Add opener');
     assert.ok(presenceReads > openedReads, 'open and reopen read presence');
     await online();
 

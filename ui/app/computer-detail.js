@@ -243,6 +243,7 @@ function computerAddStepHTML(machine, step) {
 function computerAddOpen(id) {
   const machine = () => (SETTINGS_DATA?.machines || []).find(m => m.id === id);
   if (!machine()) return;
+  const restoreFocus = computerFocusRestore($('#set-machines'));
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal model-login computer-add-dialog';
   dialog.setAttribute('aria-labelledby', 'computer-add-title');
@@ -253,7 +254,12 @@ function computerAddOpen(id) {
     signingIn = true;     // the sign-in owns the pop-up from here (its own Close cancels a sign-in still running)
     window.TicoModelLogin?.open({runnerId: id, runtime: step.runtime, machine: machine().label, profile: '', into: dialog});
   };
-  dialog.addEventListener('close', () => dialog.remove());
+  dialog.addEventListener('close', () => {
+    // A queued close must not take focus back from an action already opened elsewhere.
+    const returnFocus = document.activeElement === document.body || dialog.contains(document.activeElement);
+    dialog.remove();
+    if (returnFocus) restoreFocus();
+  });
   dialog.addEventListener('cancel', event => { if (signingIn) return; event.preventDefault(); dialog.close(); });
   dialog.addEventListener('click', event => {
     if (signingIn) return;
@@ -392,9 +398,15 @@ function computerDetailOpen(id) {
     dialog = document.createElement('dialog');
     dialog.className = 'tmodal computer-detail';
     dialog.setAttribute('aria-labelledby', 'computer-detail-title');
-    dialog.onclose = () => { dialog.dataset.computer = ''; };
+    dialog.onclose = () => {
+      if (dialog.open) return;
+      dialog.dataset.computer = '';
+      if (document.activeElement === document.body || dialog.contains(document.activeElement)) dialog.restoreOpener?.();
+    };
     el.appendChild(dialog);
   }
+  // Presence refreshes can replace the opener while this modal is open.
+  if (!dialog.open) dialog.restoreOpener = computerFocusRestore(el);
   dialog.dataset.computer = id;
   computerDetailPaint(true);
   if (!dialog.open) dialog.showModal();
