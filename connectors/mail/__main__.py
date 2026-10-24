@@ -1641,7 +1641,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
         raise Refused("no recipient.", "Pass --to, or --reply-to a thread that has one.")
     outside = pl.externals(policy, cc)
     appr = (pl.approval_check(approval, pl.externals(policy, to), outside, thread_id,
-                              slug=ctx.slug) if approval else None)
+                              slug=ctx.slug, body=body) if approval else None)
     approved = bool(appr and appr["full"])
     if outside and not approved:
         raise Refused(f"Cc outside {', '.join(policy['internal_domains'])} is not allowed "
@@ -1722,6 +1722,7 @@ def make_draft(ctx, to, subject, body, reply_to="", cc=(), slot=None,
                "draft": draft_id, "key": key, "thread": thread_id, "message": message_id,
                "to": to, "cc": cc, "subject": subject, "reply_to": reply_to or "",
                "attachments": files, "created": created, "updated": not created, "dry_run": ctx.dry,
+               "body_sha256": hashlib.sha256(body.encode()).hexdigest(),   # what a send approval names
                "send_needs_approval": bool(files),     # check_send: an attached send needs a yes
                "approval_request": (approval_request(ctx, draft_id, to, cc, subject, body, files,
                                                      file_ids, task_id) if files else None),
@@ -1808,10 +1809,11 @@ def send_result(ctx, payload):
 
 
 def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, approval=None,
-                 extra=None, attachments=()):
+                 extra=None, attachments=(), body=None):
     """The full send chain. Returns a payload; a policy problem is a downgrade, not an error.
     Attachments ride the same chain: they need allow_attachments and a per-message approval
-    whoever the recipient is, are named in the audit, and lift nothing."""
+    whoever the recipient is, are named in the audit, and lift nothing. `body` is the text the
+    draft carries; a Tico send approval covers only the text it names by sha256."""
     names = [a["name"] for a in attachments or ()]
     files = list(attachments or ())
     base = {"ok": True, "employee": ctx.slug, "mailbox": ctx.mailbox, "issue": ctx.issue,
@@ -1832,7 +1834,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # is recorded, but it advises rather than blocks: it does not get to overrule the owner.
     appr = (pl.approval_check(approval, pl.externals(ctx.policy, to),
                               pl.externals(ctx.policy, cc), thread_id,
-                              slug=ctx.slug, attachments=files or None, draft=draft_id)
+                              slug=ctx.slug, attachments=files or None, draft=draft_id, body=body)
             if approval else None)
     full = bool(appr and appr["full"])
     review_note = ""
@@ -1856,7 +1858,7 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
 
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
                              attachments=files, draft=draft_id, thread_id=thread_id,
-                             approval=approval, verbs=None, conn=ctx.conn,
+                             approval=approval, verbs=None, conn=ctx.conn, body=body,
                              thread_senders=pl.inbound_senders(msgs, ctx.mailbox))
     if not decision.allowed:
         return downgrade(decision["reason"], decision["gate"], decision["checks"])
@@ -1897,6 +1899,7 @@ def cmd_send(args):
     to, cc, subject, body = msg["to"], msg["cc"], msg["subject"], msg["body"]
     thread_id = msg["thread_id"]
     files = draft_files(ctx, draft)                     # hashed as they stand in Gmail now
+    sent_text = gm.body_text((draft.get("message") or {}).get("payload") or {})[0]   # and the text
     if not to:
         raise Refused(f"draft {args.draft} has no recipient.",
                       "Draft it again with --to; a draft with no To: cannot be sent.")
@@ -1913,7 +1916,7 @@ def cmd_send(args):
 
     allowance = pl.allowance_for(policy, ctx.slug, ctx.mailbox)
     appr = (pl.approval_check(args.approval_issue, pl.externals(policy, to),
-                              pl.externals(policy, cc), thread_id, slug=ctx.slug)
+                              pl.externals(policy, cc), thread_id, slug=ctx.slug, body=sent_text)
             if args.approval_issue else None)
     res = ln.run(body, subject=subject, to=to, cc=cc, slug=ctx.slug,
                  reply_to=thread_id if msgs else "", allowance=allowance,
@@ -1947,7 +1950,7 @@ def cmd_send(args):
                    "available": verdict.get("available"),
                    "attachments": [a["name"] for a in files]})
     payload = attempt_send(ctx, args.draft, to, cc, subject, thread_id, msgs, verdict,
-                           approval=args.approval_issue, attachments=files,
+                           approval=args.approval_issue, attachments=files, body=sent_text,
                            extra={"lint": {"ok": True, "findings": res["findings"]},
                                   "review": ("ok" if verdict.get("ok") else
                                              ("unavailable" if not verdict.get("available")
@@ -1964,7 +1967,8 @@ def cmd_reply(args):
                                 approval=args.approval_issue)
     sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                         state["thread_id"], state["msgs"], state["verdict"],
-                        approval=args.approval_issue, attachments=state["attachments"])
+                        approval=args.approval_issue, attachments=state["attachments"],
+                        body=state["body"])
     payload = dict(payload, sent=sent.get("sent", False))
     for k in ("downgraded", "reason", "gate", "message", "key", "already_sent", "would_send",
               "note", "checks"):
@@ -2346,7 +2350,7 @@ def cmd_schedule(args):
     if not attendee:
         raise Refused("no attendee.", "Pass --attendee <address>.")
     decision = pl.check_send(policy, ctx.slug, ctx.mailbox, [attendee], thread_id=args.thread,
-                             approval=args.approval_issue, conn=ctx.conn)
+                             approval=args.approval_issue, conn=ctx.conn, body=body)
     would = {"start": start.isoformat(), "end": end.isoformat(), "attendee": attendee,
              "summary": args.summary or subject or "Intro call",
              "mailbox": ctx.mailbox, "minutes": args.minutes}
@@ -2372,7 +2376,7 @@ def cmd_schedule(args):
                                     slot=args.slot, minutes=args.minutes)
         sent = attempt_send(ctx, state["draft_id"], state["to"], state["cc"], state["subject"],
                             state["thread_id"], state["msgs"], state["verdict"],
-                            approval=args.approval_issue)
+                            approval=args.approval_issue, body=state["body"])
         if not sent.get("sent"):
             raise Refused(sent.get("reason", "the confirmation was not sent"),
                           "The event was rolled back; nothing is on the calendar and nothing "

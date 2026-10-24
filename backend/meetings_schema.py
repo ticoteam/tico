@@ -242,3 +242,16 @@ CREATE TABLE IF NOT EXISTS live_meeting_chat_routes (
 );
 CREATE INDEX IF NOT EXISTS live_meeting_chat_routes_status ON live_meeting_chat_routes(meeting_id,status,started);
 """
+
+# A live meeting is private to its owner, the people the owner adds and attached bots, or open to the
+# whole team. Existing meetings were team-visible, so the column defaults to team; new clients choose.
+LIVE_MEETING_ACCESS_SCHEMA = """
+ALTER TABLE live_meetings ADD COLUMN visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('private','team'));
+CREATE TABLE IF NOT EXISTS live_meeting_access (
+ meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
+ actor TEXT NOT NULL,
+ added_by TEXT NOT NULL,
+ added_at TEXT NOT NULL,
+ PRIMARY KEY(meeting_id,actor)
+);
+"""

@@ -172,7 +172,7 @@ function renderInboxNav() {
   }
   const rows = inboxNavRows().filter(row => !INBOX_PLACED.has(row.bot));
   section.hidden = !rows.length;
-  list.innerHTML = rows.map(inboxNavLink).join('');
+  patchHTML(list, rows.map(inboxNavLink).join(''));
 }
 function renderLibrarians() {
   // The owner's tab is the CEO Bot, by its name; everyone else's the Assistant (ui/app/state.js meCeo).
@@ -435,7 +435,7 @@ function orgGroupFieldHTML(value = '') {
   return `<input class="org-name" type="text" maxlength="60" value="${esc(value)}" aria-label="Group name" autocomplete="off" spellcheck="false">`;
 }
 function orgGroupFieldWire() {
-  const input = $('#tree .org-name'); if (!input) return;
+  const input = $('#tree .org-name'); if (!input || input.onkeydown) return;   // a field kept through a redraw keeps what is typed
   input.focus(); input.select();
   input.onkeydown = ev => {
     if (ev.key === 'Enter') { ev.preventDefault(); input.onblur = null; void orgGroupSave(input); }
@@ -685,9 +685,10 @@ function renderTree() {
   $('#tree').classList.toggle('history', historyOn);
   const manage = orgCanGroups() && !historyOn;
   teamAddRefresh();
-  $('#tree').innerHTML = historyOn ? history()
+  // Bot status events redraw the tree several times a minute: only the rows that changed are replaced (patchHTML).
+  patchHTML($('#tree'), historyOn ? history()
     : (manage && ORG_EDIT?.add === '' ? `<li class="org-new">${orgGroupFieldHTML()}</li>` : '') + rec('', 0)
-      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : '');
+      + (manage ? '<li class="org-no-group" data-org="g:">No group</li>' : ''));
   renderInboxNav();                                   // after the tree, which places what it can
   orgDragWire($('#tree'));
   orgGroupFieldWire();

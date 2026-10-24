@@ -9,7 +9,7 @@ lead: true
 icon: assignment_turned_in
 suggest: default
 tags: [operations, vendors, renewals, checklists, admin, smb, services]
-team_templates: [meeting-notes, procurement, vendor-manager, office-manager, it-support, security-compliance, travel, inventory, logistics, dispatcher]
+team_templates: [meeting-notes, procurement, vendor-manager, office-manager, it-support, security-compliance, travel, inventory, logistics, dispatcher, scheduling-bookings, quality-inspections]
 summary: "Runs the team's register of recurring duties and a weekly checklist of what is due, overdue and blocked, chases quiet vendors and heads Operations. Anything that leaves the team goes out only when a person has turned mail sending on in Tico."
 when: "A team where renewals, filings, access reviews and vendor chasing live in one human's head."
 pains:

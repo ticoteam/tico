@@ -1583,6 +1583,22 @@ class BotWakePreset(Contract):
     expected_revision: int = Field(ge=1)
 
 
+class BotTaskTab(Contract):
+    """One tab over a bot's task list (backend/bot_task_tabs.py): a built-in view, or a filter by type, state and
+    whom the task waits on. Empty `types` is every type."""
+    name: str = Field(min_length=1, max_length=40)
+    builtin: Literal["needs", "active", "blocked", "done"] | None = None
+    types: list[str] = Field(default_factory=list, max_length=50)
+    states: list[Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]] = Field(
+        default_factory=list, max_length=8)
+    waiting_on: Literal["", "me", "person", "bot"] = ""
+
+
+class BotTaskTabs(Contract):
+    # No cap on how many tabs (Task-list tabs spec): the request body limit bounds one write.
+    tabs: list[BotTaskTab] | None
+
+
 class BotTransitionCreate(Contract):
     kind: Literal["model", "machine"]
     model: ID | None = None
@@ -1811,6 +1827,8 @@ class Recruit(Contract):
 
 
 class Claim(Contract):
+    # Opt in only after the heartbeat advertises this protocol; old workers keep their delivery leases.
+    start_places: bool = False
     # Bots the runner takes no work for at all (maintenance, or a runner without lanes that is busy).
     busy_bots: list[ID] | None = Field(default=None, max_length=32)
     # Lanes the runner is already running, each "bot|lane" (clients/sessions.py lane), when it runs lanes.
@@ -1828,9 +1846,17 @@ class LoadSnapshot(Contract):
     running_turns: int = Field(ge=0, le=10_000)
 
 
+class StartPlace(Contract):
+    waiting: Literal["", "shared login", "pre-start requirements"] = ""
+
+
 class Started(Contract):
     thread_id: ID
     load_snapshot: LoadSnapshot | None = None
+
+
+class AttemptThread(Contract):
+    thread_id: ID
 
 
 class AttemptStderr(Contract):
