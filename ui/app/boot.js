@@ -53,8 +53,11 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
     return;
   }
   if (S.me?.cloud) {
+    // Its settings change seldom (an owner turning telemetry on or off): read again every ten minutes, and when a
+    // tab that was hidden is shown, not every 30 s from every open tab.
     window.TicoObservability?.start();
-    setInterval(() => window.TicoObservability?.start(), 30000);
+    setInterval(() => { if (!document.hidden) window.TicoObservability?.start(); }, 600000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) window.TicoObservability?.start(); });
   }
   void orgHistorySync();
   void railsSync();

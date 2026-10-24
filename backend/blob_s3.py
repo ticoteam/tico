@@ -25,6 +25,12 @@ class Sources:
     def kind(self):
         return self.selected or kinds(self.settings)[0]
 
+    def forget(self):
+        """Drop the clients built so far: the next request builds one with the settings' keys as they are now."""
+        with self._lock:
+            self._clients.clear()
+            self._building.clear()
+
     def client_for(self, kind, reads=False, region_name=None):
         cache_key = (kind, reads) if region_name is None else (kind, reads, region_name)
         with self._lock:
@@ -134,8 +140,10 @@ def client(settings, config=None, kind=None, region_name=None):
                "config": signing if config is None else config.merge(signing)}
     kind = kind or kinds(settings)[0]
     if kind == "company":
-        key, secret = settings.blob_keys
-        options.update(aws_access_key_id=key, aws_secret_access_key=secret)
+        # (key ID, secret), or with a session token for Tico file hosting's keys (backend/tico_storage.py).
+        key, secret, *token = settings.blob_keys
+        options.update(aws_access_key_id=key, aws_secret_access_key=secret,
+                       **({"aws_session_token": token[0]} if token and token[0] else {}))
     elif kind != "role":
         prefix = "TICO_BLOB" if kind == "keys" else "LITESTREAM"
         key, secret = os.environ.get(prefix + "_ACCESS_KEY_ID"), os.environ.get(prefix + "_SECRET_ACCESS_KEY")

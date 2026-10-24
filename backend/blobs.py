@@ -1,6 +1,8 @@
 """Immutable binary storage. Only opaque, authorized IDs are exposed over HTTP."""
 
 import base64
+import collections
+import contextlib
 import io
 import errno
 import json
@@ -18,6 +20,8 @@ from . import blob_s3
 
 # How long an unreachable earlier place is skipped (Blobs._open_earlier).
 EARLIER_RETRY = 300
+# The place new files go to, fixed at one moment (`Blobs.target`): a copy that must land there whatever happens next.
+Target = collections.namedtuple("Target", "generation settings sources s3")
 
 
 class Blobs:
@@ -50,12 +54,23 @@ class Blobs:
         # Bumped by `configure`, so a copy or probe begun for one target never records against another.
         self._generation = 0
         self._loop = None
+        # Whether this disk's files are copied to a new place on their own, and why an upload is refused when the
+        # place can't take it (`configure`).
+        self._copy_disk, self._paused = True, ""
+        # Tico file hosting's edge links (backend/tico_storage.py `edge_link`), while its place holds files.
+        self.edge = None
+        self._edge_seen = {}
+        # Files this server uploaded to Tico file hosting's bucket since it started, so Move existing files does not
+        # count them as still to move (after a restart, the move finds them there: tico_storage.copy_one).
+        self._landed = set()
 
-    def configure(self, company=None, earlier=(), store=None, checked=False):
+    def configure(self, company=None, earlier=(), store=None, checked=False, copy_disk=True, paused=""):
         """Write to `company` ({bucket, prefix, region, keys}), or to the server's own storage when None, from now
         on, without a restart. Files keep their bytes where they are: reads also try each of `earlier` and the
-        server's own storage. With `store`, files on this computer's disk are then copied to the new place.
-        `checked`: the company's keys were just shown to write there, so writes need not wait for the probe."""
+        server's own storage. With `store`, files on this computer's disk are then copied to the new place, unless
+        `copy_disk` is False (Tico file hosting: the owner chooses Move existing files, backend/tico_storage.py).
+        `checked`: the company's keys were just shown to write there, so writes need not wait for the probe.
+        `paused`: the plain reason an upload is refused with when this place can't take it (`{reason}` is why)."""
         target = Location(self._base, **company) if company else self._base
         if company:
             # A client handed in for the server's own bucket (a backup's) cannot sign for the company's.
@@ -77,9 +92,37 @@ class Blobs:
             self._write_failed, self._write_error = False, ""
             self._s3_failed = set()
             self._earlier = readable
+            self._copy_disk, self._paused = copy_disk, paused
             self._generation += 1
-        if store is not None and self._loop is not None and target.blob_bucket:
+        if store is not None and self._loop is not None and target.blob_bucket and copy_disk:
             threading.Thread(target=self.storage_loop, args=(store, self._loop), name="tico-storage-copy", daemon=True).start()
+
+    def rekey(self, location, keys):
+        """New keys for the place at `location` (Tico file hosting's last an hour), swapped in where it is used: no
+        new write check, and a copy or move under way carries on; requests from now on sign with them. Whether a
+        place is there."""
+        found = False
+        with self._write_lock:
+            for place, sources in [(self.settings, self._sources), *self._earlier]:
+                if isinstance(place, Location) and location_of(place) == location:
+                    place.blob_keys = keys
+                    sources.forget()
+                    found = True
+        return found
+
+    def target(self):
+        """The place new files go to now. `_upload` and `verify_s3` given it act on that place or not at all: once
+        `configure` points new files elsewhere, they refuse rather than act on the new place."""
+        with self._write_lock:
+            return Target(self._generation, self.settings, self._sources, self._s3)
+
+    def place_at(self, location):
+        """(settings, Sources) of the place new files go to or an earlier one at `location`, or None."""
+        with self._write_lock:
+            for place, sources in [(self.settings, self._sources), *self._earlier]:
+                if place.blob_bucket and location_of(place) == location:
+                    return place, sources
+        return None
 
     @property
     def s3(self):
@@ -116,6 +159,24 @@ class Blobs:
 
     def put_staged(self, stream, digest, size, content_type="application/octet-stream"):
         """The multipart parser already hashed and spooled this stream."""
+        with self._refused():
+            return self._put_staged(stream, digest, size, content_type)
+
+    def _refused(self):
+        """Turns a storage failure into the plain reason `configure` was given, while one is (credits out)."""
+        paused = self._paused
+
+        @contextlib.contextmanager
+        def plain():
+            try:
+                yield
+            except Problem as exc:
+                if not paused or exc.code != "blob_storage":
+                    raise
+                raise Problem("storage_paused", paused.format(reason=exc.detail.split(";")[0]), 503, True) from exc
+        return plain()
+
+    def _put_staged(self, stream, digest, size, content_type):
         if self.bucket and self.rehearsal:
             raise Problem("rehearsal", "Uploads are off in a rehearsal: attachments live in the company's bucket", 409)
         stream.seek(0)
@@ -129,14 +190,22 @@ class Blobs:
         return digest
 
     def put(self, data, content_type="application/octet-stream"):
+        with self._refused():
+            return self._put(data, content_type)
+
+    def _put(self, data, content_type):
         if self.bucket and not self.rehearsal:
             digest = hashlib.sha256(data).hexdigest()
             self._upload(io.BytesIO(data), digest, len(data), content_type, small_body=data)
             return digest
-        return self.put_stream(io.BytesIO(data), content_type)
+        return self._put_stream(io.BytesIO(data), content_type, None, 0, None)
 
     def put_stream(self, fileobj, content_type="application/octet-stream", max_bytes=None, rate_limit=0, stop=None):
         """Stage and hash in bounded chunks; staging files always leave with the request."""
+        with self._refused():
+            return self._put_stream(fileobj, content_type, max_bytes, rate_limit, stop)
+
+    def _put_stream(self, fileobj, content_type, max_bytes, rate_limit, stop):
         if self.bucket and self.rehearsal:
             raise Problem("rehearsal", "Uploads are off in a rehearsal: attachments live in the company's bucket", 409)
         try:
@@ -160,10 +229,14 @@ class Blobs:
             detail = "File storage disk is full; free space or configure an S3 bucket and retry" if exc.errno == errno.ENOSPC else "File staging storage is unavailable; check disk space and permissions"
             raise Problem("blob_storage", detail, 503, True) from exc
 
-    def _upload(self, stream, digest, size, content_type, small_body=None, rate_limit=0, stop=None):
+    def _upload(self, stream, digest, size, content_type, small_body=None, rate_limit=0, stop=None, at=None, whole=False):
+        # `whole`: one PutObject with the file's SHA-256 whatever its size (up to S3's 5 GB), so S3 checks every byte
+        # on receipt and keeps that checksum (`holds_whole`).
         # Reads may use an unselected source; writes must wait for the probe.
         # Keep one identity for every part and cleanup even if a later check switches it.
         with self._write_lock:
+            if at is not None and at.generation != self._generation:
+                raise Problem("storage_changed", "Where new files go changed; the file was not copied", 409)
             if self._write_failed or self._sources.selected is None:
                 detail = self._write_error or "S3 storage write check is still pending"
                 raise Problem("blob_storage", detail + "; retry without discarding your file", 503, True)
@@ -178,8 +251,9 @@ class Blobs:
         try:
             s3 = s3 if s3 is not None else sources.client_for(kind)
             if self._matches_s3(digest, size, settings, bucket, sources):
+                self._landing(digest, settings, at)
                 return
-            if size <= 8 * 1024 ** 2:
+            if size <= 8 * 1024 ** 2 or whole:
                 s3.put_object(**options, Body=small_body if small_body is not None else PacedReader(stream, rate_limit, stop), IfNoneMatch="*",
                                    ChecksumSHA256=base64.b64encode(bytes.fromhex(digest)).decode())
             else:
@@ -193,6 +267,7 @@ class Blobs:
                     parts.append({"PartNumber": number, "ETag": result["ETag"]})
                 s3.complete_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id,
                                                  MultipartUpload={"Parts": parts}, IfNoneMatch="*")
+            self._landing(digest, settings, at)
         except Exception as exc:
             if upload_id:
                 try:
@@ -220,6 +295,23 @@ class Blobs:
         return head.get("ContentLength") == size and (
             head.get("ChecksumSHA256") == checksum or head.get("Metadata", {}).get("sha256") == digest)
 
+    def _landing(self, digest, settings, at):
+        # A new file, not a move's copy (that one counts once it is checked: tico_storage._move).
+        found = self.edge
+        if at is None and found and location_of(settings) == found["location"]:
+            if len(self._landed) > 200_000:
+                self._landed.clear()
+            self._landed.add((found["location"], digest))
+
+    def holds_whole(self, digest, size, at):
+        """Whether the place `at` holds the file whole, by S3's own SHA-256 of what it received (a `whole` upload):
+        no byte is read back."""
+        head = at.sources.read_s3("head_object", Bucket=at.settings.blob_bucket, Key=self.s3_key(digest, at.settings),
+                                  ChecksumMode="ENABLED")[0] if at.s3 is None else at.s3.head_object(
+            Bucket=at.settings.blob_bucket, Key=self.s3_key(digest, at.settings), ChecksumMode="ENABLED")
+        return (head.get("ContentLength") == size
+                and head.get("ChecksumSHA256") == base64.b64encode(bytes.fromhex(digest)).decode())
+
     def _local(self, source, digest):
         path = self.directory / self.key(digest)
         path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -244,9 +336,10 @@ class Blobs:
         finally:
             os.unlink(temporary)
 
-    def verify_s3(self, digest, rate_limit=0, stop=None):
-        response, _ = self.read_s3("get_object", Bucket=self.bucket, Key=self.s3_key(digest))
-        stream = response["Body"]
+    def verify_s3(self, digest, rate_limit=0, stop=None, at=None):
+        """Read the file back whole from the place new files go to (`at`, when the copy was made for that one)."""
+        at = at or self.target()
+        stream = self._read(at.settings, at.sources, at.s3, digest, {})
         try:
             sha = hashlib.sha256()
             paced = PacedReader(stream, rate_limit, stop)
@@ -261,10 +354,10 @@ class Blobs:
         """Open now (so failures precede headers); iterator closes even on disconnect."""
         key = self.key(digest)
         span = {"Range": f"bytes={start}-{end if end is not None else ''}"} if start or end is not None else {}
-        if self.bucket and digest not in self._s3_failed:
+        at = self.target()
+        if at.settings.blob_bucket and digest not in self._s3_failed:
             try:
-                response, _ = self.read_s3("get_object", Bucket=self.bucket, Key=self.s3_key(digest), **span)
-                stream = response["Body"]
+                stream = self._read(at.settings, at.sources, at.s3, digest, span)
             except Exception:
                 stream = self._open_elsewhere(key, digest, start, span)
         else:
@@ -298,13 +391,26 @@ class Blobs:
             if time.monotonic() - self._earlier_down.get(where, -EARLIER_RETRY) < EARLIER_RETRY:
                 continue
             try:
-                return sources.read_s3("get_object", Bucket=place.blob_bucket, Key=self.s3_key(digest, place), **span)[0]["Body"]
+                return self._read(place, sources, None, digest, span)
             except Exception as exc:
                 # Any answer from S3 means the bucket is reachable: without s3:ListBucket a missing file is
                 # AccessDenied, not NoSuchKey. Only a failure to get an answer (timeout, endpoint) marks it down.
                 if getattr(exc, "response", None) is None:
                     self._earlier_down[where] = time.monotonic()
         return None
+
+    def _read(self, place, sources, s3, digest, span):
+        """The file's body from `place`. Bytes in Tico file hosting's bucket come through the company's address,
+        where Tico's edge counts their delivery (backend/tico_storage.py `edge_read`); a read straight from that
+        bucket would be neither counted nor cheaper. Any other place is read from its bucket."""
+        found = self.edge
+        if found and location_of(place) == found["location"]:
+            from .tico_storage import edge_read
+            return edge_read(found, "/" + self.key(digest), span)
+        options = dict(Bucket=place.blob_bucket, Key=self.s3_key(digest, place), **span)
+        if s3 is not None:
+            return s3.get_object(**options)["Body"]
+        return sources.read_s3("get_object", **options)[0]["Body"]
 
     def _open_local(self, key, start):
         try:
@@ -323,7 +429,7 @@ class Blobs:
             self.copy_local(store, stop)
 
     def copy_local(self, store, stop, interval=0.25):
-        if not self.bucket or self.rehearsal or stop.is_set():
+        if not self.bucket or self.rehearsal or stop.is_set() or not self._copy_disk:
             return
         generation, location = self._generation, self.location
         if not self.check_write(store, stop) or generation != self._generation:

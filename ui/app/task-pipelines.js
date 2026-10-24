@@ -9,7 +9,7 @@ const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
 const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';
 const pipelineType = task => TASK_TYPES.find(type => type.id === pipelineTypeId(task));
-// A steps-only type's tasks change status only by a step move: no Done, Close or Reopen of their own.
+// A steps-only type's tasks change status only by a step move: no Done or Reopen of their own. A person can still close one.
 const pipelineStepsOnly = task => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = state => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task, body) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
@@ -17,10 +17,14 @@ const pipelineStepName = id => TASK_TYPES.flatMap(type => type.steps).find(step 
 // The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
 const pipelineRoleType = role => TASK_TYPES.find(type => type.role === role);
 const pipelineProductType = () => pipelineRoleType('product-roadmap');
-async function taskTypesLoad() {
+let TASK_TYPES_READ = false;
+// `cached`: the types already read do (a task opened); the Tasks page's loads read them again, so an edit elsewhere shows.
+async function taskTypesLoad({cached = false} = {}) {
   if (!S.me?.cloud) return TASK_TYPES;
+  if (cached && TASK_TYPES_READ) return TASK_TYPES;
   if (!TASK_TYPES_LOADING) TASK_TYPES_LOADING = get('/v2/task-types').then(data => {
     TASK_TYPES = data.types || [];
+    TASK_TYPES_READ = true;
     return TASK_TYPES;
   }).finally(() => { TASK_TYPES_LOADING = null; });
   return TASK_TYPES_LOADING;

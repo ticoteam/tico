@@ -133,7 +133,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     const conns = dialog.locator('[data-connection]');
     assert.deepEqual(await conns.evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex', 'own:musecode']);
     const codex = dialog.locator('[data-connection="own:codex"]');
-    assert.match(await codex.innerText(), /Codex\s+Computer's login/);
+    assert.deepEqual(await conns.locator('.computer-conn-head').allInnerTexts(), ['Claude Code', 'Codex', 'Muse Code']);
     assert.match(await codex.innerText(), /Weekly 30% left/);
     assert.match(await codex.innerText(), /Bots: Ops, Writer/);
     assert.equal(await codex.locator('meter').evaluateAll(m => m.map(x => x.value)).then(v => v.join()), '30');

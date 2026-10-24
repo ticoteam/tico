@@ -8,12 +8,16 @@
 #   scripts/journey-test.sh --keep              # leave the stack running afterwards
 #   scripts/journey-test.sh --release           # the release gate's run (python scripts/release_checks.py --release)
 #
+# Each run's containers, volume and compose project end in its own run id, and cleanup removes only those. A run
+# killed before its cleanup leaves them behind: `docker ps -a --filter name=journey` lists its containers and
+# `docker volume ls --filter name=journey-runner` its volume.
+#
 # --release keeps the stages nothing else covers and drops the ones docker/smoke.sh already proves (server restart)
 # or that run on demand (replica restore, runner restart, backup). With TICO_JOURNEY_IMAGES_READY=<file> the candidate
 # images are built by the caller: the upgrade waits for that file to say "ok" instead of building them.
 # TICO_JOURNEY_CANDIDATE=vX.Y.Z names a local candidate built (or pulled and tagged) as that version instead of v9.9.9.
 #
-# What it does, in one throwaway install directory and Docker project (tico-journey), auth none:
+# What it does, in one throwaway install directory and Docker project (tico-journey-<run id>), auth none:
 #   1 install     the PREVIOUS release: its checksummed bundle unpacked, a .env, `docker compose up -d`
 #   2 seed        data shaped like a real team's: older releases' rows (scripts/make_upgrade_fixture.py), a computer
 #                 enrolled with a one-time code (the previous runner, started as docker/runner.compose.yaml starts it),
@@ -55,7 +59,7 @@ while [ $# -gt 0 ]; do
     --previous) PREV="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
     --release) FAST=1; shift ;;
-    -h|--help) sed -n 2,46p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n 2,50p "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -64,9 +68,12 @@ BROKEN=v9.9.10   # newer than the candidate: the updater refuses a downgrade
 THIRD=v9.9.11    # the second updater hop's target: the candidate again, as another release
 RELEASES="${TICO_JOURNEY_RELEASES_URL:-https://github.com/ticoteam/tico/releases}"
 SERVER_IMAGE=ghcr.io/ticoteam/tico RUNNER_IMAGE=ghcr.io/ticoteam/tico-runner UPDATER_IMAGE=ghcr.io/ticoteam/tico-updater
-PROJECT=tico-journey NET=tico-journey_default RUNNER=journey-runner
+# Every Docker name carries this run's id, so cleanup removes only what this run made, never a same-named
+# container or volume someone already had.
+RUN="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+PROJECT=tico-journey-$RUN NET=tico-journey-${RUN}_default RUNNER=journey-runner-$RUN RUNNER_VOLUME=journey-runner-$RUN
 REGISTRY_IMAGE=public.ecr.aws/docker/library/registry:2.8.3
-REGISTRY=127.0.0.1:${TICO_JOURNEY_REGISTRY_PORT:-5052} REGISTRY_NAME=journey-registry RELEASE_SERVER=journey-releases
+REGISTRY=127.0.0.1:${TICO_JOURNEY_REGISTRY_PORT:-5052} REGISTRY_NAME=journey-registry-$RUN RELEASE_SERVER=journey-releases-$RUN
 INSTALL_UPDATER="$REGISTRY/ticoteam/tico-updater"   # the install's updater image: what it pulls when it replaces itself
 SWAP_HELPER=tico-updater-swap-$PROJECT              # docker/updater.py names the helper after the compose project
 BUCKET=acme-journey-bucket                          # the team's own HUB_BUCKET value, fake
@@ -110,10 +117,10 @@ for row in sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(sy
 }
 
 cleanup() {
-  [ "$KEEP" = 1 ] && { echo "journey: kept the stack (docker compose -p $PROJECT --project-directory $DIR ...) and $RUNNER"; return; }
+  [ "$KEEP" = 1 ] && { echo "journey: kept the stack (docker compose -p $PROJECT --project-directory $DIR ...), $RUNNER and volume $RUNNER_VOLUME"; return; }
   docker rm -f "$RUNNER" "$SWAP_HELPER" "$RELEASE_SERVER" "$REGISTRY_NAME" >/dev/null 2>&1
   dc down -v >/dev/null 2>&1
-  docker volume rm journey-runner >/dev/null 2>&1
+  docker volume rm "$RUNNER_VOLUME" >/dev/null 2>&1
   # The updater writes the install's bundle as the image's user; hand it back so the directory can go.
   docker run --rm --user 0 --entrypoint chown -v "$WORK:/w" "$SERVER_IMAGE:$PREV" -R "$(id -u):$(id -g)" /w >/dev/null 2>&1
   for v in $([ "$LOCAL" = 1 ] && echo "$CAND") "$BROKEN" "$THIRD"; do docker rmi "$SERVER_IMAGE:$v" "$RUNNER_IMAGE:$v" "$UPDATER_IMAGE:$v" >/dev/null 2>&1; done
@@ -130,7 +137,7 @@ sha256_of() { if command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{pr
 start_runner() {  # image tag, then the join arguments: as docker/runner.compose.yaml starts it (root, five capabilities)
   local tag=$1; shift
   docker rm -f "$RUNNER" >/dev/null 2>&1
-  docker run -d --name "$RUNNER" --restart unless-stopped --network "$NET" -e OPENAI_API_KEY=journey-fake -v journey-runner:/home/runner \
+  docker run -d --name "$RUNNER" --restart unless-stopped --network "$NET" -e OPENAI_API_KEY=journey-fake -v "$RUNNER_VOLUME:/home/runner" \
     --user 0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add KILL --cap-add SETGID --cap-add SETUID \
     --security-opt no-new-privileges:true "$RUNNER_IMAGE:$tag" join --url http://server:8765 "$@" --label "Journey runner" >/dev/null || return 1
   # The fake harness: a `codex` on the runner's PATH that speaks the app-server protocol. The runner finds it, the
@@ -487,7 +494,7 @@ failure_logs() {  # what the containers said last: the release gate's log is all
   docker exec "$RUNNER" cat /tmp/journey-fake-codex.log 2>/dev/null | tail -n 20 | sed 's/^/    fake codex: /'
 }
 
-printf 'journey: previous %s -> candidate %s (%s)\n' "$PREV" "$CAND" "$([ "$LOCAL" = 1 ] && echo "built from this checkout" || echo "published release")"
+printf 'journey: previous %s -> candidate %s (%s), Docker names end in -%s\n' "$PREV" "$CAND" "$([ "$LOCAL" = 1 ] && echo "built from this checkout" || echo "published release")" "$RUN"
 run_step "install $PREV (bundle, auth none)" step_install
 run_step "seed: fixture rows, runner, HUB_ variable, session, worktree" step_seed
 [ "$FAST" = 1 ] || run_step "restart the server" step_restart

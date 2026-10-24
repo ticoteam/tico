@@ -234,6 +234,24 @@ def test_every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_sh
     assert _roadmap_step(api, item) == 'Shipped'
 
 
+def test_a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api):
+    """Tickets closed without shipping send the item back to Approved; a person can still ship or close it."""
+    dev = _dev_tickets(api)
+    item, children = _building(api, dev, 'Chat')
+    for child in children:
+        _step(api, child, 'Closed')
+    assert _roadmap_step(api, item) == 'Approved'
+    _step(api, item, 'Shipped')
+    assert _roadmap_step(api, item) == 'Shipped'
+    _step(api, children[0], 'In Progress')          # a ticket moving takes the item back over
+    assert _roadmap_step(api, item) == 'Building'
+    row = post(api, 'tasks/' + item['id'], {'version': get(api, 'tasks/' + item['id'])['task']['version'],
+                                            'close': True})
+    assert row['status'] == 'closed' and row['step'] is None
+    _step(api, children[0], 'Closed')
+    assert get(api, 'tasks/' + item['id'])['task']['status'] == 'closed'
+
+
 def test_a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api):
     dev = _dev_tickets(api)
     item, (kept, dropped) = _building(api, dev, 'Sharing')
@@ -326,6 +344,9 @@ def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(ap
     url = 'https://github.com/acme/app/pull/7'
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', ticket['id'], url, mover=True)
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
+                  ('a' * 40, ticket['id']))
+        c.execute("UPDATE tasks SET note=? WHERE id=?", ('Tests: head ' + 'a' * 40 + ': 9 passed, 0 failed', ticket['id']))
         number, other_number = (H.task(c, t['id'])['number'] for t in (ticket, other))
     assert number is not None
     name = f'#{number} Build exports'

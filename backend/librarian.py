@@ -111,18 +111,19 @@ def research(c, auth, who, body):
     return {"task_id": task["id"], "bot": LIBRARIAN, "kind": kind, "target": target}
 
 
-def install(app, store, auth, mutate, onboarding):
-    def person(request):
-        """A person, or BotOps acting with one's delegated rights (it then has their role)."""
-        who = request.state.identity
-        if who.actor == "bot:botops":
-            raise Problem("forbidden", "BotOps does this only for the person who asked it to; the " + NAME
-                          + " turns on for the owner", 403)
-        if who.role not in ("owner", "human"):
-            raise Problem("identity", "Bots ask the " + NAME + " with `hub doc ask` (a message of kind ask); "
-                          "this route is for people", 403)
-        return who
+def person(request):
+    """A person, or BotOps acting with one's delegated rights (it then has their role)."""
+    who = request.state.identity
+    if who.actor == "bot:botops":
+        raise Problem("forbidden", "BotOps does this only for the person who asked it to; the " + NAME
+                      + " turns on for the owner", 403)
+    if who.role not in ("owner", "human"):
+        raise Problem("identity", "Bots ask the " + NAME + " with `hub doc ask` (a message of kind ask); "
+                      "this route is for people", 403)
+    return who
 
+
+def install(app, store, auth, mutate, onboarding):
     @app.get("/api/v2/librarian")
     def librarian(request: Request):
         who = person(request)

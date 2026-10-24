@@ -312,7 +312,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .needs-you{position:fixed;left:12px;bottom:52px;z-index:40;width:min(400px,calc(100vw - 24px));max-height:min(70vh,640px);overflow:auto;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);box-shadow:0 16px 48px rgba(0,0,0,.4)}
 .needs-you header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 4px}.needs-you header h2{margin:0;font-size:var(--t-lg)}
 .needs-you [data-list]{padding:0 16px 8px}.needs-you .row{display:flex;gap:8px;align-items:center;padding:0 16px 14px}
-#heartbeat-alert.muted{color:var(--muted)}
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-machines td:first-child{width:1%;white-space:nowrap;padding-right:24px}
@@ -615,6 +614,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 /* Settings > Triggers (ui/app/settings-triggers.js) */
 .storage-form{display:grid;gap:8px;max-width:520px;margin:12px 0}.storage-form label{display:grid;gap:4px}
 .storage-earlier{margin:6px 0 0;padding-left:18px}
+.storage-tico{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;max-width:640px}.storage-tico h4{margin:0 0 6px}.storage-tico .row{align-items:center;gap:12px}
 .trigger-new{margin-bottom:12px}.trigger-new input{flex:1 1 220px;min-width:0}
 .trigger-secret{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
 .trigger-secret p{margin:0 0 6px}.trigger-secret .row{flex-wrap:nowrap}

@@ -37,6 +37,27 @@ def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
+def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
+                      "VALUES(?, 'ops', ?, 0, ?, ?)", [
+            (f"{reason}-{billing}", stamp(1), billing, reason)
+            for reason in ("usage_unreported", "usage_limited", "no_result")
+            for billing in ("api", None)
+        ])
+        # A measured subscription and an API reading outside the window cannot supply a reading.
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
+        assert botkpis.value(c, "ops", "cost_7d", NOW) is None
+        assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
+        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
+        assert botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]["value"] == 0
+
+
 def colour(link, value, days_ago=0, kpi=ACTIVATION, **more):
     return K.assess({**kpi, **more}, link, [reading(value, days_ago)], NOW)
 
@@ -159,33 +180,63 @@ def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(ap
     assert actions[-2:] == ["kpi.archive", "kpi.restore"]
 
 
+def add_ceo_bot(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+
+
+def owners_chat(api):
+    """A CEO Bot turn in the owner's chat with it: it acts as the owner (backend/assistant.py)."""
+    add_ceo_bot(api)
+    machine = runner(api)
+    assign(api, machine, "goal-manager")
+    ready(api, machine, ["goal-manager"])
+    post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
+    return claim(api, machine, "goal-manager")["token"]
+
+
+def goals_session(api):
+    """A CEO Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    add_ceo_bot(api)
+    machine = runner(api)
+    for bot in ("ops", "goal-manager"):
+        assign(api, machine, bot)
+    ready(api, machine, ["ops", "goal-manager"])
+    post(api, "chat/ops", {"text": "Check the goals."})
+    ops = claim(api, machine, "ops")["token"]
+    post(api, "messages", {"to": "goal-manager", "text": "Run the pass.", "needs_action": True}, token=ops)
+    return claim(api, machine, "goal-manager")["token"]
+
+
 def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused(api):
     _, kpi = goal_with_kpi(api)
     post(api, f"kpis/{kpi['id']}/archive", {}, token="cara-test", expected=403)
 
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
-    machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
-    post(api, "chat/goal-manager", {"text": "Run the pass."})
-    token = claim(api, machine)["token"]
+    token = goals_session(api)
     post(api, f"kpis/{kpi['id']}/archive", {}, token=token, expected=403)
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
+def test_in_the_owners_chat_the_ceo_bot_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+    _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
+    token = owners_chat(api)
+    assert get(api, "me", token)["actor"] == "human:ana"
+    post(api, f"kpis/{kpi['id']}/archive", {}, token="ana-test")
+    for change in ("restore", "archive"):
+        # With the Assistant's rights, not the owner's: never on its own, and not a card the owner confirms either.
+        assert post(api, f"kpis/{kpi['id']}/{change}", {}, token=token,
+                    expected=403)["error"]["code"] == "confirm_required"
+        post(api, "assistant/actions", {"summary": change.title() + " the activation KPI", "method": "POST",
+                                        "path": f"/api/v2/kpis/{kpi['id']}/{change}", "body": {}},
+             token=token, expected=422)
+        post(api, f"kpis/{kpi['id']}/{change}", {}, token="ana-test")
+
+
+
 def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_confirm(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
-    machine = runner(api)
-    assign(api, machine, "goal-manager")
-    ready(api, machine, ["goal-manager"])
-    post(api, "chat/goal-manager", {"text": "Run the pass."})
-    token = claim(api, machine)["token"]
+    token = goals_session(api)
     goal, kpi = goal_with_kpi(api, {"kind": "improve", "baseline": 40, "target": 70, "deadline": "2099-12-31"}, token="ben-test", owner="ben")
     # It writes the readings and the automatic colours...
     log(api, kpi["id"], 45, token=token, evidence="https://analytics.example/q/12", period_end=H.now())

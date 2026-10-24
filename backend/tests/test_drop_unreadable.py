@@ -74,7 +74,7 @@ def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api)
         # The message stays where it was: only the job is let go.
         assert H.message(c, unreadable["message_id"])
     assert claim(api, machine)["job_id"] == readable["id"]
-    assert claim(api, machine) is None
+    assert claim(api, machine, "ops") is None
 
 
 def test_health_counts_no_queued_work_from_the_cancelled_job(api):
@@ -89,7 +89,7 @@ def test_health_counts_no_queued_work_from_the_cancelled_job(api):
             waiting, slow, stuck = health._waiting(c, online, store.settings)
         return [r for r in waiting + slow + stuck if r["bot"] == "ops"]
 
-    assert post(api, "jobs/claim", {}, token=machine["token"])["attempt"] is None   # the claim passes it over...
+    assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None   # the claim passes it over...
     before = ops_rows()
     assert before and {r["queued"] for r in before} == {1} and "unreadable" in {r["reason"] for r in before}
     sweep(api)                                                                     # ...the sweep lets it go
@@ -140,7 +140,7 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
 
     monkeypatch.setattr(execution.Execution, "candidate", candidate)
     monkeypatch.setattr(execution.Execution, "idle_claim", lambda self, *a, **k: None)
-    assert claim(api, machine) is None
+    assert claim(api, machine, "ops") is None
     assert picks == [None, job["id"]], "select in the read snapshot, then recheck that pick under the writer"
     with store.read() as c:
         assert job_of(c, secret["id"])["state"] == "cancelled"

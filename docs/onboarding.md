@@ -177,17 +177,31 @@ second). It reaches no computer.
   never moved.
 - Finishing twice is safe: it reopens no task, creates no second bot, and keeps the first completion time.
 
-### Needs setup
+### A bot's stages
 
-A parked starter shows **Needs setup** on the team chart (a small amber gear; hover it for *Needs setup*), on its page and after Create. **Set up** sends it
-the message "Let's set you up." as the human, in the human's own chat with the bot: the conversation the bot page's **Chat** tab shows,
-open or not when the button is pressed. It starts the setup conversation its `AGENT.md` describes; any first message from a human
-does the same. While the bot is parked, the runner gives its chat runs one Setup instruction in place of the generic chat rules: follow
-the template's `onboarding` section and `playbooks/onboarding.md`, ask the questions and stop, and until the human has answered run no
-tool that reaches another system, file no task and edit no file, never `AGENT.md`. The bot introduces itself, asks the template's questions in one message, writes a first draft from the team's own
-data, and tells the human what its first routine does; starting the setup already switched that routine on. When its answers and first
-result are recorded it calls `hub bot setup-done` (MCP `hub_bot_setup_done`, `POST /api/v2/bots/{bot}/onboarded`). That clears the mark,
-lets its routines run and counts it toward a member's limit. Until then it stays parked and answers humans only.
+Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
+
+- **Recruiting** is a seat: a role on the org chart with its job description and reporting line, and no bot, repository or
+  computer slot (`hub seat create|list|update|close`, `/api/v2/seats`, and `seats` on `GET /api/v2/org`). It holds no work:
+  a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
+  places a seat anywhere; anyone else under themselves or someone below them.
+- **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
+  *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
+  own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
+  chat, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
+  comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
+  nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
+  chat. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
+  plain reason. Any number of bots may be onboarding at once.
+- When it has learned enough, the bot says so with `hub bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
+  summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
+  (`hub bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm
+  ready"). That makes it **Active**: its routines run, its queued work starts and it counts toward a member's limit.
+
+`stage` on a bot (`GET /api/v2/bots`, `/api/v2/bots/{bot}`, `/api/v2/org`) is `onboarding` or `active`; while onboarding it also
+carries `can_complete_onboarding` and `onboarding_ready`. On an upgrade nothing is rewritten: a bot in the old *Set up* stage
+(`onboarding_state` `needs_setup` or `needs_onboarding`) shows as Onboarding, a `planned` bot without a computer keeps working as
+before, and no Active bot changes stage.
 
 ### After Create: one screen
 
@@ -235,13 +249,15 @@ an external agent you already have is the **Connect an external agent** button i
 ### An empty Market page
 
 While the market has no entity and no page someone wrote (the seed's pages do not count), the Market page is an empty state
-instead of the graph, the index and the ask box. The owner sees one box for a website, a description
-or links to anything about the market, **Start research**, and an **Attach files** link to the Docs import. Everyone else sees
-"Nothing here yet."
+instead of the graph, the index and the ask box. The owner sees the Librarian's four questions, one at a time (what you sell,
+who buys it, who you compete with, what to watch), with **Skip for now** and an **Attach files** link to the Docs import.
+Answers are kept as given, so a skipped setup shows **Continue** at the same question next time
+([librarian.md](librarian.md#first-run-setup)). Everyone else sees "Nothing here yet."
 
-**Start research** calls `POST /api/v2/setup/getting-started/market` `{"text"}`, which files one task, "Set up the market map", to the
-Librarian and answers `{"task_id", "bot": "librarian"}`; `409 librarian` while the Librarian is not running. The Librarian's
-`playbooks/market-setup.md` researches the sources and writes the market pages and graph ([librarian.md](librarian.md)). The page
+The last question's **Start research** calls `POST /api/v2/librarian/setup/market` with `action: finish`, which files one task,
+"Set up the market map", to the Librarian; `409 librarian` while the Librarian is not running. (`POST
+/api/v2/setup/getting-started/market` `{"text"}` still files the same task from one box of text.) The Librarian's
+`playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
 Market page is drawn. The code is `ui/market-page.js`.

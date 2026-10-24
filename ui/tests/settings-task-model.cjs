@@ -25,7 +25,7 @@ const {unrouted} = require('./support/routes.cjs');
     };
     const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'claude-sonnet-5-5', harness: 'claude', reasoning_effort: 'high',
-      task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
+      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
     const bots = [helper];
     const WARNING = 'This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and may word things badly. It still saves, and its tasks run on it.';
     let calls = [];
@@ -48,6 +48,10 @@ const {unrouted} = require('./support/routes.cjs');
           helper.task_model_warning = t?.model === 'claude-haiku-5-5' && helper.model === 'claude-sonnet-5-5' ? WARNING : '';
           return json({bot: 'helper', task_model: helper.task_model, revision: ++helper.revision, readiness: null,
             warning: helper.task_model_warning});
+        }
+        if (what === 'keep-tasks-going') {
+          helper.keep_tasks_going = body.keep_tasks_going;
+          return json({bot: 'helper', keep_tasks_going: body.keep_tasks_going, revision: ++helper.revision});
         }
         if (what === 'definition') {
           Object.assign(helper, {display_name: body.display_name, description: body.description});
@@ -154,6 +158,26 @@ const {unrouted} = require('./support/routes.cjs');
     const width = await row.evaluate(tr => tr.getBoundingClientRect().width);
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
+
+    // Active-work caps save on change at both widths, including off and the unlimited default.
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 900});
+      await toBots();
+      assert.match(await page.locator('[data-settings-bot=helper] [data-task-flow]').innerText(), /2 of unlimited tasks going, 5 waiting to start/);
+      await openEditor();
+      const keep = editor.locator('[data-bot-keep-tasks]');
+      for (const [value, stored] of [['3', 3], ['0', 0], ['', null]]) {
+        const before = helper.revision;
+        calls = [];
+        await keep.fill(value);
+        await keep.dispatchEvent('change');
+        await loaded(before + 1);
+        assert.deepEqual(calls, [{what: 'keep-tasks-going', body: {keep_tasks_going: stored, expected_revision: before}}]);
+        assert.equal(helper.keep_tasks_going, stored);
+      }
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.evaluate(() => settingsEditBot('helper', true));
+    }
 
     assert.deepEqual(errors, []);
     console.log('ok');

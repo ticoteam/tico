@@ -52,7 +52,7 @@ async function check(engine, native) {
   assert.equal(await page.evaluate(() => S.people[0].id),'ana','keep the last complete roster');
   failStatus = true;
   await page.evaluate(() => refresh(false));
-  assert.equal(await page.locator('#heartbeat').getAttribute('aria-label'),'Tico unreachable');
+  assert.equal(await page.locator('#heartbeat').getAttribute('aria-label'),"Can't reach Tico. Trying again");
   assert.deepEqual(errors,[]);
   await browser.close();
 }

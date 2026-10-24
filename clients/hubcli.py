@@ -104,6 +104,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
+    hub assistant learn "<line>" [--company]
+                                           in a person's own chat: save what they taught you, in their own
+                                           layer (--company: the CEO Bot, about the company, owner's chat only)
+    hub assistant learned                  what a person's chat bot has learned (What it has learned)
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -203,6 +207,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
+    hub seat create <title> [--description D] [--reports-to R] [--team G]
+                                           add a seat under you or someone below you; update <seat> / close <seat>
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
@@ -263,7 +270,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
                                            show or set whether the bot sends mail without approval and its forward
                                            targets; a person who manages the bot only, never a bot (docs/mail.md)
-    hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
+    hub bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
+    hub bot ready --summary S              an onboarding bot says it is ready, with what it learned
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
     hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
@@ -762,6 +770,13 @@ def parser():
     s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("--body", default="{}", help="the request's JSON body")
     s.set_defaults(fn="assistant propose")
+    s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
+    s.add_argument("text", help="one short line, in their words")
+    s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
+                   help="the CEO Bot in the owner's chat: about the company, not how they like things")
+    s.set_defaults(fn="assistant learn")
+    assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
+        .set_defaults(fn="assistant learned")
     # Tags keep the existing task --label key contract.
     tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
     s = tag.add_parser("list")
@@ -826,6 +841,9 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
+    s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
+    s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
+    s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
@@ -1483,6 +1501,16 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="approval decline")
 
+    s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
+                       "running, queued, held and dead jobs, and failed runs by cause")
+    s.add_argument("--type", help="task type id or name; default the engineering board")
+    s.add_argument("--owner")
+    s.add_argument("--label")
+    s.add_argument("--updated-since", help="ISO date-time or a window like 7d")
+    s.add_argument("--snoozed", choices=["all", "hide", "only"], help="default all")
+    s.add_argument("--bot", help="queues and failures for this bot only")
+    s.add_argument("--since", help="failure window: 24h (default), up to 7d, or an ISO date-time")
+    s.set_defaults(fn="pipeline")
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
     s.set_defaults(fn="brief")
@@ -1537,6 +1565,24 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    seat = sub.add_parser("seat", help="Recruiting seats: roles on the chart with no bot yet").add_subparsers(dest="sub")
+    seat.add_parser("list", help="the Recruiting seats").set_defaults(fn="seat list")
+    s = seat.add_parser("create", help="add a seat under you or someone below you (a person)")
+    s.add_argument("title")
+    s.add_argument("--description", help="its job description")
+    s.add_argument("--reports-to", dest="reports_to", help="a bot's slug or human:<id>; you by default")
+    s.add_argument("--team", help="a group id")
+    s.set_defaults(fn="seat create")
+    s = seat.add_parser("update", help="change a seat's title, job description, reporting line or group (a person)")
+    s.add_argument("seat")
+    s.add_argument("--title")
+    s.add_argument("--description")
+    s.add_argument("--reports-to", dest="reports_to")
+    s.add_argument("--team")
+    s.set_defaults(fn="seat update")
+    s = seat.add_parser("close", help="take a seat off the chart (a person)")
+    s.add_argument("seat")
+    s.set_defaults(fn="seat close")
     org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
     s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
     s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
@@ -1744,9 +1790,12 @@ def parser():
     s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
                    help="take what the bot's bot.yaml asks, as its computer reported it")
     s.set_defaults(fn="bot mail")
-    s = bot.add_parser("setup-done", help="a starter bot marks its setup done, once its setup is done")
+    s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")
+    s = bot.add_parser("ready", help="an onboarding bot says it is ready, with what it learned")
+    s.add_argument("--summary", required=True, help="a few lines on what you learned and what you will do first")
+    s.set_defaults(fn="bot ready")
     s = bot.add_parser("place", help="put a bot on a computer, as the person who asked (BotOps)")
     s.add_argument("bot")
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
@@ -1766,6 +1815,10 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--successor")
     s.set_defaults(fn="bot archive")
+    s = bot.add_parser("keep-tasks-going", help="read or set automatic task starts: N, off, or unlimited")
+    s.add_argument("bot")
+    s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else 0 if v == 'off' else int(v), default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot keep-tasks-going")
     s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
@@ -1811,6 +1864,16 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
+    s = repos.add_parser("review", help="submit a GitHub review at an exact PR head; shared App falls back to COMMENT")
+    s.add_argument("repository", metavar="OWNER/REPO")
+    s.add_argument("number", type=int)
+    s.add_argument("--head", required=True, help="reviewed full 40-character commit SHA")
+    s.add_argument("--verdict", required=True, choices=("approve", "changes"))
+    text = s.add_mutually_exclusive_group(required=True)
+    text.add_argument("--body")
+    text.add_argument("--body-file", help="review text file; VERDICT is appended automatically")
+    s.add_argument("--operation-id", help="stable retry key; defaults to a hash of the review")
+    s.set_defaults(fn="repo review")
     s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository "
                          "(the Owner, or a bot with Create product repositories)")
     s.add_argument("name", help="exact GitHub repository name, without an organization")

@@ -18,14 +18,20 @@ const MARKET_BRIEF = 'brief';
 
 // Nothing about the market is written here: the Overview is the page the Librarian writes
 // (playbooks/market-setup.md). Until the market has content the page is its own empty state, drawn in
-// the app's theme rather than the graph's dark room: the owner's one box, or the notice while it works.
+// the app's theme rather than the graph's dark room: the Librarian's questions, or the notice while it works.
 const marketStyle = document.createElement('style');
 marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-items:center;justify-content:center;overflow:auto;padding:32px 16px 12vh;background:var(--bg);color:var(--ink)}
 .market-start{width:min(560px,100%);display:grid;gap:10px;margin:0}
 .market-start h1{margin:0 0 6px;font-size:22px;line-height:1.25;font-weight:650;color:var(--ink)}
 .market-start label{font-size:13px;color:var(--muted)}
+.market-start h1 label{font-size:inherit;color:inherit}
 .market-start textarea{min-height:112px;font:inherit;font-size:14px}
 .market-start .err{margin:0;font-size:13px}
+.market-who{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:13px}
+.market-who .nav-icon{font-size:17px;color:var(--accent)}
+.market-hint{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
+.market-count{white-space:nowrap;opacity:.8}
+.market-count::before{content:"· "}
 .market-start-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:4px}
 .market-start-actions .primary{padding:9px 18px}
 .market-start-actions a{font-size:13.5px}
@@ -115,7 +121,7 @@ async function mountMarket(shell) {
   let researching = marketResearchGet();
   const blank = !nodes.length && !pages.length;
   if (researching && !blank && Date.now() - Number(researching.at) >= MARKET_RESEARCH_MIN) { marketResearchSet(null); researching = null; }
-  if (blank || researching) return mountBlank(shell);
+  if (blank || researching) return await mountBlank(shell);
   shell.innerHTML = `<aside class="market-list" aria-label="Market notes">
       <a id="market-overview" class="market-overview-btn" href="${marketHref(MARKET_BRIEF)}">Overview</a>
       <input id="market-filter" type="search" placeholder="Search the market" aria-label="Search the market" autocomplete="off">
@@ -247,14 +253,23 @@ async function mountMarket(shell) {
 }
 
 // ---------------------------------------------------------------- an empty market
-// The owner's one box: whatever they have about their market. The Librarian reads it and builds the map
-// (templates/catalog/librarian/playbooks/market-setup.md); "Attach files" is the Docs import. Then a notice,
-// kept in this browser with no server involved: it shows for at least two minutes and until the market has
-// content, and goes for good after thirty. While it shows, the market is read every thirty seconds (two
-// small GETs), and the page is drawn again once the notice is done.
+// On a first visit the Librarian asks the owner four questions, one at a time (backend/librarian_setup.py): what you
+// sell, who buys it, who you compete with, what to watch. Each answer is kept on the server as it is given, so
+// "Skip for now" leaves and Continue picks up at the same question, in any browser. The last one files "Set up the
+// market map" (templates/catalog/librarian/playbooks/market-setup.md), which builds the map and sets what Market
+// tracks; "Attach files" is the Docs import. Then a notice, kept in this browser with no server involved: it shows for
+// at least two minutes and until the market has content, and goes for good after thirty. While it shows, the market
+// is read every thirty seconds (two small GETs), and the page is drawn again once the notice is done.
 const MARKET_RESEARCH_KEY = 'tico.market.researching';
 const MARKET_RESEARCH_MIN = 2 * 60 * 1000, MARKET_RESEARCH_MAX = 30 * 60 * 1000, MARKET_RESEARCH_POLL = 30 * 1000;
 let MARKET_RESEARCH = null;        // the same record in memory, for a browser that will not store it
+// [key, question, hint, placeholder]. Only the first must be answered: the Librarian finds the rest.
+const MARKET_QUESTIONS = [
+  ['sell', 'What do you sell?', 'Your website, or a sentence or two.', 'https://example.com'],
+  ['buyers', 'Who buys it?', "The kinds of companies or people, and where they are. Leave it blank and I'll work it out.", 'Property managers in the US Midwest'],
+  ['competitors', 'Who do you compete with?', "Names or websites, one per line. Leave it blank and I'll find them.", 'CleanCo\nhttps://sparkle.example'],
+  ['watch', 'What should Market watch?', "Where your buyers talk, topics, rules or people to follow. Leave it blank and I'll suggest some.", 'r/PropertyManagement, new licensing rules'],
+];
 
 function marketResearchGet() {
   let row = MARKET_RESEARCH;
@@ -278,36 +293,66 @@ async function marketSig() {
   return `${(entities.total ?? (entities.entities || []).length)}|${written.reduce((a, b) => a > b ? a : b, '')}`;
 }
 
-function marketBlankHtml(row) {
-  if (row) return `<div class="market-researching" data-market-researching role="status">
-      <span class="market-spin" aria-hidden="true"></span>
-      <div><strong>The Librarian is researching your market.</strong>
-        <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
-  if (!(S.me?.cloud && S.me.role === 'owner')) return '<p class="market-none">Nothing here yet.</p>';
-  return `<form class="market-start" data-market-research>
-      <h1>Market</h1>
-      <label for="market-sources">Your website, a description, or links to anything about your market</label>
-      <textarea id="market-sources" name="text" rows="4" maxlength="8000" required autocomplete="off" placeholder="https://example.com"></textarea>
-      <p class="err" data-market-error hidden></p>
-      <div class="market-start-actions"><button class="primary" type="submit">Start research</button>
+const MARKET_WHO = '<p class="market-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>';
+
+function marketQuestionHtml(setup) {
+  const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step];
+  const last = setup.step === MARKET_QUESTIONS.length - 1;
+  return `<form class="market-start" data-market-setup data-step="${setup.step}" novalidate>
+      ${MARKET_WHO}
+      <h1><label for="market-answer">${esc(question)}</label></h1>
+      <p class="market-hint" id="market-hint">${esc(hint)} <span class="market-count">${setup.step + 1} of ${MARKET_QUESTIONS.length}</span></p>
+      <textarea id="market-answer" name="answer" rows="4" maxlength="4000" autocomplete="off" aria-describedby="market-hint" placeholder="${esc(placeholder)}">${esc(setup.answers[key] || '')}</textarea>
+      <p class="err" data-market-error role="alert" hidden></p>
+      <div class="market-start-actions"><button class="primary" type="submit">${last ? 'Start research' : 'Next'}</button>
+        ${setup.step ? '<button class="ghost" type="button" data-market-back>Back</button>' : ''}
+        <button class="ghost" type="button" data-market-skip>Skip for now</button>
         <a href="#/docs?import=1">Attach files</a></div>
     </form>`;
 }
 
-function mountBlank(shell) {
-  let poll = 0;
+function marketBlankHtml(row, setup) {
+  if (row) return `<div class="market-researching" data-market-researching role="status">
+      <span class="market-spin" aria-hidden="true"></span>
+      <div><strong>The Librarian is researching your market.</strong>
+        <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
+  if (!(S.me?.cloud && S.me.role === 'owner') || !setup) return '<p class="market-none">Nothing here yet.</p>';
+  if (!setup.skipped) return marketQuestionHtml(setup);
+  const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
+  return `<div class="market-start" data-market-resume>
+      ${MARKET_WHO}
+      <h1>Set up Market</h1>
+      <p class="market-hint">I have ${MARKET_QUESTIONS.length} questions about your market, to set what Market tracks. You've answered ${answered}.</p>
+      <div class="market-start-actions"><button class="primary" type="button" data-market-continue>Continue</button>
+        <a href="#/docs?import=1">Attach files</a></div>
+    </div>`;
+}
+
+async function mountBlank(shell) {
+  let poll = 0, setup = null;
+  if (S.me?.cloud && S.me.role === 'owner') {
+    try { setup = (await get('/v2/librarian/setup')).market; } catch { setup = null; }
+    if (setup) setup = {...setup, answers: {...setup.answers}};
+    // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes
+    // count from when the task was filed, so a reload never starts them again.
+    const filed = Date.parse(setup?.task?.created || '');
+    if (setup?.task && !['done', 'closed', 'declined'].includes(setup.task.status) && !marketResearchGet()
+        && Date.now() - filed < MARKET_RESEARCH_MAX)
+      marketResearchSet({at: filed, task: setup.task.id, base: null});
+  }
   const watch = on => {
     if (!on) { clearInterval(poll); poll = 0; } else if (!poll) poll = setInterval(() => void tick(), MARKET_RESEARCH_POLL);
   };
   const draw = () => {
     const row = marketResearchGet();
     shell.classList.add('market-shell-blank');
-    shell.innerHTML = marketBlankHtml(row);
+    shell.innerHTML = marketBlankHtml(row, setup);
     watch(!!row);
+    if (!row) shell.querySelector('#market-answer')?.focus();
   };
   async function tick() {
     const row = marketResearchGet();
-    if (!row) { watch(false); window.marketReload(); return; }          // thirty minutes passed: the box is back
+    if (!row) { watch(false); window.marketReload(); return; }          // thirty minutes passed: the questions are back
     let sig;
     try { sig = await marketSig(); } catch { return; }                   // the next tick tries again
     const arrived = row.base == null ? !sig.startsWith('0|') : sig !== row.base;
@@ -317,21 +362,53 @@ function mountBlank(shell) {
       window.marketReload();
     }
   }
+  // Keeps what is typed in the open question, then tells the server where the owner is.
+  const keep = () => {
+    const field = shell.querySelector('#market-answer');
+    if (field) setup.answers[MARKET_QUESTIONS[setup.step][0]] = field.value.trim();
+  };
+  // One write at a time, in the order they were made: a slow Back save never lands after the Next that followed it.
+  let saving = Promise.resolve();
+  const send = (step, action) => {
+    const body = {answers: {...setup.answers}, step, action};
+    const sent = saving.catch(() => {}).then(() => post('/v2/librarian/setup/market', body));
+    saving = sent;
+    return sent;
+  };
+  const fail = (form, error) => {
+    const line = form.querySelector('[data-market-error]');
+    line.textContent = error.message || 'That did not go through.'; line.hidden = false;
+    form.querySelectorAll('button').forEach(button => { button.disabled = false; });
+  };
+  shell.onclick = async event => {
+    if (event.target.closest('[data-market-continue]')) { setup.skipped = false; draw(); return; }
+    const form = event.target.closest('[data-market-setup]');
+    if (!form) return;
+    if (event.target.closest('[data-market-back]')) {
+      keep(); setup.step -= 1; draw();
+      send(setup.step, 'save').catch(() => { /* kept here; the next answer saves it */ });
+    } else if (event.target.closest('[data-market-skip]')) {
+      keep();
+      form.querySelectorAll('button').forEach(button => { button.disabled = true; });
+      try { setup = {...setup, ...(await send(setup.step, 'skip')), answers: setup.answers}; draw(); } catch (error) { fail(form, error); }
+    }
+  };
   shell.onsubmit = async event => {
-    const form = event.target.closest('[data-market-research]');
+    const form = event.target.closest('[data-market-setup]');
     if (!form) return;
     event.preventDefault();
-    const line = form.querySelector('[data-market-error]'), button = form.querySelector('[type=submit]');
-    const fail = error => { line.textContent = error.message || 'That did not go through.'; line.hidden = false; button.disabled = false; };
-    const text = form.elements.text.value.trim();
-    if (!text) return fail(new Error('Add your website, a description or a link.'));
-    button.disabled = true;
+    keep();
+    if (setup.step === 0 && !setup.answers.sell) return fail(form, new Error('Add your website, or a sentence about what you sell.'));
+    form.querySelectorAll('button').forEach(button => { button.disabled = true; });
+    const last = setup.step === MARKET_QUESTIONS.length - 1;
     try {
+      if (!last) { await send(setup.step + 1, 'save'); setup.step += 1; draw(); return; }
+      if (!setup.answers.sell) { setup.step = 0; draw(); return; }
       const base = await marketSig().catch(() => null);
-      const result = await post('/v2/setup/getting-started/market', {text});
-      marketResearchSet({at: Date.now(), task: result.task_id || '', base});
+      const result = await send(setup.step, 'finish');
+      marketResearchSet({at: Date.now(), task: result.task?.id || '', base});
       draw();
-    } catch (error) { fail(error); }
+    } catch (error) { fail(form, error); }
   };
   draw();
   return {shell, open: async () => {}, stop: () => watch(false)};

@@ -71,6 +71,8 @@ STABLE = [
     ("/api/v2/subscriptions/name", "put", "Subscriptions", "renameSubscription", "Rename a subscription without changing its local login", "SubscriptionIdentity"),
     ("/api/v2/subscriptions/weekly", "put", "Subscriptions", "recordSubscriptionWeekly", "Record or clear a manual weekly allowance observation", "SubscriptionWeeklyResult"),
     ("/api/v2/subscriptions/refresh", "post", "Subscriptions", "refreshSubscriptionWeekly", "Request a bounded weekly allowance read on its computer", "SubscriptionRefreshResult"),
+    ("/api/v2/bots/{bot}/keep-tasks-going", "post", "Bots", "setKeepTasksGoing",
+     "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap", None),
     ("/api/v2/bots/{bot}/subscription", "get", "Subscriptions", "getBotSubscription", "The Computer login a bot runs on", "BotSubscription"),
     ("/api/v2/repositories", "get", "Repositories", "listRepositories", "Team repositories", "RepositoryList"),
     ("/api/v2/repositories/refresh", "post", "Repositories", "refreshRepositories", "Refresh from GitHub", "RepositoryList"),
@@ -102,6 +104,15 @@ STABLE = [
     ("/api/v2/org", "get", "Team chart", "getOrg",
      "Humans, the bots the caller can see and reports_to; ?can=read|write keeps the bots they can read or write to", "Org"),
     ("/api/v2/humans/{pid}", "post", "Team chart", "updatePerson", "Edit a person's profile or reports_to", None),
+    ("/api/v2/seats", "get", "Team chart", "listSeats",
+     "The Recruiting seats: roles on the chart with a job description and reporting line, and no bot. A seat holds no "
+     "work: a task for it is refused and its role's work stays with its manager", "SeatList"),
+    ("/api/v2/seats", "post", "Team chart", "createSeat",
+     "Add a Recruiting seat: the owner anywhere, a person under themselves or someone below them", "Seat"),
+    ("/api/v2/seats/{seat_id}", "patch", "Team chart", "updateSeat",
+     "Change a seat's title, job description, reporting line or group (a person it reports up to, or the owner)", "Seat"),
+    ("/api/v2/seats/{seat_id}/close", "post", "Team chart", "closeSeat", "Take a seat off the chart; its row is kept",
+     "SeatClosed"),
     ("/api/v2/groups", "get", "Team chart", "listGroups",
      "The groups, nested by `parent`, each with its humans and the bots the caller can see", "GroupList"),
     ("/api/v2/groups", "post", "Team chart", "createGroup",
@@ -132,8 +143,10 @@ STABLE = [
      "Latest Instructions snapshot published by the Computer; requires Read, published is false until content arrives",
      "BotInstructions"),
     ("/api/v2/bots/{bot}/onboarded", "post", "Bots", "markBotOnboarded",
-     "A starter bot's own call, or its manager's, once its setup is done: `onboarding_state` goes "
-     "from `needs_setup` to `onboarded`. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
+     "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; "
+     "403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to "
+     "`onboarded`) and its routines start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it "
+     "onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
      "BotOnboarded"),
     ("/api/v2/bots/{bot}/tools", "get", "Bots", "listBotTools",
      "The tools a bot uses, for the row at the top of its page: its model and harness, its repository and each "
@@ -335,10 +348,20 @@ STABLE = [
     ("/api/v2/librarian/research", "post", "Docs", "requestLibrarianResearch",
      "Ask the Librarian to research the web and add what it finds, cited, to one doc, market page or market entity "
      "(`target`), optionally one `section` of it; it files one task to the Librarian", "LibrarianResearchFiled"),
+    ("/api/v2/librarian/setup", "get", "Docs", "getLibrarianSetup",
+     "The Librarian's first-run setup for the caller: whether Docs asks where the docs are, and the owner's market "
+     "answers so far", "LibrarianSetup"),
+    ("/api/v2/librarian/setup/docs", "post", "Docs", "setUpDocs",
+     "Add the places the caller's docs are as sources and file one \"Set up Docs\" task to the Librarian; "
+     "`skip` hides the first-visit question for the caller only", None),
+    ("/api/v2/librarian/setup/market", "post", "Docs", "setUpMarket",
+     "Owner only: keep the answers to the Librarian's four market questions (`save`, `skip`), or `finish` and file "
+     "\"Set up the market map\", which builds the map and sets what Market tracks", "LibrarianMarketSetup"),
     ("/api/v2/librarian/turn-on", "post", "Docs", "turnOnLibrarian",
      "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it", None),
     ("/api/v2/assistant", "get", "Assistant", "getAssistant",
-     "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
+     "The caller's Assistant (the CEO Bot, for the owner): their private room id, whether it is on, the recent messages "
+     "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
      "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
@@ -622,16 +645,25 @@ SCHEMAS = {
                   required=["see", "read", "write"]),
     "OrgBot": obj({"id": "s", "display_name": "s", "description": "s", "team": "s", "reports_to": "n", "org_parent": "s",
                    "owners": items({"type": "string"}), "status": "s", "access": ref("Access"),
-                   "onboarding_state": "s"},
+                   "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}},
                   required=["id", "display_name", "org_parent", "status", "access"]),
+    "Seat": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
+                 "description": "s", "reports_to": "s", "team": "s", "created": "s", "org_parent": "s"},
+                required=["id", "kind", "stage", "title", "description", "reports_to"]),
+    "SeatList": obj({"seats": items(ref("Seat"))}, required=["seats"]),
+    "SeatClosed": obj({"id": "s", "closed": "b"}, required=["id", "closed"]),
+    "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
     "Bot": obj({"slug": "s", "display_name": "s", "state": "s", "online": "b", "queued": "i", "description": "s",
                 "reports_to": "n", "team": "n", "operator": "n", "owners": "a", "status": {"type": ["object", "null"]},
-                "access": ref("Access"), "onboarding_state": "s"},
+                "keep_tasks_going": {"type": ["integer", "null"]}, "task_flow": ref("TaskFlow"),
+                "access": ref("Access"), "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}, "can_complete_onboarding": {"type": "boolean", "description": "While onboarding: whether the caller may mark its onboarding complete"}, "onboarding_ready": {"type": ["object", "null"], "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"}},
                required=["slug", "display_name", "state", "owners", "access"]),
     "BotDetail": obj({"slug": "s", "display_name": "s", "description": "s", "state": "s", "online": "b", "queued": "i",
                       "status": {"type": ["object", "null"]}, "reports_to": "n", "reports_to_name": "s",
                       "operator": "n", "operator_name": "s", "team": "n", "owners": "a", "goals": "s",
-                      "access": ref("Access"), "onboarding_state": "s", "template": "s", "template_version": "s"},
+                      "keep_tasks_going": {"type": ["integer", "null"]}, "task_flow": ref("TaskFlow"),
+                      "access": ref("Access"), "onboarding_state": "s", "template": "s", "template_version": "s",
+                      "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}, "can_complete_onboarding": {"type": "boolean", "description": "While onboarding: whether the caller may mark its onboarding complete"}, "onboarding_ready": {"type": ["object", "null"], "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"}},
                      required=["slug", "display_name", "state", "owners", "access"]),
     "Routine": obj({"id": "s", "bot": "s", "key": "n", "title": "s", "cron": "s", "on": "s", "kind": "s",
                     "timezone": "s", "enabled": "b", "text": "s", "last_fired": "n", "next_due": "n",
@@ -668,10 +700,13 @@ SCHEMAS = {
                             "reports": items(obj({"id": "s", "kind": "s", "name": "s", "saved": "b"},
                                                  required=["id", "kind", "name", "saved"]))},
                            required=["manager", "kind", "name", "can_order", "reports"]),
-    "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "org_groups": "a", "teams": "o"}),
+    "Org": obj({"people": items(ref("Person")), "bots": items(ref("OrgBot")), "seats": items(ref("Seat")),
+                "org_groups": "a", "teams": "o"}),
     "BotList": items(ref("Bot")),
     "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
-    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "changed": "b", "routine": {
+    "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "stage": "s", "changed": "b", "ready": {
+                            "type": ["object", "null"], "description": "The bot's own call: its \"I'm ready\" "
+                            "({at, summary})"}, "routine": {
                             "type": ["string", "null"], "description": "The template's first routine when this call "
                             "armed it (on, unless a person turned it off); null when setup had armed it already"}}, required=["bot", "onboarding_state", "changed"]),
     "BotTool": obj({"id": "s", "service": "s", "name": "s", "logo_key": "n", "identity": "s", "can": items({"type": "string"}),
@@ -875,9 +910,15 @@ SCHEMAS = {
                                     "text so far; null when it is not working (show a thinking state while it is)"},
                       "actions": {"type": "object", "description": "{action id: proposal} for every card in `messages` "
                                   "(a message whose refs.action names one is a Confirm / Cancel card)"},
-                      "pending": "a"},
+                      "pending": "a",
+                      "ceo": {"type": "boolean", "description": "True for the owner, who talks to the CEO Bot in place of an "
+                              "Assistant: `bot` is the CEO Bot and `name` its name"},
+                      "earlier": {"oneOf": [obj({"room_id": "s", "bot": "s", "name": "s"},
+                                                required=["room_id", "bot", "name"]), {"type": "null"}],
+                                  "description": "The owner's own earlier Assistant chats, read-only (GET "
+                                  "/api/v2/conversations/{room_id}/messages); null for everyone else, or none"}},
                      required=["available", "state", "bot", "name", "can_turn_on", "room_id", "messages", "has_more",
-                               "next_before", "execution", "actions", "pending"], actors=ACTORS),
+                               "next_before", "execution", "actions", "pending", "ceo", "earlier"], actors=ACTORS),
     "Librarian": obj({"available": "b", "state": "s", "bot": "s", "name": "s", "can_turn_on": "b"},
                      required=["available", "state", "bot", "name", "can_turn_on"]),
     "DocsAsked": obj({"conversation_id": "s", "message_id": "s",
@@ -889,6 +930,12 @@ SCHEMAS = {
                               "next_offset": {"type": ["integer", "null"]}}),
     "DocsReopened": obj({"conversation_id": "s"}),
     "LibrarianResearchFiled": obj({"task_id": "s", "bot": "s", "kind": "s", "target": "s"}),
+    "LibrarianMarketSetup": obj({"can_answer": "b", "answers": obj({"sell": "s", "buyers": "s", "competitors": "s",
+                                                                    "watch": "s"}),
+                                 "step": "i", "skipped": "b", "task": {"type": ["object", "null"]}}),
+    "LibrarianSetup": obj({"available": "b",
+                           "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
+                           "market": ref("LibrarianMarketSetup")}),
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "

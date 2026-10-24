@@ -33,7 +33,7 @@ EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "idempotency", "idempotency_messages", "blob_media_retries",
-    "github_product_repo_operations",
+    "github_product_repo_operations", "github_review_operations",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # routines and watchers
@@ -48,7 +48,7 @@ EMPTY = (
     "service_key_tasks", "owner_links",
     # credentials
     "credentials", "credential_keys", "credential_grants", "credential_requests", "credential_imports",
-    "directory_credentials", "company_storage",
+    "directory_credentials", "company_storage", "tico_storage",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -78,7 +78,7 @@ KEEP = frozenset((
     "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "provenance_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
     "health_findings", "health_reports", "humans", "import_refs", "intake_items", "kpi_definitions", "kpi_readings",
-    "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "linked_docs",
+    "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "learned_entries", "linked_docs",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -87,8 +87,8 @@ KEEP = frozenset((
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "runners",
-    "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
-    "stale_suggestions", "system_runs", "tags", "task_assets",
+    "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
+    "stale_suggestions", "storage_moves", "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",

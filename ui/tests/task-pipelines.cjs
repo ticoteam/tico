@@ -84,6 +84,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
           const body = req.postDataJSON(); posted.push({path: p, body});
           if (refuseMove) { refuseMove = false; return json({error: {code: 'identity', detail: 'not yours to change'}}, 422); }
           if ('step_rank' in body) task.step_rank = body.step_rank;
+          if (body.owner) task.owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
           if (body.type) task.type_id = body.type;
           const type = types.find(type => type.id === task.type_id);
           const step = 'step' in body ? type.steps.find(step => step.id === body.step) : type.steps.find(step => step.status === (body.status || task.status));
@@ -210,11 +211,23 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'brief').version === 2);
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 1, step_rank: 0}}, 'above the top card: its rank less one');
     assert.deepEqual(await titlesIn('legal'), ['Brief the agency', 'Plan the launch']);
+    // A move rebuilds only the card that moved: the others keep their nodes.
+    await page.evaluate(() => { window.keptCard = document.querySelector('#task-body [data-task-key="tbrief"]'); });
     await drag('ttask-0', '#task-body [data-col="copy"]');
     assert.deepEqual(posted.at(-1).body, {version: 1, step: 'copy', step_rank: 1}, 'an empty step starts at 1');
     await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'task-0').version === 2);
     assert.deepEqual(await titlesIn('copy'), ['Write the campaign']);
     assert.equal(await page.locator('#task-body [data-col="draft"] .bcard').count(), 0);
+    assert.equal(await page.evaluate(() => window.keptCard === document.querySelector('#task-body [data-task-key="tbrief"]')), true, 'an unmoved card is not redrawn');
+    // The face on a card picks its owner, saved from the card without opening it.
+    await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
+    await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ana'}).click();
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'You');
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner: 'human:ana'}});
+    assert.equal(await page.evaluate(() => TASKS_ST.peek), '', 'picking an owner opens nothing');
+    await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
+    await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ops'}).click();
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'Ops');
     refuseMove = true;
     await drag('tplan', '#task-body [data-col="copy"] .bcol-body', 0.9);
     await page.locator('.toast', {hasText: 'Not moved'}).waitFor();
@@ -252,7 +265,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       {id: 'filed', name: 'Filed', status: 'closed', position: 6, type_id: 'marketing'});
     const decision = {...tasks[2], id: 'decision', owner: 'human:ana', requester: 'bot:ops'};
     tasks.push(decision);
-    await page.evaluate(task => taskModalShow(task), decision);
+    // A task opened uses the types already read; the page's next load reads the edited ones.
+    await page.evaluate(async task => { await tasksLoad(TASKS_ST); taskModalShow(task); }, decision);
     const pickStep = async (id, name) => {
       await page.locator('#task-modal [data-prop="step"]').click();
       await page.locator(`#task-modal .prop-pop [data-prop-pick="${id}"]`).click();
