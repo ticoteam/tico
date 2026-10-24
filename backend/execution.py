@@ -1456,8 +1456,8 @@ class Execution:
     def stall_recovery(self, now):
         """Keep the original cutoff and deadline while bounded sweeps drain a stalled fleet.
 
-        Contact may resume between chunks. A lease extended beyond the cutoff cannot receive
-        this grace again, and an undrained cohort expires normally after its fixed deadline.
+        Contact may resume between chunks. An attempt that already received lease grace
+        cannot receive stall grace again, and an undrained cohort expires at its fixed deadline.
         """
         with self.stall_lock:
             self.stall_graces = [g for g in self.stall_graces if g[2] > now]
@@ -1474,7 +1474,11 @@ class Execution:
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
         overdue = set(start_places.overdue(c))
-        rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND (lease_until<=?" +
+        # The existing indexed event is committed atomically with its extension, so rollback
+        # cannot consume grace and a later contact cohort cannot extend the same attempt twice.
+        rows = c.execute("SELECT a.*,EXISTS(SELECT 1 FROM events e WHERE e.target=a.id "
+                         "AND e.action='attempt.lease-grace') AS already_graced "
+                         "FROM attempts a WHERE state IN ('leased','running') AND (lease_until<=?" +
                          (" OR id IN (" + ','.join('?' * len(overdue)) + ")" if overdue else "") + ")" +
                          (" AND id IN (" + ','.join('?' * len(attempt_ids)) + ")" if attempt_ids else "") +
                          " ORDER BY lease_until,id" + (" LIMIT ?" if limit is not None else ""),
@@ -1485,7 +1489,7 @@ class Execution:
         for row in rows:
             with isolated(c, "expire", row["id"]):
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
-                if grace and row["id"] not in overdue:
+                if grace and not row["already_graced"] and row["id"] not in overdue:
                     served_at, _, until = grace
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],

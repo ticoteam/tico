@@ -161,11 +161,10 @@ def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, mon
                          "AND lease_until=?", (until,)).fetchone()[0] == 10
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 10
         assert not c.execute("SELECT 1 FROM events WHERE action='attempt.expired'").fetchone()
-    # Contact continues, but these runners really stop renewing. Every original lease must expire.
-    for seconds in (store.settings.lease_seconds // 3, 2 * store.settings.lease_seconds // 3,
-                    store.settings.lease_seconds):
-        clock[0] = H.shift(now, seconds=seconds)
-        execution.record_contact(clock[0])
+    # Brief contact must not enroll already-graced attempts in another stalled cohort.
+    # Stop contact a third of a lease in: the first deadline is itself a server stall.
+    clock[0] = H.shift(now, seconds=store.settings.lease_seconds // 3)
+    execution.record_contact(clock[0])
     clock[0] = H.shift(until, seconds=1)
     with store.transaction() as c:
         execution.expire(c)
