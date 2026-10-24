@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_only_audited_leaves_are_focused_shared_missing_and_main_run_everything(tmp_path):
     leaf = checks.selection(["backend/task_loops.py"])
-    assert leaf["python"] == ["backend/tests/test_task_loops.py"]
+    assert leaf["python"] == sorted(checks.PYTHON_MAP["backend/task_loops.py"])
+    # Scheduler.tick catches loop failures; its integration guard must stay selected.
+    assert "backend/tests/test_scheduler.py" in leaf["python"]
     assert leaf["browser"] == [] and leaf["caddy"] is False
     for changed in (["conftest.py"], ["backend/store.py"], [".github/workflows/pr-checks.yml"],
                     ["backend/missing.py"], [], ["backend/task_loops.py", "backend/auth.py"]):
@@ -53,15 +55,21 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
 
 def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pytest(tmp_path, monkeypatch):
     files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10,
-             "backend/tests/test_api.py": 30, "scripts/tests/test_release_checks.py": 6}
+             "backend/tests/test_api.py": 30, "scripts/tests/test_release_checks.py": 6,
+             "backend/tests/test_health.py": 1, "backend/tests/test_system_routines.py": 1,
+             "backend/tests/test_scheduler.py": 1}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
     guarded = []
     monkeypatch.setattr(checks, "guard_changelog", lambda base: guarded.append(base))
     monkeypatch.setattr(checks, "changed_files", lambda base: ["backend/task_loops.py"])
     target = tmp_path / "plan.json"
-    focused = checks.prepare("pull_request", "base", target)
+    timing_dir = tmp_path / "previous" / "pr-python-timings-python-1"
+    timing_dir.mkdir(parents=True)
+    (timing_dir / "durations.json").write_text(json.dumps({"backend/tests/test_task_loops.py": 100}))
+    focused = checks.prepare("pull_request", "base", target, timing_dir.parent)
     assert guarded == ["base"]
-    assert focused["matrix"]["include"] == [{"suite": "python-1", "files": ["backend/tests/test_task_loops.py"]}]
+    assert focused["timed_files"] == 1
+    assert sorted(sum([j["files"] for j in focused["matrix"]["include"]], [])) == sorted(checks.PYTHON_MAP["backend/task_loops.py"])
     main = checks.prepare("push", "base", target)
     assert guarded == ["base"]  # A direct release cut on main is checked by the release guards.
     groups = [j for j in main["matrix"]["include"] if j["suite"].startswith("python-")]
@@ -72,6 +80,7 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     calls = []
     monkeypatch.setattr(checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1))
+    focused["matrix"] = {"include": [{"suite": "python-1", "files": ["backend/tests/test_task_loops.py"]}]}
     target.write_text(json.dumps(focused))
     # Missing selected paths fail before subprocess starts, rather than widening to an implicit full run.
     with pytest.raises(RuntimeError, match="nonempty"):
@@ -241,6 +250,91 @@ def test_cached_system_packages_match_the_locked_browser_version():
     assert manifest["playwright"] == lock["packages"]["node_modules/playwright-core"]["version"]
     assert manifest["platform"] == "ubuntu24.04-x64"
     assert len(set(manifest["packages"])) == len(manifest["packages"]) > 0
+
+
+def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch):
+    # Exercise selector inputs independently of the separate release-notes guard.
+    monkeypatch.setattr(checks, "guard_changelog", lambda _: None)
+    monkeypatch.setattr(checks, "changed_files", lambda _: ["docs/removed.md", "CHANGELOG.md", "README.md"])
+    monkeypatch.setattr(checks, "collect", lambda: pytest.fail("docs must not collect tests"))
+    target = tmp_path / "plan.json"
+    plan = checks.prepare("pull_request", "base", target)
+    assert plan["python"] == plan["browser"] == [] and not plan["caddy"]
+    assert plan["matrix"]["include"] == [{"suite": "selection", "files": []}]
+    monkeypatch.setattr(checks.subprocess, "run", lambda *a, **k: pytest.fail("must not run tests"))
+    assert checks.run(target, "selection") == 0
+    plan["python"] = None
+    target.write_text(json.dumps(plan))
+    with pytest.raises(RuntimeError, match="explicitly unaffected"):
+        checks.run(target, "selection")
+    assert checks.selection(["docs/example.md"], "push")["python"] is None
+
+
+def source(root, name, text):
+    path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def test_test_leaves_use_imports_and_fixture_references_instead_of_filenames(tmp_path):
+    leaf = "backend/tests/test_leaf.py"
+    consumer = "backend/tests/test_consumer.py"
+    source(tmp_path, leaf, "from pytest import fixture as fx\n@fx(name='shared')\ndef local(): return 1\ndef test_ok(shared): pass\n")
+    source(tmp_path, consumer, "def test_other(): pass\n")
+    assert checks.selection([leaf, "CHANGELOG.md"], root=tmp_path)["python"] == [leaf]
+    for text in ("from .test_leaf import local", "import backend.tests.test_leaf as helper",
+                 "from backend.tests import test_leaf", "import test_leaf",
+                 "import importlib\nx = importlib.import_module('backend.tests.test_leaf')",
+                 "import importlib\nx = importlib.import_module('.test_leaf', 'backend.tests')",
+                 "from importlib import import_module as load\nx = load(variable)",
+                 "pytest_plugins = ['backend.tests.test_leaf']", "pytest_plugins = ['test_leaf']",
+                 "def test_uses(shared): pass",
+                 "def test_uses(request): request.getfixturevalue('shared')",
+                 "import pytest\n@pytest.mark.usefixtures('shared')\ndef test_uses(): pass",
+                 "import pytest\n@pytest.mark.parametrize('shared', [1], indirect=True)\ndef test_uses(): pass",
+                 "def test_uses(request, variable): request.getfixturevalue(variable)",
+                 "import importlib\nx = importlib.import_module(variable)"):
+        source(tmp_path, consumer, text + "\n")
+        assert checks.selection([leaf], root=tmp_path)["python"] is None, text
+    source(tmp_path, consumer, "import pytest\n@pytest.mark.parametrize('shared', [1])\ndef test_other(shared): pass\n")
+    assert checks.selection([leaf], root=tmp_path)["python"] == [leaf]
+    source(tmp_path, consumer, "def test_other(): pass\n")
+    for text in ("def pytest_collection_modifyitems(items): pass", "pytest_plugins = ['helper']", "@unknown\ndef test_ok(): pass", "syntax error !"):
+        source(tmp_path, leaf, text + "\n")
+        assert checks.selection([leaf], root=tmp_path)["python"] is None
+    source(tmp_path, "backend/tests/conftest.py", "")
+    assert checks.selection(["backend/tests/conftest.py"], root=tmp_path)["python"] is None
+
+
+def test_audited_backend_map_adds_direct_tests_but_rejects_new_runtime_consumers(tmp_path, monkeypatch):
+    module, test = "backend/feature.py", "backend/tests/test_feature.py"
+    monkeypatch.setitem(checks.PYTHON_MAP, module, [test])
+    monkeypatch.setitem(checks.AUDITED_IMPORTERS, module, {"backend/known.py"})
+    source(tmp_path, module, "value = 1\n")
+    source(tmp_path, test, "from backend import feature\ndef test_feature(): pass\n")
+    source(tmp_path, "backend/known.py", "from .feature import value\n")
+    source(tmp_path, "backend/tests/test_other.py", "from backend.feature import value\n")
+    assert checks.selection([module, test, "CHANGELOG.md"], root=tmp_path)["python"] == [test, "backend/tests/test_other.py"]
+    source(tmp_path, "backend/tests/test_dependent.py", "from .test_other import value\n")
+    assert "backend/tests/test_dependent.py" in checks.selection([module], root=tmp_path)["python"]
+    source(tmp_path, "backend/new.py", "from . import feature\n")
+    assert checks.selection([module], root=tmp_path)["python"] is None
+    for hub in checks.SHARED_HUBS:
+        source(tmp_path, hub, "")
+        monkeypatch.setitem(checks.PYTHON_MAP, hub, [test])
+        assert checks.selection([hub], root=tmp_path)["python"] is None
+    (tmp_path / "backend/new.py").unlink()
+    (tmp_path / test).unlink()
+    assert checks.selection([module], root=tmp_path)["python"] is None
+
+
+def test_removing_a_shared_fixture_does_not_make_its_module_a_leaf(tmp_path):
+    leaf = "backend/tests/test_fixture.py"
+    source(tmp_path, leaf, "def test_local(): pass\n")
+    source(tmp_path, "backend/tests/test_consumer.py", "def test_consumer(shared): pass\n")
+    graph = checks.SourceGraph(tmp_path)
+    assert graph.test_leaf(leaf)
+    assert not graph.test_leaf(leaf, "import pytest\n@pytest.fixture\ndef shared(): return 1\n")
 
 
 def test_groups_are_sized_to_the_job_target_and_browser_scripts_split_by_measured_time(tmp_path, monkeypatch):

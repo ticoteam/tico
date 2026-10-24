@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Conservative PR selection, measured Python and browser groups, and read-only check receipts."""
 import argparse
-from collections import Counter
+import ast
+from collections import Counter, defaultdict
 import json
 import math
 import os
@@ -14,7 +15,26 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 # Audited feature leaves only. A matching filename alone does not establish isolation.
-PYTHON_MAP = {"backend/task_loops.py": ["backend/tests/test_task_loops.py"]}
+PYTHON_MAP = {
+    "backend/task_loops.py": ["backend/tests/test_task_loops.py", "backend/tests/test_health.py",
+                              "backend/tests/test_system_routines.py", "backend/tests/test_scheduler.py"],
+    "backend/aws_identity.py": ["backend/tests/test_aws_identity.py"],
+    "backend/devcopy.py": ["backend/tests/test_devcopy.py"],
+    "backend/operations.py": ["backend/tests/test_operations.py", "backend/tests/test_backup_bundle.py",
+                               "backend/tests/test_company_storage.py"],
+    "backend/code_hash.py": ["backend/tests/test_flight.py"],
+}
+# These consumers were audited with the tests above. New consumers invalidate the
+# audit rather than silently inheriting a filename-based assumption of isolation.
+AUDITED_IMPORTERS = {
+    "backend/task_loops.py": {"backend/health.py", "backend/scheduler.py"},
+    "backend/aws_identity.py": set(),
+    "backend/devcopy.py": set(),
+    "backend/operations.py": set(),
+    "backend/code_hash.py": {"backend/flight.py"},
+}
+SHARED_HUBS = {"backend/app.py", "backend/models.py", "backend/hubdb.py", "backend/store.py",
+               "backend/execution.py"}
 UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/chat-outline.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
@@ -78,7 +98,180 @@ def merge_writes(combined):
     return False
 
 
-def selection(changed, event="pull_request", root=ROOT):
+def is_test(name):
+    path = Path(name)
+    return "tests" in path.parts and path.name.startswith("test_") and path.suffix == ".py"
+
+
+def dotted_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return dotted_name(node.value) + "." + node.attr
+    return ""
+
+
+class SourceGraph:
+    """Static local imports, literal dynamic imports and fixture references, without executing code."""
+
+    def __init__(self, root):
+        self.trees, self.importers, self.references = {}, defaultdict(set), {}
+        self.uncertain = False
+        self.dynamic_fixtures = False
+        try:
+            paths = subprocess.check_output(["git", "ls-files", "-z", "--", "*.py"], cwd=root).decode().split("\0")
+        except (OSError, subprocess.CalledProcessError):
+            paths = [str(p.relative_to(root)) for p in root.rglob("*.py")
+                     if not set(p.parts) & {".venv", "node_modules", ".git", "build", ".cache"}]
+        modules = {str(Path(p).with_suffix("")).replace("/", "."): p for p in paths if p}
+        for name in paths:
+            if not name:
+                continue
+            try:
+                self.trees[name] = ast.parse((root / name).read_text())
+            except (OSError, SyntaxError, UnicodeError):
+                self.uncertain = True
+        for name, tree in self.trees.items():
+            refs, imports = set(), set()
+            loaders = {"__import__"}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module in ("importlib", "builtins"):
+                    loaders.update(a.asname or a.name for a in node.names if a.name in ("import_module", "__import__"))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name.startswith("test_") or node.decorator_list:
+                        args = {arg.arg for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]}
+                        for decorator in node.decorator_list:
+                            if not isinstance(decorator, ast.Call) or not dotted_name(decorator.func).endswith(".parametrize"):
+                                continue
+                            indirect = next((k.value for k in decorator.keywords if k.arg == "indirect"), ast.Constant(False))
+                            if isinstance(indirect, ast.Constant) and indirect.value is False and decorator.args:
+                                argnames = decorator.args[0]
+                                args -= {part.strip() for n in ast.walk(argnames)
+                                         if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                                         for part in n.value.split(",")}
+                        refs.update(args)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    # Also catches pytest_plugins, import_module and __import__
+                    # with literal names, including modules passed to subprocesses.
+                    if node.value in modules or node.value.startswith("test_"):
+                        imports.add(node.value)
+                elif isinstance(node, ast.Call):
+                    function = dotted_name(node.func)
+                    if function.endswith((".getfixturevalue", ".usefixtures")):
+                        refs.update(n.value for arg in node.args for n in ast.walk(arg)
+                                    if isinstance(n, ast.Constant) and isinstance(n.value, str))
+                        if function.endswith(".getfixturevalue") and (not node.args or not isinstance(node.args[0], ast.Constant)):
+                            self.dynamic_fixtures = True
+                    if function.endswith(".parametrize"):
+                        for keyword in node.keywords:
+                            if keyword.arg == "indirect" and not (isinstance(keyword.value, ast.Constant) and keyword.value.value is False):
+                                if not isinstance(keyword.value, (ast.Constant, ast.List, ast.Tuple)):
+                                    self.dynamic_fixtures = True
+                                args = node.args[:1] if isinstance(keyword.value, ast.Constant) else [keyword.value]
+                                refs.update(part.strip() for arg in args for n in ast.walk(arg)
+                                            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                                            for part in n.value.split(","))
+                    if function in loaders or function.endswith((".import_module", ".__import__")):
+                        if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
+                            if name.startswith("backend/") or is_test(name):
+                                self.uncertain = True
+                        elif node.args[0].value.startswith("."):
+                            module = node.args[0].value
+                            package = node.args[1] if len(node.args) > 1 else next(
+                                (k.value for k in node.keywords if k.arg == "package"), None)
+                            if isinstance(package, ast.Name) and package.id == "__package__":
+                                package = ast.Constant(".".join(name.split("/")[:-1]))
+                            if isinstance(package, ast.Constant) and isinstance(package.value, str):
+                                level = len(module) - len(module.lstrip("."))
+                                parts = package.value.split(".")
+                                imports.add(".".join(parts[:len(parts) - level + 1] + [module.lstrip(".")]))
+                            else:
+                                self.uncertain = True
+                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    if any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
+                        value = node.value
+                        if not isinstance(value, (ast.Constant, ast.List, ast.Tuple)) or any(
+                                not isinstance(n, ast.Constant) or not isinstance(n.value, str)
+                                for n in (value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value])):
+                            self.uncertain = True
+                elif isinstance(node, ast.Import):
+                    imports.update(a.name for a in node.names)
+                elif isinstance(node, ast.ImportFrom):
+                    package = name.split("/")[:-1]
+                    prefix = package[:len(package) - node.level + 1] if node.level else []
+                    module = ".".join([*prefix, *([node.module] if node.module else [])])
+                    imports.add(module)
+                    imports.update(module + "." + a.name for a in node.names)
+            self.references[name] = refs
+            for module in imports:
+                targets = {modules[module]} if module in modules else set()
+                # Bare test imports are supported even with importlib collection.
+                if module.split(".")[0].startswith("test_"):
+                    targets.update(p for m, p in modules.items() if m.endswith("." + module))
+                for target in targets - {name}:
+                    self.importers[target].add(name)
+
+    def test_leaf(self, name, previous=None):
+        if self.uncertain or name not in self.trees or self.importers[name]:
+            return False
+        tree = ast.parse(previous) if previous is not None else self.trees[name]
+        fixtures = set()
+        aliases = {"pytest.fixture"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                aliases.update((a.asname or a.name) + ".fixture" for a in node.names if a.name == "pytest")
+            elif isinstance(node, ast.ImportFrom) and node.module == "pytest":
+                aliases.update(a.asname or a.name for a in node.names if a.name == "fixture")
+            elif isinstance(node, ast.Name) and (node.id == "pytest_plugins" or node.id.startswith("pytest_")):
+                return False
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("pytest_"):
+                return False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                call = decorator if isinstance(decorator, ast.Call) else None
+                decorator_name = dotted_name(call.func if call else decorator)
+                if decorator_name not in aliases and ".mark." not in decorator_name:
+                    return False
+                if decorator_name in aliases:
+                    fixture = node.name
+                    if call:
+                        for keyword in call.keywords:
+                            if keyword.arg == "name":
+                                if not isinstance(keyword.value, ast.Constant) or not isinstance(keyword.value.value, str):
+                                    return False
+                                fixture = keyword.value.value
+                    fixtures.add(fixture)
+        # Function arguments and fixture-call strings include usefixtures,
+        # parametrize(indirect=...), fixture aliases and getfixturevalue literals.
+        return not (fixtures and self.dynamic_fixtures) and not any(
+            fixtures & refs for other, refs in self.references.items()
+            if other != name and (is_test(other) or Path(other).name == "conftest.py"))
+
+    def backend_tests(self, name):
+        if self.uncertain or name not in AUDITED_IMPORTERS or name in SHARED_HUBS:
+            return None
+        importers = self.importers[name]
+        if any(not is_test(p) and p not in AUDITED_IMPORTERS[name] for p in importers):
+            return None
+        tests = set(PYTHON_MAP[name]) | {p for p in importers if is_test(p)}
+        # A mapped test can itself supply fixtures/helpers. Include that import
+        # closure, or fall back when it reaches a non-test consumer.
+        pending = list(tests)
+        while pending:
+            for consumer in self.importers[pending.pop()]:
+                if not is_test(consumer):
+                    return None
+                if consumer not in tests:
+                    tests.add(consumer)
+                    pending.append(consumer)
+        return tests
+
+
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None):
     """None means the full default suite; an empty list means explicitly unaffected."""
     full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
@@ -87,35 +280,44 @@ def selection(changed, event="pull_request", root=ROOT):
     full["rust"] = rust
     if event != "pull_request":
         return {**full, "conformance": runner, "reason": "main runs the full default suite"}
-    python, browser = set(), set()
-    unknown = not changed
+    python, browser, uncertain = set(), set(), []
     for name in changed:
         path = root / name
-        if not path.is_file() or path.name in ("conftest.py", "__init__.py"):
-            unknown = True
-        elif name in PYTHON_MAP:
-            python.update(PYTHON_MAP[name])
+        if name.startswith("docs/") or ("/" not in name and name.endswith(".md")):
+            continue
+        if not path.is_file() or path.name in ("conftest.py", "__init__.py") or name in SHARED_HUBS:
+            uncertain.append(name)
+        elif name in PYTHON_MAP or (is_test(name) and name.startswith(("backend/tests/", "scripts/tests/"))):
+            graph = graph or SourceGraph(root)
+            tests = graph.backend_tests(name) if name in PYTHON_MAP else ({name} if graph.test_leaf(name) else None)
+            if tests is not None and is_test(name) and base:
+                try:
+                    exists = subprocess.check_output(["git", "ls-tree", "--name-only", base, "--", name],
+                                                     cwd=root, text=True).strip()
+                    previous = subprocess.check_output(["git", "show", f"{base}:{name}"], cwd=root, text=True) if exists else None
+                    if previous is not None and not graph.test_leaf(name, previous):
+                        tests = None
+                except (OSError, subprocess.CalledProcessError, SyntaxError):
+                    tests = None
+            if tests is None:
+                uncertain.append(name)
+            else:
+                python.update(tests)
         elif name in UI_MAP:
             browser.update(UI_MAP[name])
-        elif name.startswith("ui/"):
-            # Shared UI and unclassified UI changes need non-core scripts too.
-            browser.add("--all")
-            unknown = True
-        elif name.startswith(("runner/", "runner-rs/", "relay-rs/")):
-            unknown = True
-        elif name.startswith(("backend/tests/test_", "scripts/tests/test_")) and name.endswith(".py"):
-            # Test modules can also supply fixtures or helpers to other tests.
-            unknown = True
         else:
-            unknown = True
+            if name.startswith("ui/"):
+                browser.add("--all")
+            uncertain.append(name)
     if any(not (root / f).is_file() for f in python):
-        unknown = True
+        uncertain.append("missing mapped Python test")
     if any(n != "--all" and not (root / "ui/tests" / f"{n}.cjs").is_file() for n in browser):
-        unknown = True
+        uncertain.append("missing mapped browser test")
         browser = {"--all"}
-    if unknown:
+    if uncertain or not changed:
         return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
-                "reason": "unmapped, shared, deleted or uncertain change: full default suite"}
+                "reason": "unmapped, shared, deleted or uncertain change: full default suite",
+                "uncertain": uncertain or ["empty diff"]}
     return {"python": sorted(python), "browser": sorted(browser), "conformance": runner, "rust": rust,
             "caddy": False, "reason": "audited affected-test mapping"}
 
@@ -173,14 +375,19 @@ def prepare(event, base, output, timings_path=None):
     if event == "pull_request":
         guard_changelog(base)
     changed = changed_files(base) if base else []
-    picked = selection(changed, event)
-    counts = collect()
+    picked = selection(changed, event, base=base)
+    counts = collect() if picked["python"] != [] else Counter()
     if picked["python"] is not None:
         missing = set(picked["python"]) - counts.keys()
         if missing:
             raise RuntimeError(f"Affected mapping selected no default tests: {sorted(missing)}")
         counts = Counter({f: counts[f] for f in picked["python"]})
-    timings = json.loads(Path(timings_path).read_text()) if timings_path and Path(timings_path).exists() else {}
+    timings = {}
+    if timings_path:
+        source = Path(timings_path)
+        paths = sorted(source.rglob("durations.json")) if source.is_dir() else ([source] if source.is_file() else [])
+        for path in paths:
+            timings.update(json.loads(path.read_text()))
     split, loads = groups(counts, timings)
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
     if picked["browser"] != []:
@@ -192,9 +399,10 @@ def prepare(event, base, output, timings_path=None):
         loads += browser_loads
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
-    # An empty matrix is invalid in Actions; fail rather than silently omit a gate.
+    # Actions rejects an empty matrix. Keep an explicit successful selection job
+    # for documented no-test changes, without invoking bare pytest.
     if not jobs:
-        raise RuntimeError("Selection produced no check jobs")
+        jobs.append({"suite": "selection", "files": []})
     plan = {**picked, "changed": changed, "matrix": {"include": jobs}, "estimated_seconds": loads,
             "timed_files": len(set(counts) & timings.keys())}
     Path(output).write_text(json.dumps(plan, indent=2) + "\n")
@@ -219,6 +427,11 @@ def run(plan_path, suite):
     plan = json.loads(Path(plan_path).read_text())
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
+    if suite == "selection":
+        if plan["python"] != [] or plan["browser"] != [] or plan["caddy"] or plan["conformance"]:
+            raise RuntimeError("Selection-only job requires an explicitly unaffected plan")
+        print("Documentation-only change: no affected tests")
+        return 0
     env = None
     if suite.startswith("browser-"):
         if not files:
