@@ -305,14 +305,15 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
     assert post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'])['started']
 
 
-def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api):
+def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
+    from backend import login_waits
+    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=1, running=0)
     aid = 'attempt-0'
     grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert grant['reserved']
     post(api, f'attempts/{aid}/events', {'events': [
-        {'seq': 2, 'kind': 'status', 'payload': {'waiting': 'late login wait', 'login': 'ChatGPT'}},
-        {'seq': 3, 'kind': 'status', 'payload': {'waiting': ''}}
+        {'seq': 2, 'kind': 'status', 'payload': {'waiting': 'late login wait', 'login': 'ChatGPT'}}
     ]}, computer['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT start_until,wait_reason,waiting_since FROM start_places WHERE attempt_id=?',
