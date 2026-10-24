@@ -22,9 +22,8 @@ window.runnerUpdateHtml = function runnerUpdateHtml(update, version) {
 };
 
 // The Computers page's banner: the online computers on older code than the server, and whose they are to update.
-window.runnerOutdatedBanner = function runnerOutdatedBanner(machines, me, name) {
-  const stale = (machines || []).filter(machine => machine.update?.outdated && !machine.revoked_at && machine.last_seen
-    && Date.now() - new Date(machine.last_seen) < 60000);
+window.runnerOutdatedBanner = function runnerOutdatedBanner(machines, me, name, online) {
+  const stale = (machines || []).filter(machine => machine.update?.outdated && online(machine));
   if (!stale.length) return '';
   const server = stale[0].update.server_release;
   const mine = stale.filter(machine => machine.operator === me);

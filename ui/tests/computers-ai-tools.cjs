@@ -89,7 +89,9 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
         return json({machines: [box, empty, fresh, revoked], services: []});
       }
       // The manifests' capabilities this page reads (runner/harnesses/*.toml).
-      if (p === '/api/v2/models') return json({models: [], harnesses: [
+      if (p === '/api/v2/providers') return json({enabled: ['openai'], default: {runtime: 'codex', model: 'test-model'},
+        providers: [{id: 'openai', label: 'OpenAI'}]});
+      if (p === '/api/v2/models') return json({models: [{id: 'test-model', label: 'Test model', provider: 'openai', runtime: 'codex'}], harnesses: [
         {id: 'claude', runtime: 'claude', name: 'Claude Code', capabilities: {account: 'status-json', weekly_usage: 'turns', browser_sign_in: true}},
         {id: 'codex', runtime: 'codex', name: 'Codex', capabilities: {account: 'app-server', weekly_usage: 'refresh', browser_sign_in: true}},
         // terminal_login as the server sends it: the executable and its arguments (clients/harness_manifests.py).
@@ -239,6 +241,11 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.clock.pauseAt(now + 1000);
     presenceMode = 'live';
     await page.evaluate(() => { settingsMachinesWatch(); return settingsMachinesRefresh(); });
+    // Polling keeps keyboard focus on ordinary controls, including when the row's status changes.
+    const rowButton = row('box').locator('.machine-name');
+    await rowButton.focus();
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'list control keeps focus');
     const beforeIdle = presenceReads;
     presenceOffset = 65000;
     await page.clock.fastForward(65000);
@@ -253,16 +260,25 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       assert.equal(await dialog.locator('[data-model-login][data-runtime=codex]').isEnabled(), true);
     };
     await online();
+    const signIn = dialog.locator('[data-model-login][data-runtime=codex]');
+    await signIn.focus();
     const openedReads = presenceReads;
     presenceOffset = 130000;
     await page.clock.fastForward(65000);
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await online();
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
     await page.keyboard.press('Escape');
     await row('box').locator('.machine-name').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     assert.ok(presenceReads > openedReads, 'open and reopen read presence');
     await online();
+
+    // Provider and gateway drafts are outside the presence guidance and never repainted by a poll.
+    const providerSignIn = page.locator('#set-provider-next [data-model-login][data-runner=box]');
+    assert.equal(await providerSignIn.count(), 1, 'provider guidance offers the same online sign-in');
+    const providerDraft = page.locator('#set-prov [data-provider-check]');
+    await providerDraft.evaluate(node => { node.value = 'unfinished model choice'; });
 
     // Carry the actual draft node through repaint, including focus and the selected text range.
     await dialog.locator('[data-connection="own:codex"]').evaluate(node => {
@@ -290,22 +306,34 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     }), [true, 'unfinished add connection', true, 2, 7]);
     await add.locator('[data-add-close]').first().click();
     await add.waitFor({state: 'detached'});
+    await signIn.focus();
 
     // A slow/failed read preserves the last confirmed state, even when its heartbeat ages past a minute.
     await page.evaluate(() => clearTimeout(SETTINGS_PRESENCE.timer));
     presenceMode = 'slow';
     await page.evaluate(() => { void settingsMachinesRefresh(); });
     assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.checking), true);
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives check start');
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
     presenceOffset = 200000;
     await page.clock.fastForward(70000);
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await online();
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
+    assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives deadline repaint');
     presenceMode = 'failure';
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
+    assert.equal(await providerSignIn.count(), 1, 'failed read cannot age provider sign-in offline');
+    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
+
+    // An outdated online computer remains in its banner while presence is stale.
+    await page.evaluate(() => {
+      SETTINGS_DATA.machines.find(machine => machine.id === 'box').update = {outdated: true, server_release: '0.3.53'};
+      renderSettingsMachines();
+    });
+    assert.equal(await page.locator('[data-runner-outdated-banner]').count(), 1);
 
     // Only a successful read can confirm disconnect; both views recover from the next heartbeat.
     presenceMode = 'fixed';
@@ -313,14 +341,38 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /^offline/);
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /^offline/);
     assert.equal(await dialog.locator('[data-add-connection=box]').isDisabled(), true);
+    assert.equal(await providerSignIn.count(), 0, 'provider guidance follows confirmed disconnect');
     presenceMode = 'live';
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
+    assert.equal(await providerSignIn.count(), 1, 'provider guidance follows reconnect without a tab change');
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
       body: JSON.stringify({machines: [{...box, last_seen: at(-3 * 3600000)}], services: []})});
     await online(); // A late answer to the timed-out read cannot replace the newer heartbeat.
     await dialog.locator('[data-presence-draft]').evaluate(node => node.remove());
     await page.keyboard.press('Escape');
+    // Provider guidance is keyboard reachable too; a poll never replaces the editable provider form.
+    await providerSignIn.focus();
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.equal(await providerSignIn.evaluate(node => node === document.activeElement), true);
+    assert.equal(await providerDraft.inputValue(), 'unfinished model choice');
+
+    // A first-load presence timeout is local to Computers; the rest of Settings still loads.
+    presenceMode = 'slow';
+    await page.evaluate(() => {
+      SETTINGS_DATA.loaded = false; SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0;
+      window.initialSettingsLoad = loadSettings();
+    });
+    await page.clock.fastForward(10001);
+    await page.evaluate(() => window.initialSettingsLoad);
+    assert.equal(await page.evaluate(() => SETTINGS_DATA.loaded && SETTINGS_DATA.people.length > 0), true);
+    assert.equal(await page.locator('#machine-operator').count(), 1);
+    assert.match(await page.locator('[data-machines-list]').innerText(), /presence unavailable.*checking/);
+    assert.equal(await page.locator('#set-bots > .err, #set-machines > .err').count(), 0);
+    presenceMode = 'live';
+    await page.evaluate(() => settingsMachinesRefresh());
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
+      body: JSON.stringify({machines: [], services: []})});
     // Leaving the tab stops its timer; returning starts it and requests fresh presence.
     await page.locator('[data-settings-tab=bots]').click();
     const afterLeaving = presenceReads;

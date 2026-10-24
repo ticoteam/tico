@@ -11,6 +11,24 @@ const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESEN
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = machine => machine.revoked_at ? 'revoked'
   : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
+// A presence paint can change the focused row too; restore its control by stable data attributes,
+// keeping positional selectors only for the unkeyed containers between them.
+function computerFocusRestore(root) {
+  const active = document.activeElement;
+  if (!root?.contains(active)) return () => {};
+  const path = [];
+  for (let node = active; node !== root; node = node.parentElement) {
+    const keys = [...node.attributes].filter(attr => attr.name === 'id' || attr.name.startsWith('data-'));
+    path.unshift(node.localName + (keys.length ? keys.map(attr => `[${attr.name}="${CSS.escape(attr.value)}"]`).join('')
+      : `:nth-of-type(${[...node.parentElement.children].filter(peer => peer.localName === node.localName).indexOf(node) + 1})`));
+  }
+  const caret = [active.selectionStart, active.selectionEnd, active.selectionDirection];
+  return () => {
+    const target = active.isConnected ? active : root.querySelector(path.join(' > '));
+    target?.focus({preventScroll: true});
+    if (target && typeof caret[0] === 'number') try { target.setSelectionRange(...caret); } catch { /* not a text field */ }
+  };
+}
 const machineToolName = (machine, runtime) => Object.values(machine.readiness?.harnesses || {}).find(tool => tool.runtime === runtime)?.name
   || harnessRow(runtime)?.name || harnessWords(runtime);
 // Whether the computer has reported its tools yet: before its first report the server sends empty `runtimes`.
@@ -399,16 +417,13 @@ function computerDetailPaint(force = false) {
     && formBusy({querySelectorAll: selector => [field].filter(f => f.matches(selector))}))) return;
   const body = dialog.querySelector('.computer-detail-body'), scroll = body?.scrollTop || 0;
   const open = new Set([...dialog.querySelectorAll('details[open]')].map(node => node.dataset.machineDetails || node.dataset.profile || ''));
-  const active = document.activeElement, caret = [active?.selectionStart, active?.selectionEnd];
+  const restoreFocus = force ? () => {} : computerFocusRestore(dialog);
   const next = document.createElement('div');
   next.innerHTML = computerDetailHTML(machine);
   next.querySelectorAll('details').forEach(node => { node.open = open.has(node.dataset.machineDetails || node.dataset.profile || ''); });
   // A connection that is gone keeps no draft.
   for (const node of kept) next.querySelector(computerDetailKey(node))?.replaceWith(node);
   dialog.replaceChildren(...next.childNodes);
-  if (active && kept.some(node => node.contains(active))) {
-    active.focus({preventScroll: true});
-    if (typeof caret[0] === 'number') try { active.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ }
-  }
+  restoreFocus();
   if (!force) dialog.querySelector('.computer-detail-body').scrollTop = scroll;
 }

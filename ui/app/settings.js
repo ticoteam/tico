@@ -380,8 +380,7 @@ async function loadSettings() {
   try {
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me?.cloud ? settingsMachinesRead().catch(error => {
-        if (!SETTINGS_DATA.loaded) throw error;
+      S.me?.cloud ? settingsMachinesRead().catch(() => {
         SETTINGS_PRESENCE.failed = true;
         return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
       }) : Promise.resolve({machines: [], services: []}),
