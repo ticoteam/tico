@@ -141,7 +141,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10002 ticorun \
     && useradd --uid 10002 --gid ticorun --home-dir /home/runner --no-create-home --shell /bin/bash ticorun \
-    && useradd --uid 10003 --gid ticorun --home-dir /home/runner --no-create-home --shell /bin/bash bot
+    && useradd --uid 10003 --gid ticorun --home-dir /home/runner --no-create-home --shell /bin/bash bot \
+    && for slot in $(seq 0 63); do \
+         useradd --uid "$((10100 + slot))" --gid ticorun --home-dir /home/runner --no-create-home \
+           --shell /usr/sbin/nologin "tico-turn-$(printf '%03d' "$slot")"; \
+       done
 # The SQLite check again, after this image's own apt installs.
 RUN --mount=type=bind,source=docker/versions.env,target=/tmp/versions.env \
     --mount=type=bind,source=docker/sqlite.sh,target=/tmp/sqlite.sh \

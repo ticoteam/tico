@@ -180,8 +180,12 @@ impl<W: Wire> OneShot<W> {
         self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
     }
 
-    fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
-        let mut command = if W::ISOLATED { crate::isolation::command(&argv[0]) } else { tokio::process::Command::new(&argv[0]) };
+    pub(crate) fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
+        let env = W::env(settings);
+        if settings.identity.is_some() && crate::hosts::pi::is_gateway(settings.model.as_deref()) && !env.contains_key("PI_CODING_AGENT_DIR") {
+            return Err(std::io::Error::other("cannot prepare the private Gateway configuration"));
+        }
+        let mut command = if W::ISOLATED { crate::isolation::command_as(settings.identity, &argv[0]) } else { tokio::process::Command::new(&argv[0]) };
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
@@ -189,9 +193,9 @@ impl<W: Wire> OneShot<W> {
             .stderr(Stdio::piped())
             .current_dir(&settings.cwd)
             .env_clear()
-            .envs(W::env(settings));
+            .envs(&env);
         let mut child = command.spawn()?;
-        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &W::env(settings));
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
         Ok((child, stderr))
     }
 

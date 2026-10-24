@@ -85,6 +85,7 @@ separate_users() {
   fi
   mkdir -p /run/tico-runner && chown "$SUPERVISOR_UID:$SUPERVISOR_GID" /run/tico-runner && as_supervisor chmod 0755 /run/tico-runner
   export TICO_RUNNER_BOT_UID="$BOT_UID" TICO_RUNNER_BOT_GID="$SUPERVISOR_GID"
+  export TICO_RUNNER_TURN_UIDS=10100-10163
   exec setpriv --reuid="$SUPERVISOR_UID" --regid="$SUPERVISOR_GID" --clear-groups --inh-caps="$CAPS" --ambient-caps="$CAPS" \
     /usr/local/bin/tico-runner-entrypoint "$@"
 }

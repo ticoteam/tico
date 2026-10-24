@@ -54,7 +54,12 @@ fn umask_group() -> std::io::Result<()> {
 /// A command that runs `program` as the bot user when isolation is on (with umask 002: the bot's files are
 /// group-writable), else as itself. Arguments added later follow the program.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    match prefix() {
+    command_as(identity(), program)
+}
+
+/// An explicitly leased identity; None preserves the ordinary bot identity.
+pub fn command_as(id: Option<(u32, u32)>, program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    match id.or_else(identity).map(prefix_for) {
         None => tokio::process::Command::new(program),
         Some(p) => {
             let mut cmd = tokio::process::Command::new(&p[0]);
@@ -82,8 +87,12 @@ pub fn command_under(parent: &[std::ffi::OsString], program: impl AsRef<std::ffi
 
 /// `command` for std's blocking Command.
 pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    std_command_as(identity(), program)
+}
+
+pub fn std_command_as(id: Option<(u32, u32)>, program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     use std::os::unix::process::CommandExt;
-    match prefix() {
+    match id.or_else(identity).map(prefix_for) {
         None => std::process::Command::new(program),
         Some(p) => {
             let mut cmd = std::process::Command::new(&p[0]);
@@ -156,7 +165,7 @@ pub fn adopt(paths: &[PathBuf]) {
     adopt_with(paths, uid, gid, &mut |_| {});
 }
 
-fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd::OwnedFd> {
+pub(crate) fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
     // SAFETY: name is NUL-terminated; the returned descriptor has one owner and is close-on-exec.
     let fd = unsafe { libc::openat(parent, name.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
@@ -165,7 +174,7 @@ fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd
 
 /// The pinned parent directory of `path` and its last name, opened one component at a time without
 /// following a link. None for an empty path, / or . (never an ownership-handoff root).
-fn pinned_parent(path: &Path) -> Option<(std::os::fd::OwnedFd, std::ffi::CString)> {
+pub(crate) fn pinned_parent(path: &Path) -> Option<(std::os::fd::OwnedFd, std::ffi::CString)> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;

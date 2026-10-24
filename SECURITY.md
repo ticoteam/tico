@@ -70,7 +70,8 @@ computer in **Settings > Computers**.
 
 ### Bots on one computer share a trust boundary, on purpose
 
-Tico does not isolate bots from each other on the same computer. By default they run as the same OS user,
+Tico shares workspace files and model sign-ins between bots on the same computer. Except for Docker Gateway
+turns described below, they run as the same OS user,
 in the same workspace, with the same model sign-ins. The runner delivers only credentials granted to that bot,
 not the whole environment or `_shared.env`; upgrades automatically grant each bot the shared credentials it already uses.
 This delivery filter is not OS isolation: bot code can still read another bot's files and credentials on that computer. This is a design choice, not a bug: it keeps setup simple and lets
@@ -88,13 +89,20 @@ work of any bot assigned to that computer, so code a bot runs must not be able t
   supervisor-owned bare mirrors with read-only access for bots (0755 directories, 0644 files). The state
   directory allows traversal (0711) so bots can read mirrors; its existing private files remain 0600 and
   private subdirectories 0700. Base clones refresh from mirrors as the bot user, without a token.
+  **Gateway exception:** each Tico model harness (primary or fallback) leases a distinct OS user, sharing the bot
+  group for workspace access. Sibling bot processes cannot read its live process environment, file descriptors or
+  private turn directory. The relay checks the connecting socket's UID before reading its per-turn bearer token.
+  Non-Gateway hosts are never given that relay token. The runner stops the relay and all of its calls, kills the
+  leased user's descendants, removes private state and temporary files, and returns workspace ownership to the
+  ordinary bot user before returning the lease. Startup sweeps crash leftovers; failed or incomplete cleanup
+  quarantines a UID instead of reusing it. The pool holds up to 64 concurrent Gateway attempts.
 - **Mac runner:** one user runs the runner and the bots, so the registration sits in the same account the
   bots run as: treat the Mac as one trust group. A second macOS account for the bots is possible by hand but
   not built in.
 - **Still shared, by default:** the `bot` user's workspace, credentials and model sign-ins, so one bot can read
-  another's repository and credentials, and read the environment of another bot's current run. Separate OS
-  users per bot are not built (a future opt-in); separate computers or separate containers are the boundary
-  today.
+  another's repository, shared credentials and subscription sign-ins. Non-Gateway turns still share process
+  identity and environment access. The Gateway exception protects live turn state, not the workspace or shared
+  sign-ins; separate computers or separate containers remain the boundary for unrelated trust domains.
 
 Practical guidance:
 

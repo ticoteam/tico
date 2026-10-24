@@ -109,7 +109,13 @@ model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
-Docker runner does, and says so when it checks in. On a computer that says it runs bots as itself (a Mac), the model
+Docker runner does, and says so when it checks in. On the current Docker runner, every Tico model turn (including
+a fallback to a Tico model) gets a separate OS user from a pool of 64. Other bots cannot read its live environment,
+open file descriptors or private temporary files, or use its Gateway connection. Workspace files remain shared
+through the bot group; subscription sign-ins and turns on other providers keep their existing boundary. At turn
+end the connection is revoked, remaining processes are killed and temporary files are cleaned before the user is
+reused. If all 64 users are busy, a new Gateway turn waits for a retry. Update the image as well as the runner binary;
+an older image without the user pool cannot start a Gateway turn. On a computer that says it runs bots as itself (a Mac), the model
 list marks the Tico models **not on this computer** and Tico doesn't save one for a bot there: the reason says
 "<computer> can't run Tico Gateway work (it needs Tico's Docker runner)". A runner from before it said either way is
 treated the same, with "<computer> hasn't said it can run Tico Gateway work": update its runner. A bot already on a

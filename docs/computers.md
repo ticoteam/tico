@@ -7,6 +7,12 @@ team-wide model settings: the models choice, which providers are on, the default
 out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
 These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
 
+Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
+cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
+connection. Workspace files stay shared through the bot group. This does not separate subscription sign-ins or
+turns on other providers. See [the Gateway boundary](ai-gateway.md#pick-a-tico-model-for-a-bot) and
+[Docker runner setup](install.md#linux-or-cloud-server-docker).
+
 ## Turn counts
 
 **Unreleased.** The following counts and start rules apply with this update.

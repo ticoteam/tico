@@ -711,6 +711,9 @@ impl Clock {
 
 impl Runner {
     pub async fn run(self: Arc<Self>) {
+        if let Err(e) = tokio::task::spawn_blocking(crate::turn_users::initialize).await.unwrap_or_else(|e| Err(e.to_string())) {
+            log(&format!("Tico runner: Gateway turn users unavailable: {e}"));
+        }
         let names = self.names().await;
         let _ = names;
         self.recover_output().await;

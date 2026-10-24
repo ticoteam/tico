@@ -149,6 +149,8 @@ pub fn compact_at(value: &Value) -> i64 {
 
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
+    /// Only a Gateway harness receives its turn's leased OS identity.
+    pub identity: Option<(u32, u32)>,
     pub cwd: String,
     pub model: Option<String>,
     pub effort: Option<String>,

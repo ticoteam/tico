@@ -449,3 +449,31 @@ def test_handing_an_older_releases_session_to_the_bot_changes_no_owner_outside_i
     assert not problems, "\n".join(problems)
     for name in ("acme-root-file", "acme-supervisor-file", "acme-dir/nested"):
         assert after[f"/home/runner/{session}/{name}"][0].startswith("10003:"), (name, after[f"/home/runner/{session}/{name}"])
+
+
+def test_gateway_turn_users_block_siblings_and_clean_before_reuse(volume):
+    """The source-pinned Rust probe exercises the real pool and relay in the candidate image.
+
+    Build its executable with `cargo test --manifest-path runner-rs/Cargo.toml --no-run`, then set
+    TICO_RUNNER_TEST_BINARY to the emitted executable. No host home, credential or database is mounted.
+    The probe verifies its fingerprint against the candidate's runner and all 64 passwd entries.
+    """
+    binary = os.environ.get("TICO_RUNNER_TEST_BINARY", "").strip()
+    if not binary:
+        pytest.skip("Set TICO_RUNNER_TEST_BINARY for the required Gateway two-user candidate acceptance")
+    binary = Path(binary).resolve(strict=True)
+    assert binary.is_file() and os.access(binary, os.X_OK), binary
+    configured = docker("run", "--rm", "--user", "0", "--cap-drop", "ALL", *CAPS,
+                        "--security-opt", "no-new-privileges:true", "--network", "none",
+                        "-v", f"{volume}:/home/runner", IMAGE, "python", "-c",
+                        "import os; print(os.geteuid(),os.environ['TICO_RUNNER_TURN_UIDS'])")
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert configured.stdout.strip().splitlines()[-1] == "10002 10100-10163", configured.stdout
+    result = docker("run", "--rm", "--user", "0", "--cap-drop", "ALL", *CAPS,
+                    "--security-opt", "no-new-privileges:true", "--network", "none",
+                    "-e", "TICO_TEST_DISPOSABLE=1", "-v", f"{volume}:/home/runner",
+                    "-v", f"{binary}:/turn-user-probe:ro", "--entrypoint", "/turn-user-probe", IMAGE,
+                    "--ignored", "--exact", "gateway_relay::tests::docker_turn_user_blocks_siblings_and_cleans_before_reuse",
+                    "--nocapture", "--test-threads=1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout and "0 failed" in result.stdout, result.stdout

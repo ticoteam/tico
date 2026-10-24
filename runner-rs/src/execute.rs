@@ -1135,6 +1135,14 @@ impl Runner {
                 billing: self.billing(&runtime, selected.as_ref()),
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
+            if crate::hosts::pi::is_gateway(model.as_deref()) {
+                vault.turn_user = Some(crate::turn_users::Lease::take().map_err(|why| {
+                    drove.outcome = "failed".into();
+                    drove.reply = why.clone();
+                    drove.retryable = !why.contains("(not_isolated)");
+                    Fail::runtime(why)
+                })?);
+            }
             env = crate::env::environment(&ctx, &attempt, &mut vault).await.map_err(Fail::runtime)?;
             // The subscription this bot runs on: Claude keys its login to HOME, so it is the turn's own environment,
             // the same one the host process and the turn's shell commands get.
@@ -1166,9 +1174,11 @@ impl Runner {
                 let _ = self.state.append(&aid, "error", &json!({"error": why}));
                 drove.outcome = "failed".into();
                 drove.reply = why.clone();
+                drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
             base_env = Some(env.clone());
+            let turn_identity = vault.for_model(&mut env, model.as_deref()).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             redactor = redact::for_turn(&pairs, &vault.values);
             if let Some(s) = &self.socket {
@@ -1258,6 +1268,11 @@ impl Runner {
             receivers.push((tx.clone(), rx));
             let rx = &mut receivers.last_mut().unwrap().1;
             let own = tx.clone();
+            if turn_identity.is_some() {
+                let mut paths = vec![p.main_path.clone(), execution_path.clone()];
+                paths.extend(p.add_dirs.iter().map(PathBuf::from));
+                crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+            }
             let made = if persistent {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
@@ -1277,6 +1292,7 @@ impl Runner {
             h.start().await?;
             mark("harness_started", &aid);
             let settings = Settings {
+                identity: turn_identity,
                 cwd: execution_path.display().to_string(),
                 model: model.clone(),
                 effort: effort.clone(),
@@ -1509,7 +1525,8 @@ impl Runner {
                     profile: selected.as_ref().map(|p| p.name.clone()),
                     billing: self.billing(&hop.runtime, selected.as_ref()),
                 });
-                let hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                let turn_identity = vault.for_model(&mut hop_env, Some(&hop.model)).map_err(Fail::runtime)?;
                 env = hop_env.clone();
                 // Named with the harness it moved to, so the task's Runs say where the turn went and why.
                 let note = match (&left, &busy) {
@@ -1532,6 +1549,11 @@ impl Runner {
                 let (tx, rx) = self.attempt_events(&aid, redactor.clone());
                 receivers.push((tx.clone(), rx));
                 let rx = &mut receivers.last_mut().unwrap().1;
+                if turn_identity.is_some() {
+                    let mut paths = vec![execution_path.clone()];
+                    paths.extend(place.as_ref().into_iter().flat_map(|p| p.add_dirs.iter().map(PathBuf::from)));
+                    crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+                }
                 let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
                 if let Some(held) = login_held.as_mut() {
                     held.bind(h.clone());
@@ -1542,6 +1564,7 @@ impl Runner {
                 let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
                 h.start().await?;
                 let settings = Settings {
+                    identity: turn_identity,
                     cwd: execution_path.display().to_string(),
                     model: Some(hop.model.clone()),
                     effort: hop.reasoning_effort.clone(),
@@ -1710,6 +1733,13 @@ impl Runner {
             let _ = self.state.append(&aid, "status", &json!({"yielded": held.yielded()}));
         }
         drop(login_held.take());
+        // A stopped harness may leave detached descendants. Revoke the relay, kill the whole leased UID,
+        // and hand workspace ownership back before bot-user scrubbing, history and publication.
+        if let Some(relay) = &mut vault.relay { relay.stop().await; }
+        if let Some(user) = &mut vault.turn_user { user.permit_reuse(); }
+        vault.remove_files();
+        let user = vault.turn_user.take();
+        let _ = tokio::task::spawn_blocking(move || drop(user)).await;
         if self.drain.returning(&aid) {
             let _ = self.state.append(&aid, "status", &json!({"waiting": ""}));
         }

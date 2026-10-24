@@ -62,10 +62,15 @@ pub struct Relay {
     pub dir: Option<std::path::PathBuf>,
     deadline: Instant,
     retry_at: Arc<AtomicU64>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Relay {
+    pub async fn stop(&mut self) {
+        if let Some(stop) = self.shutdown.take() { let _ = stop.send(()); }
+        let _ = (&mut self.task).await;
+    }
     /// The Gateway's Retry-After, including a reset that passed while the harness was finishing.
     pub fn limit_reset(&self) -> Option<String> {
         let at = self.retry_at.load(Ordering::SeqCst);
@@ -90,12 +95,6 @@ impl Drop for Relay {
 /// Where the turn of attempt `aid` keeps the pi configuration that names its relay: one directory per attempt, since
 /// every turn of every bot shares the workspace and two turns starting together would otherwise overwrite each other's
 /// relay URL.
-fn turn_dir(env: &Env, aid: &str) -> std::path::PathBuf {
-    let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| ".".into());
-    let name: String = aid.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-    std::path::PathBuf::from(root).join("runtime").join("pi-gateway").join(if name.is_empty() { "turn".into() } else { name })
-}
-
 /// The fallback `hop`, unless it is a Tico model and this turn has no relay (a runner without isolation, or no key):
 /// such a hop could only fail, and the primary's own outcome is the truer one.
 pub fn admit(hop: Option<crate::fallback::Hop>, relayed: bool) -> Option<crate::fallback::Hop> {
@@ -176,17 +175,39 @@ pub async fn hand_to_turn(
         crate::util::log(&format!("{}: no Tico fallback here: {NOT_ISOLATED}", text_of(&attempt["id"])));
         return Ok(());
     }
-    if let Some((key, url, bot)) = credentials(client, &text_of(&attempt["id"])).await? {
+    let mut user = match vault.turn_user.take().map(Ok).unwrap_or_else(crate::turn_users::Lease::take) {
+        Ok(user) => user,
+        Err(e) if !crate::hosts::pi::is_gateway(attempt["config"]["model"].as_str()) => {
+            crate::util::log(&format!("Tico runner: no Tico fallback for this attempt: {e}"));
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+    let pinned = match credentials(client, &text_of(&attempt["id"])).await {
+        Ok(pinned) => pinned,
+        Err(e) => { user.permit_reuse(); return Err(e); }
+    };
+    if let Some((key, url, bot)) = pinned {
         vault.values.push(key.clone());
-        let mut relay = start(&url, key, bot).await?;
-        let dir = turn_dir(env, &text_of(&attempt["id"]));
-        env.insert(URL_ENV.into(), relay.url.clone());
-        env.insert(KEY_ENV.into(), relay.token.clone());
-        env.insert(DIR_ENV.into(), dir.display().to_string());
-        relay.dir = Some(dir);
-        vault.relay = Some(relay);
+        let relay = match start_for_user(&url, key, bot, Some(user.uid)).await {
+            Ok(relay) => relay,
+            Err(e) => { user.permit_reuse(); return Err(e); }
+        };
+        attach(relay, user.dir.join("pi"), env, vault);
+        vault.turn_user = Some(user);
+    } else {
+        user.permit_reuse();
     }
+
     Ok(())
+}
+
+fn attach(relay: Relay, dir: std::path::PathBuf, env: &mut Env, vault: &mut Vault) {
+    env.insert(URL_ENV.into(), relay.url.clone());
+    env.insert(KEY_ENV.into(), relay.token.clone());
+    env.insert(DIR_ENV.into(), dir.display().to_string());
+    vault.values.push(relay.token.clone());
+    vault.relay = Some(relay);
 }
 
 /// The agent every call to the Gateway carries: Cloudflare in front of Tico HQ refuses a library's default agent
@@ -196,7 +217,12 @@ pub fn user_agent() -> String {
 }
 
 /// Start a relay to the Gateway at `upstream` with `key`, naming the turn's bot by `bot` on every call.
+#[cfg(test)]
 pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<Relay, String> {
+    start_for_user(upstream, key, bot, None).await
+}
+
+async fn start_for_user(upstream: &str, key: String, bot: Option<String>, uid: Option<u32>) -> Result<Relay, String> {
     let deadline = Instant::now() + Duration::from_secs(MAX_RUN_SECONDS);
     let base = safe_upstream(upstream).ok_or("the Gateway URL is neither https nor this computer")?;
     let local = base.starts_with("http://");
@@ -213,12 +239,17 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
     let token = format!("tico-relay-{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let retry_at = Arc::new(AtomicU64::new(0));
     let shared = Arc::new(Shared { client, base, key, token: token.clone(), bot, retry_at: retry_at.clone() });
+    let (shutdown, mut stopping) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
         let mut calls = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
+                _ = &mut stopping => break,
                 accepted = listener.accept() => match accepted {
                     Ok((socket, _)) => {
+                        if let Some(uid) = uid {
+                            if !peer_is(&socket, uid) { continue; }
+                        }
                         let shared = shared.clone();
                         calls.spawn(async move { let _ = serve(socket, &shared).await; });
                     }
@@ -227,8 +258,30 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
                 Some(_) = calls.join_next(), if !calls.is_empty() => {}
             }
         }
+        drop(listener);
+        calls.abort_all();
+        while calls.join_next().await.is_some() {}
     });
-    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, retry_at, task })
+    Ok(Relay { url: format!("http://127.0.0.1:{port}{PREFIX}"), token, dir: None, deadline, retry_at, shutdown: Some(shutdown), task })
+}
+
+/// Match the client's reverse four-tuple, rather than the accepted (supervisor-owned) socket.
+/// Failure to read or match /proc denies access before any bearer token is consumed.
+fn peer_is(socket: &TcpStream, uid: u32) -> bool {
+    let (Ok(local), Ok(peer)) = (socket.local_addr(), socket.peer_addr()) else { return false };
+    let encode = |address: std::net::SocketAddr| -> Option<String> {
+        let std::net::IpAddr::V4(ip) = address.ip() else { return None };
+        Some(format!("{:08X}:{:04X}", u32::from_le_bytes(ip.octets()), address.port()))
+    };
+    let (Some(local), Some(peer)) = (encode(local), encode(peer)) else { return false };
+    std::fs::read_to_string("/proc/net/tcp").ok().is_some_and(|table| peer_in_table(&table, &peer, &local, uid))
+}
+
+fn peer_in_table(table: &str, peer: &str, local: &str, uid: u32) -> bool {
+    table.lines().skip(1).any(|line| {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        fields.len() > 7 && fields[1] == peer && fields[2] == local && fields[3] == "01" && fields[7].parse::<u32>() == Ok(uid)
+    })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -549,14 +602,18 @@ mod tests {
         env.insert("PATH".into(), "/usr/bin".into());
         hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": false}), &mut env, &mut vault, true).await.unwrap();
         assert!(asked.lock().unwrap().is_empty() && vault.relay.is_none());
-        hand_to_turn(&client, &serde_json::json!({"id": "att-1", "gateway": true}), &mut env, &mut vault, true).await.unwrap();
+        let (key, url, bot) = credentials(&client, "att-1").await.unwrap().unwrap();
+        vault.values.push(key.clone());
+        let relay = start(&url, key, bot).await.unwrap();
+        attach(relay, std::env::temp_dir().join("unused-pi-config"), &mut env, &mut vault);
         let request = asked.lock().unwrap()[0].clone();
         assert!(request.starts_with("GET /api/v2/runner-gateway-credentials?attempt=att-1 "), "{request}");
         assert!(request.contains("Bearer runner-token"));
         assert!(env.values().all(|v| !v.contains(KEY)), "{env:?}");
         let relay = vault.relay.as_ref().unwrap();
         assert_eq!((env[URL_ENV].as_str(), env[KEY_ENV].as_str()), (relay.url.as_str(), relay.token.as_str()));
-        assert_eq!(vault.values, vec![KEY.to_string()]);
+        assert_eq!(vault.values[0], KEY);
+        assert!(vault.values.contains(&vault.relay.as_ref().unwrap().token));
         assert!(!env.contains_key(BOT_ENV), "the bot id is the relay's, not the turn's: {env:?}");
         let out = call(relay, &env[KEY_ENV], "/gateway/chat/completions", "{}").await;
         assert!(out.starts_with("HTTP/1.1 200") && seen.lock().unwrap().len() == 1, "{out}");
@@ -603,7 +660,11 @@ mod tests {
             let (client, _) = hub_for(&gateway).await;
             let (mut env, mut vault) = (Env::new(), Vault::default());
             env.insert("HUB_WORKSPACE".into(), ws.display().to_string());
-            hand_to_turn(&client, &serde_json::json!({"id": aid, "gateway": true}), &mut env, &mut vault, true).await.unwrap();
+            let (key, url, bot) = credentials(&client, aid).await.unwrap().unwrap();
+            let mut relay = start(&url, key, bot).await.unwrap();
+            let dir = ws.join("runtime/pi-gateway").join(aid);
+            relay.dir = Some(dir.clone());
+            attach(relay, dir, &mut env, &mut vault);
             turns.push((env, vault, seen));
         }
         // Both turns' pi configurations are written before either turn calls.
@@ -665,4 +726,232 @@ mod tests {
             assert!(safe_upstream(bad).is_none(), "{bad}");
         }
     }
+    #[test]
+    fn peer_matching_uses_the_client_tuple_and_uid_and_fails_closed() {
+        let table = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid\n 0: 0100007F:A001 0100007F:B002 01 00000000:00000000 00:00000000 00000000 10100 0 42\n";
+        assert!(peer_in_table(table, "0100007F:A001", "0100007F:B002", 10100));
+        assert!(!peer_in_table(table, "0100007F:A001", "0100007F:B002", 10003));
+        assert!(!peer_in_table(table, "0100007F:B002", "0100007F:A001", 10100));
+        assert!(!peer_in_table(&table.replace(" 01 ", " 06 "), "0100007F:A001", "0100007F:B002", 10100));
+        assert!(!peer_in_table("", "0100007F:A001", "0100007F:B002", 10100));
+    }
+
+    #[tokio::test]
+    async fn the_real_socket_owner_is_checked_even_with_a_valid_token() {
+        let (gateway, seen) = upstream(SSE.to_vec()).await;
+        let uid = unsafe { libc::geteuid() };
+        let mut denied = start_for_user(&gateway, KEY.into(), None, Some(uid + 1)).await.unwrap();
+        let url = url::Url::parse(&denied.url).unwrap();
+        let mut socket = TcpStream::connect(("127.0.0.1", url.port().unwrap())).await.unwrap();
+        let request = format!("POST /gateway/chat/completions HTTP/1.1\r\nAuthorization: Bearer {}\r\nContent-Length: 2\r\n\r\n{{}}", denied.token);
+        let _ = socket.write_all(request.as_bytes()).await;
+        let mut out = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(2), socket.read_to_end(&mut out)).await.unwrap();
+        assert!(!String::from_utf8_lossy(&out).starts_with("HTTP/1.1 200"));
+        assert!(seen.lock().unwrap().is_empty());
+        denied.stop().await;
+        let accepted = start_for_user(&gateway, KEY.into(), None, Some(uid)).await.unwrap();
+        assert!(call(&accepted, &accepted.token, "/gateway/chat/completions", "{}").await.starts_with("HTTP/1.1 200"));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    /// Run only in a disposable Linux container, with the production five capabilities and no real credentials.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires disposable Linux root and the five Docker runner capabilities"]
+    async fn docker_turn_user_blocks_siblings_and_cleans_before_reuse() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        assert_eq!(std::env::var("TICO_TEST_DISPOSABLE").as_deref(), Ok("1"));
+        if unsafe { libc::geteuid() } == 0 {
+            let output = std::process::Command::new(crate::isolation::SETPRIV)
+                .args(["--reuid=10002", "--regid=10002", "--clear-groups",
+                       "--inh-caps=+chown,+dac_override,+kill,+setgid,+setuid",
+                       "--ambient-caps=+chown,+dac_override,+kill,+setgid,+setuid"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--ignored", "--exact", "gateway_relay::tests::docker_turn_user_blocks_siblings_and_cleans_before_reuse", "--nocapture", "--test-threads=1"])
+                .env_clear().env("TICO_TEST_DISPOSABLE", "1").env("PATH", "/usr/local/bin:/usr/bin:/bin")
+                .output().unwrap();
+            assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            println!("{}", String::from_utf8_lossy(&output.stdout));
+            return;
+        }
+        assert_eq!(unsafe { libc::geteuid() }, 10002, "actual Docker supervisor identity");
+        let status = std::fs::read_to_string("/proc/self/status").unwrap();
+        let caps = status.lines().find_map(|line| line.strip_prefix("CapEff:")).unwrap().trim();
+        assert_eq!(u64::from_str_radix(caps, 16).unwrap(), 0xe3, "exactly the production five capabilities");
+        let image_build = std::process::Command::new("/usr/local/bin/tico-runner").arg("--build-id").env_clear().output().unwrap();
+        assert!(image_build.status.success());
+        assert_eq!(String::from_utf8_lossy(&image_build.stdout).trim(), crate::BUILD_ID, "probe and candidate must have the same source fingerprint");
+        for uid in 10100..=10163 {
+            let user = std::process::Command::new("/usr/bin/getent").args(["passwd", &uid.to_string()]).env_clear().output().unwrap();
+            assert!(user.status.success(), "candidate image lacks reserved user {uid}");
+        }
+        let root = std::env::temp_dir().join(format!("tico-turn-fixture-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("HOME", &root);
+        std::env::set_var(crate::isolation::UID_ENV, "10003");
+        std::env::set_var(crate::isolation::GID_ENV, "10002");
+        std::env::set_var(crate::turn_users::POOL_ENV, "10100-10101");
+        std::fs::create_dir_all("/run/tico-runner").unwrap();
+        std::fs::create_dir_all("/run/tico-runner/turns/10100").unwrap();
+        std::os::unix::fs::lchown("/run/tico-runner/turns/10100", Some(10100), Some(10002)).unwrap();
+        let workspace = root.join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let old = workspace.join("owner-only");
+        std::fs::write(&old, "previous turn").unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&workspace, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for path in [&old, &workspace] { std::os::unix::fs::lchown(path, Some(10003), Some(10002)).unwrap(); }
+        // A crashed runner's user and temp file must be swept before the first allocation.
+        let stale = root.join("crash-file");
+        std::fs::write(&stale, "stale").unwrap();
+        std::os::unix::fs::lchown(&stale, Some(10100), Some(10002)).unwrap();
+        let mut orphan = crate::isolation::command_as(Some((10100, 10002)), "/bin/sleep")
+            .arg("300").env_clear().spawn().unwrap();
+        let user = crate::turn_users::Lease::take().unwrap();
+        let other = crate::turn_users::Lease::take().unwrap();
+        assert_ne!(user.uid, other.uid);
+        assert!(crate::turn_users::Lease::take().is_err(), "pool exhaustion must not reuse a live UID");
+        assert!(!orphan.wait().await.unwrap().success());
+        assert_eq!(stale.metadata().unwrap().uid(), 10003);
+        crate::turn_users::share_workspace(vec![workspace.clone()]).await.unwrap();
+        let (gateway, seen) = upstream(SSE.to_vec()).await;
+        let relay = start_for_user(&gateway, KEY.into(), None, Some(user.uid)).await.unwrap();
+        let mut grant_vault = Vault::default();
+        grant_vault.turn_user = Some(user);
+        let ctx = crate::env::EnvContext { url: "http://127.0.0.1:9", projects_dir: &workspace, state_dir: &root };
+        let mut grant_env = crate::env::environment_with(&ctx,
+            &serde_json::json!({"bot": "fixture", "token": "SYNTHETIC-HUB-TOKEN"}), &mut grant_vault,
+            Some(serde_json::json!({"credentials": [{"id": "fixture", "env": "SYNTHETIC_FILE", "kind": "file", "value": "SYNTHETIC-GRANTED"}]}))).await.unwrap();
+        let private_dir = grant_vault.turn_user.as_ref().unwrap().dir.clone();
+        let grant_path = std::path::PathBuf::from(&grant_env["SYNTHETIC_FILE"]);
+        assert_eq!(grant_path.parent(), Some(private_dir.as_path()));
+        assert_eq!(grant_path.metadata().unwrap().uid(), grant_vault.turn_user.as_ref().unwrap().uid);
+        attach(relay, private_dir.join("pi"), &mut grant_env, &mut grant_vault);
+        let canonical = grant_env.clone();
+        // A subscription primary/fallback keeps the bot identity; the Gateway hop gets a private copy again.
+        assert_eq!(grant_vault.for_model(&mut grant_env, Some("opus-5-5")).unwrap(), None);
+        assert_eq!(std::fs::metadata(&grant_env["SYNTHETIC_FILE"]).unwrap().uid(), 10003);
+        assert!(!grant_env.contains_key(KEY_ENV));
+        grant_env = canonical;
+        assert!(grant_vault.for_model(&mut grant_env, Some("tico-mid-1.0")).unwrap().is_some());
+        let mut user = grant_vault.turn_user.take().unwrap();
+        let mut relay = grant_vault.relay.take().unwrap();
+        let private = user.dir.join("private");
+        std::fs::write(&private, "SYNTHETIC-PRIVATE").unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::lchown(&private, Some(user.uid), Some(10002)).unwrap();
+        let written = workspace.join("next-turn");
+        let tmp = std::path::Path::new("/tmp").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
+        let shm = std::path::Path::new("/dev/shm").join(format!("tico-turn-owned-{}", uuid::Uuid::new_v4().simple()));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = crate::hosts::pi::PiHost::new("fixture", vec![], tx);
+        let mut settings = crate::hosts::Settings { identity: Some(user.identity()), cwd: workspace.display().to_string(), model: Some("tico-mid-1.0".into()), ..Default::default() };
+        settings.env = grant_env;
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings.env.insert("SYNTHETIC_ENV".into(), "SYNTHETIC-TURN-SECRET".into());
+        settings.env.insert(KEY_ENV.into(), relay.token.clone());
+        settings.env.insert(URL_ENV.into(), relay.url.clone());
+        settings.env.insert(DIR_ENV.into(), user.dir.join("pi").display().to_string());
+        let mut argv = vec![crate::env::python().display().to_string()];
+        argv.extend(["-u", "-c", r#"import os,pathlib,subprocess,sys,time
+assert os.getegid()==10002
+assert os.environ['SYNTHETIC_ENV']=='SYNTHETIC-TURN-SECRET'
+assert pathlib.Path(os.environ['SYNTHETIC_FILE']).read_text()=='SYNTHETIC-GRANTED'
+assert 'CapEff:\t0000000000000000' in pathlib.Path('/proc/self/status').read_text()
+assert pathlib.Path(os.environ['PI_CODING_AGENT_DIR'],'models.json').stat().st_uid==os.geteuid()
+f=open(sys.argv[1]); assert f.read()=='SYNTHETIC-PRIVATE'
+assert pathlib.Path(sys.argv[2]).read_text()=='previous turn'
+for p in sys.argv[3:]:
+ pathlib.Path(p).write_text('from isolated turn'); os.chmod(p,0o600)
+subprocess.run(['git','init','-q',str(pathlib.Path(sys.argv[3]).parent)],check=True)
+subprocess.run(['git','-c','safe.directory=*','-C',str(pathlib.Path(sys.argv[3]).parent),'-c','user.name=fixture','-c','user.email=fixture@example.invalid','add','.'],check=True)
+subprocess.run(['git','-c','safe.directory=*','-C',str(pathlib.Path(sys.argv[3]).parent),'-c','user.name=fixture','-c','user.email=fixture@example.invalid','commit','-qm','synthetic'],check=True)
+remote=str(pathlib.Path(sys.argv[3]).parent/'.git'/'fixture-remote.git')
+subprocess.run(['git','init','--bare','-q',remote],check=True)
+subprocess.run(['git','-c','safe.directory=*','-C',str(pathlib.Path(sys.argv[3]).parent),'push','-q',remote,'HEAD:refs/heads/main'],check=True)
+print(os.getpid(),flush=True)
+time.sleep(300)
+"#, &private.display().to_string(), &old.display().to_string(), &written.display().to_string(), &tmp.display().to_string(), &shm.display().to_string()].map(String::from));
+        // Exercise the actual OneShot/Pi process-launch boundary, including Settings.identity.
+        let (mut child, _stderr) = host.launch(&argv, &settings).unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).await.unwrap();
+        let pid: u32 = line.trim().parse().unwrap();
+        assert_eq!(std::fs::metadata(format!("/proc/{pid}")).unwrap().uid(), user.uid);
+        let probe = r#"import json,os,pathlib,signal,sys,urllib.request
+pid,private,url,token=sys.argv[1:]
+r={}
+for name,path in [('environment','/proc/'+pid+'/environ'),('fd','/proc/'+pid+'/fd'),('open_fd','/proc/'+pid+'/fd/3'),('private',private)]:
+ try:
+  if name=='fd': os.listdir(path)
+  else: pathlib.Path(path).read_bytes()
+  r[name]=True
+ except OSError: r[name]=False
+try: os.kill(int(pid),signal.SIGTERM); r['signal']=True
+except PermissionError: r['signal']=False
+for name,bearer in [('relay_without','guessed'),('relay_with',token)]:
+ try:
+  req=urllib.request.Request(url+'/chat/completions',data=b'{}',headers={'Authorization':'Bearer '+bearer})
+  with urllib.request.urlopen(req,timeout=3) as response: r[name]=response.status==200
+ except Exception: r[name]=False
+print(json.dumps(r))
+"#;
+        // An original shared-user fixture makes the same probe succeed. This prevents an environmental
+        // /proc restriction or a broken HTTP probe from turning all of the denials into vacuous passes.
+        let (control_gateway, control_seen) = upstream(SSE.to_vec()).await;
+        let mut control_relay = start(&control_gateway, KEY.into(), None).await.unwrap();
+        let mut control = crate::isolation::command(crate::env::python())
+            .args(["-u", "-c", "import os,sys,time; f=open(sys.argv[1]); print(os.getpid(),flush=True); time.sleep(300)", &old.display().to_string()])
+            .env_clear().env("SYNTHETIC_ENV", "SYNTHETIC-CONTROL").stdout(std::process::Stdio::piped()).spawn().unwrap();
+        let mut control_pid = String::new();
+        BufReader::new(control.stdout.take().unwrap()).read_line(&mut control_pid).await.unwrap();
+        let control_result = crate::isolation::command(crate::env::python())
+            .args(["-c", probe, control_pid.trim(), &old.display().to_string(), &control_relay.url, &control_relay.token])
+            .env_clear().output().await.unwrap();
+        assert!(control_result.status.success());
+        let baseline: Value = serde_json::from_slice(&control_result.stdout).unwrap();
+        for key in ["environment", "fd", "open_fd", "private", "signal", "relay_with"] {
+            assert_eq!(baseline[key], true, "original shared-user control: {baseline}");
+        }
+        assert_eq!(control_seen.lock().unwrap().len(), 1);
+        control_relay.stop().await;
+        let _ = control.wait().await;
+        for id in [(10003, 10002), other.identity()] {
+            let result = crate::isolation::command_as(Some(id), crate::env::python())
+                .args(["-c", probe, &pid.to_string(), &private.display().to_string(), &relay.url, &relay.token])
+                .env_clear().output().await.unwrap();
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            let r: Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert!(r.as_object().unwrap().values().all(|v| v == false), "sibling {id:?}: {r}");
+        }
+        let allowed = crate::isolation::command_as(Some(user.identity()), crate::env::python())
+            .args(["-c", "import sys,urllib.request; r=urllib.request.Request(sys.argv[1]+'/chat/completions',data=b'{}',headers={'Authorization':'Bearer '+sys.argv[2]}); print(urllib.request.urlopen(r,timeout=3).status)", &relay.url, &relay.token])
+            .env_clear().output().await.unwrap();
+        assert!(allowed.status.success(), "{}", String::from_utf8_lossy(&allowed.stderr));
+        assert_eq!(String::from_utf8_lossy(&allowed.stdout).trim(), "200");
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let dir = user.dir.clone();
+        let uid = user.uid;
+        relay.stop().await;
+        grant_vault.remove_files();
+        user.permit_reuse();
+        drop(user);
+        assert!(!child.wait().await.unwrap().success(), "detached process survives cleanup");
+        assert!(!dir.exists() && !tmp.exists() && !shm.exists());
+        assert_eq!(written.metadata().unwrap().uid(), 10003);
+        let next = crate::isolation::command("/bin/sh").args(["-c", "cat \"$1\"; echo next >> \"$1\"", "fixture", &written.display().to_string()])
+            .env_clear().output().await.unwrap();
+        assert!(next.status.success(), "next bot turn must edit an owner-only file");
+        let mut reused = crate::turn_users::Lease::take().unwrap();
+        assert_eq!(reused.uid, uid);
+        // Even the next borrower of the same UID cannot use a revoked relay.
+        assert!(TcpStream::connect(("127.0.0.1", url::Url::parse(&relay.url).unwrap().port().unwrap())).await.is_err());
+        reused.permit_reuse(); drop(reused);
+        let mut other = other; other.permit_reuse(); drop(other);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
 }

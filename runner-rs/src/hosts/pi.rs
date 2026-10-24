@@ -94,17 +94,28 @@ pub(crate) fn gateway_agent_dir(settings: &Settings, env: &Env) -> Option<PathBu
     let root = env.get("HUB_WORKSPACE").filter(|w| !w.is_empty()).cloned().unwrap_or_else(|| if settings.cwd.is_empty() { ".".into() } else { settings.cwd.clone() });
     let dir = env.get(GATEWAY_DIR_ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(root).join("runtime").join("pi-gateway"));
-    crate::isolation::mkdir(&dir, 0o755).ok()?;
-    let body = serde_json::to_vec_pretty(&gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default())).ok()?;
-    std::fs::write(dir.join("models.json"), body).ok()?;
-    crate::isolation::chown(&dir.join("models.json"));
-    // Gateway retries belong to the server; the relay carries Retry-After into the turn's completion.
-    // pi's bash tool hands its commands pi's whole environment: each command starts by unsetting GATEWAY_KEY_ENV. It
-    // holds only the turn's token for the runner's relay, never the Gateway's key (gateway_relay.rs); a command can
-    // still read pi's /proc environ, so this only keeps the token out of ordinary tool output.
+    let models = gateway_models_json(env.get(GATEWAY_URL_ENV).map(String::as_str).unwrap_or_default());
     let settings_json = json!({"retry": {"enabled": false}, "shellCommandPrefix": format!("unset {GATEWAY_KEY_ENV}")});
-    std::fs::write(dir.join("settings.json"), serde_json::to_vec_pretty(&settings_json).ok()?).ok()?;
-    crate::isolation::chown(&dir.join("settings.json"));
+    // The agent directory can be changed by the turn. Prepare it as that unprivileged user;
+    // no privileged open or write may follow a link planted by a harness or a sibling.
+    let mut child = crate::isolation::std_command_as(settings.identity, crate::env::python())
+        .env_clear()
+        .args(["-c", r#"import json,os,sys
+root=sys.argv[1]
+os.makedirs(root,mode=0o700,exist_ok=True)
+body=json.load(sys.stdin)
+for name,value in body.items():
+ fd=os.open(os.path.join(root,name),os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,'w') as out: json.dump(value,out)
+"#, &dir.display().to_string()])
+        .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn().ok()?;
+    {
+        use std::io::Write;
+        let body = serde_json::to_vec(&json!({"models.json": models, "settings.json": settings_json})).ok()?;
+        child.stdin.take()?.write_all(&body).ok()?;
+    }
+    if !child.wait().ok()?.success() { return None; }
     Some(dir)
 }
 
