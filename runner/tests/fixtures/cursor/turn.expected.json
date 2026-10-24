@@ -32,7 +32,7 @@
  },
  {
   "kind": "message",
-  "text": "Checking the files.Acme reply.",
+  "text": "Checking the files.\n\nAcme reply.",
   "final": true
  },
  {

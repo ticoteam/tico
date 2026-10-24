@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "org", "health",
+               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "roadmap", "service-key"]
 
@@ -495,3 +495,15 @@ def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice)
     assert len(sent) == 2
     assert all(p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js']
                and p['qa_not_checkable_live'] is True for p in sent)
+
+
+def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'keep-tasks-going', 'ops'], ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
+                 ['bot', 'keep-tasks-going', 'ops', 'off'], ['bot', 'keep-tasks-going', 'ops', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert 'limit' not in sent[0]
+    assert [row['limit'] for row in sent[1:]] == [None, 0, 3]

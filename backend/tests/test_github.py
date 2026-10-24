@@ -995,7 +995,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     _app(api)
     with api.app.state.store.transaction() as c:
         dev = H.type_create(c, H.KEEPER, 'Dev tickets', [
-            {'name': 'In Progress', 'status': 'doing'}, {'name': 'Waiting', 'status': 'waiting'},
+            {'name': 'In Progress', 'status': 'doing'},
             {'name': 'Review 1', 'status': 'review'}, {'name': 'Review 2', 'status': 'review'},
             {'name': 'Done', 'status': 'done'}])
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
@@ -1025,7 +1025,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     refused = move(step='Review 2')
     assert all(f'{repo} branch {branch}' in refused for repo in repos)
     assert move(note='still working') == 'review'
-    assert move(step='Waiting') == 'waiting'
+    assert move(status='waiting') == 'waiting'
     assert 'ticoteam/tico branch' in move(step='Review 1')
     hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
     still = move(step='Done')

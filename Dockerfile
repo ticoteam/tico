@@ -10,6 +10,10 @@
 # Health checks probe every 2 seconds while a container starts (Docker 25+), so an update sees it healthy at once.
 # Layer order is for release speed: system packages, tools and the venv come first, and the source tree is
 # copied last, so a release that changes only source rebuilds one small layer per image.
+# The Rust runner and screen relay are compiled here by default. Release validation instead passes the static
+# binaries it built and tests (NATIVE=prebuilt, with dist/native/amd64/ and dist/native/arm64/ in the context), so a
+# release ships exactly the binaries its gate ran.
+ARG NATIVE=compiled
 ARG PYTHON_IMAGE=python:3.15.0-slim-trixie@sha256:d802f03223b9e00604cd54574bcac1a4638914c43683d3f0afd6ebee35f25313
 
 FROM ${PYTHON_IMAGE} AS download
@@ -110,7 +114,7 @@ RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
 
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
-FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin
+FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin-compiled
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
@@ -119,6 +123,12 @@ COPY runner-rs/src ./src
 COPY runner/harnesses /src/runner/harnesses
 COPY LICENSE /src/LICENSE
 RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner
+
+FROM scratch AS runner-bin-prebuilt
+ARG TARGETARCH
+COPY --chmod=0755 dist/native/${TARGETARCH}/tico-runner /out/tico-runner
+
+FROM runner-bin-${NATIVE} AS runner-bin
 
 FROM python AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -173,12 +183,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s -
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 
-FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS screen-bin
+FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS screen-bin-compiled
 WORKDIR /src/relay-rs
 COPY LICENSE /src/LICENSE
 COPY relay-rs/Cargo.toml relay-rs/Cargo.lock relay-rs/build.rs ./
 COPY relay-rs/src ./src
 RUN cargo build --release --locked && install -D -m 0755 target/release/tico-screen-relay /out/tico-screen-relay
+
+FROM scratch AS screen-bin-prebuilt
+ARG TARGETARCH
+COPY --chmod=0755 dist/native/${TARGETARCH}/tico-screen-relay /out/tico-screen-relay
+
+FROM screen-bin-${NATIVE} AS screen-bin
 
 FROM python AS server
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \

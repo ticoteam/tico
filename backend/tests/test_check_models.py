@@ -73,7 +73,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     assert all(m.get("conversation_id") == sub["conversation_id"] for m in check["history"])
     finish(api, machine, check, GROK, during=lambda: post(
         api, "tasks/" + sub["id"], {"status": "done", "note": "Verdict: OK to merge; one nit on naming.",
-                                         "version": sub["version"]}, check["token"]))
+                                         "version": check["task"]["version"]}, check["token"]))
     shown = get(api, "tasks/" + sub["id"])
     assert shown["runs"][0]["ran_on"]["segments"][0]["model"] == "grok-4.6"
     assert shown["check_model"]["model"] == "grok-4.6" and shown["check_model"]["role"] == "review"

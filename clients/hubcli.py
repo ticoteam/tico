@@ -203,6 +203,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
+    hub seat create <title> [--description D] [--reports-to R] [--team G]
+                                           add a seat under you or someone below you; update <seat> / close <seat>
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
@@ -263,7 +266,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
                                            show or set whether the bot sends mail without approval and its forward
                                            targets; a person who manages the bot only, never a bot (docs/mail.md)
-    hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
+    hub bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
+    hub bot ready --summary S              an onboarding bot says it is ready, with what it learned
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
     hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
@@ -1540,6 +1544,24 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    seat = sub.add_parser("seat", help="Recruiting seats: roles on the chart with no bot yet").add_subparsers(dest="sub")
+    seat.add_parser("list", help="the Recruiting seats").set_defaults(fn="seat list")
+    s = seat.add_parser("create", help="add a seat under you or someone below you (a person)")
+    s.add_argument("title")
+    s.add_argument("--description", help="its job description")
+    s.add_argument("--reports-to", dest="reports_to", help="a bot's slug or human:<id>; you by default")
+    s.add_argument("--team", help="a group id")
+    s.set_defaults(fn="seat create")
+    s = seat.add_parser("update", help="change a seat's title, job description, reporting line or group (a person)")
+    s.add_argument("seat")
+    s.add_argument("--title")
+    s.add_argument("--description")
+    s.add_argument("--reports-to", dest="reports_to")
+    s.add_argument("--team")
+    s.set_defaults(fn="seat update")
+    s = seat.add_parser("close", help="take a seat off the chart (a person)")
+    s.add_argument("seat")
+    s.set_defaults(fn="seat close")
     org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
     s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
     s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
@@ -1747,9 +1769,12 @@ def parser():
     s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
                    help="take what the bot's bot.yaml asks, as its computer reported it")
     s.set_defaults(fn="bot mail")
-    s = bot.add_parser("setup-done", help="a starter bot marks its setup done, once its setup is done")
+    s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")
+    s = bot.add_parser("ready", help="an onboarding bot says it is ready, with what it learned")
+    s.add_argument("--summary", required=True, help="a few lines on what you learned and what you will do first")
+    s.set_defaults(fn="bot ready")
     s = bot.add_parser("place", help="put a bot on a computer, as the person who asked (BotOps)")
     s.add_argument("bot")
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
@@ -1769,6 +1794,10 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--successor")
     s.set_defaults(fn="bot archive")
+    s = bot.add_parser("keep-tasks-going", help="read or set automatic task starts: N, off, or unlimited")
+    s.add_argument("bot")
+    s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else 0 if v == 'off' else int(v), default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot keep-tasks-going")
     s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")

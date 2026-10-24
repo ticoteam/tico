@@ -145,7 +145,7 @@ def test_public_workflow_and_company_ciphertext_artifact_boundary():
     upload = next(step for step in workflow["jobs"]["build"]["steps"] if "actions/upload-artifact@" in step.get("uses", ""))
     assert upload["with"]["path"] == "out/bundles.enc"
     release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
-    # The server release waits only for the Rust runner binaries it attaches, never for desktop builds.
-    assert release["jobs"]["release"].get("needs") == "runner-binaries"
+    # The server release waits only for its validation run (whose binaries it attaches), never for desktop builds.
+    assert release["jobs"]["release"].get("needs") == "validated"
     assert "release" in release["jobs"]["desktop-assets"]["needs"]
     assert release["jobs"]["companies"]["strategy"]["fail-fast"] is False

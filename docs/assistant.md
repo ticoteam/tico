@@ -15,6 +15,8 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 ## Private to you
 
 The chat is a personal room (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
+The company's owner has the [CEO Bot](ceo-bot.md#your-chat-with-it) in its place; everyone else, administrators
+included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [CEO Bot](goals-and-kpis.md#the-ceo-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
@@ -76,7 +78,9 @@ close|update|comment|link|label`, `hub approval decline` and `hub question answe
 server checks that message: yours, typed in your own
 Assistant chat (not written by a bot or the Assistant, not another chat), and no more than 30 minutes old. Otherwise it
 answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do
-yourself it cannot do for you. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
+yourself it cannot do for you. And it acts only as you: a task change, comment or link runs only on a task you are on
+(its owner, its requester or in one of its roles), never on another person's task, even when you ask (`403
+on_behalf_of`). The owner's own chat is the [CEO Bot](ceo-bot.md#your-chat-with-it), which acts as the owner. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
 `POST /api/v2/approvals/{id}` with `"decision": "declined"`, `POST /api/v2/messages/{id}/answer`), and only for an
 approval or question addressed to you: someone else's is a `403` whatever you said. A decline is undone by the bot asking
 again. Approving stays a card unless you let it decide approvals (below). Running a task now, a message to another

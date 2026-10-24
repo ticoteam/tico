@@ -40,6 +40,37 @@ const skelRows = (n = 5, {card = false, dot = true} = {}) => `<div class="skel${
 // a same-route redraw must leave such a form alone (checkboxes and selects save when changed, so they do not count).
 const formBusy = el => !!el && [...el.querySelectorAll('textarea, input:not([type=checkbox], [type=radio], [type=hidden], [type=button], [type=submit])')]
   .some(field => field === document.activeElement || field.value !== field.defaultValue);
+// Redraw `root` from `html`, touching only what changed. The same markup as last time leaves it alone; otherwise only
+// the top-level children whose markup differs are replaced, so the unchanged rows keep their nodes (focus, the place
+// someone reads, a playing clip, a loaded picture). Polls and live events redraw lists every few seconds, and redrawing
+// a whole list for one changed row kept the desktop app's page busy. `full(root, html)` draws instead when a replaced
+// row holds a visual card (chat keeps those through visualSwap), or when someone else changed root's children since.
+// Returns whether anything changed.
+const PATCH_SRC = new WeakMap();
+function patchHTML(root, html, full = (el, h) => { el.innerHTML = h; }) {
+  const was = PATCH_SRC.get(root), kids = root.childNodes;
+  const same = was && was.nodes.length === kids.length && was.nodes.every((n, i) => n === kids[i]);
+  if (same && was.html === html) return false;
+  const t = document.createElement('template');
+  t.innerHTML = html;
+  const fresh = [...t.content.childNodes], src = fresh.map(n => n.nodeType === 1 ? n.outerHTML : n.nodeValue);
+  const draw = () => {
+    full(root, html);
+    PATCH_SRC.set(root, {html, src, nodes: [...root.childNodes].length === src.length ? [...root.childNodes] : []});
+    return true;
+  };
+  if (!same) return draw();
+  let a = 0, b = 0;
+  while (a < was.src.length && a < src.length && was.src[a] === src[a]) a++;
+  while (b < was.src.length - a && b < src.length - a && was.src[was.src.length - 1 - b] === src[src.length - 1 - b]) b++;
+  const gone = was.nodes.slice(a, was.nodes.length - b), added = fresh.slice(a, fresh.length - b);
+  if (gone.some(n => n.nodeType === 1 && (n.matches('figure.vcard') || n.querySelector('figure.vcard')))) return draw();
+  const after = was.nodes[was.nodes.length - b] || null;
+  for (const n of gone) n.remove();
+  for (const n of added) root.insertBefore(document.adoptNode(n), after);
+  PATCH_SRC.set(root, {html, src, nodes: [...was.nodes.slice(0, a), ...added, ...was.nodes.slice(was.nodes.length - b)]});
+  return true;
+}
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
 const md = s => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs

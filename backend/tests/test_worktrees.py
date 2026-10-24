@@ -320,6 +320,29 @@ def test_heartbeat_writes_only_changes_and_backs_off_a_refused_cleanup(prepared)
         assert json.loads(c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])['cleanup_gave_up']
 
 
+def test_a_removed_checkout_reported_every_heartbeat_is_not_a_task_change(prepared):
+    api, tid, _ = prepared
+    link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()
+    report = {'link_id': link['link_id'], 'state': 'present', 'branch': link['branch'], 'ahead': 0, 'dirty_files': 0,
+              'last_commit': 'abc', 'last_activity': 1792560695.4}
+    body = {'version': '0.3.2', 'platform': 'linux', 'readiness': {'schema_version': 1, 'bots': {}, 'worktrees': True},
+            'worktrees': [report]}
+    post(api, 'runners/heartbeat', body, 'runner-test')
+    # Gone from disk, the computer reports only the link and its state: no commit, no activity.
+    body['worktrees'] = [{'link_id': link['link_id'], 'state': 'removed'}]
+    post(api, 'runners/heartbeat', body, 'runner-test')
+
+    def written():
+        with api.app_state.store.read() as c:
+            return (c.execute("SELECT count(*) FROM changes WHERE topic='tasks' AND kind='link' AND subject_id=?",
+                              (tid,)).fetchone()[0],
+                    c.execute('SELECT updated,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+    seen = written()
+    for _ in range(3):
+        assert post(api, 'runners/heartbeat', body, 'runner-test').status_code == 200
+    assert written() == seen, 'a removed checkout reported again is not activity'
+
+
 def test_a_refused_cleanup_keeps_its_error_across_a_computer_restart(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}).json()

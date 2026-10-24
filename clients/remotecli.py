@@ -42,6 +42,8 @@ def via_tool(client, args, **more):
               and v is not None}
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
+    if args.fn == "bot keep-tasks-going" and hasattr(args, "limit"):
+        fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -152,7 +154,8 @@ def run(args, who=None):
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
               "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "org order", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
-              "slack channel list", "slack channel add", "slack channel remove", "slack channel import"):
+              "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
+              "seat list", "seat create", "seat update", "seat close"):
         if fn == "routine update":                  # --enable / --disable are the tool's `enabled`; a key or an id names it
             more = {"text": Path(args.text_file).read_text()} if args.text_file else {}
             if args.enable or args.disable:
@@ -733,7 +736,7 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot place", "bot go-live", "bot model", "bot pause",
+    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
                    "bot resume", "bot restore", "bot archive") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()

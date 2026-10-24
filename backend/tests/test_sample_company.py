@@ -129,8 +129,8 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
                          "LEFT JOIN schedule_config sc ON sc.schedule_id=s.id WHERE s.bot IN (%s)"
                     % ",".join("?" * len(ROLE_BOTS)), tuple(ROLE_BOTS))
     assert routines and not any(r["enabled"] for r in routines)
-    # No "Finish setting up" reminder in Needs you for a sample bot.
-    assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish setting up%' AND status NOT IN ('done','closed')")
+    # No "Finish onboarding" reminder in Needs you for a sample bot.
+    assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Finish onboarding%' AND status NOT IN ('done','closed')")
 
     goals = {row["owner"]: row for row in rows(api, "SELECT id,owner,title FROM goals WHERE owner LIKE 'bot:%'")}
     assert {"bot:coo", *("bot:" + slug for slug in ROLE_BOTS)} <= set(goals)
