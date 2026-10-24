@@ -22,7 +22,7 @@ async function check(engine) {
   const browser = await launch[engine]();
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
-    const errors = [], sends = [], keys = [], warnings = [];
+    const errors = [], sends = [], keys = [], warnings = [], uploads = [];
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'warning' && m.text().startsWith('chat send')) warnings.push(m.text()); });
     let answer = 'ok', busy = 0, hold = null, stopHold = null;
@@ -46,6 +46,10 @@ async function check(engine) {
       if (p === '/api/v2/events' || p.endsWith('/watch'))
         return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/bots/botops/stop') { await stopHold; return json({ok: true}); }
+      if (p === '/api/v2/uploads/chat/botops') {
+        uploads.push(route.request().postDataBuffer().toString());
+        return json({conversation: {id: 'c1'}, message: {id: 'u' + uploads.length, from_actor: 'human:ana', body: 'With a file', created: new Date().toISOString()}});
+      }
       if (p === '/api/v2/chat/botops') {
         const text = route.request().postDataJSON().text;
         const key = route.request().headers()['idempotency-key']; keys.push(key);
@@ -162,6 +166,33 @@ async function check(engine) {
     assert.equal(keys.at(-1), uncertainKey, 'restored access replays the same key for an unchanged draft');
     assert.equal(sends.length, beforeUncertain + 1, 'same-key replay leaves exactly one message server-side');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledged replay ends pending delivery');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // Adding a file intentionally changes an uncertain text submission. A successful upload must not leave its
+    // old key behind: typing the same text again is a new message, not a replay of the earlier stored answer.
+    await page.evaluate(() => { CHAT_SEND.timeout = 200; });
+    answer = 'stored-stall';
+    const uploadText = 'Same words after an attachment', beforeUploadText = sends.length;
+    await box.fill(uploadText); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const uploadTextKey = keys.at(-1), uploadSignature = await page.evaluate(() => BOT_PILL.unconfirmed.signature);
+    assert.equal(sends.length, beforeUploadText + 1, 'the uncertain text reached storage');
+    await page.locator('#chat-composer .p-file').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('fixture')});
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.equal(uploads.length, 1, 'the changed payload takes the upload route');
+    assert.ok(uploads[0].includes(uploadText) && uploads[0].includes('notes.txt'), 'the upload includes the text and attachment');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'upload acknowledgement leaves no uncertain identity');
+    assert.equal(await page.evaluate(signature => pendingWrites.has(signature), uploadSignature), false, 'the old text request leaves the cache');
+    assert.equal(await page.evaluate(() => CHAT_PENDING.has('botops')), false, 'the old identity is removed from the per-tab map');
+    await page.reload();
+    await page.waitForFunction(() => V2C?.loaded);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'reload cannot restore the acknowledged identity');
+    await box.fill(uploadText); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.notEqual(keys.at(-1), uploadTextKey, 'the repeated text gets a new request id after the successful upload');
+    assert.equal(sends.length, beforeUploadText + 2, 'the repeated text reaches the bot instead of replaying the old answer');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // No answer at all: it ends in time, says so, keeps the draft, and Retry sends it under the same request id.
