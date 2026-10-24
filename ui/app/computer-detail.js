@@ -13,8 +13,7 @@ const machinePresenceWords = machine => machine.revoked_at ? 'revoked'
   : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen ? ` · last seen ${ago(machine.last_seen)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
 // A presence paint can change the focused row too; restore its control by stable data attributes,
 // keeping positional selectors only for the unkeyed containers between them.
-function computerFocusRestore(root) {
-  const active = document.activeElement;
+function computerFocusRestore(root, active = document.activeElement) {
   if (!root?.contains(active)) return () => {};
   const path = [];
   for (let node = active; node !== root; node = node.parentElement) {
@@ -243,7 +242,11 @@ function computerAddStepHTML(machine, step) {
 function computerAddOpen(id) {
   const machine = () => (SETTINGS_DATA?.machines || []).find(m => m.id === id);
   if (!machine()) return;
-  const restoreFocus = computerFocusRestore($('#set-machines'));
+  const root = $('#set-machines dialog.computer-detail[open]') || $('#set-machines');
+  const opener = root?.querySelector(`[data-add-connection="${CSS.escape(id)}"]`);
+  const restoreFocus = computerFocusRestore(root, opener);
+  // Mouse clicks need not focus buttons; give the native dialog the same stable opener.
+  opener?.focus({preventScroll: true});
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal model-login computer-add-dialog';
   dialog.setAttribute('aria-labelledby', 'computer-add-title');
@@ -406,7 +409,11 @@ function computerDetailOpen(id) {
     el.appendChild(dialog);
   }
   // Presence refreshes can replace the opener while this modal is open.
-  if (!dialog.open) dialog.restoreOpener = computerFocusRestore(el);
+  if (!dialog.open) {
+    const opener = el.querySelector(`[data-computer-open="${CSS.escape(id)}"]`);
+    dialog.restoreOpener = computerFocusRestore(el, opener);
+    opener?.focus({preventScroll: true});
+  }
   dialog.dataset.computer = id;
   computerDetailPaint(true);
   if (!dialog.open) dialog.showModal();

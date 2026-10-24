@@ -275,9 +275,32 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.clock.runFor(100);
     await page.evaluate(() => window.computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail opener');
+    // A row-area click has no focused button; close still returns to the computer name.
+    await row('empty').locator('.machine-name').focus();
+    await row('box').locator('[data-machine-status]').click();
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.evaluate(() => window.computerClosed);
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'row-area Escape returns to the computer name');
+    // Dispatching click without focus also covers browsers that do not focus clicked buttons.
+    await row('empty').locator('.machine-name').focus();
+    await rowButton.dispatchEvent('click');
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.evaluate(() => window.computerClosed);
+    assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'unfocused name click returns to the computer name');
     // Add can open from either the list or the detail; polling replaces both openers.
     const listAdd = row('box').locator('[data-add-connection=box]');
-    await listAdd.click();
+    await rowButton.focus();
+    await listAdd.dispatchEvent('click');
     await add.waitFor();
     await page.evaluate(() => settingsMachinesRefresh());
     await page.keyboard.press('Escape');
@@ -287,7 +310,8 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await rowButton.click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     const detailAdd = dialog.locator('[data-add-connection=box]');
-    await detailAdd.click();
+    await signIn.focus();
+    await detailAdd.dispatchEvent('click');
     await add.waitFor();
     await page.evaluate(() => settingsMachinesRefresh());
     await page.keyboard.press('Escape');
