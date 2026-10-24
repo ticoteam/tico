@@ -1609,7 +1609,7 @@ class Execution:
             f"AND {unfenced_sql()} "
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then the longest waiting.
+            # then task rank, then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
             f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,(qt.rank IS NULL),qt.rank,j.created,j.id",
             (*bots, who.runner_id, *(v for bot in bots for v in (bot, held.get(bot, 0)))))

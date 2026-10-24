@@ -133,7 +133,7 @@ ACTIONS = {
 
 JOBS = [
     Job("assigned_tasks", "Start assigned tasks",
-        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and turn share.",
+        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity.",
         HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",

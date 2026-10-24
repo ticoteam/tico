@@ -70,7 +70,7 @@ blocker-done and milestone events make the task eligible again; no manual nudge 
 In **Settings → Bots → Edit**, **Keep N tasks going** is blank by default (no task cap). Set a positive
 number to cap active work, or **0** to turn automatic starts off. Waiting for a person, a check, a review
 child or a workspace frees a place. Delegated review children have no task cap; every review uses its
-own session as computer turns become free. Usage holds, computer readiness and each bot's turn share
+own session as computer turns become free. Usage holds, computer readiness and computer capacity
 still apply. The Bots page shows how many tasks are going and how many eligible tasks wait to start.
 
 `hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
