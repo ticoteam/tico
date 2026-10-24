@@ -13,10 +13,20 @@ const needsLabel = owner => {
   return 'Needs ' + String(p.name || slug).trim().split(/\s+/)[0];
 };
 const prioPill = i => i.priority ? `<span class="pill ${i.priority}">${i.priority}</span>` : '';
+// Memoized per roster: task rows and sort comparators call this many times per render. Rebuilt when S.emps is
+// replaced (every refresh), grows in place (bot-branches.js) or the assistant's name changes.
+let BOT_NAMES = {emps: null, len: -1, key: '', map: new Map()};
 const botDisplayName = slug => {
+  const key = assistantBot() + '\n' + assistantName();
+  if (BOT_NAMES.emps !== S.emps || BOT_NAMES.len !== S.emps.length || BOT_NAMES.key !== key)
+    BOT_NAMES = {emps: S.emps, len: S.emps.length, key, map: new Map()};
+  const hit = BOT_NAMES.map.get(slug);
+  if (hit !== undefined) return hit;
   const name = slug === assistantBot() ? assistantName() : S.emps.find(e => e.name === slug)?.display_name || slug || '—';
-  return S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
+  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
     ? `${name} (${slug})` : name;
+  BOT_NAMES.map.set(slug, out);
+  return out;
 };
 const empName = slug => esc(botDisplayName(slug));
 const empChip = slug => slug && S.emps.some(e => e.name === slug) ? `<a class="chip" href="#/bot/${slug}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>` : `<span class="chip">${empName(slug)}</span>`;

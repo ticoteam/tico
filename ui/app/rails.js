@@ -128,6 +128,7 @@ async function railsSync() {
     railsKeep(side, railsShown[side]);
   });
   // A narrower window squeezes the rails for now; the saved widths come back when there is room.
-  addEventListener('resize', () => railsApply('left', railsWant('left')));
+  let soon = 0;                                     // once a frame while the window is dragged
+  addEventListener('resize', () => { cancelAnimationFrame(soon); soon = requestAnimationFrame(() => railsApply('left', railsWant('left'))); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void railsSync(); });
 })();

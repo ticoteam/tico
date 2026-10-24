@@ -36,7 +36,14 @@ const orgBranchMark = e => (e.shared_from || e.is_branch) ? '<span class="org-br
 // A team made from the catalog has several "Head of …" bots, and a narrow row cut each one to "Head of …". The first
 // words a bot's name shares with another bot's on the chart are muted, and drop out whole when the row is too narrow
 // for all of it (ui/styles/sidebar.css), so the part that tells them apart stays; the row's tooltip has the whole name.
+let ORG_LEADS = {key: null, lead: null};           // the last answer, by its names: the tree redraws often
 function orgNameLeads(names) {
+  const key = JSON.stringify([...names]);
+  if (ORG_LEADS.key === key) return ORG_LEADS.lead;
+  ORG_LEADS = {key, lead: orgNameLeadsOf(names)};
+  return ORG_LEADS.lead;
+}
+function orgNameLeadsOf(names) {
   const words = name => String(name).match(/\S+\s*/g) || [];
   const lead = new Map();
   for (const name of names) {
@@ -607,9 +614,11 @@ function renderTree() {
   const myId = mePerson()?.id;
   const curBot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
   const curPerson = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
+  let needCounts;                                   // counted once per render, on first use
+  const needN = slug => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
   const subtreeNeeds = key => (byParent[key] || []).some(c =>
-    (c.kind === 'bot' && (stateOf(c.name) === 'needs' || needsMeCount(c.name) || subtreeNeeds('b:' + c.name))) ||
+    (c.kind === 'bot' && (stateOf(c.name) === 'needs' || needN(c.name) || subtreeNeeds('b:' + c.name))) ||
     (c.kind === 'person' && subtreeNeeds('p:' + c.id)) ||
     (c.kind === 'group' && subtreeNeeds('g:' + c.id)));
   const nameOf = n => n.kind === 'person' ? (n.person.name || n.id) : (n.display_name || '').replace(TEMP_RE, '');
@@ -672,7 +681,7 @@ function renderTree() {
         ${mailPersonVisible(p) ? `<a class="person-mail-link${S.route.startsWith(MESSAGING) && messagingParams().bot === p.inbox_bot ? ' cur' : ''}" href="${MESSAGING}?bot=${encodeURIComponent(p.inbox_bot)}&source=${encodeURIComponent('email:' + p.email)}" title="${esc(p.name || p.id)} has a message bot" aria-label="Open ${esc(p.name || p.id)}'s message bot">forum</a>` : ''}</div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
-    const e = node, key = 'b:' + e.name, st = stateOf(e.name), n = needsMeCount(e.name), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
+    const e = node, key = 'b:' + e.name, st = stateOf(e.name), n = needN(e.name), kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
     const helper = isHelperBot(e);                 // not on the chart: nothing is dragged onto or out of it
     const own = !flat && sources[e.name];
     if (own) INBOX_PLACED.add(e.name);

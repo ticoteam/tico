@@ -83,7 +83,7 @@ function pageOverview() {
   const state = OVERVIEW_PAGE = {frame, abort: new AbortController(), ready: false, computers: [], loadingComputers: false};
   window.addEventListener('message', ev => {
     if (OVERVIEW_PAGE !== state || ev.source !== frame.contentWindow || ev.origin !== location.origin) return;
-    if (ev.data?.type === 'tico-overview-ready') { state.ready = true; overviewRefresh(); }
+    if (ev.data?.type === 'tico-overview-ready') { state.ready = true; state.sent = ''; overviewRefresh(); }
     if (ev.data?.type === 'tico-overview-open') {
       const person = overviewModel().groups.flatMap(g => g.members).find(m => m.id === ev.data.id);
       if (person?.href) location.hash = person.href;
@@ -124,7 +124,12 @@ function overviewRefresh() {
   const state = OVERVIEW_PAGE; if (!state) return;
   state.model = overviewModel();
   overviewHoursMaybe();
-  if (state.ready) state.frame.contentWindow?.postMessage({type: 'tico-overview-data', model: state.model}, location.origin);
+  if (!state.ready) return;
+  // Every bot event lands here; the frame redraws only for a model it has not had.
+  const sent = JSON.stringify(state.model);
+  if (sent === state.sent) return;
+  state.sent = sent;
+  state.frame.contentWindow?.postMessage({type: 'tico-overview-data', model: state.model}, location.origin);
 }
 function overviewStop() {
   const state = OVERVIEW_PAGE; if (!state) return;

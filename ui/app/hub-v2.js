@@ -203,7 +203,7 @@ function pausedRender() {
   const el = $('#conv-paused'); if (!el || !V2C) return;
   const text = pausedNotice(V2C.slug);
   const agent = text ? '' : agentNotice(V2C.slug);
-  el.innerHTML = text || agent; el.hidden = !(text || agent);
+  patchLiveHTML(el, text || agent); el.hidden = !(text || agent);
   el.classList.toggle('agent', !text && !!agent && agentQuiet(V2C.slug));
   const resume = el.querySelector('[data-quarantine-resume]'), slug = V2C.slug;
   if (resume) resume.onclick = async () => {

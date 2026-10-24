@@ -72,6 +72,13 @@ function patchHTML(root, html, full = (el, h) => { el.innerHTML = h; }) {
   PATCH_SRC.set(root, {html, src, nodes: [...was.nodes.slice(0, a), ...added, ...was.nodes.slice(was.nodes.length - b)]});
   return true;
 }
+// patchHTML for a box every poll redraws. Unchanged markup is kept only while the controls still match it: a button a
+// click left disabled ("Resuming…") or a box ticked by hand is drawn fresh, as before.
+function patchLiveHTML(root, html) {
+  if (root.querySelector('button:disabled') || [...root.querySelectorAll('input[type=checkbox]')].some(b => b.checked !== b.defaultChecked))
+    PATCH_SRC.delete(root);
+  return patchHTML(root, html);
+}
 // Bot text (final replies, status notes, playbooks) is untrusted: every render goes through safeMd.
 const md = s => safeMd(s);
 // bucket objects are only reachable through the presign redirect; markdown may name them as s3:// URIs

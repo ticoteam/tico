@@ -179,3 +179,13 @@ function botNeeds(slug) {
     && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug));
 }
 function needsMeCount(slug) { return botNeeds(slug).length; }
+// needsMeCount for every bot in one pass over the needs list ("bot:<slug>" -> count), for views that count many rows.
+function needsMeCounts() {
+  const counts = new Map();
+  for (const it of S.v2?.needs || []) {
+    const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
+      : it.kind === 'ask' ? it.requester : null;
+    if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
+  }
+  return counts;
+}

@@ -516,7 +516,8 @@ html.demo .dask{top:var(--demo-h)}
       else if (!railHidden()) open(undefined, false);
     } else if (panel?.getAttribute('role') === 'complementary') close(false);
   };
-  window.addEventListener('resize', () => window.syncLibrarianRail());
+  let resizeSoon = 0;                               // once a frame while the window is dragged
+  window.addEventListener('resize', () => { cancelAnimationFrame(resizeSoon); resizeSoon = requestAnimationFrame(() => window.syncLibrarianRail()); });
   window.openDocsAsk = open;
   // The old entry point, until every page that called it says openDocsAsk.
   window.openDocsChat = () => open();

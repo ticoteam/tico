@@ -238,9 +238,9 @@ function botLimitHTML(slug) {
 function botAlertDraw() {
   if (!BOT) return;
   const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
-  if (alert) alert.innerHTML = botAlertHTML(BOT.slug);
-  if (held) held.innerHTML = botQuarantineCard(BOT.slug);
-  if (limit) limit.innerHTML = botLimitHTML(BOT.slug);
+  if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
+  if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
+  if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }
 // Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
 // (#524, after bot-desk). A file dropped anywhere else on the page is swallowed: the browser's own

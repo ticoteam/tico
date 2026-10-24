@@ -73,7 +73,7 @@ function renderAccountStatus() {
   const html = lines.map(line => `<li class="account-status-line ${line.level}" data-level="${line.level}"><span class="account-status-text" title="${esc(line.text)}">${esc(line.text)}</span>${line.fix}</li>`).join('');
   for (const box of [$('#account-status'), $('#account-status-pop')]) {
     if (!box) continue;
-    box.innerHTML = html ? `<ul>${html}</ul>` : '';
+    patchLiveHTML(box, html ? `<ul>${html}</ul>` : '');
     if (!html) box.hidden = true;
     else if (box.id === 'account-status') box.hidden = false;
   }
