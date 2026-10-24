@@ -316,6 +316,9 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-machines td:first-child{width:1%;white-space:nowrap;padding-right:24px}
+@media (max-width:760px){
+  .settings-machines td:first-child{width:100%;white-space:normal;padding-right:0}
+}
 .machine-head{display:flex;align-items:center;gap:10px}
 .machine-head .machine-status{font-size:var(--t-sm);color:var(--muted)}
 .machine-facts{display:block}
@@ -417,6 +420,17 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-team-icon button{margin-top:10px}
 .owner-picker{width:min(520px,92vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .owner-picker-body{padding:18px}
+/* A bot's tab settings (ui/app/bot-tasks.js botTaskTabsSettings): each tab a name, then its filter. */
+.bot-tab-list{display:grid;gap:10px;max-height:60vh;margin:10px 0;padding:0;overflow:auto;list-style:none}
+.bot-tab-item{padding:8px 10px;border:1px solid var(--line);border-radius:8px}
+.bot-tab-line{display:flex;align-items:center;gap:4px}
+.bot-tab-line input[type=text]{flex:1;min-width:0}
+.bot-tab-item fieldset{margin:8px 0 0;padding:0;border:0}
+.bot-tab-item legend{padding:0;font-size:var(--t-sm);color:var(--muted)}
+.bot-tab-opts{display:flex;flex-wrap:wrap;gap:4px 12px}
+.bot-tab-opts label,.bot-tab-wait{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm)}
+.bot-tab-wait{margin-top:8px;white-space:nowrap}
+.bot-tab-fixed,.bot-tab-hint{margin:6px 0 0;font-size:var(--t-sm)}
 .access-editor{width:min(660px,94vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .access-body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:82vh;overflow:auto}
 .access-body p{margin:0}

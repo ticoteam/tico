@@ -168,7 +168,7 @@ async function liveReply(browser) {
   assert.deepEqual(stops[1],{attempt_id:'a1',redirect:'m2'},'stops that run and names the message to start with');
   const paragraphs=await page.locator('#v2-live p').allInnerTexts();
   assert.deepEqual(paragraphs,['Keep the bot planned.','I filed the build.'],'each message is its own paragraph');
-  // Avatars: a bot is an SVG blob that morphs while it answers; a person stays a circle; motion stops under reduced motion.
+  // Avatars: a bot is an SVG blob that breathes while it answers; a person stays a circle; motion stops under reduced motion.
   const av=await page.evaluate(()=>{
     const el=document.querySelector('#bot-top .av'),path=el?.querySelector('svg.av-shape path');
     const probe=document.createElement('div');
@@ -176,14 +176,15 @@ async function liveReply(browser) {
     document.body.append(probe);
     const [person,glyph]=probe.children;
     return {blob:!!el?.classList.contains('blob'),d:/^M[\d.]+ [\d.]+(C[-\d. ]+){6,8}Z$/.test(path?.getAttribute('d')||''),
-      morph:!!el?.classList.contains('morph'),moving:getComputedStyle(path).animationName==='av-morph'||!!path.querySelector('animate'),
+      morph:!!el?.classList.contains('morph'),moving:getComputedStyle(el.querySelector('svg.av-shape')).animationName==='av-breathe',
       person:!person.querySelector('svg')&&getComputedStyle(person).borderRadius==='50%',
-      glyph:glyph.querySelector('.av-glyph')?.textContent,same:botAvatar('ops',22)===botAvatar('ops',22)};
+      glyph:glyph.querySelector('.av-glyph')?.textContent,same:botAvatar('ops',22)===botAvatar('ops',22),
+      still:!/ morph/.test(botAvatar('ops',22))};
   });
-  assert.deepEqual(av,{blob:true,d:true,morph:true,moving:true,person:true,glyph:'rocket_launch',same:true},'bot blob, person circle');
+  // Only the page's own bot breathes: the same working bot in a row or the sidebar (under 30 px) keeps still.
+  assert.deepEqual(av,{blob:true,d:true,morph:true,moving:true,person:true,glyph:'rocket_launch',same:true,still:true},'bot blob, person circle');
   await page.emulateMedia({reducedMotion:'reduce'});
-  assert.equal(await page.evaluate(()=>{const p=document.querySelector('#bot-top .av-shape path');
-    return getComputedStyle(p).animationName==='none'&&!botAvatar('ops',36).includes('<animate');}),true,'reduced motion: no morph');
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#bot-top .av-shape')).animationName==='none'),true,'reduced motion: no breath');
   assert.deepEqual(errors,[]);
   const pending = await page.evaluate(() => {
     const state = {slug:'ops', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],

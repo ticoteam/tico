@@ -68,6 +68,9 @@ def test_each_vm_runs_its_slice_and_an_older_candidate_runs_whole_on_the_product
     gate = tmp_path / 'scripts/release_checks.py'
     base = [check.sys.executable, 'scripts/release_checks.py', '--release', '--previous', 'v0.3.50']
     gate.write_text("parser.add_argument('--part', choices=PARTS)")
+    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) is None   # frozen before the desktop part
+    gate.write_text("PARTS = ('product', 'python', 'browser', 'desktop')\nparser.add_argument('--part', choices=PARTS)")
+    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) == base + ['--part', 'desktop']
     assert check.gate_command(tmp_path, 'v0.3.50', None, None) == base
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', None) == base + ['--part', 'browser']
     assert check.gate_command(tmp_path, 'v0.3.50', 'python', '2/4') == base + ['--part', 'python', '--shard', '2/4']

@@ -12,7 +12,7 @@ FROZEN = 'a' * 40
 
 def run(candidate=FROZEN, title=None):
     return dict(id=42, path='.github/workflows/ci.yml', event='workflow_dispatch', head_branch='main',
-                head_sha=candidate, display_title=title or f'Validate {FROZEN} from v1.0.0',
+                head_sha=candidate, display_title=title or f'Validate {FROZEN} as v1.0.1 from v1.0.0',
                 status='completed' if (root / 'watched').exists() else 'in_progress', conclusion='success',
                 created_at='2026-01-02T01:00:00Z')
 
@@ -38,9 +38,9 @@ elif name == 'gh':
             print(json.dumps(dict(workflow_runs=runs)))
         else:
             print(json.dumps(run('c' * 40 if config.get('wrong_commit') else FROZEN,
-                                 'Validate ' + 'c' * 40 + ' from v1.0.0' if config.get('wrong_title') else None)))
+                                 'Validate ' + 'c' * 40 + ' as v1.0.1 from v1.0.0' if config.get('wrong_title') else None)))
     elif args[:2] == ['workflow', 'run']:
-        assert f'candidate_sha={FROZEN}' in args
+        assert f'candidate_sha={FROZEN}' in args and 'version=v1.0.1' in args, args
         (root / 'dispatched').touch()
     elif args[:2] == ['run', 'watch']:
         (root / 'watched').touch()

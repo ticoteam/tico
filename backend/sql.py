@@ -533,17 +533,28 @@ def json_value(value):
 def run(conn, sql, params, cap, seconds):
     """Execute one read statement; returns the response body or raises a Problem with SQLite's words."""
     deadline = time.monotonic() + seconds
-    conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 2000)
+    interrupted = False
+
+    def progress():
+        nonlocal interrupted
+        interrupted = interrupted or time.monotonic() > deadline
+        return int(interrupted)
+
+    conn.set_progress_handler(progress, 2000)
     started = time.monotonic()
     try:
         cursor = conn.execute(sql, params)
         rows = cursor.fetchmany(cap + 1)
     except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc):
+        # SQLite wraps an interrupt from a nested SELECT inside a Python UDF
+        # as "user-defined function raised exception". Preserve its cause.
+        if interrupted or "interrupted" in str(exc):
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise Problem("sql", str(exc), 422) from exc
     except (sqlite3.Error, sqlite3.Warning) as exc:
         raise Problem("sql", str(exc), 422) from exc
+    finally:
+        conn.set_progress_handler(None, 0)
     ms = round((time.monotonic() - started) * 1000)
     blobs = any(isinstance(value, bytes) for row in rows for value in row)
     kind = STATEMENT.match(sql)

@@ -703,6 +703,9 @@ class Store:
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             c.executescript(SCHEMA)
+            from . import start_places as _start_places
+            c.executescript(_start_places.SCHEMA)
+            _start_places.restore_waits(c)
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)
@@ -745,6 +748,8 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import bot_task_tabs as _bot_task_tabs
+            c.executescript(_bot_task_tabs.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
@@ -1260,6 +1265,9 @@ class Store:
                 # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
                 from .milestone_waits import ensure as ensure_milestone_waits
                 ensure_milestone_waits(c)
+                # Recruiting seats (backend/lifecycle.py). Unversioned like the trash.
+                from .lifecycle import ensure as ensure_seats
+                ensure_seats(c)
                 # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
                 # Unversioned like the trash: an older release never reads the tables or the columns.
                 from .company import ensure as ensure_company
@@ -1634,6 +1642,8 @@ class Store:
                           (principal, operation, key, hashed, encode(cached), H.now()))
         self.ring(logged)
         if refusal:
+            # This key now records a rolled-back operation, not an earlier successful delivery.
+            refusal.extra["idempotency_refused"] = True
             raise refusal
         return result
 

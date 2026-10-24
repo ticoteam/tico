@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
+from . import auto_tasks, start_places, app_delivery, check_models, rooms, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -73,30 +73,9 @@ ROOTS = "session_roots_v1"
 TASK_GOALS = "task_goals_v1"
 
 
-def bot_turns(capacity):
-    """How many of a computer's turns one bot may hold at once: half of them, at least one. A bot with many
-    task sessions would otherwise fill every turn and leave other bots' work (a review, a release) queued."""
-    return max(1, int(capacity or 1) // 2)
-
-
-def turn_share(c, runner_id, capacity):
-    """The turns one bot may hold on this computer: its share (bot_turns) when another active bot is assigned there,
-    every turn when it is alone, since then no one else's work can be waiting for them."""
-    bots = c.execute("SELECT count(*) FROM assignments a JOIN bots b ON b.slug=a.bot "
-                     "WHERE a.runner_id=? AND b.state='active'", (runner_id,)).fetchone()[0]
-    return bot_turns(capacity) if bots > 1 else int(capacity or 1)
-
-
-def turn_limit(share, capacity, others_waiting):
-    """The turns one bot may hold now: its share while another bot's work waits for this computer; otherwise every
-    turn but one, kept free so new work from another bot starts at once. Turns left idle help no one."""
-    return share if others_waiting else max(share, int(capacity or 1) - 1)
-
-
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
-    return {r[0]: r[1] for r in c.execute("SELECT bot,count(*) FROM attempts WHERE runner_id=? "
-                                          "AND state IN ('leased','running') GROUP BY bot", (runner_id,))}
+    return start_places.held(c, runner_id)
 
 
 # The busy lists each runner sent with its latest claim: {runner id: (bots, lanes, monotonic time)}. Only the runner
@@ -1016,6 +995,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
         return "unreadable"
     conversation = H.conversation(c, message["conversation_id"])
     task_id = H.message_task_id(message, conversation)
+    task = H.task(c, task_id) if task_id else None
+    if (task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER
+            and not (message.get("refs") or {}).get("run_now")):
+        if why := auto_tasks.refusal(c, task, followed):
+            return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
@@ -1098,10 +1082,6 @@ def bot_claimable(c, settings, runner_id, bot):
     lanes, roots = lanes_on(runner), roots_on(runner)
     busy = {(r["bot"], r["lane"]) for r in c.execute(
         "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")} | held_lanes
-    # A lapsed lease whose worker still runs counts against the bot's turns here, as in the claim; only a person's
-    # message is never held behind them.
-    mine = sum(1 for b, _ in held_lanes if b == bot)
-    at_share = mine and mine >= turn_limit(turn_share(c, runner_id, runner["capacity"]), runner["capacity"], False)
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
     for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
@@ -1110,8 +1090,6 @@ def bot_claimable(c, settings, runner_id, bot):
         person = str(job["from_actor"]).startswith("human:")
         if not job["free"]:
             why = "uncertain"
-        elif at_share and not person:
-            why = "lane_held"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
@@ -1354,7 +1332,7 @@ class Execution:
         restart = c.execute("SELECT restart_requested,performance FROM runners WHERE id=?", (who.runner_id,)).fetchone()
         if restart and restart["restart_requested"]:
             c.execute("UPDATE runners SET restart_requested=NULL WHERE id=?", (who.runner_id,))
-        return {"server_time": H.now(), "assignments": self.assigned(c, who), "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+        return {"server_time": H.now(), "assignments": self.assigned(c, who), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
@@ -1477,17 +1455,20 @@ class Execution:
 
     def expire(self, c):
         now = H.now()
-        rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND lease_until<=?",
-                         (now,)).fetchall()
+        overdue = set(start_places.overdue(c))
+        rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND (lease_until<=? "
+                         "OR id IN (" + ",".join("?" for _ in overdue) + "))", (now, *overdue)).fetchall()
         if rows and self.stalled(now):
             # The same grace as after a restart: one more lease period, then the usual rule.
             until = H.shift(now, seconds=self.store.settings.lease_seconds)
             for row in rows:
+                if row["id"] in overdue:
+                    continue
                 with isolated(c, "expire", row["id"]):
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
                             {"bot": row["bot"], "lapsed": row["lease_until"], "lease_until": until, "served_at": self.served_at})
-            return
+            rows = [row for row in rows if row["id"] in overdue]
         for row in rows:
             with isolated(c, "expire", row["id"]):
                 retry_state = state = "queued" if row["state"] == "leased" else "uncertain"
@@ -1585,13 +1566,9 @@ class Execution:
         busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
-        # This computer's turns each bot holds: the server's leases, or the runner's own live workers when it
-        # counts more (a lapsed lease whose worker still runs). A bot at its share waits for one of them to
-        # finish, except for a person's own message, which is never held behind the bot's other work.
+        # Prefer the bot holding the fewest real places; waiting workers still fence their lanes,
+        # but neither occupy a place nor impose a per-bot cap.
         held = turns_here(c, runner["id"])
-        for bot in {bot for bot, _ in mine}:
-            held[bot] = max(held.get(bot, 0), sum(1 for b, _ in mine if b == bot))
-        share = turn_share(c, runner["id"], runner["capacity"])
         followed = {}
         ready = readiness_document(runner["readiness_json"])
         # Unconfirmed effects hold the interrupted conversation and task until review. Other
@@ -1619,25 +1596,25 @@ class Execution:
             return None
         marks = ",".join("?" for _ in bots)
         live = live_tasks(c)
-        limit = turn_limit(share, runner["capacity"], any(held.get(bot, 0) < share for bot in bots))
-        full = [bot for bot in bots if held.get(bot, 0) >= limit]
         # Readiness, spend and cooldown are checked once per bot, never once per queued job.
         # Keep human chat priority and interrupted-task/conversation fencing in the query.
         candidates = c.execute(
             "SELECT j.*,a.generation FROM jobs j JOIN assignments a ON a.bot=j.bot "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot IN ({marks}) AND a.runner_id=? "
-            f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
+            # An onboarding bot takes a person's message and its manager's, nothing else (backend/lifecycle.py).
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
-            "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
+            "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + " "
+            "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
             f"AND {unfenced_sql()} "
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then the longest waiting.
+            # then task rank, then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
-            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
-            (*bots, who.runner_id, *full, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
+            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,(qt.rank IS NULL),qt.rank,j.created,j.id",
+            (*bots, who.runner_id, *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
@@ -1667,6 +1644,8 @@ class Execution:
         if not runner:
             return None
         now = H.now()
+        if start_places.overdue(c):
+            return None
         if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND lease_until<=? LIMIT 1",
                      (now,)).fetchone():
             return None
@@ -1687,11 +1666,17 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        count = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
-                          (who.runner_id,)).fetchone()[0]
+        from .performance import load_status
+        if load_status(c, who.runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        if start_places.ready_waiting(c, who.runner_id):
+            return {"attempt": None}
+        count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner)
+        if row is None and auto_tasks.missing(c, self.store.settings, runner, body):
+            return None
         if row is not None and selected is not None:
             selected.append(row)
         return None if row else {"attempt": None}
@@ -1762,8 +1747,12 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        count = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
-                          (who.runner_id,)).fetchone()[0]
+        from .performance import load_status
+        if load_status(c, who.runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        if start_places.ready_waiting(c, who.runner_id):
+            return {"attempt": None}
+        count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"]:
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
@@ -1771,6 +1760,10 @@ class Execution:
         if not self.awake(awake_since, now):
             return {"attempt": None}
         row = selected if selected is not None else self.candidate(c, who, body, runner)
+        # Backfill a free turn after queued conversations and awaited results keep their place.
+        if row is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
+            auto_tasks.enqueue(c, pending)
+            row = self.candidate(c, who, body, runner)
         if not row:
             return {"attempt": None}
         msg = H.message(c, row["message_id"])
@@ -1800,6 +1793,9 @@ class Execution:
         handed = providers.bot_choice(c, self.store.settings, followed)
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
+        if (task and task['owner'] == 'bot:' + row['bot'] and not auto_tasks.refusal(c, task, followed)
+                and not (msg.get("refs") or {}).get("run_now")):
+            task = auto_tasks.started(c, task)
         roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).
@@ -1820,6 +1816,8 @@ class Execution:
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
+        if body.start_places:
+            start_places.claim(c, aid)
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
@@ -1989,11 +1987,14 @@ class Execution:
                             # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                             "gateway": gateway_connection.wanted(config),
                             "generation": row["generation"], "lease_until": until,
+                            **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
-                            "history": history, "config": config, "principal": principal,
+                            "history": history, "principal": principal,
+                            # The owner's CEO Bot chat is a session of its own (backend/rooms.py).
+                            "config": rooms.session_config(conv, row["bot"], config),
                             # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                             # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                             "session_epoch": epoch["epoch"] if epoch else 0,
@@ -2017,6 +2018,9 @@ class Execution:
             row = self.restore(c, row) or row
         if final and row["state"] == "expired":
             return row
+        place = c.execute("SELECT start_until FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+        if active and row["state"] == "leased" and place and place[0] and place[0] <= H.now():
+            raise Problem("stale_lease", "Start reservation expired; this work returns to the queue", 409)
         if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= H.now() or not current):
             raise Problem("stale_lease", "Execution ownership expired; stop this attempt", 409)
         return row
@@ -2205,10 +2209,11 @@ class Execution:
             until = H.shift(now, seconds=seconds)
             c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, aid))
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
-        # task ended meanwhile is stopped only while it waits for its login; one preparing or under way runs on.
+        # task ended meanwhile is stopped while it waits before starting; one preparing or under way runs on.
         from .login_waits import wait
         return {"lease_until": until, "lease_seconds": seconds,
-                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and wait(c, aid) else {})}
+                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and
+                   (wait(c, aid) or start_places.is_waiting(c, aid)) else {})}
 
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
@@ -2261,22 +2266,50 @@ class Execution:
             H.event(c, who.actor, "attempt.stop", row["id"], {"bot": bot, **({"redirect": redirect} if redirect else {})})
         return {"attempt_id": row["id"], "stopping": True, **({"redirect": redirect} if redirect else {})}
 
+    def start_place(self, c, who, aid, body):
+        row = self.attempt(c, who, aid)
+        if row["state"] != "leased":
+            raise Problem("already_started", "This attempt was already started", 409)
+        if body.waiting:
+            start_places.waiting(c, aid, body.waiting)
+        # Check before reserve clears the wait, including when the last renewal preceded task completion.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            return {"reserved": False, "stop": True}
+        if body.waiting:
+            return {"reserved": False, **({"stop": True} if row["stop_requested"] else {})}
+        return start_places.reserve(c, row)
+
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
-        c.execute("UPDATE attempts SET state='running',started=?,thread_id=? WHERE id=?",
-                  (H.now(), body.thread_id, aid))
+        # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            raise Problem("start_wait", "Task finished while this turn was waiting", 409)
+        reserved = start_places.reserve(c, row) if start_places.managed(c, aid) else {"reserved": not row["stop_requested"]}
+        if not reserved["reserved"]:
+            raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
+        c.execute("UPDATE attempts SET state='running',started=? WHERE id=?", (H.now(), aid))
         from .performance import stamp_attempt
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
-        c.execute("UPDATE turns SET thread_id=? WHERE id=?", (body.thread_id, aid))
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "started")
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
+        msg = self.record_thread(c, who, row, body.thread_id)
+        H.mark_delivered(c, H.KEEPER, msg)
+        settle_status(c, row["bot"], "running", "Responding to queued work",
+                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
+        return {"started": True}
+
+    def record_thread(self, c, who, row, thread_id):
+        """The provider thread a running attempt is on: the run's, the bot's session under the model it ran, and the
+        task's primary session. Returns the attempt's message id."""
+        c.execute("UPDATE attempts SET thread_id=? WHERE id=?", (thread_id, row["id"]))
+        c.execute("UPDATE turns SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         from .shared_bots import follow
         config = follow(c, row["bot"], json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
-        if ran := task_models.handed_out(c, aid):
+        if ran := task_models.handed_out(c, row["id"]):
             # Its thread is the task model's, kept under that model, never as the bot's own session.
             runtime, model = ran["runtime"], ran["model"]
         if not ran and ran_another_model(c, self.store.settings, row):
@@ -2286,13 +2319,20 @@ class Execution:
             c.execute("INSERT INTO bot_sessions(bot,runtime,model,thread_id,runner_id,tokens_in,updated) "
                       "VALUES(?,?,?,?,?,0,?) ON CONFLICT(bot,runtime,model) DO UPDATE SET "
                       "thread_id=excluded.thread_id,runner_id=excluded.runner_id,updated=excluded.updated",
-                      (row["bot"], runtime, model, body.thread_id, who.runner_id, H.now()))
+                      (row["bot"], runtime, model, thread_id, who.runner_id, H.now()))
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
-        H.task_session_started(c, row["bot"], row["lane"], msg, body.thread_id, runtime)
-        H.mark_delivered(c, H.KEEPER, msg)
-        settle_status(c, row["bot"], "running", "Responding to queued work",
-                      claimed=row["created"], task_id=H.message_task_id(H.message(c, msg)) or "")
-        return {"started": True}
+        H.task_session_started(c, row["bot"], row["lane"], msg, thread_id, runtime)
+        return msg
+
+    def thread(self, c, who, aid, body):
+        """A running attempt's new provider thread, once its harness confirmed the session (runner-rs execute.rs
+        Fresh): a run that left a large thread starts on the old one and moves here, so one whose new session never
+        came up leaves the task on the old thread."""
+        row = self.attempt(c, who, aid)
+        if row["state"] != "running":
+            raise Problem("not_running", "This attempt is not running", 409)
+        self.record_thread(c, who, row, body.thread_id)
+        return {"thread_id": body.thread_id}
 
     @staticmethod
     def input_reply(c, attempt):
@@ -2472,6 +2512,15 @@ class Execution:
                 goals.append(event.payload)
             seq = event.seq
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)", inserts)
+        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
+        # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
+        if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
+            from .login_waits import wait
+            pending = wait(c, aid)
+            if pending:
+                start_places.waiting(c, aid, "shared login" if pending.get("login") else "pre-start requirements")
+            else:
+                c.execute("UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,))
         if last_event is not None:
             from . import run_diagnostics
             run_diagnostics.touch(c, aid, *last_event)

@@ -9,7 +9,7 @@ const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
 const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';
 const pipelineType = task => TASK_TYPES.find(type => type.id === pipelineTypeId(task));
-// A steps-only type's tasks change status only by a step move: no Done, Close or Reopen of their own.
+// A steps-only type's tasks change status only by a step move: no Done or Reopen of their own. A person can still close one.
 const pipelineStepsOnly = task => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = state => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task, body) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
@@ -67,6 +67,7 @@ function taskPipelineSelect(state, id) {
   tasksSelectionClear(state);
   taskPipelineRemember(state); tasksRemember(state);
   tasksFiltersChanged(state); tasksPeekSync(state);
+  tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
 }
 function taskPipelineMenu(state, anchor) {
   const dev = taskPipelineDevType();
@@ -84,26 +85,46 @@ function taskPipelineMenu(state, anchor) {
   });
   anchor.setAttribute('aria-expanded', String($('#task-filter-pop').matches(':popover-open')));
 }
-function taskPipelineBoard(items, state) {
+// A type's board: a column per step, in the type's order, that cards are dragged between (ui/app/task-board.js). Its
+// leading backlog steps (open, before the first step with work under way) and its trailing finished steps each fold
+// into one strip; a finished step part way along stays off the board.
+function taskPipelineBoard(items, state, head = '') {
   const type = pipelineSelectedType(state);
   if (!type) return null;
-  const shown = type.steps.filter(step => !BOARD_HIDDEN.has(step.status));
-  const columns = shown.map(step => ({id: step.id, name: step.name,
-    items: items.filter(item => item.task.step_id === step.id)}));
-  const unmapped = items.filter(item => !shown.some(step => step.id === item.task.step_id));
+  items = items.map(item => taskBoardLive(state, item));
+  const steps = type.steps;
+  let end = steps.length;
+  while (end > 0 && BOARD_HIDDEN.has(steps[end - 1].status)) end--;
+  const finished = steps.slice(end), working = steps.slice(0, end).filter(step => !BOARD_HIDDEN.has(step.status));
+  let lead = 0;
+  while (lead < working.length && working[lead].status === 'open') lead++;
+  const backlog = working.slice(0, lead), folds = taskBoardFolds(state, type, backlog.length);
+  const inStep = step => items.filter(item => item.task.step_id === step.id);
+  const stepColumn = step => ({id: step.id, name: step.name, drop: step.id, items: inStep(step)});
+  const strip = (fold, run, drop, name) => ({id: 'fold-' + fold, fold, drop, items: [], name: run.length === 1 ? run[0].name : name,
+    hint: run.map(step => step.name).join(', '), count: fold === 'backlog' ? run.reduce((n, step) => n + inStep(step).length, 0) : ''});
+  const columns = [];
+  if (backlog.length && folds.backlog) columns.push(strip('backlog', backlog, backlog.at(-1).id, 'Backlog'));
+  else backlog.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'backlog'}));
+  working.slice(lead).forEach(step => columns.push(stepColumn(step)));
+  const shown = [...working, ...(folds.finished ? [] : finished)];
+  const unmapped = items.filter(item => !shown.some(step => step.id === item.task.step_id) && !backlog.some(step => step.id === item.task.step_id));
   for (const status of PIPELINE_STATUSES.filter(status => !BOARD_HIDDEN.has(status))) {
     const list = unmapped.filter(item => item.task.status === status);
     if (list.length) columns.push({id: 'status-' + status, name: STATUS_WORD[status] || status, items: list});
   }
+  if (finished.length && folds.finished) columns.push(strip('finished', finished, finished[0].id, 'Finished'));
+  else finished.forEach((step, i) => columns.push({...stepColumn(step), foldable: i ? '' : 'finished'}));
   const STEP_KIND = {open: 'starting', doing: 'doing', waiting: 'waiting', review: 'review', ready: 'review', done: 'done', closed: 'closed', declined: 'needs'};
   for (const column of columns) {
-    column.items.sort((a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
-      || String(a.task.created).localeCompare(String(b.task.created)) || String(a.task.id).localeCompare(String(b.task.id)));
+    column.items.sort(taskByStepRank);
     const step = type.steps.find(step => step.id === column.id);
     column.kind = STEP_KIND[step?.status || column.id.replace(/^status-/, '')] || '';
   }
-  return boardColumnsHTML(columns);
+  return boardColumnsHTML(columns, {head});
 }
+const taskByStepRank = (a, b) => (a.task.step_rank ?? Infinity) - (b.task.step_rank ?? Infinity)
+  || String(a.task.created).localeCompare(String(b.task.created)) || String(a.task.id).localeCompare(String(b.task.id));
 // A task's Type and Step are rows in its properties (ui/app/task-props.js).
 async function taskPipelineCreate(form, selected = '') {
   form.dataset.taskType = selected || 'general';

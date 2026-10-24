@@ -37,13 +37,14 @@ img.av-photo{object-fit:cover;background:var(--surface2)}
 .av-glyph{display:inline-flex;align-items:center;justify-content:center;width:1em;height:1em;overflow:hidden;color:#fff;user-select:none;
   font-family:"Material Symbols Outlined";font-weight:200;font-style:normal;line-height:1;letter-spacing:normal;text-transform:none;white-space:nowrap;
   font-variation-settings:"FILL" 0,"wght" 200,"GRAD" 0,"opsz" 24;font-feature-settings:"liga";-webkit-font-feature-settings:"liga";-webkit-font-smoothing:antialiased}
-/* Working: the outline eases to its second shape and back (CSS `d`; WebKit gets the same as SMIL). */
-@keyframes av-morph{0%,100%{d:var(--d0)}50%{d:var(--d1)}}
-.av.morph .av-shape path{animation:av-morph 3.6s ease-in-out infinite}
+/* Working (the page's own bot only, ui/app/avatars.js): the shape swells and turns a little and back. A transform, so the
+   compositor draws it and the page does not repaint each frame. */
+@keyframes av-breathe{50%{transform:scale(1.07) rotate(5deg)}}
+.av.morph .av-shape{animation:av-breathe 3.6s ease-in-out infinite;will-change:transform}
 .node.cur{background:linear-gradient(90deg,var(--surface2),transparent)}
 .chip{display:inline-flex;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
 .chip:hover{text-decoration:none;color:var(--accent)}
-@media (prefers-reduced-motion:reduce){.av::after,.av,.av-shape path{animation:none!important}}
+@media (prefers-reduced-motion:reduce){.av::after,.av,.av-shape{animation:none!important}}
 
 .proj{color:var(--muted);font-size:.85em;margin-right:5px}
 /* dots */

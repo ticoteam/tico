@@ -27,6 +27,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const tag = {id: 'release-tag', key: 'release-2026-10-02', label: 'release',
       metadata: {date: '2026-10-02'}, markdown: '- [ ] Smoke checks', is_template: false, version: 1};
     const bots = [{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true}];
+    let refuseMove = false;
     const tasks = ['draft', 'copy', 'complete', null].map((stepId, index) => {
       const step = types[1].steps.find(step => step.id === stepId) || null;
       return {id: 'task-' + index, title: ['Write the campaign', 'Review the campaign', 'Finished campaign', 'Unmapped campaign'][index],
@@ -81,6 +82,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
         const task = tasks.find(task => task.id === one[1]);
         if (req.method() === 'POST') {
           const body = req.postDataJSON(); posted.push({path: p, body});
+          if (refuseMove) { refuseMove = false; return json({error: {code: 'identity', detail: 'not yours to change'}}, 422); }
+          if ('step_rank' in body) task.step_rank = body.step_rank;
+          if (body.owner) task.owner = body.owner.includes(':') ? body.owner : 'bot:' + body.owner;
           if (body.type) task.type_id = body.type;
           const type = types.find(type => type.id === task.type_id);
           const step = 'step' in body ? type.steps.find(step => step.id === body.step) : type.steps.find(step => step.status === (body.status || task.status));
@@ -97,11 +101,33 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
     assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(),
-      ['Draft', 'Legal review', 'Copy review', 'Doing'], 'done and closed steps are not columns');
+      ['Draft', 'Legal review', 'Copy review', 'Doing', 'Finished'], 'done and closed steps fold into one strip');
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'finished work leaves the board');
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
+    // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
+    // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
+    const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
+    const finishedCol = (col, title) => page.waitForFunction(([col, title]) => {
+      const el = document.querySelector(`#task-body [data-col="${col}"]`);
+      return el?.querySelector('header .cnt')?.textContent === String(title.length)
+        && [...el.querySelectorAll('.bcard-title')].map(n => n.textContent).sort().join('|') === title.join('|');
+    }, [col, title], {timeout: t(5000)});
+    await page.evaluate(() => localStorage.setItem('tico.board.fold', JSON.stringify({marketing: {finished: false}})));
+    await page.reload();
+    await boardLoaded();
+    assert.equal(await page.evaluate(() => TASKS_ST.view), 'board');
+    await finishedCol('complete', ['Finished campaign']);
+    await finishedCol('archive', ['Dropped campaign']);
+    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated: '2026-10-02T12:00:00Z'});
+    await page.evaluate(() => tasksLoad(TASKS_ST, {poll: true}));
+    await finishedCol('complete', ['Finished campaign', 'Finished later']);
+    tasks.pop();
+    await page.evaluate(() => localStorage.removeItem('tico.board.fold'));
+    await page.reload();
+    await boardLoaded();
+    assert.equal(await page.locator('#task-body .bcard').count(), 3, 'folded again, finished work leaves the board');
     // Done and Closed are their own tabs, Closed right after Done; each lists only its status.
     assert.deepEqual((await page.locator('#task-view [role=tab]').allTextContents()).slice(-2), ['Done', 'Closed']);
     for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {
@@ -120,6 +146,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // Column headings name their steps without circular status glyphs.
     assert.equal(await page.locator('#task-body .bcol > header > .si').count(), 0);
     assert.equal(await page.locator('#task-body .bcol > header > h2').count(), 4);
+    assert.equal(await page.locator('#task-body .bfold [data-board-unfold="finished"]').count(), 1);
     assert.equal(await page.locator('#task-body .bcard .task-status').count(), 0, 'custom step columns supply status context too');
     await page.locator('#task-filter').click();
     await page.locator('#task-filter-pop [data-pick-field="tag"]').click();
@@ -155,9 +182,77 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(tasks.find(task => task.id === 'task-1').status, 'review', 'a General task keeps its status');
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
+    // Dragging cards: within a column, to another column, a refusal that puts the card back; and a plain click still peeks.
+    const card = (stepId, n, title, over = {}) => ({...tasks[0], id: n, title, step_id: stepId, step: types[1].steps.find(s => s.id === stepId),
+      status: 'review', version: 1, rank: 0, ...over});
+    tasks.push(card('legal', 'plan', 'Plan the launch', {step_rank: 1}), card('legal', 'brief', 'Brief the agency', {step_rank: 2,
+      relations: {blocks: [{id: 'plan', title: 'Plan the launch', status: 'review', owner: 'bot:ops', direction: 'in'}]}}));
+    tasks[0].step_rank = 1;
+    await page.evaluate(() => tasksLoad(TASKS_ST));
+    await page.locator('#task-body [data-task-key="tbrief"]').waitFor();
+    const titlesIn = col => page.locator(`#task-body [data-col="${col}"] .bcard-title`).allTextContents();
+    const drag = async (from, to, dy = 0.5) => {
+      const a = await page.locator(`#task-body [data-task-key="${from}"] .bcard-title`).boundingBox(), b = await page.locator(to).boundingBox();
+      await page.mouse.move(a.x + 10, a.y + a.height / 2); await page.mouse.down();
+      await page.mouse.move(a.x + 30, a.y + a.height / 2 + 20, {steps: 4});
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height * dy, {steps: 6});
+      const sent = posted.length;
+      await page.mouse.up();
+      for (let i = 0; posted.length === sent && i < 200; i++) await page.waitForTimeout(t(10));
+    };
+    // Blocked: the strip names the blocker and focuses the board on the two; X shows every card again.
+    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').innerText(), 'Blocked by Plan the launch');
+    await page.locator('#task-body [data-board-blocked="tbrief"]').click();
+    assert.deepEqual((await page.locator('#task-body .bcard-title').allTextContents()).sort(), ['Brief the agency', 'Plan the launch']);
+    await page.locator('#task-body [data-board-unfocus]').waitFor();
+    await page.keyboard.press('x');
+    await page.waitForFunction(() => document.querySelectorAll('#task-body .bcard').length === 4 && !document.querySelector('[data-board-unfocus]'));
+    await drag('tbrief', '#task-body [data-task-key="tplan"]', 0.1);
+    await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'brief').version === 2);
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 1, step_rank: 0}}, 'above the top card: its rank less one');
+    assert.deepEqual(await titlesIn('legal'), ['Brief the agency', 'Plan the launch']);
+    // A move rebuilds only the card that moved: the others keep their nodes.
+    await page.evaluate(() => { window.keptCard = document.querySelector('#task-body [data-task-key="tbrief"]'); });
+    await drag('ttask-0', '#task-body [data-col="copy"]');
+    assert.deepEqual(posted.at(-1).body, {version: 1, step: 'copy', step_rank: 1}, 'an empty step starts at 1');
+    await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'task-0').version === 2);
+    assert.deepEqual(await titlesIn('copy'), ['Write the campaign']);
+    assert.equal(await page.locator('#task-body [data-col="draft"] .bcard').count(), 0);
+    assert.equal(await page.evaluate(() => window.keptCard === document.querySelector('#task-body [data-task-key="tbrief"]')), true, 'an unmoved card is not redrawn');
+    // The face on a card picks its owner, saved from the card without opening it.
+    await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
+    await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ana'}).click();
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'You');
+    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 2, owner: 'human:ana'}});
+    assert.equal(await page.evaluate(() => TASKS_ST.peek), '', 'picking an owner opens nothing');
+    await page.locator('#task-body [data-task-key="tbrief"] [data-card-owner]').click();
+    await page.locator('#task-card-pops .prop-pop .tl-mi', {hasText: 'Ops'}).click();
+    await page.waitForFunction(() => document.querySelector('#task-body [data-task-key="tbrief"] [data-card-owner]')?.title === 'Ops');
+    refuseMove = true;
+    await drag('tplan', '#task-body [data-col="copy"] .bcol-body', 0.9);
+    await page.locator('.toast', {hasText: 'Not moved'}).waitFor();
+    assert.deepEqual(posted.at(-1).body, {version: 1, step: 'copy', step_rank: 2});
+    await page.waitForFunction(() => [...document.querySelectorAll('#task-body [data-col="legal"] .bcard-title')].map(n => n.textContent).join() === 'Brief the agency,Plan the launch');
+    await page.locator('#task-body [data-task-key="tplan"] .bcard-title').click();
+    await page.waitForFunction(() => TASKS_ST.peek === 'tplan' && document.querySelector('#task-peek')?.open);
+    await peek.locator('[data-modal-close]').click();
+    // The folds: a lone backlog step folds by hand, the finished strip unfolds, and both are remembered.
+    await page.locator('#task-body [data-board-fold="backlog"]').click();
+    await page.locator('#task-body [data-board-unfold="backlog"]').waitFor();
+    await page.locator('#task-body [data-board-unfold="finished"]').click();
+    await page.locator('#task-body [data-col="archive"]').waitFor();
+    assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('tico.board.fold'))).marketing, {backlog: true, finished: false});
+    await page.locator('#task-body [data-board-fold="finished"]').click();
+    await page.locator('#task-body [data-board-unfold="backlog"]').click();
+    await page.locator('#task-body [data-board-unfold="finished"]').waitFor();
+    // Q: only my cards (none here), Q again: everyone's.
+    await page.keyboard.press('q');
+    await page.waitForFunction(() => location.hash.includes('owner=me') && !document.querySelector('#task-body .bcard'));
+    await page.keyboard.press('q');
+    await page.waitForFunction(() => document.querySelectorAll('#task-body .bcard').length === 4);
     await page.locator('[data-task-type="general"]').click();
     await page.waitForFunction(() => location.hash.includes('type=general'));
-    assert.equal(await page.locator('#task-body .bcol').count(), 4, 'General has its own working columns');
+    assert.equal(await page.locator('#task-body .bcol').count(), 5, 'General has its own working columns and a finished strip');
     assert.equal(await page.locator('#task-body .bcard').count(), 2, 'General never includes Marketing tasks');
     await page.locator('#task-new').click();
     await page.locator('#task-create select[name=type]').waitFor();
