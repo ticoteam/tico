@@ -74,7 +74,9 @@ impl Wire for Cursor {
     }
 
     fn env(settings: &Settings) -> Env {
-        base_env(settings)
+        let mut env = base_env(settings);
+        env.extend(crate::harness_tools::env_for(Self::NAME));
+        env
     }
 
     fn on_event(msg: &Value, turn: &mut Turn) {
@@ -86,6 +88,10 @@ impl Wire for Cursor {
                 let text = message_text(&msg["message"]);
                 if !text.is_empty() {
                     turn.reply = text.clone();
+                    if !turn.extra["texts"].is_array() {
+                        turn.extra["texts"] = json!([]);
+                    }
+                    turn.extra["texts"].as_array_mut().unwrap().push(json!(text));
                     turn.emit("message", json!({"text": text, "final": false}));
                 }
             }
@@ -101,6 +107,12 @@ impl Wire for Cursor {
                     turn.error = why.unwrap_or_else(|| "cursor error".into());
                 } else if truthy(msg.get("result")) {
                     turn.reply = text_of(&msg["result"]);
+                    // Cursor's answer runs the turn's messages together with nothing between them: each keeps its
+                    // own paragraph, as Claude's separate answers do.
+                    let texts: Vec<&str> = turn.extra["texts"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                    if texts.len() > 1 && texts.concat() == turn.reply {
+                        turn.reply = texts.join("\n\n");
+                    }
                 }
                 let (inp, out, total) = usage_tokens(&msg["usage"]);
                 if total != 0 {

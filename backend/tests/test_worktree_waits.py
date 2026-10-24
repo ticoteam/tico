@@ -384,3 +384,42 @@ def test_a_reserved_worktree_whose_task_closes_is_cancelled_once_and_never_prepa
     assert rows(api, 'SELECT state FROM task_links WHERE id=?', (link['id'],))[0]['state'] == 'removed'
     assert len(rows(api, "SELECT * FROM events WHERE action='worktree.released' AND target=?", (tid,))) == 1
     assert not wakes(api, tid)
+
+
+def test_served_wait_reuses_removed_link_without_old_cleanup_intent(prepared):
+    api, tid, _ = prepared
+    filler, links = setup_wait(api, tid)
+    old = H.shift(H.now(), days=-4)
+    retired = uuid.uuid4().hex
+    stale = dict(owner='bot:cmo', release_requested=True, cleanup_requested=True,
+                 release_reason='pull request merged', removed_by='cleanup', restore_on_reopen=True,
+                 held='held: live turn',
+                 cleanup_attempts=W.CLEANUP_TRIES, cleanup_gave_up=True, cleanup_retry_at=H.now())
+    with api.app_state.store.transaction() as c:
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,"
+                  "path,detail_json,updated) VALUES(?,?,'worktree',?,'w','removed','bot:cmo',?,'Acme/product',"
+                  "'tico/retired','r1',?,?,?)",
+                  (retired, tid, 'worktree:' + retired, old, f'tasks/{tid[:8]}/Acme__product', json.dumps(stale), old))
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/7')
+        c.execute("UPDATE task_links SET state='merged',created=?,branch='tico/retired',detail_json=? WHERE id=?",
+                  (old, json.dumps({'head_sha': 'a' * 40}), pr['id']))
+    assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').status_code == 409
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='done' WHERE id='a1'")  # the asking turn ended
+    free(api, filler, links[0])
+    served = rows(api, 'SELECT * FROM worktree_waits')[0]
+    assert served['state'] == 'reserved' and served['link_id'] == retired
+    detail = json.loads(rows(api, 'SELECT detail_json FROM task_links WHERE id=?', (retired,))[0]['detail_json'])
+    assert not any(key in detail for key in stale if key not in ('owner', 'held'))
+    assert detail.get('held') != stale['held']  # a current reservation hold is separate from the retired one
+    assert finish_setup(api, tid, retired).status_code == 200
+    assert rows(api, 'SELECT state FROM worktree_waits')[0]['state'] == 'woken'
+    assert not any(a['link_id'] == retired and a['action'] == 'remove' for a in beat(api))
+    row = rows(api, 'SELECT state,detail_json FROM task_links WHERE id=?', (retired,))[0]
+    assert row['state'] == 'present'
+    assert not any(json.loads(row['detail_json']).get(k) for k in W.REMOVAL)
+    # A PR opened for the new allocation can still release it when that work finishes.
+    with api.app_state.store.transaction() as c:
+        pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/8')
+        c.execute("UPDATE task_links SET state='merged',branch='tico/retired' WHERE id=?", (pr['id'],))
+    assert [(a['link_id'], a['action']) for a in beat(api)] == [(retired, 'remove')]

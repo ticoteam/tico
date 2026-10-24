@@ -21,6 +21,7 @@ import pytest
 from backend.store import encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
+from runner import engine
 
 pytestmark = pytest.mark.slow
 
@@ -41,21 +42,24 @@ SECRET = "acme-synthetic-fixture-4821"
 @pytest.fixture(scope="session")
 def rust_binary(tmp_path_factory):
     """The release binary, built once per test run: xdist workers share the base temp directory's lock, and the
-    first to take it builds and copies the binary. A copy, so no worker ever runs a file cargo is relinking."""
-    if not shutil.which("cargo"):
-        pytest.skip("cargo is not installed")
+    first to take it builds and copies the binary. A copy, so no worker ever runs a file cargo is relinking. A
+    release binary already built from these sources (the release gate's, which ships) is used as it is."""
     import fcntl
+    built = ROOT / "runner-rs" / "target" / "release" / "tico-runner"
+    if engine.current(built, ROOT) and not shutil.which("cargo"):
+        pytest.skip("cargo is not installed")
     shared = tmp_path_factory.getbasetemp().parent
     # Inside the checkout, where the binary finds its root (runner-rs/src/env.rs root).
     binary = ROOT / "runner-rs" / "target" / "conformance" / shared.name / "tico-runner"
     with open(shared / "tico-runner.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not binary.exists():
-            subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
+            if engine.current(built, ROOT):
+                subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
             shutil.rmtree(binary.parent.parent, ignore_errors=True)  # earlier runs' copies
             binary.parent.mkdir(parents=True)
             staged = binary.parent / "tico-runner.part"
-            shutil.copy2(ROOT / "runner-rs" / "target" / "release" / "tico-runner", staged)
+            shutil.copy2(built, staged)
             staged.rename(binary)
     return binary
 
@@ -105,6 +109,10 @@ class Computer:
                 subprocess.run(["git", *args], check=True, env=git_env, capture_output=True)
         home, bin_dir = tmp_path / "home", tmp_path / "bin"
         (home / ".codex").mkdir(parents=True)
+        # Grok now checks its scoped local login before accepting a turn.
+        (home / ".grok").mkdir()
+        (home / ".grok/auth.json").write_text(json.dumps({"https://accounts.x.ai/sign-in": {
+            "auth_mode": "oidc", "key": "synthetic-grok-login"}}))
         bin_dir.mkdir()
         self.log_path = tmp_path / "harness.jsonl"
         for name, script in FAKE_PROGRAMS.items():
@@ -118,7 +126,9 @@ class Computer:
         # A Meta-account login, as signing in from Tico leaves it: in the runner's own Muse folder, never ~/.config.
         muse = self.config.parent / f"state-{self.registration['runner_id']}" / "musecode" / "config" / "muse"
         muse.mkdir(parents=True)
-        (muse / "auth.json").write_text("{}")
+        (muse / "auth.json").write_text(json.dumps({
+            "schema_version": 1, "providers": {"meta": {"api_key": "acme-synthetic-meta-login"}},
+        }))
         self.config.write_text(json.dumps({"url": live, "token": self.registration["token"],
                                            "runner_id": self.registration["runner_id"],
                                            "projects_dir": str(tmp_path / "projects"), **(registration or {})}))
@@ -428,6 +438,29 @@ def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, co
         assert calls[0]["env"]["GEMINI_API_KEY"] == "gemini-synthetic-fixture-key-5531"
         settings = json.loads(Path(calls[0]["env"]["GEMINI_CLI_SYSTEM_SETTINGS_PATH"]).read_text())
         assert settings["security"]["auth"]["selectedType"] == "gemini-api-key"
+
+
+@pytest.mark.parametrize("harness", ["grok"])
+def test_a_grok_key_grant_runs_without_a_computer_subscription(api, computer):
+    from backend.readiness import can_run
+    from backend.tests.test_credentials import create, setup
+    setup(api)
+    secret = "grok-synthetic-granted-key-408"
+    key = create(api, name="Grok API", env="XAI_API_KEY", secret=secret)
+    post(api, f"credentials/{key['id']}/grants", {"subject": "bot:ops"})
+    auth = Path(computer.env["HOME"]) / ".grok/auth.json"
+    auth.unlink()
+    computer.start()
+    with api.app.state.store.read() as c:
+        assert can_run(c, "ops", "grok")["can_run"] is True
+        # Another bot's grant cannot authorize a bot without the key.
+        assert can_run(c, "writer", "grok", runner=computer.registration["runner_id"])["can_run"] is False
+    message = post(api, "chat/ops", {"text": "Use the Grok API key"})
+    until(lambda: reply_to(api, message["conversation_id"]), "the key-only Grok reply")
+    until(lambda: computer.attempts()[-1]["result"], "the key-only Grok completion")
+    assert computer.attempts()[-1]["result"]["outcome"] == "completed"
+    assert computer.prompts()[-1]["env"]["XAI_API_KEY"] == secret
+    assert not auth.exists()
 
 
 def test_a_granted_credential_reaches_the_turn_and_never_the_transcript(api, computer):

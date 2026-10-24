@@ -18,10 +18,10 @@ from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import visuals
-from . import app_delivery, providers, runner_versions
+from . import app_delivery, login_holds, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, rooms, team_rules, turns, wake_presets
-from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turn_limit, turn_share, turns_here
+from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
 from pathlib import Path
 
 from . import read_cache
@@ -64,10 +64,10 @@ def attempt_details(c, turn):
             result = json.loads(attempt["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = result.get("error") or result.get("reason") or result.get("message") or (
+        reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
             "Lease expired before completion" if attempt["state"] == "expired" else "Attempt failed before completion")
         details.update(exit=attempt["state"], finished=attempt["finished"] or turn.get("finished"),
-                       failure_reason=details["end_reason"] or str(reason))
+                       failure_reason=login_holds.failure_line(result) or details["end_reason"] or str(reason))
     return details
 
 
@@ -95,7 +95,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             result = json.loads(row["result_json"] or "{}")
         except (ValueError, TypeError):
             result = {}
-        reason = (result.get("error") or result.get("reason") or result.get("message")
+        reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
         rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],
@@ -638,25 +638,19 @@ def own_sign_in(c, bot, settings=None):
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer a bot's queued work waits on for a free turn, or '': every turn there is taken, or this
-    bot already holds its share of them (execution.turn_share). A person's message is never held to the share."""
+    """The computer whose running work and short starts occupy all its places, or ''."""
     machine = location.get("machine") or {}
     row = c.execute("SELECT capacity FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
     held = turns_here(c, machine["runner_id"])
-    share = turn_share(c, machine["runner_id"], row["capacity"])
-    others = [r[0] for r in c.execute("SELECT DISTINCT j.bot FROM jobs j JOIN assignments a ON a.bot=j.bot "
-                                      "WHERE j.state='queued' AND a.runner_id=? AND j.bot!=?", (machine["runner_id"], bot))]
-    limit = turn_limit(share, row["capacity"], any(held.get(other, 0) < share for other in others))
-    full = (sum(held.values()) >= (row["capacity"] or 1)
-            or not human and held.get(bot, 0) >= limit)
-    return (machine.get("label") or "its computer") if full else ""
+    return (machine.get("label") or "its computer") if sum(held.values()) >= (row["capacity"] or 1) else ""
 
 
 def queued_label(c, bot, location, settings=None, human=False, behind=False):
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation."""
+    from .performance import load_status
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
     draining = c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
@@ -673,6 +667,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
+    elif (location.get("machine") or {}).get("runner_id") and load_status(
+            c, location["machine"]["runner_id"])["overloaded"]:
+        label = "Saved — waiting: computer busy"
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):
@@ -1578,7 +1575,8 @@ def install_views(app, store, auth, mutate, task_view):
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,
-                "output_tokens": turn.get("tokens_out"), "cost_usd": turn.get("cost"),
+                "output_tokens": turn.get("output_tokens") if turn.get("output_tokens") is not None else turn.get("tokens_out"),
+                "cost_usd": turn.get("est_cost_usd") if turn.get("est_cost_usd") is not None else turn.get("cost"),
                 "resumed": False, "fallback": made["fallback"] if made else None, "ran_on": made,
                 "load_start": turn.get("load_start"), "load_end": turn.get("load_end")}
 
@@ -1817,6 +1815,9 @@ def install_views(app, store, auth, mutate, task_view):
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
                         if a[0] not in hidden]
                 value = dict(row)
+                from .start_places import summary, describe
+                value["turn_counts"] = summary(c, row["id"], store.settings)
+                value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.

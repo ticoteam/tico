@@ -13,7 +13,7 @@ suite=${1:?suite required}
 python3 -m venv "$RUNNER_TEMP/venv"
 "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r backend/requirements-dev.txt
 # Python tests do not use Playwright. The browser VM also needs Python for its synthetic server.
-if [ "$suite" != browser ]; then exit 0; fi
+case $suite in browser*) ;; *) exit 0 ;; esac
 npm ci --fetch-retries=1
 cache="$RUNNER_TEMP/playwright-system"
 mkdir -p "$cache/archives/partial" "$cache/lists/partial"

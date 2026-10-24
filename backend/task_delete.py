@@ -324,6 +324,10 @@ def restore_tasks(c, ids, actor=None):
             if number is not None and c.execute("SELECT 1 FROM tasks WHERE number=?", (number,)).fetchone():
                 task["number"] = None
                 unlinked.setdefault(e["task_id"], []).append("number")
+            if task.get("step_id") and not c.execute("SELECT 1 FROM task_steps WHERE id=?", (task["step_id"],)).fetchone():
+                # Its step was retired (Waiting and Won't do are no longer steps): it comes back without one.
+                task["step_id"] = None
+                task["step_rank"] = None
             _insert(c, "tasks", task, skip=LINKS)
         messages = []
         for e, snap in snapshots:

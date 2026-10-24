@@ -108,6 +108,10 @@ ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")   # still on t
 # changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)               # visible until a person reassigns or closes it
 LIVE_STATUSES = ACTIVE_STATUSES + ("done",)                # not closed, not declined
+# No step has these statuses: a waiting task stays in the working step it is in (a Waiting tag shows it), and a declined
+# one goes to its type's closed step (`_task_state`, `retire_held_steps`). The Product roadmap keeps its public Declined.
+HELD_STATUSES = ("waiting", "declined")
+STEP_STATUSES = tuple(s for s in TASK_STATUSES if s not in HELD_STATUSES)
 OWNER_STATUSES = ("doing", "waiting", "review", "done", "declined")  # what the owner may set
 # `ready` is a fact the hub learns (the PR merged), not a claim a bot makes: movers and the
 # keeper set it, an owning bot does not.
@@ -229,7 +233,7 @@ CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started);
 from .meetings_schema import (MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA, MEETING_ITEMS_SCHEMA,
                               MEETING_SCHEMA, RECORDING_SOURCES_SCHEMA, MEETING_REVIEW_SCHEMA,
                               LIVE_MEETINGS_SCHEMA, LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA)
+                              LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA)
 
 # Goals and KPIs (backend/goals.py). A task may name the goal
 # it serves; the column is optional and nothing requires it.
@@ -582,7 +586,7 @@ INSERT OR IGNORE INTO task_types(id,name,created,updated)
 """ + "\n".join(
     f"INSERT OR IGNORE INTO task_steps(id,type_id,name,position,status) "
     f"VALUES('general-{status}','general','{status.title()}',{position},'{status}');"
-    for position, status in enumerate(TASK_STATUSES)
+    for position, status in enumerate(STEP_STATUSES)
 ) + """
 UPDATE tasks SET type_id='general', step_id=(SELECT id FROM task_steps
   WHERE type_id='general' AND status=tasks.status ORDER BY position,id LIMIT 1)
@@ -730,7 +734,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA]
 
 
 class Refused(Exception):
@@ -828,6 +832,15 @@ def token_hash(token):
 
 
 # ----------------------------------------------------------------------------- connection
+def synchronous(default):
+    """The PRAGMA synchronous a connection uses: `default`, or OFF when $TICO_SQLITE_SYNC is "off".
+
+    Only the test suite sets it (conftest.py). Each test builds its own database and throws it away, so a sync per
+    commit buys nothing there, while a shared host's disk paid for it: two pytest workers on the team runner wrote
+    ~30 MB/s, a quarter of the volume's throughput, and pushed the live server's pages out of the cache."""
+    return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -843,7 +856,7 @@ def connect(path=None, adopt_legacy=False):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
     try:
         migrate(conn, adopt_legacy=adopt_legacy)
     except Exception:
@@ -1063,6 +1076,9 @@ def migrate(conn, adopt_legacy=False):
     # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
     # are not a context size.
     add_column(conn, "turns", "prompt_tokens", "INTEGER")
+    # Why a finished run's usage reads 0 tokens or no cost (USAGE_REASONS, turn_finish): null when its runner counted
+    # its tokens and the model has a price. NULL throughout on a run finished before it was recorded.
+    add_column(conn, "turns", "usage_reason", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_snoozed ON tasks(snoozed_until) WHERE snoozed_until IS NOT NULL")
     # A type whose tasks change status only by moving between its steps (`_task_state`).
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
@@ -1076,6 +1092,8 @@ def migrate(conn, adopt_legacy=False):
     migrate_roadmaps(conn)
     from .roadmap_flow import ready_step as roadmap_ready_step
     roadmap_ready_step(conn)
+    # Waiting and Won't do are no longer board steps (`_task_state`): move their tasks off, then delete them.
+    retire_held_steps(conn)
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
@@ -1113,6 +1131,9 @@ def migrate(conn, adopt_legacy=False):
     # A task's history, and the Tasks page's stats: how many tasks reached each status, by day.
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_task ON task_events(task_id, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS task_events_field_ts ON task_events(field, ts)")
+    # One task's history of one field (status, owner, waiting_on): without it, and without ANALYZE, SQLite picks
+    # task_events_field_ts and reads that field's changes on every task.
+    conn.execute("CREATE INDEX IF NOT EXISTS task_events_task_field ON task_events(task_id, field, ts)")
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
@@ -2911,7 +2932,10 @@ def _type_steps(conn, actor, type_id, steps):
         if raw.get("id") and ident not in existing:
             refuse(conn, actor, "not-found", "That step does not belong to this type")
         if status not in TASK_STATUSES:
-            refuse(conn, actor, "kind", f"A step status is {'|'.join(TASK_STATUSES)}")
+            refuse(conn, actor, "kind", f"A step status is {'|'.join(STEP_STATUSES)}")
+        if status in HELD_STATUSES and existing.get(ident, {}).get("status") != status:
+            refuse(conn, actor, "kind", f"A step can't be {status}: a waiting task keeps its step, and a declined one "
+                                        f"goes to the closed step. A step status is {'|'.join(STEP_STATUSES)}")
         names.add(name); ids.add(ident)
         clean.append({"id": ident, "type_id": type_id, "name": name,
                       "position": raw.get("position") if raw.get("position") is not None else position,
@@ -3017,6 +3041,12 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
         chosen = current
     else:
         chosen = next((s for s in typ["steps"] if s["status"] == effective), None)
+        if not chosen and effective == "waiting":
+            # Waiting is not a column: the task stays in the working step it is in, or starts at the first.
+            chosen = (current if current and current["status"] in ACTIVE_STATUSES
+                      else next((s for s in typ["steps"] if s["status"] in ("open", "doing")), None))
+        elif not chosen and effective == "declined":
+            chosen = next((s for s in typ["steps"] if s["status"] == "closed"), None)
     if effective not in TASK_STATUSES:
         refuse(conn, actor, "kind", f"A status is {'|'.join(TASK_STATUSES)}, not {effective}")
     # On a steps-only type a task is finished or brought back only by a step move: a bare close, decline,
@@ -3033,6 +3063,58 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
                                     f"({steps}), not by closing, declining, reopening or finishing it; move it, or delete it",
                context={"what": f"task {row.get('id')}"})
     return typ["id"], chosen["id"] if chosen else None, effective
+
+
+def retire_held_steps(conn):
+    """Take the Waiting and Declined (Won't do) steps off every type but the Product roadmap, whose Declined is public.
+    A task on a waiting step goes back to the working step it last left (its step history), else its type's first
+    open or doing step, and keeps status waiting; one on a declined step goes to its type's closed step, or no step
+    when there is none, and keeps status declined. Typed waiting or declined tasks with no step are placed the same
+    way. Runs at every start; once nothing is left to move it only reads."""
+    from .roadmap_flow import PRODUCT
+    held = _rows(conn.execute("SELECT s.id,s.type_id,s.status FROM task_steps s JOIN task_types ty ON ty.id=s.type_id "
+                              "WHERE s.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?", (PRODUCT,)))
+    loose = _rows(conn.execute("SELECT t.id,t.type_id,t.status FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
+                               "WHERE t.step_id IS NULL AND t.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?",
+                               (PRODUCT,)))
+    if not held and not loose:
+        return
+    gone = {row["id"] for row in held}
+    version = "version" in {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    conn.execute("SAVEPOINT retire_held_steps")
+    try:
+        moving = [(t["id"], t["type_id"], t["status"]) for t in loose]
+        for step in held:
+            moving += [(r[0], step["type_id"], "waiting" if step["status"] == "waiting" else "declined")
+                       for r in conn.execute("SELECT id FROM tasks WHERE step_id=?", (step["id"],))]
+        steps = {}
+        for task_id, type_id, held_as in moving:
+            if type_id not in steps:
+                steps[type_id] = [s for s in _rows(conn.execute(
+                    "SELECT id,status FROM task_steps WHERE type_id=? ORDER BY position,id", (type_id,))) if s["id"] not in gone]
+            mine = steps[type_id]
+            if held_as == "waiting":
+                working = {s["id"] for s in mine if s["status"] in ACTIVE_STATUSES}
+                left = (r[0] for r in conn.execute("SELECT old FROM task_events WHERE task_id=? AND field='step' "
+                                                   "ORDER BY ts DESC,rowid DESC", (task_id,)))
+                target = next((old for old in left if old in working), None) \
+                    or next((s["id"] for s in mine if s["status"] in ("open", "doing")), None)
+            else:
+                target = next((s["id"] for s in mine if s["status"] == "closed"), None)
+            current = conn.execute("SELECT step_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+            if target == current:
+                continue
+            conn.execute("UPDATE tasks SET step_id=?,step_rank=?" + (",version=version+1" if version else "") + " WHERE id=?",
+                         (target, _step_end(conn, target, task_id) if target else None, task_id))
+            _task_event(conn, task_id, KEEPER, "step", current, target,
+                        "Waiting is a tag now, not a step" if held_as == "waiting" else "Declined goes to Closed now, not a step")
+        for ident in gone:
+            conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
+    except BaseException:
+        conn.execute("ROLLBACK TO retire_held_steps")
+        raise
+    finally:
+        conn.execute("RELEASE retire_held_steps")
 
 
 def steps_only(conn, row):
@@ -4193,6 +4275,23 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
     return msg
+
+
+def jobs_mark(conn):
+    """Where the jobs table stands, to tell later which bot jobs a write queued (comment_delivery)."""
+    return conn.execute("SELECT coalesce(max(rowid),0) FROM jobs").fetchone()[0]
+
+
+def comment_delivery(conn, msg, copies=(), *, since=0):
+    """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
+    take a turn on it), counting the comment's own job and any the write caused elsewhere, such as the notice a
+    delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write. `delivered`
+    is true when it reached a person (its recipient or an @mentioned copy), who sees it in their own lists."""
+    ids = [msg["id"], *(m["id"] for m in copies)]
+    queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id IN (%s)" % ",".join("?" * len(ids)),
+                          [since, *ids]).fetchone() is not None
+    return {"woke": queued,
+            "delivered": any(is_human(m.get("to_actor")) for m in (msg, *copies))}
 
 
 def comment_target(conn, actor, row):
@@ -6763,24 +6862,38 @@ def turn_start(conn, actor, bot_slug, thread_id=None, trigger="message", message
     return _one(conn, "SELECT * FROM turns WHERE id=?", (row["id"],))
 
 
-def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out=None, cost=None,
-                summary=None, usage=None):
+# Why a finished run's usage says 0 tokens or no cost (`turns.usage_reason`). Usage is written on every finish, so a
+# sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
+USAGE_REASONS = {
+    "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
+    "usage_limited": "the runtime refused the turn on a usage limit and reported no tokens",
+    "no_result": "its runner never sent a result (the lease ran out, or a restore ended it)",
+    "cost_unpriced": "tokens were counted, but its model has no list price, so est_cost_usd is null",
+}
+NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+
+
+def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, usage_reason="usage_unreported"):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
     `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
-    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known."""
+    est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
+    Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
+    left blank. The legacy `tokens_in`, `tokens_out` and `cost` columns are no longer written (docs/hub-sql.md)."""
     _writer(conn, actor)
     ts = now()
-    conn.execute("UPDATE turns SET finished=?, exit=?, tokens_in=?, tokens_out=?, cost=?, summary=? "
-                 "WHERE id=?", (ts, exit_code, tokens_in, tokens_out, cost, summary, turn_id))
+    conn.execute("UPDATE turns SET finished=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))
     # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
     conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
     if usage:
-        conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-                     "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                     "billing=:billing, prompt_tokens=:prompt_tokens WHERE id=:id",
-                     {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
-                      "id": turn_id})
+        reason = "cost_unpriced" if usage.get("est_cost_usd") is None else None
+    else:
+        reason, usage = usage_reason, NO_USAGE
+    conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
+                 "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+                 "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
+                 {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
+                  "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                  "usage_reason": reason, "id": turn_id})
     if usage and usage.get("segments"):
         conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
         for position, part in enumerate(usage["segments"]):
@@ -6800,7 +6913,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", tokens_in=None, tokens_out
     from . import run_diagnostics
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
         run_diagnostics.finish(conn, turn_id, exit_code, summary)
-    event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "cost": cost})
+    event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
     return row
 
 

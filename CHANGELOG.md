@@ -7,35 +7,43 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
-### Added
-- **Settings › Billing.** Owners and admins see the company's balance in dollars and cents with one status line
-  (Active; Low balance; Tico models paused; or Hosting's grace period with when servers stop, UTC), credits with what is
-  left and when each ends (used-up and expired ones under Show past credits, with what expired), usage by day opening
-  into hours split by product and model ("<$0.01" under a cent), and each month's statement with a CSV download.
-  "Talk to us to add credit" opens Tico's booking link; there is no card form. It is read from Tico HQ with the
-  install's Tico AI Gateway key (`GET /api/v2/billing`, `/billing/usage?day=`, `/billing/statements/YYYY-MM.csv`);
-  other members don't see the page and its API refuses them. Needs Tico HQ with company billing reads.
-- **Choose a task model in Settings.** In **Settings > Bots**, click **Tasks** beside a bot's model to choose a harness, model and effort for its tasks. The bot editor also has a **Task model** row. Choose **Same as bot** to clear it. Chat keeps the bot's own model ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
-- **Cheaper task models show a warning for sensitive work.** A bot with send, spend or publish approval history, or write access beyond its own repository, warns when its task model costs less than its own model from the same provider. You can still save and run it; the run note records the warning ([Warning rules](docs/harnesses.md#a-warning-about-a-cheaper-task-model)).
-
-### Fixed
-- **A Muse Code run that ends in a quota failure ends its task attempt.** When Muse Code reported its run over (a
-  quota or other terminal failure) but its process, or a child process still holding its output, stayed up, the
-  runner kept the turn open and renewed the attempt's lease, so the bot showed rate limited and busy at once and its
-  model could not be changed. The run's terminal record now ends the turn: the process gets five seconds to exit
-  and is then stopped, and the attempt finishes failed with the quota hold kept. Nothing is retried on its own.
-- **Task updates point to the closing command.** The CLI no longer offers `closed` on `hub task update --status`. Trying it tells you to use `hub task close <id>`. MCP also directs requesters to `hub_task_close`; filtering a task list by `closed` still works ([Tasks](docs/tasks.md)).
+## [0.4.1] - 2026-10-23
 
 ### Changed
-- **One sign-in per AI tool per computer.** Every bot runs its tool on its computer's login for it; a bot can no longer
-  have a sign-in of its own. The bot editor's Connection picker is gone (its line now reads "Runs on *tool* ·
-  Computer's login on *computer*"), the computer pop-up shows one line per tool, and Add connection signs in the
-  computer's login or adds a key. To run bots on a different account, add another computer, which can be on the same
-  machine. `PUT /api/v2/subscriptions` is gone (405), `POST /api/v2/runners/{runner_id}/logins` with a `profile` is
-  refused (422 `one_login`), and a runner ignores `bot_profiles`, drops `profile assign` and refuses `profile login`
-  for any profile but its default. Upgrading deletes each bot's saved choice, so a bot that ran on a named
-  subscription runs on its computer's login, which must be signed in. Named subscriptions on a computer stay on disk
-  and in its reports for one release, unused and unshown.
+- **Each bot can keep up to 100 worktrees.** The per-bot worktree limit rises from 50 to 100. Adding or restoring a worktree still needs 5 GB free on the computer, and cleanup still waits until the bot is idle. The limit is separate from how many turns a computer runs at once ([Worktrees](docs/worktrees.md)).
+
+### Fixed
+- **The docs say when an automatic check skips an idle task.** An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check. Wake behavior is unchanged: human messages still wake the bot, and running sessions keep their recovery checks ([Sessions](docs/sessions.md)).
+
+## [0.4.0] - 2026-10-23
+
+### Changed
+- **Bots share their computer's sign-in.** Each AI tool has one login per computer. Per-bot named subscriptions are removed. Before upgrading, sign in the computer's login for each tool your bots use, and update its runner. To use another account, add another computer; it can run on the same machine. API clients must stop setting per-bot subscriptions and named-profile sign-ins ([Computers](docs/computers.md)).
+- **Large sessions restart from a checkpoint.** By default, when a bot's last completed turn reads at least 400,000 input tokens, the next turn starts a fresh session. It uses the task's checkpoint and subsequent conversation instead of the old transcript. Update the runner to use this behavior ([Checkpoints and resume](docs/sessions.md#checkpoints-and-resume)).
+- **The key scrubber catches more key-shaped text.** Setup chat, the company file and setup support tickets also remove 32 or more letters and digits in a row, however regular and whether alone or inside a longer token, as Tico HQ's copy does.
+
+### Added
+- **Choose a task model in Settings.** In **Settings > Bots**, click **Tasks** beside a bot's model to choose a harness, model and effort for its tasks. The bot editor also has a **Task model** row. Choose **Same as bot** to clear it. Chat keeps the bot's own model ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Cheaper task models show a warning for sensitive work.** A bot with send, spend or publish approval history, or write access beyond its own repository, warns when its task model costs less than its own model from the same provider. You can still save and run it; the run note records the warning ([Warning rules](docs/harnesses.md#a-warning-about-a-cheaper-task-model)).
+- **See your company's billing in Settings.** Owners and admins can open **Settings > More > Billing** to see balance, credits, daily and hourly usage, and monthly statements with CSV downloads. **Talk to us to add credit** opens the booking page. Billing needs a working Tico HQ connection; this page adds no card form.
+- **Start a stopped hosted computer from Settings.** Owners and admins see their company's hosted computers in **Settings > Computers** and can start a stopped one. When Tico HQ refuses because the company is out of credit, the card keeps the refusal and links to the account page to add credit. This needs a working Tico HQ connection.
+- **See computer load alongside bot runs.** Computer lists include recent CPU and memory readings, running turns and an overload flag. Run records keep start and end load snapshots, helping you investigate a slow turn ([Computer performance](docs/permissions.md#a-computers-performance)).
+- **See why a run stopped or stalled.** `hub run list` shows each run's end reason, end time, last event and last heartbeat. An attempt with no heartbeat or event for five minutes shows as stalled in the run list and Health; it is not stopped. The runner keeps up to 64 KiB of scrubbed stderr per attempt for seven days, under the existing export rules ([Why a run stopped or stalled](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Every run names its purpose.** The SQL `turns` table and weekly run view carry a short purpose label, such as `review PR`, so you can group runs and tokens by what they were for ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
+- **Opt-in error reports for one install.** With a Sentry DSN and environment set, the server reports unexpected errors, scheduler failures and runner panics, tagged with the release and instance. Each report holds only the error class, Tico's own stack frames and the route template, never message, task or request text. `python -m backend.observability test` sends a harmless test error ([Server and runner errors](docs/observability.md#server-and-runner-errors)).
+
+### Fixed
+- **Stopped waiting turns stay stopped.** A turn stopped before it starts now settles. An expired lease or an old system notice no longer queues stopped or finished work again. Human follow-ups and explicit resumes still work ([Tasks](docs/tasks.md)).
+- **Muse Code failures release the busy turn.** A terminal run result now settles the attempt even when the process stays open. Quota failures keep their usage hold and do not retry automatically ([Harnesses](docs/harnesses.md)).
+- **SQL history reads avoid repeated full scans.** Scoped history lookups and recent-attempt counts use indexed reads while keeping the existing visibility rules and query limits ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Runner requests wait less behind database writes.** Server writers queue in order, and a lease renewal with most of its lease left no longer writes. Attempt input, renewals and events spend less time waiting on SQLite writer contention. Health warns when those requests exceed one second at p95 ([Health monitor](docs/health-monitor.md)).
+- **Gateway models return sooner after fallback.** When another model finishes a rate-limited Tico-model turn, the bot tries Tico models again after a minute. Update the server and its computers to use the shorter wait ([Gateway status and retries](docs/ai-gateway.md#when-the-gateway-refuses-a-bots-run)).
+- **Try now sends one queued run first.** After **Try now** on a usage limit, one queued run on the shared login goes first. A success resumes the bots waiting on it; another limit puts the hold back with its original end. A limit reported late by a turn started before the hold no longer blocks that run's success ([What happens when](docs/how-it-works.md#what-happens-when)).
+- **Task updates point to the closing command.** The CLI no longer offers `closed` on `hub task update --status`. Trying it tells you to use `hub task close <id>`. MCP also directs requesters to `hub_task_close`; filtering a task list by `closed` still works ([Tasks](docs/tasks.md)).
+- **Unchanged idle tasks skip redundant checks.** A status or stall check starts no turn when an idle task still matches its owner's checkpoint. Human messages, questions, approvals, dependency results and active-session recovery checks keep their existing paths ([Wake audit](docs/hub-sql.md)).
+- **Self-filed tasks wait for their filing turn.** When a bot creates work for itself, the new task waits for that turn to finish, up to five minutes. Work the filing turn already finished or parked does not start again ([Task sessions](docs/how-it-works.md)).
+- **Finished-task rechecks avoid repeated no-change replies.** A system-triggered recheck of a task already done or closed posts no reply when it made no changes. Human messages and required answers still get replies; withheld text stays on the run ([Reply audit](docs/hub-sql.md)).
+- **Temporary model capacity keeps a short hold.** A provider's capacity refusal holds the login for two minutes without increasing the quota backoff. Real quota and billing limits keep their normal holds. Work that may have acted is kept for review rather than replayed ([Usage limits](docs/how-it-works.md)).
 
 ## [0.3.75] - 2026-10-23
 
@@ -4315,7 +4323,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.75...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
 [0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73

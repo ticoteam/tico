@@ -14,6 +14,14 @@ def test_inputs_and_host_are_checked_before_any_reclamation(tmp_path, monkeypatc
     monkeypatch.setattr(check.subprocess, 'run', lambda *a, **kw: pytest.fail('must not remove anything on a local host'))
     with pytest.raises(RuntimeError, match='never run on a user or bot host'):
         check.capacity(tmp_path, 30 * check.GIB, {'GITHUB_ACTIONS': 'true', 'TICO_HOSTED_ENVIRONMENT': 'self-hosted'})
+    # A RunsOn VM counts only when its runner is the one launched on that instance for this job.
+    vm = {'RUNS_ON_INSTANCE_ID': 'i-035ddcac4f42c1fed', 'RUNNER_NAME': 'runs-on--i-035ddcac4f42c1fed--40ef49e1-4'}
+    assert check.runs_on(vm)
+    for bad in ({**vm, 'RUNNER_NAME': 'bot-box'}, {**vm, 'RUNS_ON_INSTANCE_ID': 'i-0'},
+                {**vm, 'RUNNER_NAME': 'runs-on--i-0aaaaaaaaaaaaaaaa--1'}, {}):
+        assert not check.runs_on(bad)
+    with pytest.raises(RuntimeError, match='never run on a user or bot host'):
+        check.capacity(tmp_path, 30 * check.GIB, {'GITHUB_ACTIONS': 'true', 'TICO_HOSTED_ENVIRONMENT': 'runs-on'})
 
 
 def test_source_bytes_must_match_the_native_build_id(tmp_path, monkeypatch):
@@ -60,6 +68,9 @@ def test_each_vm_runs_its_slice_and_an_older_candidate_runs_whole_on_the_product
     gate = tmp_path / 'scripts/release_checks.py'
     base = [check.sys.executable, 'scripts/release_checks.py', '--release', '--previous', 'v0.3.50']
     gate.write_text("parser.add_argument('--part', choices=PARTS)")
+    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) is None   # frozen before the desktop part
+    gate.write_text("PARTS = ('product', 'python', 'browser', 'desktop')\nparser.add_argument('--part', choices=PARTS)")
+    assert check.gate_command(tmp_path, 'v0.3.50', 'desktop', None) == base + ['--part', 'desktop']
     assert check.gate_command(tmp_path, 'v0.3.50', None, None) == base
     assert check.gate_command(tmp_path, 'v0.3.50', 'browser', None) == base + ['--part', 'browser']
     assert check.gate_command(tmp_path, 'v0.3.50', 'python', '2/4') == base + ['--part', 'python', '--shard', '2/4']
