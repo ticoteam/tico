@@ -1636,6 +1636,8 @@ class Store:
                           (principal, operation, key, hashed, encode(cached), H.now()))
         self.ring(logged)
         if refusal:
+            # This key now records a rolled-back operation, not an earlier successful delivery.
+            refusal.extra["idempotency_refused"] = True
             raise refusal
         return result
 

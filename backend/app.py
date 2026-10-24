@@ -964,7 +964,8 @@ def create_app(settings=None):
 
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
-            raise Problem(refusal["code"], refusal["detail"], refusal["status"])
+            raise Problem(refusal["code"], refusal["detail"], refusal["status"],
+                          extra={"idempotency_refused": True})
         with store.read() as c:
             privacy.require_payload(c, request.state.identity, result)
         return result

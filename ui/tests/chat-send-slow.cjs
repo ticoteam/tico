@@ -55,17 +55,19 @@ async function check(engine) {
         const key = route.request().headers()['idempotency-key']; keys.push(key);
         // Current access is checked before replay, and this denial does not overwrite the stored result.
         if (answer === 'access-refused') return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
-        if (answer === 'stored-drop-refuse' && delivered.has(key))
+        if (['stored-drop-refuse', 'stored-busy-refuse'].includes(answer) && delivered.has(key))
           return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
         if (delivered.has(key)) return json(delivered.get(key));
-        if (answer === 'stored-stall' || answer === 'stored-drop-refuse') {
+        if (['stored-stall', 'stored-drop-refuse', 'stored-busy-refuse'].includes(answer)) {
           sends.push(text);
           delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
           if (answer === 'stored-drop-refuse') return route.abort('failed');
+          if (answer === 'stored-busy-refuse') return json({error: {code: 'unavailable', detail: 'Proxy lost the answer'}}, 503);
           return;                                  // saved, but the response never reaches the page
         }
-        if (answer === 'refused') refusals.add(key);
-        if (refusals.has(key)) return json({error: {code: 'forbidden', detail: 'A rule refused this send'}}, 403);
+        if (answer === 'busy-refused' && busy > 0) { busy--; return json({error: {code: 'unavailable', detail: 'Busy'}}, 503); }
+        if (answer === 'refused' || answer === 'busy-refused') refusals.add(key);
+        if (refusals.has(key)) return json({error: {code: 'escape', detail: 'A rule refused this send', idempotency_refused: true}}, 403);
         if (answer === 'stall') return;                       // never answered: the page has to give up on its own
         if (busy > 0) { busy--; return json({error: {code: 'unavailable', detail: 'Busy'}}, 503); }
         if (hold) await hold;
@@ -138,6 +140,25 @@ async function check(engine) {
     assert.equal(sends.at(-1), 'A rule refused this draft');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
+    // A recorded rule refusal resolves this identity even after an automatic retry. A bare 503 alone
+    // cannot prove whether a proxy lost a successful answer; the refusal receipt supplies that proof.
+    answer = 'busy-refused'; busy = 1;
+    const beforeBusyRefusal = sends.length, beforeBusyKeys = keys.length;
+    await box.fill('A rule refused after a busy answer'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const busyRefusedKey = keys.at(-1);
+    assert.equal(keys.length, beforeBusyKeys + 2, 'a busy answer retries into a recorded rule refusal');
+    assert.equal(keys.at(-2), busyRefusedKey, 'automatic retry keeps its key before refusal');
+    assert.equal(sends.length, beforeBusyRefusal, 'the recorded refusal stored no message');
+    assert.match(await page.locator('.toast.err').innerText(), /Not sent:/, 'recorded rule refusal is definitive after a retry');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'recorded refusal ends the retry identity');
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.notEqual(keys.at(-1), busyRefusedKey, 'a later explicit Send re-evaluates a confirmed refusal');
+    assert.equal(sends.length, beforeBusyRefusal + 1, 'the later Send reaches the bot exactly once');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
     // A stored send with a lost response is still uncertain if access is refused before same-key replay.
     // Restoring access and sending the unchanged draft must replay that original, never create a second message.
     await page.evaluate(() => { CHAT_SEND.timeout = 200; });
@@ -171,23 +192,25 @@ async function check(engine) {
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledged replay ends pending delivery');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // An automatic retry inside the first Send can also lose access after its earlier attempt was stored.
-    await page.evaluate(() => { CHAT_SEND.timeout = 3000; });
-    answer = 'stored-drop-refuse';
-    const autoText = 'Stored before an automatic retry lost access', beforeAuto = sends.length, beforeAutoKeys = keys.length;
-    await box.fill(autoText); await page.keyboard.press('Enter');
-    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
-    const autoKey = keys.at(-1);
-    assert.equal(keys.length, beforeAutoKeys + 2, 'one Send loses its answer then automatically retries into 403');
-    assert.equal(keys.at(-2), autoKey, 'the automatic retry uses the first attempt key');
-    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), autoKey, 'automatic retry 403 cannot resolve the earlier uncertain attempt');
-    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*access.*refused.*Check the chat before resending/);
-    answer = 'ok';
-    await send.click();
-    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
-    assert.equal(keys.at(-1), autoKey, 'restored access replays the original automatic-attempt identity');
-    assert.equal(sends.length, beforeAuto + 1, 'automatic retry plus restored access leave exactly one stored message');
-    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+    // An automatic retry can lose access after storage, whether its answer was dropped or a proxy returned 503.
+    for (const autoMode of ['stored-drop-refuse', 'stored-busy-refuse']) {
+      await page.evaluate(() => { CHAT_SEND.timeout = 3000; });
+      answer = autoMode;
+      const autoText = 'Stored before an automatic retry lost access', beforeAuto = sends.length, beforeAutoKeys = keys.length;
+      await box.fill(autoText); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+      const autoKey = keys.at(-1);
+      assert.equal(keys.length, beforeAutoKeys + 2, 'one Send loses its answer then automatically retries into 403');
+      assert.equal(keys.at(-2), autoKey, 'the automatic retry uses the first attempt key');
+      assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), autoKey, 'automatic retry 403 cannot resolve the earlier uncertain attempt');
+      assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*access.*refused.*Check the chat before resending/);
+      answer = 'ok';
+      await send.click();
+      await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+      assert.equal(keys.at(-1), autoKey, 'restored access replays the original automatic-attempt identity');
+      assert.equal(sends.length, beforeAuto + 1, 'automatic retry plus restored access leave exactly one stored message');
+      await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+    }
 
     // Adding a file intentionally changes an uncertain text submission. A successful upload must not leave its
     // old key behind: typing the same text again is a new message, not a replay of the earlier stored answer.

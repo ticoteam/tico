@@ -776,8 +776,9 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     P.retryTries = 0;
     return true;
   } catch (e) {
-    // Access is checked before replay, so its refusal cannot disprove delivery of an earlier uncertain send.
-    const accessRefused = uncertainRetry && e.status === 403 && !e.unconfirmed;
+    // Access is checked before replay. Only a stored refusal proves that this key created no message;
+    // HTTP errors from an earlier attempt, including a proxy's 503, cannot establish that on their own.
+    const accessRefused = uncertainRetry && e.status === 403 && !e.unconfirmed && e.body?.error?.idempotency_refused !== true;
     watch.end(accessRefused ? 'unconfirmed' : e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A confirmed rule refusal created no message. The server caches that refusal too, so a later explicit Send
     // must be able to try again after its cause is resolved. Uncertain deliveries always retain their key.
