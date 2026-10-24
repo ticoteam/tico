@@ -29,6 +29,23 @@ def move(api, task, step='Review 1'):
                     json={'version': task['version'], 'step': step})
 
 
+def test_qa_pending_marker_is_scoped_to_each_links_task(api):
+    task = ticket(api)
+    plain = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), plain['id']))
+    hook(api, 'pull_request', pr_event('opened', head={'sha': HEAD}))
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': OLD}))
+    with api.app.state.store.read() as c:
+        engineering = H.task_links(c, task['id'])[0]
+        general = H.task_links(c, plain['id'])[0]
+        assert json.loads(engineering['detail_json'])['qa_default_pending'] is True
+        detail = json.loads(general['detail_json'])
+        assert not detail.get('qa_default_pending')
+        assert detail['kept'] == 'metadata'
+
+
 def notices(api, task):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (task['conversation_id'],))]
