@@ -14,7 +14,7 @@ from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
 from . import people as P, task_privacy as privacy
 from .harnesses import SYNCED_SQL
-from .statuses import is_parked
+from .statuses import PARKED_SQL, is_parked
 from .scheduler import next_due, stamp
 from .store import H, Problem, encode
 
@@ -244,6 +244,8 @@ def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, aut
                      # a bot synced in from another platform never sees a task (hubdb._takes_tasks)
                      "AND NOT EXISTS(SELECT 1 FROM bot_config xc WHERE xc.bot=s.bot "
                      "AND json_extract(xc.config_json,'$.harness') IN (" + SYNCED_SQL + ")) "
+                     # an onboarding bot runs no routines until a person above it marks onboarding complete
+                     "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot AND pc.onboarding_state IN " + PARKED_SQL + ") "
                      "ORDER BY s.id", (kind,)).fetchall()
     for schedule in rows:
         occurrence = f"{kind}:{subject}"

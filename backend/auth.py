@@ -878,6 +878,8 @@ class Auth:
         bot: `see` to name it at all, `write` to send it something, `read` to look at its work."""
         self.domain(who)
         actor = H.resolve_actor(c, target)
+        if not actor and (why := H.recruiting(c, target)):
+            raise Problem("recruiting", why, 409)
         if not actor or actor == H.KEEPER:
             raise Problem("not_found", "Unknown recipient", 404)
         if actor.startswith("bot:"):

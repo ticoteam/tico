@@ -194,6 +194,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-title{min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bcard-foot{display:flex;align-items:center;gap:6px;min-height:18px;margin-top:6px;color:var(--muted);font-size:var(--t-sm)}
 .bcard-foot .spacer{flex:1}
+.bcard-owner{padding:0;border:0;border-radius:50%;background:none;cursor:pointer}
+.bcard-owner:hover,.bcard-owner[aria-expanded="true"]{box-shadow:0 0 0 2px var(--g4)}
+.bcard-owner:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .bcard-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}

@@ -232,26 +232,29 @@ function frWireNext(state) {
 // ----------------------------------------------------------------- the bot page and the org chart
 const frNeedsSetup = e => !!e && ['needs_setup', 'needs_onboarding'].includes(e.onboarding_state);
 // The org chart's mark: small, beside the name, a gear so the name keeps the row; it says the bot page's words on hover.
-const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Needs setup" title="Needs setup: set it up together before it does anything on its own"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
+const frTreeMark = e => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Onboarding" title="Onboarding: it learns in chat and takes no work until someone above it marks onboarding complete"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
+// Onboarding (backend/lifecycle.py): the bot learns in chat; a person above it on the org chart marks it complete.
 function frBotBannerHTML(e) {
   if (!frNeedsSetup(e)) return '';
   const manager = typeof settingsCanManageBot === 'function' && settingsCanManageBot(e);
   const planned = e.status === 'planned';
   const can = e.can_chat && (!planned || manager);
-  return `<section class="bot-onboard" id="bot-onboard" role="status" aria-label="Needs setup">
-      <span class="pill needs">Needs setup</span>
-      ${can ? '<button class="primary" type="button" id="bot-start-setup">Set up</button>'
-        : `<span class="muted">${planned ? 'Setting up.' : 'Ask someone who can write to it to start.'}</span>`}
-      ${manager ? '<button type="button" id="bot-finish-setup">Mark setup done</button>' : ''}
-      <button class="ghost" type="button" data-setup-help="bot">Want help setting up?</button>
+  const ready = e.onboarding_ready?.summary;
+  return `<section class="bot-onboard" id="bot-onboard" role="status" aria-label="Onboarding">
+      <span class="pill needs">Onboarding</span>
+      ${can ? '<button class="primary" type="button" id="bot-start-setup">Start onboarding</button>'
+        : `<span class="muted">${planned ? 'Getting ready.' : 'It learns in chat with its manager before it takes any work.'}</span>`}
+      ${e.can_complete_onboarding ? '<button type="button" id="bot-finish-setup">Mark onboarding complete</button>' : ''}
+      <button class="ghost" type="button" data-setup-help="bot">Want help onboarding it?</button>
+      ${ready ? `<p class="muted bot-ready" id="bot-ready">It says it is ready: ${esc(ready)}</p>` : ''}
     </section>`;
 }
 function frBotWire(slug) {
   const button = $('#bot-start-setup');
   if (button) button.onclick = async () => {
     button.disabled = true; button.textContent = 'Starting…';
-    try { await frSendSetup(slug); button.textContent = 'Setup started'; showBotTab('chat'); }
-    catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Set up'; }
+    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('chat'); }
+    catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Start onboarding'; }
   };
   const finish = $('#bot-finish-setup');
   if (finish) finish.onclick = async () => {
@@ -259,13 +262,13 @@ function frBotWire(slug) {
     try {
       const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
       const bot = S.emps.find(e => e.name === slug);
-      if (bot) bot.onboarding_state = result.onboarding_state;
+      if (bot) Object.assign(bot, {onboarding_state: result.onboarding_state, stage: result.stage});
       if (BOT?.slug === slug) frBotRefresh(slug);
       renderTree();
-      toast('Setup marked done');
+      toast('Onboarding marked complete');
     } catch (error) {
       toast(error.message, true);
-      finish.disabled = false; finish.textContent = 'Mark setup done';
+      finish.disabled = false; finish.textContent = 'Mark onboarding complete';
     }
   };
 }
