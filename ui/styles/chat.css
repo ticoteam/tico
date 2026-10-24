@@ -341,6 +341,11 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .asst-empty{display:flex;min-height:100%;align-items:flex-end;justify-content:center;padding:16px 0 4px}
 .asst-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
 .asst-hints button{border-radius:999px;font-size:var(--t-base);padding:6px 12px}
+/* "Earlier chats" on the owner's CEO Bot page (ui/app/assistant-page.js): their Assistant chats from before, read-only. */
+.asst-earlier{margin:0 0 var(--s2)}
+.asst-earlier>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
+.asst-earlier-list{max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s2);padding:var(--s2) 0}
+.asst-earlier-msg .md{margin-top:2px}
 /* The chat column (bot chat, the Assistant, update threads, task comments): one centred column at most
    --read-width wide, in --read-size type on --read-leading lines. Your words sit in a --bubble; a bot's reply,
    its run summary and a Confirm card stay on the page without one. The thread pads itself to the column, so

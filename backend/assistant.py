@@ -28,6 +28,7 @@ from urllib.parse import quote
 import httpx
 from fastapi import Request
 
+from . import ceo_bot
 from . import models as M
 from . import visuals
 from . import rooms
@@ -95,7 +96,7 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True  # free address allocation; quota and identity still apply in inbound.py
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
-        if (chatting and (settings is None or chatting.group(1) != settings.assistant_bot)) or (
+        if (chatting and (settings is None or chatting.group(1) not in (settings.assistant_bot, ceo_bot.SLUG))) or (
                 path == "/api/v2/messages" and to_bot(fields.get("to"))):
             return True
     commenting = re.fullmatch(r"/api/v2/tasks/([^/]+)/comments", path)
@@ -352,14 +353,36 @@ def instruction(c, who, ref):
     msg = H.message(c, message_id) if message_id else None
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
+    # The CEO Bot's turn cites the owner's words in the CEO Bot chat, an Assistant's its person's Assistant room.
+    key = rooms.CEO_ROOM if who.task_actor == "bot:" + ceo_bot.SLUG else rooms.ASSISTANT_ROOM
     if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
-            or room.get("closed_at")):
+            or room.get("owner_actor") != who.actor or room.get("room_key") != key
+            or (key == rooms.CEO_ROOM and who.role != "owner") or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
     if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
+
+
+def require_on_task(c, auth, who, path):
+    """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester
+    or in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked
+    to. The owner's own chat (the CEO Bot's) acts as the owner, who may act on any task. A task they may not read is
+    a 404, as the route answers it: the refusal never says it is there."""
+    m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|links))?", normalize_path(path) or "")
+    if not m or who.role == "owner":
+        return
+    row = H.task(c, m.group(1))
+    if not row:
+        return          # the route answers for a task that is not there
+    auth.task_row(c, who, row)
+    from . import task_roles
+    people = {row["owner"], row["requester"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
+                                                 for a in actors}
+    if who.actor not in people:
+        raise Problem("on_behalf_of", "That task is another person's: an Assistant acts only on the person's own "
+                      "tasks; ask them to message its owner or comment on it themselves", 403)
 
 
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
@@ -756,7 +779,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body_json,status,"
               "proposed_via,created,description,diff_json,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
               ":method,:path,:body_json,:status,:proposed_via,:created,:description,:diff_json,:proposer)", row)
-    bot = settings.assistant_bot if proposer == "assistant" else proposer
+    bot = room_bot(settings, room) if proposer == "assistant" else proposer
     card = H._write_message(c, "bot:" + bot, who.actor, "Needs your OK: " + summary, room, "say",
                             {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
     H.event(c, who.actor, "assistant.action.proposed", row["id"],
@@ -765,6 +788,11 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
 
 
 # ------------------------------------------------------------------ the room
+def room_bot(settings, room):
+    """The bot that talks in this person's own room: the CEO Bot in the CEO Bot chat, else the Assistant."""
+    return ceo_bot.SLUG if (room or {}).get("room_key") == rooms.CEO_ROOM else settings.assistant_bot
+
+
 def find_room(c, actor):
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
                     "AND closed_at IS NULL ORDER BY created LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
@@ -772,12 +800,14 @@ def find_room(c, actor):
 
 
 def own_room(c, who, conversation_id):
-    """Whether this conversation is the caller's own Assistant room (and the caller is a person)."""
+    """Whether this conversation is the caller's own chat room: their Assistant room, or for the owner the CEO Bot chat
+    (and the caller is a person)."""
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
     return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
-                and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
+                and room.get("room_key") == (rooms.CEO_ROOM if ceo_seat(c, who) else rooms.ASSISTANT_ROOM)
+                and not room.get("closed_at"))
 
 
 def ensure_room(c, actor, bot):
@@ -788,12 +818,82 @@ def ensure_room(c, actor, bot):
                                scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.ASSISTANT_ROOM)
 
 
+# ------------------------------------------------------------------ the owner's CEO Bot (docs/ceo-bot.md)
+# The owner talks to the CEO Bot (backend/ceo_bot.py) in place of an Assistant: the same page, rights, cards and
+# read-backs, in a room of its own (`rooms.CEO_ROOM`) that belongs to the owner seat. A transfer of ownership moves that
+# room to the new owner (`move_ceo_room`), and the old owner talks to their Assistant again. Everyone else, admins
+# included, keeps the Assistant. The owner's own Assistant room stays theirs: the CEO Bot tab shows it, read-only, under
+# "Earlier chats", and it goes back with them if they hand ownership on. Turns in the CEO Bot chat key a provider session
+# of their own (`rooms.session_config`), apart from the bot's goals session.
+def ceo_on(c):
+    """Whether this install has its CEO Bot (every install does once it is set up)."""
+    row = H.bot(c, ceo_bot.SLUG)
+    return bool(row) and row["state"] not in ("archived", "planned")
+
+
+def ceo_seat(c, who):
+    """Whether this person talks to the CEO Bot rather than an Assistant: the owner, once the CEO Bot is there."""
+    return who.role == "owner" and H.is_human(who.actor) and ceo_on(c)
+
+
+def chat_bot(c, settings, who):
+    """The bot this person talks to in their own chat: the CEO Bot for the owner, else the Assistant."""
+    return ceo_bot.SLUG if ceo_seat(c, who) else settings.assistant_bot
+
+
+def chat_name(c, settings, bot):
+    return ceo_bot.name(c) if bot == ceo_bot.SLUG else settings.assistant_name
+
+
+def find_ceo_room(c, actor=None):
+    """The CEO Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
+    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
+                    "ORDER BY created LIMIT 1", (rooms.CEO_ROOM,)).fetchone()
+    room = H.conversation(c, row["id"]) if row else None
+    return room if room and (actor is None or room.get("owner_actor") == actor) else None
+
+
+def move_ceo_room(c, actor, to):
+    """The CEO Bot chat goes with the owner seat to `to`, the new owner: its history and what it is in the middle of.
+    The cards it put in front of the old owner are withdrawn: they ran as that person, who is no longer the owner."""
+    room = find_ceo_room(c)
+    if not room or room.get("owner_actor") == to:
+        return room
+    before = room.get("owner_actor")
+    c.execute("UPDATE conversations SET owner_actor=?, participants_json=? WHERE id=?",
+              (to, json.dumps([to, "bot:" + ceo_bot.SLUG]), room["id"]))
+    c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
+              "AND status='pending'", (H.now(), room["id"], before))
+    H.event(c, actor, "ceo_bot.chat_moved", room["id"], {"from": before, "to": to})
+    return H.conversation(c, room["id"])
+
+
+def ensure_ceo_room(c, actor):
+    """The owner's CEO Bot chat, moved to them if it still names an earlier owner, opened on first use."""
+    room = move_ceo_room(c, actor, actor)
+    if room:
+        return room
+    return H.open_conversation(c, actor, [actor, "bot:" + ceo_bot.SLUG], kind="chat", subject=ceo_bot.NAME,
+                               scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.CEO_ROOM)
+
+
+def chat_room(c, settings, who, create=True):
+    """This person's own chat, opened with `create`: the CEO Bot chat for the owner, else their Assistant room. In a
+    transaction: the CEO Bot chat moves to the owner here if it still names an earlier one."""
+    bot = chat_bot(c, settings, who)
+    if bot == ceo_bot.SLUG:
+        return ensure_ceo_room(c, who.actor) if create else move_ceo_room(c, who.actor, who.actor)
+    return ensure_room(c, who.actor, bot) if create else find_room(c, who.actor)
+
+
 def availability(c, settings, who):
-    bot = H.bot(c, settings.assistant_bot)
+    slug = chat_bot(c, settings, who)
+    bot = H.bot(c, slug)
     state = bot["state"] if bot else "missing"
-    return {"available": state == "active", "state": state, "bot": settings.assistant_bot,
-            "name": settings.assistant_name, "can_turn_on": who.role == "owner" and state != "active"
-            and state not in ("quarantined",)}
+    ceo = slug == ceo_bot.SLUG
+    # The CEO Bot is not turned on from here: it is always there, and its settings are Settings > CEO Bot.
+    return {"available": state == "active", "state": state, "bot": slug, "ceo": ceo, "name": chat_name(c, settings, slug),
+            "can_turn_on": not ceo and who.role == "owner" and state != "active" and state not in ("quarantined",)}
 
 
 # A repository card stored before its route had a sentence: titled "PUT /api/v2/bots/x/repositories", its summary
@@ -810,6 +910,10 @@ def action_view(row, c=None):
             "created": row["created"], "decided_at": row.get("decided_at"),
             "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
             "result": result}
+    if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
+        # A card the CEO Bot put in the owner's chat says it is the CEO Bot's, by its name.
+        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.CEO_ROOM:
+            view["by_name"] = ceo_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
     if m and c is not None:
         # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
@@ -1267,22 +1371,26 @@ def install(app, store, auth, mutate, onboarding):
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
             "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
-        return {**availability(c, settings, who), "room_id": room["id"] if room else None,
+        info = availability(c, settings, who)
+        earlier = None
+        if info["ceo"]:
+            # "Earlier chats": the owner's own Assistant room, read-only in the CEO Bot tab (GET .../messages on it).
+            old = find_room(c, who.actor)
+            if old and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
+                                 (old["id"],)).fetchone():
+                earlier = {"room_id": old["id"], "bot": settings.assistant_bot, "name": settings.assistant_name}
+        return {**info, "room_id": room["id"] if room else None,
                 "messages": snap["messages"], "has_more": snap["has_more"], "next_before": snap["next_before"],
                 "execution": snap["execution"], "actions": actions_for(c, who.actor, ids),
-                "pending": pending}
+                "pending": pending, "earlier": earlier}
 
     @app.get("/api/v2/assistant")
     def assistant(request: Request):
+        """The caller's own chat: the CEO Bot chat for the owner, an Assistant room for everyone else."""
         who = own(request)
         with store.transaction() as c:
             expire(c)
-        with store.read() as c:
-            info = availability(c, settings, who)
-            room = find_room(c, who.actor)
-        if not room and info["available"]:
-            with store.transaction() as c:
-                room = ensure_room(c, who.actor, settings.assistant_bot)
+            room = chat_room(c, settings, who, create=availability(c, settings, who)["available"])
         with store.read() as c:
             return view(c, who, room)
 
@@ -1290,17 +1398,18 @@ def install(app, store, auth, mutate, onboarding):
         def work(c):
             info = availability(c, settings, who)
             if not info["available"]:
-                raise Problem("assistant_off", "The " + settings.assistant_name + " is off", 409)
-            auth.require_write(c, who, settings.assistant_bot)
-            room = ensure_room(c, who.actor, settings.assistant_bot)
+                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+            bot = info["bot"]
+            auth.require_write(c, who, bot)
+            room = chat_room(c, settings, who)
             refs = {"assistant": True}
             if reply is not None:
                 refs["quiet"] = True
-            message = H.say(c, who.actor, "bot:" + settings.assistant_bot, body.text, conversation_id=room["id"],
+            message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
                             kind="say", refs=refs)
             out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
             if reply is not None:
-                out["reply"] = H._write_message(c, "bot:" + settings.assistant_bot, who.actor, reply, room, "say",
+                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
                                                 {"assistant": True, "fast": True, "intent": intent, "links": links},
                                                 message["id"], None, delivered_at=H.now())
                 H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
@@ -1386,9 +1495,10 @@ def install(app, store, auth, mutate, onboarding):
             state = decides(c, who.actor)
             if not state["active"]:
                 raise Problem("approve_setting_off", approve_hint(settings, state), 403)
-            room = find_room(c, who.actor)
-            if not room:
+            room = chat_room(c, settings, who, create=False)
+            if not room or "bot:" + room_bot(settings, room) != who.task_actor:
                 raise Problem("not_found", "No Assistant chat", 404)
+            bot = room_bot(settings, room)
             lines = []
             for aid in ids:
                 row = H.approval(c, aid)
@@ -1396,7 +1506,7 @@ def install(app, store, auth, mutate, onboarding):
                     raise Problem("forbidden", "That approval is not addressed to you", 403)
                 if row["decision"]:
                     raise Problem("conflict", f"Approval {aid} is already decided", 409)
-                if row["requested_by"] == "bot:" + settings.assistant_bot:
+                if row["requested_by"] == "bot:" + bot:
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
                 if row["kind"] == "support":
@@ -1415,7 +1525,7 @@ def install(app, store, auth, mutate, onboarding):
             # so their next message answers this list and nothing else.
             turn = c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
                              (who.attempt_id,)).fetchone()
-            msg = H._write_message(c, "bot:" + settings.assistant_bot, who.actor, text, room, "say",
+            msg = H._write_message(c, "bot:" + bot, who.actor, text, room, "say",
                                    {"assistant": True, "read_back": True}, turn["message_id"] if turn else None, None,
                                    delivered_at=H.now())
             H.event(c, who.actor, READ_BACK, msg["id"], {"approves": ids})
@@ -1427,12 +1537,12 @@ def install(app, store, auth, mutate, onboarding):
         who = person(request)
 
         def work(c):
-            if normalize_path(body.path) == "/api/v2/chat/" + settings.assistant_bot or not valid_operation(
-                    body.method, body.path, settings):
+            if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot, "/api/v2/chat/" + ceo_bot.SLUG) \
+                    or not valid_operation(body.method, body.path, settings):
                 raise Problem("operation", "That is not something the " + settings.assistant_name
                               + " can propose: it is not on the list of routes a person confirms (never tokens, "
                               "sign-in, enrollment or this assistant)", 422)
-            room = ensure_room(c, who.actor, settings.assistant_bot)
+            room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"))
         return mutate(request, body, work)
@@ -1464,7 +1574,7 @@ def install(app, store, auth, mutate, onboarding):
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
-                H._write_message(c, "bot:" + (settings.assistant_bot if by == "assistant" else by), who.actor, note,
+                H._write_message(c, "bot:" + (room_bot(settings, room) if by == "assistant" else by), who.actor, note,
                                  room, "say", {"assistant": True, "action_result": aid}, None, None,
                                  delivered_at=H.now())
             return {"action": action_view(row, c)}

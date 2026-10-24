@@ -77,7 +77,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (p === '/api/v2/status') return json({bots: [{bot: 'goal-manager', state: 'idle', last_turn_at: '2026-10-01T09:00:00Z', last_result: 'Updated KPI readings.'}]});
       if (p === '/api/v2/bots/goal-manager/routines') return json({routines: [{id: 'gm-review', title: 'Checks goals', cron: '0 9 * * *', active: true, enabled: true, timezone: 'UTC', next: '2026-10-02T09:00:00Z'}]});
       if (p === '/api/v2/routines/gm-review/occurrences') return json({occurrences: [{started: '2026-10-01T09:00:00Z', title: 'Checks goals', exit: 'completed'}]});
-      if (p === '/api/v2/conversations' && posted.some(r => r.path === '/api/v2/chat/goal-manager')) return json({conversations: [{id: 'gm-chat', kind: 'chat', scope: 'personal', owner_actor: 'human:ana', room_key: 'goal-manager', participants: ['human:ana', 'bot:goal-manager']}]});
+      if (p === '/api/v2/conversations' && posted.some(r => r.path === '/api/v2/chat/goal-manager')) return json({conversations: [{id: 'gm-chat', kind: 'chat', scope: 'personal', owner_actor: 'human:ana', room_key: 'ceo', participants: ['human:ana', 'bot:goal-manager']}]});
       if (p === '/api/v2/goal-manager/turn-on' && post) { bots.find(b => b.name === 'goal-manager').status = 'active'; return json({state: 'active'}); }
       if (p === '/api/v2/chat/goal-manager' && post) return json({conversation: {id: 'gm-chat'}, message: {id: 'gm-q', from_actor: 'human:ana', body: body.text}});
       if (p === '/api/v2/conversations/gm-chat/snapshot') return json(gmLive ? {messages: [{id:'gm-q', from_actor:'human:ana', body:'Change the revenue goal'}], execution:{state:'running', text:'Checking **progress** <script>bad()</script>'}} : gmQueued
