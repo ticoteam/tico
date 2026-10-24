@@ -152,6 +152,8 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-computer-remove]').click();
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
+    // The presence read can expose revoked_at before the action's remaining Settings reads finish.
+    await page.locator('#machine-enroll-status code', {hasText: 'docker compose'}).waitFor();
     assert.match(await page.locator('#machine-enroll-status').innerText(), /docker compose/);
     await page.locator('#set-machines .machine-card').waitFor({state: 'detached'});
     const showRevoked = page.getByRole('checkbox', {name: 'Show revoked computers (1)', exact: true});
