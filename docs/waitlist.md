@@ -1,6 +1,6 @@
 # Joining the Tico waitlist
 
-Hosted Tico, the Hosting preview on tico.team, runs your Tico server for you. Signing up puts you on a waitlist. This page covers what you enter, what you see afterward, and the one email you may get if Tico can't offer a spot. To run Tico on your own computer instead, start at [Install](install.md).
+Hosted Tico, the Hosting preview on tico.team, runs your Tico server for you. Signing up puts you on a waitlist. This page covers what you enter, what you see afterward, and what happens when staff decide. To run Tico on your own computer instead, start at [Install](install.md).
 
 ## Join the waitlist
 
@@ -24,6 +24,20 @@ The limits are 200 characters for the company name, 500 for the answer and 100 f
 - Signing up again with the same email keeps one place on the list. The place and answer you already have stay.
 - Tico staff read your answer and company name to decide. They are the only people who see them.
 
+## When staff approve you
+
+**Unreleased:** approval is merged; HQ deployment, staff admin installation, and live acceptance remain unverified.
+
+Staff normally approve $20 of starting credit, expiring 30 days after approval.
+Setup creates two Starter servers—your Tico server and your bot computer—and a Tico models key.
+When both servers are ready, **You're in: your Tico is ready** gives you the balance and sign-in link.
+
+Sign in at [app.tico.dev](https://app.tico.dev/) with your Tico account and select your company.
+From the account page, **Open your Tico** opens your ready Tico server.
+If setup is still running, the page does not say ready. Staff can retry a failed setup or resend a failed email.
+
+See [Your starting credit and what happens at $0](account.md#your-starting-credit-and-what-happens-at-0) for expiry, pauses, retained data, and recovery.
+
 ## If Tico can't offer a spot
 
 You get a short email with the subject **Your place on the Tico waitlist**. It says "We can't offer a spot right now." Staff can keep a private note about the decision. It is never sent to you.
@@ -41,3 +55,5 @@ That help describes an unreleased update whose deployment is still being verifie
 Staff handle the list on [the admin page](staff-waitlist.md).
 
 *Source: ticoteam/tico-services#120 (squash 028ce6bc), Waitlist 1/2, 2026-10-22.*
+
+*Approval source checked 2026-10-23: services#132, hosting/approve.py (SignupSetup, holds, youre_in_text, YOURE_IN_SUBJECT); waitlist spec v3.4 §§2–3. No live sign-in, email, or provisioning verified.*

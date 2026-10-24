@@ -145,7 +145,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 |---|---|
 | **Gateway cap reached** | Waits until the next month (UTC). |
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
-| Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute, so it is back on them within about a minute of credit being added. |
+| Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
 | The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap 1.1, Mid 1.0 or Power 1.0. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
@@ -160,7 +160,10 @@ saying the Tico AI Gateway cut the reply off.
 
 Gateway use is charged to your company's balance once an hour: one charge for each model price line used in that hour.
 
-Companies on the waitlist have the balance enforced:
+Each Gateway process caches the company’s balance for at most five minutes and subtracts its own metered call costs between refreshes.
+It does not read the database for every request. The hourly debit is the ledger record, not the stop-check interval.
+
+Companies approved through the waitlist have the balance enforced:
 
 - When the balance reaches the minimum, Tico models stop. The minimum is $0 unless Tico staff set another. The next
   call is refused with "out of credit", and each bot falls back to its other models. Use can run over the minimum by
@@ -173,3 +176,5 @@ Companies on the waitlist have the balance enforced:
 Companies that are only recorded are never stopped; their use is charged to the balance and nothing more.
 
 The stop sends no email by itself. The out-of-credit email is a separate feature, Credit notices.
+
+*Credit timing checked 2026-10-23: waitlist spec v3.4, Answer 14 and tests 9/11/12h; services#119 cached-balance behavior. Bot retry interval and Gateway balance refresh are separate.*
