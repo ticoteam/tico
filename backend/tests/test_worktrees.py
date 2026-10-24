@@ -969,6 +969,44 @@ def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
     refused = at('Review 2', 'closed')
     assert refused.status_code == 409
     assert 'still at Review 2 with no merged pull request' in refused.json()['error']['detail']
+    # A merged pull request beside one still open is not enough: the open one names what is missing.
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET state='open' WHERE kind='pr' AND number=8")
+    refused = at('Review 2', 'merged')
+    assert 'still at Review 2 with pull request #8 not merged yet' in refused.json()['error']['detail']
+    # Every blocker counts, not only the first: a met one does not let an unmet one behind it through.
+    with api.app_state.store.transaction() as c:
+        later = H.task_create(c, 'human:ana', 'Later work', 'Implement more', 'bot:cpo')
+        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (later['id'],))
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+                  (later['id'], tid, H.now()))
+    refused = at('Pending Release', 'merged')
+    assert refused.json()['error']['detail'].startswith('This task is blocked by Later work, still at '), refused.text
+
+
+def test_only_the_pending_release_step_marks_a_blocker_merged(prepared):
+    """A step with a ready status can come before work that still changes code: a blocker there counts only by its
+    status, and one moved on to a later doing step still holds the dependent."""
+    api, tid, other = prepared
+    path = f'tasks/{tid}/worktrees'
+    with api.app_state.store.transaction() as c:
+        flow = H.type_create(c, 'human:ana', 'Custom flow', steps=[
+            {'name': 'Build', 'status': 'doing'}, {'name': 'Ready', 'status': 'ready'},
+            {'name': 'Follow-up', 'status': 'doing'}, {'name': 'Pending Release', 'status': 'review'},
+            {'name': 'Done', 'status': 'done'}])
+        steps = {s['name']: s['id'] for s in flow['steps']}
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)", (other, tid, H.now()))
+
+    def at(step, status):
+        with api.app_state.store.transaction() as c:
+            c.execute('UPDATE tasks SET type_id=?,step_id=?,status=? WHERE id=?', (flow['id'], steps[step], status, other))
+        return post(api, path, {'repo': 'Acme/product'}, 'bot-test')
+
+    refused = at('Follow-up', 'doing')
+    assert refused.status_code == 409, refused.text
+    assert 'still at Follow-up with no merged pull request' in refused.json()['error']['detail']
+    started = at('Ready', 'ready')
+    assert started.status_code == 200, started.text
 
 
 def test_an_obsolete_pending_reservation_is_cancelled_without_touching_a_checkout(prepared):

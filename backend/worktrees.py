@@ -15,7 +15,7 @@ from clients import git_repository
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
-from .roadmap_flow import step_marks
+from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed', 'declined')
@@ -200,12 +200,14 @@ def start_refusal(c, task):
 def unmerged(c, blocker):
     """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
     so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
-    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned)."""
+    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned). The cutoff
+    is the Pending Release step itself: a step with a ready status may come before work that still changes code."""
     if blocker['status'] == 'ready':
         return ''
     step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()
-    ready = step_marks(c, blocker.get('type_id'))[1] if step else None
-    if ready is not None and step['position'] >= ready:
+    release = c.execute('SELECT min(position) FROM task_steps WHERE type_id=? AND lower(trim(name))=?',
+                        (blocker.get('type_id'), READY_FROM)).fetchone()[0] if step else None
+    if release is not None and step['position'] >= release:
         return ''
     prs = c.execute("SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
                     "ORDER BY created,rowid", (blocker['id'],)).fetchall()
