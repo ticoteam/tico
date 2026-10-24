@@ -745,8 +745,6 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     toast(CHAT_REPLAY_EXPIRED, true);
     return false;
   }
-  // A retained identity or an automatic retry means an earlier attempt may have landed without its answer.
-  let uncertainRetry = !!P.unconfirmed;
   // Keep uncertain intent separately from the request cache; a redraw cannot silently rotate its identity.
   if (!P.files.length && !P.unconfirmed) {
     const path = `/v2/chat/${encodeURIComponent(slug)}`, body = {text: text || 'Attached files.', refs: {...extraRefs}, ...extra};
@@ -768,19 +766,20 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
-        onRetry: (attempt, status) => { uncertainRetry = true; watch.retry(attempt, status); }, operationId: P.unconfirmed?.key});
+        onRetry: watch.retry, operationId: P.unconfirmed?.key});
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
+    if (pending) pending.acknowledged = true;       // restored composers share this identity too
     pillAcknowledge(P, text, files);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;
     return true;
   } catch (e) {
-    // Access is checked before replay. Only a stored refusal proves that this key created no message;
-    // HTTP errors from an earlier attempt, including a proxy's 503, cannot establish that on their own.
-    const accessRefused = uncertainRetry && e.status === 403 && !e.unconfirmed && e.body?.error?.idempotency_refused !== true;
+    // Access can fail before replay or after storage, even on the first attempt. Only a recorded refusal
+    // proves this key created no message; an unmarked 4xx cannot resolve delivery.
+    const accessRefused = !!pending && e.status >= 400 && e.status < 500 && !e.unconfirmed && e.body?.error?.idempotency_refused !== true;
     watch.end(accessRefused ? 'unconfirmed' : e.timedOut ? 'timeout' : e.unconfirmed ? 'network' : 'refused', e.status);
     // A confirmed rule refusal created no message. The server caches that refusal too, so a later explicit Send
     // must be able to try again after its cause is resolved. Uncertain deliveries always retain their key.
@@ -788,7 +787,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
     if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
-    else if (accessRefused) toast('Not confirmed: This message may already have sent. Chat access is currently refused. Check the chat before resending.', true);
+    else if (accessRefused) toast(`Not confirmed: This message may already have sent. ${e.message} Check the chat before resending.`, true, null, {keepWhenSignedOut: true});
     else if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
     else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
     return false;
@@ -833,8 +832,8 @@ const CHAT_REPLAY_EXPIRED = 'This message may already have sent. Check the chat 
 const chatReplayExpired = P => !!P.unconfirmed && Date.now() - P.unconfirmed.at >= CHAT_REPLAY_MS;
 function chatForgetUnconfirmed(P) {
   const u = P.unconfirmed; if (!u) return;
-  if (u.inFlight) return;                           // edit-and-restore while sending is still the same uncertain send
-  if (!u.refused && (pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
+  if (!u.acknowledged && u.inFlight) return;        // edit-and-restore while sending is still the same uncertain send
+  if (!u.acknowledged && !u.refused && (pq(P, '.p-text')?.value || '').trim() === u.text && !P.files.length) return;
   if (CHAT_PENDING.get(P.slug) === u) { CHAT_PENDING.delete(P.slug); chatPendingSave(); }
   pendingWrites.delete(u.signature); P.unconfirmed = null;
 }

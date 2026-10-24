@@ -212,8 +212,8 @@ async function cloudCompose(path, body, files = [], opts = {}) {
   if (!response.ok || !result.task && !result.message) throw new Error(apiError(result, response) || 'The server did not confirm this upload.');
   return result;
 }
-const toast = (msg, isErr, action) => {
-  if (isErr && SESSION.out) return;   // the signed-out banner says why every request fails (session.js)
+const toast = (msg, isErr, action, opts = {}) => {
+  if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
   if (isErr && !action && msg && typeof talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => talkToUs({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;

@@ -54,13 +54,15 @@ async function check(engine) {
         const text = route.request().postDataJSON().text;
         const key = route.request().headers()['idempotency-key']; keys.push(key);
         // Current access is checked before replay, and this denial does not overwrite the stored result.
+        if (answer === 'signed-out') return json({error: {code: 'identity', detail: 'Invalid credential'}}, 401);
         if (answer === 'access-refused') return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
         if (['stored-drop-refuse', 'stored-busy-refuse'].includes(answer) && delivered.has(key))
           return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
         if (delivered.has(key)) return json(delivered.get(key));
-        if (['stored-stall', 'stored-drop-refuse', 'stored-busy-refuse'].includes(answer)) {
+        if (['stored-stall', 'stored-drop-refuse', 'stored-busy-refuse', 'stored-privacy-refused'].includes(answer)) {
           sends.push(text);
           delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
+          if (answer === 'stored-privacy-refused') return json({error: {code: 'privacy', detail: 'Response access refused'}}, 403);
           if (answer === 'stored-drop-refuse') return route.abort('failed');
           if (answer === 'stored-busy-refuse') return json({error: {code: 'unavailable', detail: 'Proxy lost the answer'}}, 503);
           return;                                  // saved, but the response never reaches the page
@@ -168,21 +170,27 @@ async function check(engine) {
     await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
     const uncertainKey = keys.at(-1), uncertainAt = await page.evaluate(() => BOT_PILL.unconfirmed.at);
     assert.equal(sends.length, beforeUncertain + 1, 'the original reached storage before its response was lost');
-    answer = 'access-refused';
+    answer = 'signed-out';
     await page.locator('.toast.err button', {hasText: 'Retry'}).click();
     await page.waitForFunction(() => !BOT_PILL.sending);
     assert.equal(keys.at(-1), uncertainKey, 'access-refused Retry uses the original key');
-    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, '403 cannot resolve an earlier uncertain send');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, '401 cannot resolve an earlier uncertain send');
     assert.equal(await page.evaluate(() => !!BOT_PILL.unconfirmed?.refused), false, 'the pending send is not a confirmed refusal');
-    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*access.*refused.*Check the chat before resending/);
-    assert.ok(!/Not sent:/.test(await page.locator('.toast.err').innerText()), 'the UI does not claim the original was unsent');
+    assert.equal(await page.evaluate(() => SESSION.out), true, '401 activates sign-in recovery');
+    assert.ok(await page.locator('#signed-out').isVisible(), 'the sign-in banner offers recovery');
+    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*Invalid credential.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
+    assert.ok(!(await page.locator('.toast.err').allInnerTexts()).some(t => /Not sent:/.test(t)), 'the UI does not claim the original was unsent');
     assert.equal(await box.inputValue(), uncertainText);
     await page.reload();
     await page.waitForFunction(() => V2C?.loaded);
     await page.evaluate(() => { CHAT_SEND.timeout = 1500; });
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, 'reload preserves the uncertain key');
+    // Simulate sign-in restoring the session before a separate access denial on the same saved send.
+    answer = 'access-refused';
+    await page.evaluate(() => { SESSION.out = false; });
     await send.click();
     await page.waitForFunction(() => !BOT_PILL.sending);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, '403 after sign-in also keeps the key');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.at), uncertainAt, 'another denial after reload keeps the original replay age');
     answer = 'ok';
     await send.click();
@@ -191,6 +199,40 @@ async function check(engine) {
     assert.equal(sends.length, beforeUncertain + 1, 'same-key replay leaves exactly one message server-side');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledged replay ends pending delivery');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // Payload privacy can reject a response after the first attempt already stored its message.
+    answer = 'stored-privacy-refused';
+    const beforePrivacy = sends.length;
+    await box.fill('Stored before response privacy narrowed'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const privacyKey = keys.at(-1);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), privacyKey, 'post-commit 403 keeps the identity on a first attempt');
+    assert.match(await page.locator('.toast.err').innerText(), /Not confirmed:.*may already have sent.*Response access refused.*Check the chat before resending/);
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.equal(keys.at(-1), privacyKey, 'post-commit denial replays the stored success');
+    assert.equal(sends.length, beforePrivacy + 1, 'post-commit denial does not duplicate delivery');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // Switching bots and returning during a send restores a new composer sharing the in-flight identity.
+    let switchOpen; hold = new Promise(done => switchOpen = done);
+    const switchRequest = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/botops');
+    await box.fill('Sent while switching bots'); await page.keyboard.press('Enter');
+    const switchKey = (await switchRequest).headers()['idempotency-key'];
+    await page.evaluate(() => {
+      const old = BOT_PILL;
+      botPill('other'); const restored = botPill('botops'); old.el.replaceWith(restored.el);
+    });
+    assert.ok(await send.isDisabled(), 'restored composer waits on the in-flight identity');
+    switchOpen(); hold = null;
+    await page.waitForFunction(() => !BOT_PILL.unconfirmed?.inFlight);
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledgement clears the identity in the restored composer');
+    const beforeRepeat = sends.length;
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.notEqual(keys.at(-1), switchKey, 'explicit Send of the acknowledged words is a new submission');
+    assert.equal(sends.length, beforeRepeat + 1, 'the repeated words reach the bot');
 
     // An automatic retry can lose access after storage, whether its answer was dropped or a proxy returned 503.
     for (const autoMode of ['stored-drop-refuse', 'stored-busy-refuse']) {
@@ -304,7 +346,7 @@ async function check(engine) {
     answer = 'ok';
     // Exercise the send entry point too: Enter and an automatic retry must be safe even before a button redraw.
     await page.keyboard.press('Escape');
-    await page.evaluate(() => v2ChatSend(BOT_PILL, 'An old pending message'));
+    await box.press('Enter');
     await toast.waitFor();
     assert.match(await toast.innerText(), /may already have sent.*Check the chat before resending/);
     assert.equal(await toast.locator('button', {hasText: 'Retry'}).count(), 0, 'expired replay has no Retry action');
