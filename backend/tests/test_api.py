@@ -114,7 +114,7 @@ def test_chat_refusal_receipt_distinguishes_access_before_replay(api, monkeypatc
     from backend import task_privacy
     from backend.store import Problem
 
-    path, body, key = "/api/v2/chat/coo", {"text": "A synthetic draft"}, str(uuid.uuid4())
+    path, body, key = "/api/v2/chat/ops", {"text": "A synthetic draft"}, str(uuid.uuid4())
 
     def refuse(*args, **kwargs):
         raise H.Refused("escape", "A rule refused this send")
@@ -123,7 +123,7 @@ def test_chat_refusal_receipt_distinguishes_access_before_replay(api, monkeypatc
         patch.setattr(H, "say", refuse)
         first = api.post(path, json=body, headers=headers(key=key))
     assert first.status_code == 403, first.text
-    assert first.json()["error"]["idempotency_refused"] is True
+    assert first.json()["error"].get("idempotency_refused") is True, first.text
     replay = api.post(path, json=body, headers=headers(key=key))
     assert replay.status_code == 403, replay.text
     assert replay.json()["error"]["idempotency_refused"] is True
