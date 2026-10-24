@@ -83,9 +83,13 @@ Tico models stop at the minimum balance and its Hosting servers stop once the gr
 ## Credit notices
 
 Open **Credit notices** in the staff admin navigation, then select the company.
-The **Credit notices** panel shows **Live balance**, **Low-balance threshold**, and the **Low** flag below that threshold.
+The **Credit notices** panel shows **Live balance**, **Low-balance threshold**, and the **Low** flag strictly below that threshold.
 The default is **$20 USD**: the first spend from a $20 grant triggers the low warning.
-The owner receives one low email per below-threshold crossing; reaching the threshold or above rearms it.
+The owner receives one low email per below-threshold episode.
+Repeated checks and partial top-ups that stay below the threshold send no additional warning.
+Recovery to the threshold or above clears **Low** and the account-page warning banner, and re-arms the email.
+A later drop strictly below the threshold sends one new warning.
+For example, after a warning at $19, $19.50 remains low; exactly $20 clears it and re-arms the next warning.
 
 To change the warning threshold:
 
@@ -130,3 +134,5 @@ period 72 hours, Record only.
 *Hosting changes checked 2026-10-23: ticoteam/tico-services#138; Billing system spec v1.1, boundary rule and tests 7–8 and 19–23; waitlist spec v3.4, Answers 15–16. Owner-start safeguard (Dev 430) and grace notices (Dev 347) remain unfinished. Billing remains off.*
 
 *Credit notices checked 2026-10-23: waitlist spec v3.4 sections 2–3, Answer 15 and test 12g–i; services#130/#142, billing/credit_notices.py, billing/hosting.py (to_restart, _short), portal/views.py (credit_notice); admin#18/#21, admin/tico_admin/credit_notices.py (notices_section, account_page, threshold_history, email_history). Both restart-quote follow-ups are merged. Deployment, admin installation, email delivery and live stop/restart acceptance remain unverified.*
+
+*Warning boundaries clarified 2026-10-24: Product waitlist spec v3.5, section 2 step 9a, tests 14–15, and Answer 18. One warning per strictly-below-threshold episode; recovery at or above the threshold re-arms it. Live email delivery is not verified.*

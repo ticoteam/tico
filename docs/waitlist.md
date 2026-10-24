@@ -28,8 +28,15 @@ The limits are 200 characters for the company name, 500 for the answer and 100 f
 
 **Unreleased:** approval is merged; HQ deployment, staff admin installation, and live acceptance remain unverified.
 
-Staff normally approve $20 of starting credit, expiring 30 days after approval.
-Setup creates two Starter servers—your Tico server and your bot computer—and a Tico models key.
+**Intended policy — unreleased:** approval commits one starting-credit grant before setup starts, normally $20, expiring 30 days after approval.
+Failed setup keeps that grant. Repeated approval and interrupted or concurrent retries preserve the original amount,
+approver, approval time, and expiry, without another grant or a new 30 days.
+If the approval or grant commit fails, setup must not start.
+Setup then creates two Starter servers—your Tico server and your bot computer—and a Tico models key.
+
+**Known runtime gap — unimplemented:** the current runtime grants credit after the Tico server installs, rather than on approval.
+The current UI may still show credit as pending or absent before installation. This limitation does not satisfy the intended policy.
+This help correction does not implement or release that runtime fix.
 When both servers are ready, **You're in: your Tico is ready** gives you the balance and sign-in link.
 
 Sign in at [app.tico.dev](https://app.tico.dev/) with your Tico account and select your company.
@@ -72,3 +79,5 @@ Staff handle the list on [the admin page](staff-waitlist.md).
 *Source: ticoteam/tico-services#120 (squash 028ce6bc), Waitlist 1/2, 2026-10-22.*
 
 *Approval source checked 2026-10-23: services#132, hosting/approve.py (SignupSetup, holds, youre_in_text, YOURE_IN_SUBJECT); waitlist spec v3.4 §§2–3. No live sign-in, email, or provisioning verified.*
+
+*Policy correction, 2026-10-24: Product waitlist spec v3.5, section 2, Permissions and errors, tests 4 and 7, and Answer 17. This supersedes the earlier install-time grant ordering. Current hosting/approve.py (approve, on_installed, _grant) still grants after installation; the runtime correction remains unimplemented. No live recovery or backfill is authorized.*

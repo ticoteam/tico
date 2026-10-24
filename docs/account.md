@@ -17,9 +17,16 @@ See [Joining the Tico waitlist](waitlist.md).
 
 ## Your starting credit and what happens at $0
 
-Waitlist approval normally gives you **$20.00** of starting credit. Staff can approve a different amount.
-It pays for Hosting and Tico models. Approval provisions two **Starter** servers: your Tico server and your bot computer.
-It also issues your Tico models key.
+**Intended policy — unreleased:** waitlist approval commits one starting-credit grant before setup starts.
+It is normally **$20.00**. Staff can approve a different amount. It pays for Hosting and Tico models.
+After the approval and grant commit succeeds, setup provisions two **Starter** servers: your Tico server and your bot computer.
+It also issues your Tico models key. A failed approval or grant commit must not start setup.
+
+Failed setup keeps the original grant. Repeated approval and interrupted or concurrent setup retries preserve its amount,
+approver, original approval time, and expiry. They do not grant again or reset the 30 days.
+
+**Known runtime gap — unimplemented:** the current runtime grants credit after the Tico server installs, rather than on approval.
+It can still show no credit before installation. The intended timing is not implemented or confirmed released by this help update.
 
 Your starting grant expires **30 days after approval**, at the UTC expiry shown on your account page.
 Setup retries keep that original expiry. They do not start another 30 days.
@@ -50,7 +57,8 @@ A positive balance can restore model access while both servers remain stopped.
 ## Balance and credit
 
 After approval, **Account** shows your balance, remaining credit, and when the credit expires.
-If billing is still being set up, it shows **No credit yet**.
+The current page may show **No credit yet** before installation because of the grant-timing gap above.
+That is an implementation limitation; the intended policy grants credit on approval, before setup.
 
 - **Balance** is the live balance, including Tico models usage not yet recorded in an hourly debit.
 - **Credit** shows the unused amount out of the original grant. The page shows up to three current credits.
@@ -63,10 +71,14 @@ Expired unused credit no longer counts toward the balance.
 
 ## Credit notices
 
-Below the warning threshold, the page shows **$X of credit left; things stop at $0**.
+Strictly below the warning threshold, the page shows **$X of credit left; things stop at $0**.
 The threshold defaults to **$20 USD**, so the warning appears immediately after the first spend from a $20 grant.
 Staff can change the threshold with a required reason; each change is kept in its history.
-The warning email sends once per below-threshold crossing and rearms when the balance returns to the threshold or above.
+The warning email sends once per below-threshold episode.
+Repeated checks and partial top-ups that leave the balance below the threshold send no additional warning.
+Recovery to the threshold or above clears the warning banner and staff **Low** flag, and re-arms the email.
+A later drop strictly below the threshold sends one new warning.
+For example, after a warning at $19, a top-up to $19.50 does not re-arm it. Recovery to exactly $20 does.
 If spending takes you straight to paused before a warning is sent, you get only the run-out email.
 
 At the minimum, **Paused: out of credit** shows the reported stop times for the Gateway key and both servers.
@@ -175,3 +187,7 @@ The billing and account-page merges do not confirm their availability or enable 
 *Hosting rules checked 2026-10-23: ticoteam/tico-services#138; Billing system spec v1.1, boundary rule, section 2, and tests 7–8 and 19–23; billing database design, Option A and Settled; waitlist spec v3.4, section 2 and Answers 15–16. Manual owner-start dependency: Dev 430. Grace notices: Dev 347. Billing remains off; deployment and live power actions not verified.*
 
 *Starting credit and notices checked 2026-10-23: waitlist spec v3.4 §§2–3 and Answers 14–16; services#132, hosting/approve.py (CREDIT_DAYS, approve, on_installed, _grant, SignupSetup, _send); Engineering’s accepted receipt ordering on Dev 344; services#130, portal/views.py (credit_notice). Restart quote and partial-recovery status: services#142, billing/hosting.py (to_restart, _short), billing/credit_notices.py (status, _to_restart), portal/views.py (credit_notice); admin#18/#21, admin/tico_admin/credit_notices.py. Both follow-ups merged; installation and production acceptance remain unverified. No live grant, email, server power action, or deployment verified.*
+
+*Policy correction, 2026-10-24: Product waitlist spec v3.5, section 2, Permissions and errors, tests 4 and 7, and Answer 17. This supersedes the earlier install-time grant ordering. Current hosting/approve.py (approve, on_installed, _grant) still grants after installation; the runtime correction remains unimplemented. No live recovery or backfill is authorized.*
+
+*Warning boundaries clarified 2026-10-24: Product waitlist spec v3.5, section 2 step 9a, tests 14–15, and Answer 18. One warning per strictly-below-threshold episode; recovery at or above the threshold re-arms it. Live email delivery is not verified.*
