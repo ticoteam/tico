@@ -207,6 +207,8 @@ class TaskCreate(Contract):
     # A bot's own subtask run on another model, `<runtime>[:<model>]`, as a review or a check (backend/check_models.py).
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
+    # Why this is not the duplicate a task check found: files it anyway, logged on the check (backend/task_checks.py).
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class NoteCreate(Contract):
@@ -2442,3 +2444,15 @@ class TaskRuleUpdate(Contract):
     on: bool | None = None
     preset: Literal["15m", "hourly", "4h", "daily"] | None = None
     at: str | None = Field(default=None, max_length=5)
+    # A task check's CHECK and FOR (backend/task_checks.py); a close rule has neither.
+    check: dict | None = None
+    types: list[str] | None = Field(default=None, max_length=20)
+
+
+class TaskCheckFixItem(Contract):
+    task: str = Field(min_length=1, max_length=64)
+    duplicate_of: str | None = Field(default=None, max_length=64)
+
+
+class TaskCheckFix(Contract):
+    tasks: list[TaskCheckFixItem] = Field(min_length=1, max_length=50)

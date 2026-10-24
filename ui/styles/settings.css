@@ -717,3 +717,6 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .task-rule-form input:not([type=checkbox]),.task-rule-form select{max-width:100%;min-width:0}
 .task-rule-form input[name=ruleName]{flex:1 1 100%}
 .task-rule-form input[type=number]{width:90px}
+.task-check-types{display:flex;flex-wrap:wrap;gap:8px 16px;border:0;padding:0;margin:0}
+.task-check-types legend{margin-bottom:6px}
+[data-task-check-result] ul{margin:6px 0 10px;padding-left:18px;overflow-wrap:anywhere}

@@ -57,6 +57,8 @@ function renderSettingsRecurring() {
 let SYSTEM_ROUTINES = null, SYSTEM_ROUTINES_AT = 0, SYSTEM_ROUTINES_Q = '', SYSTEM_ROUTINES_HELD = false;
 const SYSTEM_ROUTINE_BUSY = new Set();
 function systemRoutineLastHTML(j) {
+  // A task check that runs when it happens shows what it caught, overrode and skipped instead of a last run.
+  if (j.check && !j.last) return `<span data-sysr-stats>${esc(j.stats || '')}</span>`;
   if (!j.records) return j.key === 'topic_fresh' ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
   const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished || j.last.started))}">${esc(ago(j.last.finished || j.last.started))}</span>`;
@@ -70,7 +72,8 @@ function systemRoutineAIHTML(j) {
 }
 function systemRoutineRuleHTML(j) {
   const part = list => list.map(esc).join(' <b class="sysr-and">AND</b> ');
-  return `<div class="sysr-rule" data-sysr-rule><b>WHEN</b> ${part(j.when || [])} <b>THEN</b> ${part(j.then || [])}</div>`;
+  const check = j.check ? ` <b>FOR</b> ${esc(j.for || 'all types')} <b>CHECK</b> ${esc(j.check_words || '')}` : '';
+  return `<div class="sysr-rule" data-sysr-rule><b>WHEN</b> ${part(j.when || [])}${check} <b>THEN</b> ${part(j.then || [])}</div>`;
 }
 function systemRoutineScheduleHTML(j) {
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
@@ -84,12 +87,14 @@ function systemRoutineScheduleHTML(j) {
 function systemRoutineControlHTML(j) {
   if (!j.switch) return j.needed ? '<span class="muted sysr-needed">Tico needs this to run</span>' : '';
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
+  if (!j.can_change && j.checkable) return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span><button type="button" class="ghost" data-task-check-now>Check now</button>`;
   if (!j.can_change) {
     // A member reads on or off; an admin looking at Health scan sees why they cannot change it.
     return `<span class="sysr-state" data-sysr-state>${j.on ? 'On' : 'Off'}</span>${j.owner_only && settingsIsAdmin() ? '<span class="muted sysr-owner" data-sysr-owner>Only the owner changes this</span>' : ''}`;
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
     ${j.kind === 'task_rule' ? `<button type="button" class="ghost" data-task-rule-edit${busy ? ' disabled' : ''}>Edit</button>` : ''}
+    ${j.checkable ? `<button type="button" class="ghost" data-task-check-now${busy ? ' disabled' : ''}>Check now</button>` : ''}
     ${j.controllable ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on ? ' disabled' : ''}${j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>` : ''}`;
 }
 function systemRoutineRowHTML(j) {
@@ -107,7 +112,8 @@ function systemRoutineRowsHTML(data) {
   return jobs.length ? jobs.map(systemRoutineRowHTML).join('') : '<div class="empty" data-sysr-none>No routine matches.</div>';
 }
 function systemRoutinesHTML(data) {
-  return `<div class="settings-bots-filters">${data.can_create_task_rule ? '<button type="button" class="primary" data-task-rule-new>New task rule</button>' : ''}<input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
+  const checks = (data.jobs || []).some(j => j.checkable) ? '<button type="button" class="ghost" data-task-check-all>Check all</button>' : '';
+  return `<div class="settings-bots-filters">${data.can_create_task_rule ? '<button type="button" class="primary" data-task-rule-new>New task rule</button>' : ''}${checks}<input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
       value="${esc(SYSTEM_ROUTINES_Q)}" placeholder="Search by name, when, then or department" aria-label="Search routines"></div>
     <div class="sysr-list" data-sysr-list>${systemRoutineRowsHTML(data)}</div>`;
 }
@@ -153,6 +159,8 @@ function systemRoutineFollow(key, n) {
 function systemRoutinesBind(el) {
   const add = el.querySelector('[data-task-rule-new]');
   if (add) add.onclick = () => taskRuleEditor();
+  const all = el.querySelector('[data-task-check-all]');
+  if (all) all.onclick = () => taskCheckRun(null);
   const search = el.querySelector('[data-sysr-search]');
   if (search) search.oninput = () => { SYSTEM_ROUTINES_Q = search.value; const list = el.querySelector('[data-sysr-list]'); if (list) list.innerHTML = systemRoutineRowsHTML(SYSTEM_ROUTINES); };
   const list = el.querySelector('[data-sysr-list]'); if (!list) return;
@@ -186,6 +194,8 @@ function systemRoutinesBind(el) {
   list.onclick = ev => {
     const edit = ev.target.closest('[data-task-rule-edit]');
     if (edit && !edit.disabled) { taskRuleEditor(SYSTEM_ROUTINES.jobs.find(j => j.key === edit.closest('[data-system-routine]').dataset.systemRoutine)); return; }
+    const now = ev.target.closest('[data-task-check-now]');
+    if (now && !now.disabled) { taskCheckRun(now.closest('[data-system-routine]').dataset.systemRoutine); return; }
     const run = ev.target.closest('[data-sysr-run]'); if (!run || run.disabled) return;
     const key = run.closest('[data-system-routine]').dataset.systemRoutine;
     void systemRoutineWrite(key, () => post('/v2/system-routines/' + encodeURIComponent(key) + '/run', {}));
@@ -204,6 +214,7 @@ async function renderSystemRoutines(force) {
 
 
 function taskRuleEditor(job) {
+  if (job?.check) return taskCheckEditor(job);
   const data = SYSTEM_ROUTINES, dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog';
   const department = job?.department?.id || data.task_rule_department || '';
@@ -232,4 +243,78 @@ function taskRuleEditor(job) {
     finally { button.disabled = false; }
   };
   document.body.appendChild(dialog); dialog.showModal(); form.elements.ruleName.focus();
+}
+
+
+// A task check's editor: its name, department, FOR task types, THEN action and, for quiet waits, the quiet time. The
+// trigger and the check stay the row's; the server checks the department's edit rights.
+function taskCheckEditor(job) {
+  const data = SYSTEM_ROUTINES, dialog = document.createElement('dialog');
+  const spec = (data.task_checks || []).find(c => c.key === job.check.key) || {actions: [], hours: false};
+  dialog.className = 'tmodal task-rule-dialog';
+  const department = job.department?.id || '';
+  const options = (data.task_rule_departments || []).map(d => `<option value="${esc(d.id)}"${d.id === department ? ' selected' : ''}>${esc(d.name)}</option>`).join('');
+  const types = (data.task_types || []).map(t => `<label><input type="checkbox" name="types" value="${esc(t.id)}"${(job.types || []).includes(t.id) ? ' checked' : ''}> ${esc(t.name)}</label>`).join('');
+  const single = spec.actions.some(a => a.key === 'block');
+  const then = single
+    ? `<select name="action">${spec.actions.map(a => `<option value="${esc(a.key)}"${job.actions?.[0] === a.key ? ' selected' : ''}>${esc(a.words)}</option>`).join('')}</select>`
+    : spec.actions.map(a => `<label><input type="checkbox" name="actions" value="${esc(a.key)}"${(job.actions || []).includes(a.key) ? ' checked' : ''}> ${esc(a.words)}</label>`).join(' then ');
+  dialog.innerHTML = `<form class="task-rule-form"><header><h2>Edit task check</h2><button type="button" class="ghost" data-close>Cancel</button></header>
+    <label>Name<input name="ruleName" maxlength="120" required value="${esc(job.name)}"></label>
+    <label>Department<select name="department" required>${options}</select></label>
+    <p><b>WHEN</b> ${esc((job.when || [])[0] || '')}</p>
+    <fieldset class="task-check-types"><legend><b>FOR</b> task types (none ticked: all types)</legend>${types}</fieldset>
+    <p><b>CHECK</b> ${esc(job.check_words || '')}</p>
+    ${spec.hours ? `<label>Quiet for <input name="hours" type="number" min="1" max="8760" value="${esc(job.check.hours || '')}"> hours</label>` : ''}
+    <div><b>THEN</b> ${then}</div>
+    <label><input type="checkbox" name="enabled"${job.on ? ' checked' : ''}> On</label>
+    <p class="err" role="status" data-task-rule-error></p><footer><button type="submit" class="primary">Save check</button></footer></form>`;
+  const form = dialog.querySelector('form');
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove());
+  form.onsubmit = async ev => {
+    ev.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true;
+    const values = new FormData(form);
+    const body = {name: values.get('ruleName'), department: values.get('department'), on: values.has('enabled'),
+      types: values.getAll('types'), actions: single ? [values.get('action')] : values.getAll('actions')};
+    if (spec.hours) body.check = {key: job.check.key, hours: values.get('hours') ? Number(values.get('hours')) : null};
+    try {
+      const out = await put('/v2/task-rules/' + encodeURIComponent(job.key), body);
+      systemRoutineReplace(out.job); dialog.close(); systemRoutinesPaint();
+    } catch (e) { dialog.querySelector('[data-task-rule-error]').textContent = e.message || 'Could not save the check'; }
+    finally { button.disabled = false; }
+  };
+  document.body.appendChild(dialog); dialog.showModal(); form.elements.ruleName.focus();
+}
+
+// Check now (one check) or Check all: a dry run that lists what breaks each check and changes nothing. A person may
+// then confirm the listed fix, on at most 50 tasks, which runs with their own rights on each task.
+async function taskCheckRun(key) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'tmodal task-rule-dialog';
+  dialog.innerHTML = `<div class="task-rule-form"><header><h2>${key ? 'Check now' : 'Check all'}</h2><button type="button" class="ghost" data-close>Close</button></header><div data-task-check-out><p class="muted">Checking…</p></div></div>`;
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog); dialog.showModal();
+  const out = dialog.querySelector('[data-task-check-out]');
+  let results;
+  try { results = key ? [await post('/v2/task-rules/' + encodeURIComponent(key) + '/check', {})] : (await post('/v2/task-rules/check-all', {})).checks; }
+  catch (e) { out.innerHTML = `<p class="err">${esc(e.message || 'Could not check')}</p>`; return; }
+  const person = ['owner', 'human'].includes(S.me?.role);
+  out.innerHTML = results.map((r, i) => `<section data-task-check-result="${esc(r.key)}"><h3>${esc(r.name)}</h3>
+    ${r.found.length ? `<ul>${r.found.map(f => `<li>${esc(f.task.title)} <span class="muted">(${esc(f.task.status)}, ${esc(f.task.owner)}, ${esc(f.task.age)})</span>: ${esc(f.why)}</li>`).join('')}</ul>
+      ${person ? `<button type="button" class="primary" data-task-check-fix="${i}">${esc(r.fix[0].toUpperCase() + r.fix.slice(1))}: ${r.found.length} task${r.found.length === 1 ? '' : 's'}</button>` : ''}
+      <p class="settings-cell-note" role="status" data-task-check-status></p>`
+      : '<p class="muted">Nothing breaks this check.</p>'}</section>`).join('') || '<p class="muted">No check is on.</p>';
+  out.onclick = async ev => {
+    const button = ev.target.closest('[data-task-check-fix]'); if (!button) return;
+    const r = results[Number(button.dataset.taskCheckFix)], status = button.parentElement.querySelector('[data-task-check-status]');
+    button.disabled = true;
+    try {
+      const done = await post('/v2/task-rules/' + encodeURIComponent(r.key) + '/fix',
+        {tasks: r.found.map(f => ({task: f.task.id, ...(f.duplicate_of ? {duplicate_of: f.duplicate_of.id} : {})}))});
+      const refused = done.results.filter(x => !x.ok);
+      status.textContent = `Fixed ${done.fixed}` + (refused.length ? `; ${refused.length} refused: ${refused[0].detail}` : '');
+    } catch (e) { status.textContent = e.message || 'Could not fix'; status.classList.add('err'); button.disabled = false; }
+  };
 }

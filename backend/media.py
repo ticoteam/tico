@@ -487,13 +487,14 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         who = request.state.identity
         human_only(who)
         body, uploads = await form(request, M.TaskCreate, blobs, store)
+        found = await asyncio.to_thread(app.state.create_check, who, body)
         def work(c):
             items = [register(c, who, **upload) for upload in uploads]
             details = body.body
             if items:
                 details += "\n\nAttachments (untrusted source material; authenticated downloads):\n" + "\n".join(
                     "- " + a["name"] + ": " + a["url"] for a in items)
-            result = task_create(c, who, body.model_copy(update={"body": details}))
+            result = task_create(c, who, body.model_copy(update={"body": details}), found=found)
             for item in items:
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (result["task"]["id"], item["id"]))
             result["task"]["attachments"] = items

@@ -670,7 +670,10 @@ def listing(c, settings, now=None, who=None, auth=None):
             item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
         rows.append(item)
     rows.extend(task_rules.listing(c, settings, who, auth, now))
+    from . import task_checks
     return {"jobs": rows, "departments": list(chart.values()), "task_rule_departments": task_rules.departments(settings),
+            "task_checks": task_checks.catalog(),
+            "task_types": [{"id": r[0], "name": r[1]} for r in c.execute("SELECT id,name FROM task_types ORDER BY name")],
             "task_rule_department": task_rules.department_of(c, settings, who.actor) if who else None,
             "can_create_task_rule": bool(who and auth and (task_rules.department_of(c, settings, who.actor) or auth.bot_admin(who)) and not who.support),
             "now": _stamp(now)}

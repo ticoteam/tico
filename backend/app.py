@@ -29,6 +29,7 @@ from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifec
 from . import outcome_stats
 from . import ceo_bot, invites, owner_link
 from . import login_holds
+from . import task_checks
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
 from . import task_relations as TR
@@ -3244,9 +3245,10 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None, review_prs=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None, found=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
-        private they are its requester, so its two parties are the bot and them."""
+        private they are its requester, so its two parties are the bot and them. `found` is what the before-create
+        task checks found off the write lock (`create_check`)."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if privacy.private_execution(c, who):
@@ -3332,6 +3334,7 @@ def create_app(settings=None):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if guest:
             H.task_reach(c, who.actor, parent, owner)
+        checked = task_checks.on_create(c, who.actor, found, body.reason)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
@@ -3341,7 +3344,9 @@ def create_app(settings=None):
                             number=body.number, mover=mover(c, who) or None,
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
                             change_paths=body.change_paths, qa=body.qa,
-                            qa_not_checkable_live=body.qa_not_checkable_live)
+                            qa_not_checkable_live=body.qa_not_checkable_live,
+                            override_duplicate=bool(found and found.get("match") and str(body.reason or "").strip()))
+        task_checks.after_create(c, who.actor, found, row["id"], body.reason)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
@@ -3385,7 +3390,7 @@ def create_app(settings=None):
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
+        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask, checked)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
@@ -3427,7 +3432,22 @@ def create_app(settings=None):
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots))
+        found = create_check(request.state.identity, body)
+        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots, found=found))
+
+    def create_check(who, body):
+        """The before-create task checks (backend/task_checks.py), read and asked before the write so a Decide call
+        never holds the write lock. A caller the create itself would refuse is left to that refusal."""
+        try:
+            with store.read() as c:
+                from .shared_bots import route
+                owner = auth.target(c, who, route(c, who.actor, auth.target(c, who, body.owner, need="write")), need="write")
+                typ = H.type_get(c, body.type) if body.type else None
+        except (Problem, H.Refused):
+            return None
+        return task_checks.before_create(store, app.state.judge, who, owner, (typ or {}).get("id") or H.GENERAL_TYPE,
+                                         body.title.strip(), body.body)
+    app.state.create_check = create_check
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):

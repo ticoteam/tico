@@ -1882,7 +1882,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # A writing correction ("start the title with a verb") is fixed by retrying, not a sign the bot
     # is reaching where it should not: it neither counts nor quarantines. A bot was quarantined by
     # ten refusals, three of them lint on one task title.
-    if rule in ("lint", "queue_full"):
+    if rule in ("lint", "queue_full", "task_check"):
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -1892,7 +1892,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     since = max(day, (lifted or {}).get("ts") or "")
     counted, last, total = [], {}, 0
     for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
-                                      "AND rule NOT IN ('lint','queue_full') ORDER BY ts, id", (actor, since))):
+                                      "AND rule NOT IN ('lint','queue_full','task_check') ORDER BY ts, id", (actor, since))):
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
@@ -4896,7 +4896,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False):
+                change_paths=None, qa=None, qa_not_checkable_live=False, override_duplicate=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -4994,7 +4994,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                      f"AND coalesce({TR.parent_sql()},'')=? "
                      f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))})",
                (requester, target, title, parent_id or "", *ACTIVE_STATUSES))
-    if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (deduplicate or actor != KEEPER):
+    # `override_duplicate`: the caller gave a task check its reason this is not that task (backend/task_checks.py).
+    if (dup and not override_duplicate and task_private_readable(conn, actor, task(conn, dup["id"]))
+            and (deduplicate or actor != KEEPER)):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
         refuse(conn, actor, "duplicate", detail)
@@ -5243,13 +5245,23 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if (status == "waiting" and row["status"] != "waiting" and is_bot(row["owner"])
                 and not waiting_for(conn, waiting_row)):
             if row["owner"] == row["requester"] and not str(note or "").strip():
-                refuse(conn, actor, "lint",
-                       "You asked for this task yourself, so nobody will answer it: say what you are waiting on "
-                       "in a note, file the child task, blocker or approval first, name the person with --on, "
-                       "or keep working")
+                # The Routines row "Waiting must say on whom or what" switches, scopes and names this check.
+                from . import task_checks
+                action, check = task_checks.waiting(conn, row)
+                said = ("You asked for this task yourself, so nobody will answer it: say what you are waiting on "
+                        "in a note, file the child task, blocker or approval first, name the person with --on, "
+                        "or keep working")
+                if action == "block":
+                    try:
+                        refuse(conn, actor, "lint", (f"Task check '{check['name']}': " if check else "") + said)
+                    except Refused as exc:
+                        raise task_checks.tag(exc, check, task_id) if check else exc
+                if action == "warn":
+                    task_checks.record(conn, "task_check.caught", check["id"], {"task": task_id, "warn": True})
+                    self_wait = [f"Task check '{check['name']}': {said}"]
             # A note naming what it waits on parks it, but a note wakes nobody (bots parked tasks "waiting on
             # BotOps" that BotOps never heard of): the hint goes back with the write.
-            self_wait = [f"nothing this task waits on is recorded, so it goes back to open in "
+            self_wait = self_wait + [f"nothing this task waits on is recorded, so it goes back to open in "
                          f"{STRANDED_GRACE_HOURS} hours: file a subtask for whoever must act (hub task create "
                          f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                          "or set --due for when to look again"]

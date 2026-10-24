@@ -405,6 +405,8 @@ def run(args, who=None):
                 payload["next_run"] = True
             if getattr(args, "request_id", None):
                 payload["request_id"] = args.request_id
+            if getattr(args, "reason", None):
+                payload["reason"] = args.reason
             links = s3links.apply(client, payload, ("body",))
             return s3links.annotate(post("tasks", payload), links)
         if sub == "show":

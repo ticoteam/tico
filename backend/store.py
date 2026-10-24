@@ -415,7 +415,12 @@ def refused(c, identity, exc):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422)
+    if getattr(exc, "task_check", None):
+        # A task check's catch is counted on its rule though the write it refused rolled back.
+        from . import task_checks
+        task_checks.caught(c, **exc.task_check)
+    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
+                   extra=getattr(exc, "extra", None) if getattr(exc, "task_check", None) else None)
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -798,6 +803,8 @@ class Store:
             c.executescript(_system_routines.SCHEMA)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
+            from . import task_checks as _task_checks
+            _task_checks.migrate(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs

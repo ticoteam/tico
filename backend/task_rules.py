@@ -1,5 +1,8 @@
 """Stored task rules in the shared Routines list. Only catalogued deterministic triggers/actions run.
 
+A row with a CHECK (`check_json`) and a FOR scope (`types_json`) is a task check (backend/task_checks.py): the same
+row shape, department tag and edit rights.
+
 Department tags come from the org builder's fixed catalog, not arbitrary group names. The tag
 controls who edits the rule; it does not narrow the company-wide close rule's task selection.
 Every close uses the normal keeper close path, with its audit and ordinary reopen as undo.
@@ -8,6 +11,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from . import groups, people, system_routines as SR
+from . import task_checks as TC
 from .store import H, Problem, encode
 
 DEFAULT = "task-rule-close-after-done"
@@ -20,7 +24,7 @@ CREATE TABLE IF NOT EXISTS task_rules(
  preset TEXT NOT NULL, at TEXT, created_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
 DROP INDEX IF EXISTS tasks_rule_due;
 CREATE INDEX IF NOT EXISTS tasks_rule_done_due ON tasks(updated,id) WHERE status='done' AND closed_at IS NULL;
-INSERT OR IGNORE INTO task_rules VALUES(
+INSERT OR IGNORE INTO task_rules(id,name,department,triggers_json,actions_json,enabled,preset,at,created_by,created,updated) VALUES(
  'task-rule-close-after-done','Close 24h after done','engineering',
  '[{"key":"done_untouched","hours":24}]','["close"]',1,'15m',NULL,'keeper',
  strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
@@ -68,7 +72,9 @@ def get(c, key):
     return dict(row)
 
 
-def validate(triggers, actions):
+def validate(triggers, actions, check=None, types=None):
+    if check is not None:
+        return TC.validate(triggers, actions, check, types if types is not None else [])
     if not triggers or not actions:
         raise Problem("invalid", "Choose at least one trigger and action", 422)
     for trigger in triggers:
@@ -92,23 +98,45 @@ def save(c, settings, auth, who, body, key=None):
     require_change(c, settings, auth, who, department)
     if not before and c.execute("SELECT count(*) FROM task_rules").fetchone()[0] >= MAX_RULES:
         raise Problem("conflict", "Edit an existing rule; the task rule list is full", 409)
-    triggers = body.triggers if body.triggers is not None else json.loads(before["triggers_json"]) if before else [{"key": "done_untouched", "hours": 24}]
-    actions = body.actions if body.actions is not None else json.loads(before["actions_json"]) if before else ["close"]
-    validate(triggers, actions)
+    # A row is a check or a close rule for life: an edit never turns one into the other.
+    check = TC.check_of(before) if before else body.check
+    if before and body.check is not None:
+        if not check or body.check.get("key") != check.get("key"):
+            raise Problem("invalid", "A rule keeps its check; make a new rule for another", 422)
+        check = body.check
+    types = body.types if body.types is not None else TC.types_of(before) if before else []
+    if check is not None:
+        spec = TC.CHECKS.get(check.get("key")) if isinstance(check, dict) else None
+        default_triggers = [{"key": spec["trigger"]}] if spec else []
+        default_actions = [spec["actions"][0]] if spec else []
+    else:
+        default_triggers, default_actions = [{"key": "done_untouched", "hours": 24}], ["close"]
+    triggers = body.triggers if body.triggers is not None else json.loads(before["triggers_json"]) if before else default_triggers
+    actions = body.actions if body.actions is not None else json.loads(before["actions_json"]) if before else default_actions
+    validate(triggers, actions, check, types)
+    if check is not None:
+        known = {r[0] for r in c.execute("SELECT id FROM task_types")}
+        if any(t not in known for t in types):
+            raise Problem("invalid", "Choose task types that exist, or all types", 422)
     name = body.name if body.name is not None else before["name"] if before else "Close after done"
     if not name:
         raise Problem("invalid", "Give the rule a name", 422)
     on = body.on if body.on is not None else bool(before["enabled"]) if before else True
+    if on and check is not None and TC.CHECKS[check["key"]]["hours"] and not check.get("hours"):
+        raise Problem("invalid", "Set the quiet time for this department or task type before switching it on", 422)
     preset = body.preset or (before["preset"] if before else SR.FIFTEEN)
     at = body.at if body.at is not None else before["at"] if before else None
     if preset == SR.DAILY and (not at or not SR.AT_RE.fullmatch(at)):
         raise Problem("invalid", "Choose a daily time", 422)
     key, now = key or "task-rule-" + H.new_id(), H.now()
-    c.execute("INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+    c.execute("INSERT INTO task_rules(id,name,department,triggers_json,actions_json,enabled,preset,at,created_by,created,"
+              "updated,types_json,check_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
               "name=excluded.name,department=excluded.department,triggers_json=excluded.triggers_json,"
-              "actions_json=excluded.actions_json,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated=excluded.updated",
+              "actions_json=excluded.actions_json,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated=excluded.updated,"
+              "types_json=excluded.types_json,check_json=excluded.check_json",
               (key, name, department, encode(triggers), encode(actions), int(on), preset, at,
-               before["created_by"] if before else who.actor, before["created"] if before else now, now))
+               before["created_by"] if before else who.actor, before["created"] if before else now, now,
+               encode(types), encode(check) if check is not None else None))
     H.event(c, who.actor, "task_rule.updated" if before else "task_rule.created", key,
             {"before": before, "after": get(c, key)})
     return row(c, settings, get(c, key), who, auth)
@@ -121,17 +149,20 @@ def config(rule):
 def row(c, settings, rule, who=None, auth=None, now=None, last=None):
     now = now or datetime.now(timezone.utc)
     triggers, actions = json.loads(rule["triggers_json"]), json.loads(rule["actions_json"])
-    validate(triggers, actions)
+    check = TC.check_of(rule)
+    validate(triggers, actions, check, TC.types_of(rule))
     chart = {d["id"]: d["name"] for d in departments(settings)}
     department = rule["department"]
-    when = [TRIGGERS[t["key"]][0](t) for t in triggers]
-    then = [ACTIONS[a][0] for a in actions]
+    extra = TC.row_fields(c, rule, now) if check else {}
+    when = extra.get("when") or [TRIGGERS[t["key"]][0](t) for t in triggers]
+    then = extra.get("then") or [ACTIONS[a][0] for a in actions]
     if last is None:
         found = c.execute("SELECT * FROM system_runs WHERE job=? ORDER BY started DESC LIMIT 1", (rule["id"],)).fetchone()
         last = dict(found) if found else None
     cfg = config(rule)
-    following = SR.next_due(cfg, H.parse_ts(last["started"]) if last else None, now) if cfg["on"] else None
-    return {"key": rule["id"], "kind": "task_rule", "name": rule["name"],
+    event_driven = bool(check) and not extra.get("scheduled")
+    following = SR.next_due(cfg, H.parse_ts(last["started"]) if last else None, now) if cfg["on"] and not event_driven else None
+    out = {"key": rule["id"], "kind": "task_rule", "name": rule["name"],
             "what": "Closes eligible done tasks across the company. Reopen a task to undo.",
             "when": when, "then": then, "department": {"id": department, "name": chart.get(department, department), "in_chart": department in chart},
             "triggers": triggers, "actions": actions, "schedule": SR.PRESETS[cfg["preset"]][0].format(at=cfg["at"] or ""),
@@ -142,6 +173,13 @@ def row(c, settings, rule, who=None, auth=None, now=None, last=None):
             "last": {k: bool(last[k]) if k == "ok" else last[k] for k in ("started", "finished", "ok", "result", "runs")} if last else None,
             "next": SR._stamp(following) if following else None,
             "search": " ".join([rule["name"], *when, *then, chart.get(department, department), "done close tasks"]).lower()}
+    if check:
+        out.update({k: extra[k] for k in ("check", "types", "for", "check_words", "decide", "what", "stats", "checkable")})
+        out["search"] = " ".join([rule["name"], *when, extra["for"], extra["check_words"], *then,
+                                  chart.get(department, department), "task check checks"]).lower()
+        if event_driven:
+            out.update({"schedule": "When it happens", "presets": [], "next": None})
+    return out
 
 
 def listing(c, settings, who=None, auth=None, now=None):
@@ -224,7 +262,16 @@ def tick(store, now, failures):
                 if not rule["enabled"] or not SR.due(config(rule), now, H.parse_ts(last)):
                     continue
                 triggers, actions = json.loads(rule["triggers_json"]), json.loads(rule["actions_json"])
-                validate(triggers, actions)
+                check = TC.check_of(rule)
+                validate(triggers, actions, check, TC.types_of(rule))
+                if check:
+                    if TC.CHECKS[check["key"]]["trigger"] != "schedule":
+                        continue
+                    count, said = TC.quiet_pass(c, rule, now, remaining)
+                    run.did(said, quiet=not count)
+                    SR.save(c, run)
+                    remaining -= count
+                    continue
                 hours = max(t["hours"] for t in triggers)
                 cutoff = SR._stamp(now - timedelta(hours=hours))
                 candidates = c.execute(DUE_SQL, (cutoff,cutoff,cutoff,cutoff,cutoff,remaining)).fetchall()
@@ -262,3 +309,51 @@ def install(app, store, auth, mutate):
     def update_task_rule(key: str, request: Request, body: M.TaskRuleUpdate):
         who = request.state.identity
         return mutate(request, body, lambda c: {"job": save(c, store.settings, auth, who, body, key)})
+
+    def visible(who):
+        def readable(c, row):
+            try:
+                auth.task(c, who, row["id"])
+                return True
+            except Problem:
+                return False
+        return readable
+
+    def checks(c, key=None):
+        rows = [dict(r) for r in c.execute("SELECT * FROM task_rules WHERE check_json IS NOT NULL ORDER BY created,id")]
+        if key is None:
+            return [r for r in rows if r["enabled"] and (TC.check_of(r).get("hours") or not TC.CHECKS[TC.check_of(r)["key"]]["hours"])]
+        rule = next((r for r in rows if r["id"] == key), None)
+        if not rule:
+            raise Problem("not_found", "No such task check", 404)
+        return [rule]
+
+    @app.post("/api/v2/task-rules/check-all")
+    def task_rules_check_all(request: Request, body: M.Empty):
+        """Check all: every switched-on check as a dry run over the tasks the caller can read. Changes nothing."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return {"checks": [TC.dry_run(c, rule, visible(who)) for rule in checks(c)]}
+
+    @app.post("/api/v2/task-rules/{key}/check")
+    def task_rule_check(key: str, request: Request, body: M.Empty):
+        """Check now: one check as a dry run over the tasks the caller can read. Changes nothing."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return TC.dry_run(c, checks(c, key)[0], visible(who))
+
+    @app.post("/api/v2/task-rules/{key}/fix")
+    def task_rule_fix(key: str, request: Request, body: M.TaskCheckFix):
+        """A person's confirm of a dry run's fix, on at most 50 tasks, with their own rights on each."""
+        who = request.state.identity
+        if who.role not in ("owner", "human") or who.support or getattr(who, "via", ""):
+            raise Problem("forbidden", "A person confirms a check's fix", 403)
+
+        def work(c):
+            rule = checks(c, key)[0]
+            for item in body.tasks:
+                auth.task(c, who, item.task)
+            return TC.fix(c, who, rule, [item.model_dump() for item in body.tasks])
+        return mutate(request, body, work)

@@ -38,9 +38,15 @@ function system(role) {
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
   ];
   jobs.push(job('task-rule-close-after-done', 'Close 24h after done', {kind: 'task_rule', group: 'task_rules', switch: true, on: true, can_change: role !== 'member', preset: '15m', presets: ALL, department: {id: 'engineering', name: 'Engineering', in_chart: true}, triggers: [{key: 'done_untouched', hours: 24}], actions: ['close'], when: ['a task has been done and untouched for 24 hours'], then: ['close it']}));
+  if (role === 'checks') jobs.push(job('task-check-duplicate', 'Duplicate', {kind: 'task_rule', group: 'task_rules', switch: true, on: true, can_change: true,
+    checkable: true, check: {key: 'duplicate'}, types: [], for: 'all types', check_words: 'it may already be asked for in an open task (Decide)',
+    schedule: 'When it happens', presets: [], preset: '15m', department: {id: 'engineering', name: 'Engineering', in_chart: true},
+    triggers: [{key: 'before_create'}], actions: ['block'], when: ['a task is about to be created'], then: ['block it'],
+    stats: 'Last 30 days: 2 catches, 1 override, no skipped checks'}));
   const words = {stale_review: 'stale done close suggest checks that suggest', approval_expiry: 'approval expire close done', due_reminders: 'due remind'};
   for (const j of jobs) j.search = [j.name, j.what, ...j.when, ...j.then, j.department.name, j.group, words[j.key] || ''].join(' ').toLowerCase();
-  return {now: new Date().toISOString(), departments: ['Engineering'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], task_rule_department: 'engineering', can_create_task_rule: role !== 'member', jobs};
+  return {now: new Date().toISOString(), departments: ['Engineering'], task_types: [{id: 'general', name: 'General'}, {id: 'dev', name: 'Dev'}],
+    task_checks: [{key: 'duplicate', trigger: 'before_create', hours: false, actions: [{key: 'block', words: 'block it'}, {key: 'warn', words: 'warn'}]}], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], task_rule_department: 'engineering', can_create_task_rule: role !== 'member', jobs};
 }
 
 async function open(browser, role) {
@@ -57,7 +63,7 @@ async function open(browser, role) {
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const config = {version: '0.1.0', app_name: 'Tico'};
-    if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role: role === 'owner' ? 'owner' : 'human', bot_admin: role === 'admin',
+    if (p === '/api/me') return json({id: ['owner', 'checks'].includes(role) ? 'ana' : 'cara', role: ['owner', 'checks'].includes(role) ? 'owner' : 'human', bot_admin: role === 'admin',
       name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active'}]);
@@ -67,6 +73,10 @@ async function open(browser, role) {
     if (p === '/api/v2/models') return json({models: [], harnesses});
     if (p === '/api/v2/access') return json({rules: {}});
     if (p === '/api/v2/system-routines') { asked.push(req.method()); return json(data); }
+    if (p.endsWith('/check')) return json({key: 'task-check-duplicate', name: 'Duplicate', fix: 'close it as a duplicate and link it',
+      found: [{task: {id: 'b1', title: 'Prepare export file', status: 'open', owner: 'ops', age: '2 days old'},
+               duplicate_of: {id: 'a1', title: 'Prepare the export', status: 'open', owner: 'ops', age: '5 days old'}, why: 'looks like task a1', fix: 'close it as a duplicate and link it'}]});
+    if (p.endsWith('/fix')) { writes.push({method: 'POST', key: 'fix', body: req.postDataJSON()}); return json({key: 'task-check-duplicate', fixed: 1, results: [{task: 'b1', ok: true}]}); }
     if (p.startsWith('/api/v2/task-rules')) {
       const body = req.postDataJSON();
       writes.push({method: req.method(), key: p.split('/').at(-1), body});
@@ -223,6 +233,34 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
       await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
       assert.equal(await row(page, 'task-rule-new').count(), 1);
       assert.equal(writes.at(-1).method, 'POST');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A task check row reads WHEN ... FOR ... CHECK ... THEN ..., shows its catches in words, edits its FOR and THEN,
+      // and Check now lists what breaks it, changing nothing until a person confirms the fix.
+      const {page, errors, writes} = await open(browser, 'checks');
+      const check = row(page, 'task-check-duplicate');
+      assert.equal(await check.locator('[data-sysr-rule]').innerText(),
+        'WHEN a task is about to be created FOR all types CHECK it may already be asked for in an open task (Decide) THEN block it');
+      assert.equal(await check.locator('[data-sysr-stats]').innerText(), 'Last 30 days: 2 catches, 1 override, no skipped checks');
+      await check.locator('[data-task-rule-edit]').click();
+      await page.locator('.task-rule-dialog input[name=types][value=dev]').check();
+      await page.locator('.task-rule-dialog select[name=action]').selectOption('warn');
+      await page.locator('.task-rule-dialog button[type=submit]').click();
+      await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
+      assert.deepEqual(writes.at(-1).body, {name: 'Duplicate', department: 'engineering', on: true, types: ['dev'], actions: ['warn']});
+      await row(page, 'task-check-duplicate').locator('[data-task-check-now]').click();
+      await page.locator('[data-task-check-result] li').filter({hasText: 'Prepare export file'}).waitFor();
+      const before = writes.length;
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        assert.equal(await page.locator('.task-rule-dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
+      }
+      assert.equal(writes.length, before, 'a dry run writes nothing');
+      await page.locator('[data-task-check-fix]').click();
+      await page.locator('[data-task-check-status]').filter({hasText: 'Fixed 1'}).waitFor();
+      assert.deepEqual(writes.at(-1), {method: 'POST', key: 'fix', body: {tasks: [{task: 'b1', duplicate_of: 'a1'}]}});
       assert.deepEqual(errors, []);
       await page.close();
     }
