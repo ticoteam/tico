@@ -109,6 +109,32 @@ def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_li
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (outside["id"],)).fetchone()[0] == "queued"
 
 
+def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_released(api, monkeypatch):
+    from backend import bot_to_bot
+    backlog = []
+    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "the check")
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
+                                "relations": [{"task": task["id"], "kind": "parent"}]})
+    other = post(api, "tasks", {"owner": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
+    note = post(api, "notes", {"to": "ops", "text": "Cancellations are flat."})["note"]
+    post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
+                                   "expected_revision": get(api, "bots/ops")["revision"]})
+    run = lambda: post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]  # noqa: E731
+    limited = run()
+    assert limited["lane"] == "task:" + task["id"]
+    assert [t["id"] for t in limited["next_run"]] == [child["id"]] and limited["notes"] == [] and backlog == []
+    with api.app.state.store.read() as c:                     # the held work is left exactly as it was
+        assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+        assert c.execute("SELECT carried_by FROM notes WHERE id=?", (note["id"],)).fetchone()[0] is None
+    post(api, "bots/ops/control", {"action": "unscope", "expected_revision": get(api, "bots/ops")["revision"]})
+    post(api, "chat/ops", {"text": "Anything new?"})
+    released = run()
+    assert [t["id"] for t in released["next_run"]] == [other["id"]]
+    assert [n["id"] for n in released["notes"]] == [note["id"]] and backlog == ["ops"]
+
+
 def test_claim_limit_migration_upgrades_a_database_at_62_without_lifting_a_drain(api):
     store = api.app.state.store
     task_bot(api, lanes=True)
