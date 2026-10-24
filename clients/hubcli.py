@@ -191,7 +191,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            and add it again. `--scope KEY=` takes a key off, `--note ""` clears it
     hub tool remove <bot> <tool-id>        ask BotOps to remove one (or withdraw a pending request)
     hub routine list [--bot X]             the routines a bot runs on a schedule (yours by default)
-    hub routine set <key> --title "..." (--cron "0 7 * * 1-5" | --on meeting.ready)
+    hub routine set <key> --title "..." (--cron "0 7 * * 1-5" | --on meeting.ready | --on "task.step:<type>/<step>")
                     [--text "..."|--text-file f] [--timezone Z] [--bot X] [--disabled]
                                            create or update one by its key; Tico's row is the routine
     hub routine update <id|key> [--title ...] [--text ...|--text-file f] [--cron ...|--on ...]
@@ -1446,7 +1446,9 @@ def parser():
     s.add_argument("key", help="a stable name, letters, digits, dots, dashes or underscores")
     s.add_argument("--title", required=True)
     s.add_argument("--cron", help="five fields, in --timezone (America/Los_Angeles by default)")
-    s.add_argument("--on", help="a Tico event instead of a time: meeting.ready, or webhook.<id> (hub trigger list)")
+    s.add_argument("--on", help="a Tico event instead of a time: meeting.ready; webhook.<id> (hub trigger list); or "
+                                "\"task.step:<type>/<step>\" when a task lands in that step, e.g. "
+                                "\"task.step:Dev ticket/PR Review\" (never on your own move; hub task types lists steps)")
     s.add_argument("--text", default="", help="what the bot is told each time")
     s.add_argument("--text-file", dest="text_file")
     s.add_argument("--timezone")

@@ -26,6 +26,7 @@ Three doors, one table (`schedules`, `backend/routines.py`):
   hub routine list [--bot X]
   hub routine set <key> --title "Daily audit" --cron "0 7 * * 1-5" --text-file playbooks/audit.md
   hub routine set <key> --title "Meeting debrief" --on meeting.ready --text "..."
+  hub routine set <key> --title "Review the PR" --on "task.step:Dev ticket/PR Review" --text "..."
   hub routine update <id> [--title ..] [--text ..] [--cron ..|--on ..] [--timezone ..] [--enable|--disable]
   hub routine delete <id>
   ```
@@ -56,6 +57,29 @@ on something happening in Tico (`on`), never both. Tico emits `meeting.ready` wh
 <meeting title>`; the body is the routine's text, then the event's facts, then the meeting's
 notes and transcript. Re-emitting the same event for the same subject does nothing. The event
 list is `clients/routines.py EVENTS`.
+
+## When a task lands in a step
+
+A routine `on` `task.step:<type>/<step>` runs each time a task of that type lands in that step (column):
+`task.step:Dev ticket/PR Review` wakes a reviewer bot when a Dev ticket reaches PR Review, and
+`task.step:Dev ticket/QA/PR Rejected` wakes the builder when one is sent back. In the site it is *Runs: On a
+trigger*, under *When a task lands in a step*; `hub task types` lists the types and their steps. The name is checked
+against the board when the routine is saved and kept as the board spells it; renaming the type or the step carries
+its routines along, and deleting the step leaves them in place, silent. General's steps are its statuses, which every
+run changes, so a routine listens only to another type's steps.
+
+Every way a task changes step counts, once per landing: a drag on the board, API v2, `hub task update --step`
+or the MCP tool, a bot's move, the keeper's own moves, and a task filed straight into the step (its first step
+included). Each landing opens one task per listening routine, titled `<routine title>: #<number> <ticket title>`,
+whose body is the routine's text and then: `task` (its id), `number`, `title`, `link`, `type`, `from_step`
+(`(just filed)` for a new task; `<type>/<step>` when it came from another type), `to_step`, `moved_by`, and `note`,
+the note given with the move. The ticket's own body and comments stay on the ticket, for the bot to read.
+
+Two rules keep it safe. A bot's own move never runs its own routines, so a bot that moves a ticket into the
+step it listens to, or out and back in, cannot wake itself without end; a person's or another bot's move does,
+which is how two bots hand a ticket back and forth. And a routine runs only when its bot may read the task (a
+private task it is not on, or a type its access does not cover, opens nothing), judged after the whole write, so
+a move that also makes the task private opens nothing for a bot that may not read it.
 
 ## Triggers
 

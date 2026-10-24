@@ -262,3 +262,49 @@ def test_a_routine_run_stays_company_scope_and_a_private_next_run_task_gets_its_
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
                          "AND j.state='queued' AND json_extract(m.refs_json,'$.task')=?", (secret["id"],)).fetchone()
+
+
+def test_a_ticket_landing_in_a_step_wakes_the_routine_once_never_its_own_mover_nor_a_bot_that_cannot_read_it(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        board = H.type_create(c, H.KEEPER, "Dev ticket", [{"name": "Bug Reports", "status": "open"},
+                              {"name": "PR Review", "status": "review"}, {"name": "QA/PR Rejected", "status": "doing"}],
+                              bots="work", numbered=True)
+    create(api, "ops", dict(key="review", on="task.step:dev ticket/pr review", title="Review the PR",
+                            text="Review the pull request on this ticket."))
+
+    def listening():
+        return next(r["on"] for r in rows(api) if r["key"] == "review")
+
+    assert listening() == "task.step:Dev ticket/PR Review"      # saved as the board spells it
+    create(api, "ops", dict(key="all", on="task.step:General/Done", title="Every finished task"), expected=422)
+    ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the login button", "body": "It does nothing.",
+                                 "type": board["id"]})
+
+    def runs():
+        with api.app.state.store.read() as c:
+            return [H.task(c, r["task_id"]) for r in
+                    c.execute("SELECT task_id FROM schedule_occurrences WHERE schedule_id='ops:review'").fetchall()]
+
+    def move(body):     # as the board's drag does, through API v2
+        post(api, "tasks/" + ticket["id"], {**body, "version": get(api, "tasks/" + ticket["id"])["task"]["version"]})
+
+    move({"step": "PR Review", "note": "PR 12 is up"})
+    [run] = runs()
+    assert run["owner"] == "bot:ops" and run["title"] == f"Review the PR: #{ticket['number']} Fix the login button"
+    for line in (f"task: {ticket['id']}", f"number: {ticket['number']}", "title: Fix the login button",
+                 "from_step: Bug Reports", "to_step: PR Review", "note: PR 12 is up", f"/#/task/{ticket['id']}"):
+        assert line in run["body"]
+    with api.app.state.store.transaction() as c:
+        # The bot's own moves never wake its own routine, so it cannot loop on itself.
+        H.task_update(c, "bot:ops", ticket["id"], step="QA/PR Rejected")
+        H.task_update(c, "bot:ops", ticket["id"], step="PR Review")
+        H.task_update(c, "human:ana", ticket["id"], step="Bug Reports")
+    assert len(runs()) == 1
+    # Made private in the same write that moves it: the bot may not read it, so nothing opens.
+    move({"step": "PR Review", "private": True})
+    assert len(runs()) == 1
+    with api.app.state.store.transaction() as c:
+        H.type_update(c, H.KEEPER, board["id"], steps=[{**s, "name": "Code Review"} if s["name"] == "PR Review" else s
+                                                       for s in H.type_get(c, board["id"])["steps"]])
+    assert listening() == "task.step:Dev ticket/Code Review"     # a renamed step keeps its routines

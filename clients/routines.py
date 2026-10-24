@@ -15,6 +15,16 @@ MAX_SNAPSHOT = 1_000_000
 EVENTS = ('meeting.ready', 'recording.ready', 'market.insight.urgent', 'inbound.received')
 # A webhook trigger's event (backend/triggers.py); the server checks that the trigger exists.
 WEBHOOK_EVENT = re.compile(r'webhook\.[a-z0-9][a-z0-9-]{0,39}')
+# A task landing in a step of a board type: `task.step:<type name>/<step name>`, e.g.
+# `task.step:Dev ticket/PR Review` (backend/routines.py task_moved); the server checks the step exists.
+STEP_EVENT = 'task.step:'
+STEP_EVENT_FORM = re.compile(r'task\.step:[^\x00-\x1f]+/[^\x00-\x1f]+')
+MAX_EVENT = 500
+
+
+def known_event(on):
+    return isinstance(on, str) and len(on) <= MAX_EVENT and (
+        on in EVENTS or WEBHOOK_EVENT.fullmatch(on) is not None or STEP_EVENT_FORM.fullmatch(on) is not None)
 
 
 def routine_path(value):
@@ -45,9 +55,10 @@ def validate_schedules(entries, read_file=None):
         if (cron is None) == (on is None):
             raise ValueError(f'Routine {index} needs exactly one of cron (a time) or on (an event)')
         if on is not None:
-            if on not in EVENTS and not (isinstance(on, str) and WEBHOOK_EVENT.fullmatch(on)):
-                raise ValueError(f'Routine {index} has an unknown event; Tico emits {", ".join(EVENTS)} '
-                                 'and webhook.<trigger id> for a trigger in Settings > Triggers')
+            if not known_event(on):
+                raise ValueError(f'Routine {index} has an unknown event; Tico emits {", ".join(EVENTS)}, '
+                                 'webhook.<trigger id> for a trigger in Settings > Triggers, and '
+                                 'task.step:<type>/<step> when a task lands in a step')
             cron = ''
         elif not isinstance(cron, str) or len(cron) > 100 or len(cron.split()) != 5 or not croniter.is_valid(cron):
             raise ValueError(f'Routine {title}: cron must use five fields, for example 0 9 * * 1-5')

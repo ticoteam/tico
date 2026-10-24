@@ -106,6 +106,9 @@ function routineById(id) {
 // day of the month, at a time) and saved as a cron; anything else stays a cron to type.
 const ROUTINE_EVENTS = [['meeting.ready', 'When a meeting is imported'],
   ['recording.ready', 'When a meeting is imported (legacy)'], ['market.insight.urgent', 'When a market insight is urgent']];
+// A step of a board type (not General, whose steps are its statuses) as `task.step:<type>/<step>` (docs/routines.md).
+const routineStepEvents = () => (typeof TASK_TYPES !== 'undefined' ? TASK_TYPES : []).filter(t => t.id !== 'general')
+  .flatMap(t => (t.steps || []).map(s => [`task.step:${t.name}/${s.name}`, `${t.name} › ${s.name}`]));
 let ROUTINE_TRIGGERS = null;     // Settings > Triggers (GET /v2/triggers), loaded when the editor or that tab opens
 async function routineTriggersLoad() {
   try { ROUTINE_TRIGGERS = (await get('/v2/triggers')).triggers || []; } catch { ROUTINE_TRIGGERS = ROUTINE_TRIGGERS || []; }
@@ -168,13 +171,16 @@ function routineEditorOpen(r = null, bot = '') {
   dialog.querySelectorAll('[data-routine-close]').forEach(b => b.addEventListener('click', () => dialog.close()));
   const fillTriggers = list => {
     const webhooks = (list || []).map(t => [t.event, t.name]);
-    const known = [...webhooks, ...ROUTINE_EVENTS].some(([v]) => v === r?.on);
+    const steps = routineStepEvents();
+    const known = [...webhooks, ...ROUTINE_EVENTS, ...steps].some(([v]) => v === r?.on);
     form.elements.on.innerHTML = (webhooks.length ? `<optgroup label="Webhooks">${webhooks.map(([v, w]) => opt(v, w, r?.on)).join('')}</optgroup>` : '')
       + `<optgroup label="In Tico">${ROUTINE_EVENTS.map(([v, w]) => opt(v, w, r?.on)).join('')}</optgroup>`
+      + (steps.length ? `<optgroup label="When a task lands in a step">${steps.map(([v, w]) => opt(v, w, r?.on)).join('')}</optgroup>` : '')
       + (r?.on && !known ? `<optgroup label="Removed">${opt(r.on, r.on, r.on)}</optgroup>` : '');
   };
   fillTriggers(ROUTINE_TRIGGERS);
-  routineTriggersLoad().then(list => { if (dialog.open) fillTriggers(list); });
+  Promise.all([routineTriggersLoad(), taskTypesLoad().catch(() => TASK_TYPES)])
+    .then(([list]) => { if (dialog.open) fillTriggers(list); });
   const show = () => {
     const isCron = form.elements.kind.value === 'cron', repeat = form.elements.repeat.value;
     dialog.querySelectorAll('[data-routine-cron]').forEach(el => { el.hidden = !isCron; });

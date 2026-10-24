@@ -1549,7 +1549,7 @@ class RoutineCreate(Contract):
     title: str = Field(min_length=1, max_length=300)
     text: str = Field(default="", max_length=100_000)
     cron: str = Field(default="", max_length=100)
-    on: str = Field(default="", max_length=100)
+    on: str = Field(default="", max_length=500)   # task.step:<type>/<step> names a type and a step
     timezone: str = Field(default="", max_length=100)
     enabled: bool = True
     key: RoutineKey | None = None
@@ -1559,7 +1559,7 @@ class RoutineUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     text: str | None = Field(default=None, max_length=100_000)
     cron: str | None = Field(default=None, max_length=100)
-    on: str | None = Field(default=None, max_length=100)
+    on: str | None = Field(default=None, max_length=500)
     timezone: str | None = Field(default=None, max_length=100)
     enabled: bool | None = None
 

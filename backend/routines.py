@@ -7,17 +7,21 @@ a Git branch. When one is due the hub opens a task for the bot with that text, a
 takes it from there like any other task.
 """
 import json
+import logging
+import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 
 from clients.manifest import tools_of
-from clients.routines import DEFAULT_ZONE, validate_schedules
+from clients.routines import DEFAULT_ZONE, STEP_EVENT, validate_schedules
 from . import people as P, task_privacy as privacy
 from .harnesses import SYNCED_SQL
 from .statuses import PARKED_SQL, is_parked
 from .scheduler import next_due, stamp
 from .store import H, Problem, encode
 
+log = logging.getLogger(__name__)
 OCCURRENCE_LIMIT = 50
 DEFAULT_TEXT = "Run this scheduled routine."
 # Every active bot looks at its own open tasks once a day, staggered across
@@ -51,10 +55,31 @@ def validate(fields):
 
 
 def require_trigger(c, event):
-    """A routine may listen for a webhook only while its trigger exists (backend/triggers.py)."""
+    """The event as stored. A routine may listen for a webhook only while its trigger exists
+    (backend/triggers.py), and for a step only while a board type has it (step_event_of)."""
     from . import triggers
     if event and event.startswith(triggers.EVENT) and not triggers.exists(c, event):
         raise ValueError(f"No trigger {event[len(triggers.EVENT):]}; add it in Settings > Triggers first")
+    if event and event.startswith(STEP_EVENT):
+        return step_event_of(c, event)
+    return event
+
+
+def step_event(type_name, step_name):
+    return f"{STEP_EVENT}{type_name}/{step_name}"
+
+
+def step_event_of(c, event):
+    """`task.step:<type>/<step>` spelled as the board spells it. Names may hold a slash ("QA/PR Rejected"), so the
+    whole name is matched against every type's steps rather than split. General's steps are its statuses, which
+    every run changes, so a routine listens only to a board type's steps."""
+    wanted = event[len(STEP_EVENT):].casefold()
+    for typ in H.type_list(c):
+        for step in typ["steps"] if typ["id"] != H.GENERAL_TYPE else ():
+            if f"{typ['name']}/{step['name']}".casefold() == wanted:
+                return step_event(typ["name"], step["name"])
+    raise ValueError(f"No step {event[len(STEP_EVENT):]} on a task type: write task.step:<type>/<step> with a "
+                     "type other than General and one of its steps (hub task types lists them)")
 
 
 def row(c, sid):
@@ -69,7 +94,7 @@ def create(c, actor, bot, fields, *, key=None, at=None):
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
     at = _clock(at)
     entry = validate(fields)
-    require_trigger(c, entry["on"])
+    entry["on"] = require_trigger(c, entry["on"])
     H._takes_tasks(c, actor, "bot:" + bot)        # every run of a routine is a task
     if key is not None:
         existing = c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (bot, key)).fetchone()
@@ -107,7 +132,7 @@ def update(c, actor, sid, changes, *, at=None, restore=False):
         merged["cron"] = ""
     entry = validate(merged)
     if (entry["on"] or None) != current["event_name"]:
-        require_trigger(c, entry["on"])
+        entry["on"] = require_trigger(c, entry["on"])
     now = stamp(at)
     event = entry["on"] or None
     cadence_changed = (entry["cron"] != (current["cron"] or "") or event != current["event_name"]
@@ -223,14 +248,15 @@ def open_task(c, auth, schedule, heading, body, now, trigger="schedule", sweep=F
     return task
 
 
-def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, auth=None):
+def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, auth=None, only=None):
     """Something happened in the hub; every routine that runs `on:` it gets one task.
 
     `subject` is the thing's id (a recording, say): the pair (routine, event, subject) is an
     occurrence, and `schedule_occurrences` makes it fire once however often the event is
     re-emitted. The task body is the routine's text, then the event's facts, then `content`
     (the thing itself, as a delivery task carries a meeting's notes), so the bot has everything
-    in the one task it may read. The producer decides what is shareable before calling.
+    in the one task it may read. The producer decides what is shareable before calling; `only`,
+    given a routine's row, says whether its bot may have this one.
     Caller owns the transaction. Returns the ids of the tasks it opened.
     """
     now = stamp(_clock(at))
@@ -248,6 +274,8 @@ def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, aut
                      "AND NOT EXISTS(SELECT 1 FROM bot_config pc WHERE pc.bot=s.bot AND pc.onboarding_state IN " + PARKED_SQL + ") "
                      "ORDER BY s.id", (kind,)).fetchall()
     for schedule in rows:
+        if only is not None and not only(schedule):
+            continue
         occurrence = f"{kind}:{subject}"
         if c.execute("SELECT 1 FROM schedule_occurrences WHERE schedule_id=? AND occurrence=?", (schedule["id"], occurrence)).fetchone():
             continue
@@ -258,6 +286,76 @@ def emit(c, kind, subject, payload=None, *, title=None, content="", at=None, aut
         H.event(c, H.KEEPER, "schedule.event", schedule["id"], {"event": kind, "subject": subject, "task": task["id"]})
         fired.append(task["id"])
     return fired
+
+
+def task_moved(c, actor, task_id, before, after, note=""):
+    """A task landed in a step (`after`, from `before`, None when it was just filed): every routine `on`
+    `task.step:<type>/<step>` opens one task for its bot naming the ticket, once per landing.
+
+    Two guards. A bot is never woken by its own move, so a routine whose bot moves a ticket into the step it
+    listens to (or back out and in again) cannot wake itself without end; another bot's or a person's move
+    does. And a bot that may not read the ticket (private, or a type its access does not cover) gets nothing,
+    since the task it would open carries the ticket's title and note. A failure here never undoes the move."""
+    if not after or before == after:
+        return []
+    to = c.execute("SELECT s.name,t.id AS type_id,t.name AS type FROM task_steps s JOIN task_types t ON t.id=s.type_id "
+                   "WHERE s.id=?", (after,)).fetchone()
+    if not to or to["type_id"] == H.GENERAL_TYPE:
+        return []
+    kind = step_event(to["type"], to["name"])
+    try:
+        if not c.execute("SELECT 1 FROM schedules WHERE event_name=? AND deleted_at IS NULL LIMIT 1", (kind,)).fetchone():
+            return []
+    except sqlite3.OperationalError:        # a bare hub database (H.connect) has no routines to run
+        return []
+    row = H.task(c, task_id)
+    if not row:
+        return []
+    came = c.execute("SELECT s.name,t.name AS type FROM task_steps s JOIN task_types t ON t.id=s.type_id WHERE s.id=?",
+                     (before,)).fetchone() if before else None
+    if not before:
+        came_from = "(just filed)"
+    elif not came:
+        came_from = before
+    else:   # a move from another type names that type too
+        came_from = came["name"] if came["type"] == to["type"] else f"{came['type']}/{came['name']}"
+    name = (f"#{row['number']} " if row.get("number") is not None else "") + row["title"]
+    # The server's own address, as backend/config.py reads it; a link for the bot to cite, not to fetch.
+    base = (os.environ.get("TICO_PUBLIC_URL") or "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/")
+    facts = {"task": task_id, "number": row.get("number"), "title": row["title"], "link": f"{base}/#/task/{task_id}",
+             "type": to["type"], "from_step": came_from, "to_step": to["name"],
+             "moved_by": H.person_name(c, actor), "note": note}
+
+    def reads(schedule):
+        bot = "bot:" + schedule["bot"]
+        return bot != actor and H.bot_reads_task(c, bot, row)
+
+    c.execute("SAVEPOINT step_routines")
+    try:
+        fired = emit(c, kind, f"{task_id}:{H.new_id()[:12]}", facts, title=name, only=reads)
+    except Exception:                       # a routine that cannot open its task never blocks the move
+        log.exception("step routines for %s failed", task_id)
+        c.execute("ROLLBACK TO step_routines")
+        fired = []
+    c.execute("RELEASE step_routines")
+    return fired
+
+
+def retarget_steps(c, before, after):
+    """A type or step renamed: its routines follow it, so a routine never goes quiet on a rename. A removed
+    step's routines stay, silent, as a deleted webhook's do."""
+    old = {step["id"]: step_event(before["name"], step["name"]) for step in before.get("steps") or []}
+    new = {step["id"]: step_event(after["name"], step["name"]) for step in after.get("steps") or []}
+    moves = {old[i]: new[i] for i in old.keys() & new.keys() if old[i] != new[i]}
+    if not moves:
+        return
+    marks = ",".join("?" * len(moves))
+    try:
+        listening = c.execute(f"SELECT id,event_name FROM schedules WHERE event_name IN ({marks})", list(moves)).fetchall()
+    except sqlite3.OperationalError:        # a bare hub database (H.connect) has no routines
+        return
+    for found in listening:
+        c.execute("UPDATE schedules SET event_name=? WHERE id=?", (moves[found["event_name"]], found["id"]))
 
 
 def _roster(c):

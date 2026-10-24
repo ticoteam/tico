@@ -1215,6 +1215,44 @@ def private_task_write(fn):
     return guarded
 
 
+# The steps tasks landed in during one task write, announced to routines once the write is whole
+# (routines.task_moved): a move is judged with the privacy and owner the same write gives the task, and a task
+# filed straight into a step lands there once. A write made outside these (the keeper's) announces at once.
+STEP_MOVES = contextvars.ContextVar("hub_step_moves", default=None)
+
+
+def announces_steps(fn):
+    import functools
+
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        if STEP_MOVES.get() is not None:
+            return fn(*args, **kwargs)
+        moves = {}
+        token = STEP_MOVES.set(moves)
+        try:
+            result = fn(*args, **kwargs)
+        finally:
+            STEP_MOVES.reset(token)
+        if moves:
+            from .routines import task_moved
+            conn = args[0] if args else kwargs["conn"]
+            for task_id, (actor, before, after, note) in moves.items():
+                task_moved(conn, actor, task_id, before, after, note)
+        return result
+    return wrapped
+
+
+def _step_landed(conn, actor, task_id, before, after, note=""):
+    moves = STEP_MOVES.get()
+    if moves is None:
+        from .routines import task_moved
+        task_moved(conn, actor, task_id, before, after, note)
+        return
+    first = moves.get(task_id)
+    moves[task_id] = (actor, first[1] if first else before, after, note or (first[3] if first else ""))
+
+
 def event(conn, actor, action, target="", detail=None):
     """Append the audit row every write leaves behind."""
     if VIA.get() and (detail is None or isinstance(detail, dict)):
@@ -3058,6 +3096,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
         conn.execute("UPDATE task_types SET bots=? WHERE id=?", (_type_bots(conn, actor, bots), row["id"]))
     conn.execute("UPDATE task_types SET updated=? WHERE id=?", (now(), row["id"]))
     after = type_get(conn, row["id"])
+    from .routines import retarget_steps
+    retarget_steps(conn, row, after)
     event(conn, actor, "task_type.update", row["id"], after)
     return after
 
@@ -3201,6 +3241,7 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
         conn.execute("UPDATE tasks SET step_rank=? WHERE id=?",
                      (_step_end(conn, step_id, row["id"]) if step_id else None, row["id"]))
         _task_event(conn, row["id"], actor, "step", row.get("step_id"), step_id, note)
+        _step_landed(conn, actor, row["id"], row.get("step_id"), step_id, note)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
         if effective in ("done", "closed", "declined", "review"):
@@ -4747,6 +4788,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
 
 
 @private_task_write
+@announces_steps
 def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, deduplicate=True,
                 allow_planned=False, conversation_id=None, lane=None, labels=None, top=False, lint=True,
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
@@ -4995,6 +5037,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
 
 
 @private_task_write
+@announces_steps
 def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=None, body=None,
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
@@ -5567,6 +5610,7 @@ def _task_close_allowed(conn, actor, row, note):
 
 
 @private_task_write
+@announces_steps
 def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None):
     """Rule 5. Closing is an explicit requester, human or keeper decision; work delegation is not acceptance."""
     _writer(conn, actor)

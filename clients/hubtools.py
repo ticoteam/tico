@@ -2002,7 +2002,9 @@ def routine_list(api, args):
        "title": _s("What the task is called"),
        "text": _s("What the bot is told each time", default=""),
        "cron": _s("Five-field cron, e.g. `0 7 * * 1-5`"),
-       "on": _s("A Tico event instead of a time: `meeting.ready`, or `webhook.<id>` for a trigger in hub_trigger_list"),
+       "on": _s("A Tico event instead of a time: `meeting.ready`; `webhook.<id>` for a trigger in hub_trigger_list; or "
+                "`task.step:<type>/<step>` when a task lands in a board step, e.g. `task.step:Dev ticket/PR Review` "
+                "(never on your own move; hub_task_types lists the steps)"),
        "timezone": _s("IANA zone for the cron; America/Los_Angeles by default"),
        "enabled": {"type": "boolean", "default": True},
        "bot": _s("Set it on another bot you operate; yourself by default")},
@@ -2019,7 +2021,7 @@ def routine_set(api, args):
       "Name it by its id or its key. For another bot's routine (`bot`) it acts as the person who asked you, with their "
       "rights (BotOps).",
       {"id": _s("The routine's id from hub_routine_list, or its key"), "title": _s("New title"), "text": _s("New text"),
-       "cron": _s("New five-field cron"), "on": _s("New event"), "timezone": _s("New zone"),
+       "cron": _s("New five-field cron"), "on": _s("New event, as in hub_routine_set"), "timezone": _s("New zone"),
        "enabled": {"type": "boolean", "description": "true turns it on, false turns it off"},
        "bot": _s("The bot it belongs to, when it is not yours")},
       required=("id",), writes=True)

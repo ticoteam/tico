@@ -300,6 +300,11 @@ All notable changes to Tico are recorded here. The format follows
   server. Settings > Computers offers **Hosted computer (we run it)**. The installer supports server-only installs,
   bounded AWS runner recovery and the same 4- and 8-core sizes on both machines, with 100 and 200 GB disks.
   HQ registers only a join code's hash through scoped SSM; no owner token or join secret crosses that control plane.
+- **A routine can wake a bot when a task lands in a step.** A routine `on` `task.step:<type>/<step>` (for example
+  `task.step:Dev ticket/PR Review`) opens one task for its bot each time a task of that type lands in that column,
+  however it moved: a board drag, API v2, `hub task update --step`, MCP, or a bot. The task names the ticket (id,
+  number, title, link, from and to step, who moved it, the move's note). A bot's own move never wakes its own
+  routine, and a bot that may not read the ticket gets nothing ([Routines](docs/routines.md)).
 
 ### Changed
 - **One new subscription per AI tool on each computer.** Adding a second subscription for the same tool is refused
