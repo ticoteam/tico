@@ -1,0 +1,126 @@
+bringing up nodes...
+bringing up nodes...
+
+...........................................................F....F....... [ 55%]
+..............................F...........F..............                [100%]
+=================================== FAILURES ===================================
+_ test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_in_order _
+[gw0] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xfa8924cf69c0>
+
+    def test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_in_order(api):
+        r = setup(api)
+        with api.app.state.store.transaction() as c:
+            task, _ = parked_task(c)
+            bot_comment = H.task_comment(c, "bot:ops", task["id"], "Scope add: log every skip.")
+            assert jobs(c, "cpo") == 0 and bot_comment["refs"].get("quiet")
+            person = H.task_comment(c, "human:ana", task["id"], "Please start this today.")
+            assert jobs(c, "cpo") == 1
+        attempt = claim(api, r, "cpo")
+>       assert attempt["message"]["id"] == person["id"]
+               ^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_wake_rules.py:156: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+_ test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary _
+[gw0] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xfa89284ea030>
+
+    def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary(api):
+        r = setup(api)
+        with api.app.state.store.transaction() as c:
+            task, _ = parked_task(c)
+            bot_comment = H.task_comment(c, "bot:ops", task["id"], "Scope add: log every skip.")
+            with as_cause("bot:ops"):
+                notices = [news(c, task, f"Relation added: Docs {i}") for i in range(50)]
+            # Tico's own urgent note (a lifted quarantine's) still comes first, though it is the newest.
+            urgent = H.new_id()
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                      (urgent, H.KEEPER, "bot:cpo", "Back from quarantine", H.now()))
+            assert jobs(c, "cpo") == 0
+            H.task_comment(c, "human:ana", task["id"], "Please start this today.")
+        first = claim(api, r, "cpo")
+>       assert first["notes"][0]["id"] == urgent
+               ^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_wake_rules.py:175: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+_ test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over[token_saver-3] _
+[gw1] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xec6e98ae09e0>
+name = 'token_saver', rooms = 3
+
+    @pytest.mark.parametrize("name,rooms", [("performance", 1), ("token_saver", 3)])
+    def test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over(api, name, rooms):
+        machine = task_bot(api, lanes=True)
+        preset(api, "ops", name)
+        tasks = [new_task(api, "fix")] * 3 if rooms == 1 else [new_task(api, f"report {n}") for n in range(3)]
+        settled(api)
+        since, t0 = H.now(), H.shift(H.now(), hours=-1)
+        sent = [(task, f"Finished: part {n}") for n, task in enumerate(tasks)]
+        for n, (task, body) in enumerate(sent):
+            notice(api, task, body, wake_batch="completion")
+            at(api, jobs(api, since=since)[-1]["id"], H.shift(t0, seconds=20 * n))
+        tick(api, H.shift(t0, minutes=31))                                   # one room: the newest carries; else a digest
+        released = len(jobs(api, since=since))
+        redeliver = lambda: [notice(api, task, body, wake_batch="completion") for task, body in sent]
+        redeliver()                                                          # while the carrier is queued
+        attempt = claim(api, machine)
+        start(api, machine, attempt)
+        assert "running" in [j["state"] for j in jobs(api, since=since)]
+        redeliver()                                                          # while it runs
+>       assert [(j["state"], j["wake_class"]) for j in jobs(api, since=since)[released:]] == [("cancelled", "duplicate")] * 6
+E       AssertionError: assert [('cancelled'...licate'), ...] == [('cancelled'... 'duplicate')]
+E         
+E         At index 3 diff: ('running', None) != ('cancelled', 'duplicate')
+E         Left contains one more item: ('cancelled', 'duplicate')
+E         Use -v to get more diff
+
+backend/tests/test_wake_presets.py:321: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+__ test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets ___
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xf670cc95fac0>
+
+    def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(api):
+        machine = task_bot(api, lanes=True)
+        preset(api, "ops", "token_saver")
+        tasks = [new_task(api, f"report {n}") for n in range(3)]
+        settled(api)
+        since, t0 = H.now(), H.shift(H.now(), hours=-1)
+        for n, task in enumerate(tasks):
+            notice(api, task, f"Finished: part {n}", wake_batch="completion")
+            job = jobs(api, since=since)[-1]
+            at(api, job["id"], H.shift(t0, minutes=10 * n))
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET created=? WHERE id=(SELECT message_id FROM jobs WHERE id=?)",
+                          (H.shift(t0, minutes=10 * n), job["id"]))
+        tick(api, H.shift(t0, minutes=31))
+        attempt = claim(api, machine)
+        finish(api, machine, attempt, tokens_in=900, tokens_out=0)
+        with api.app.state.store.transaction() as c:
+            for task in tasks:
+                H.task_update(c, "bot:ops", task["id"], status="done", note="Done")
+        [token_saver] = [p for p in get(api, "wake-presets/measures?since=" + H.shift(t0, minutes=-1))["presets"]
+                         if p["preset"] == "token_saver"]
+>       assert token_saver["turns"] == 1 and token_saver["tokens"] == 900 and token_saver["accepted_tickets"] == 3
+E       assert (1 == 1 and 900 == 900 and 1 == 3)
+
+backend/tests/test_wake_presets.py:372: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+=========================== short test summary info ============================
+FAILED backend/tests/test_wake_rules.py::test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_in_order
+FAILED backend/tests/test_wake_rules.py::test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary
+FAILED backend/tests/test_wake_presets.py::test_a_batched_event_redelivered_after_its_batch_went_out_wakes_once_until_its_turn_is_over[token_saver-3]
+FAILED backend/tests/test_wake_presets.py::test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets
+4 failed, 125 passed in 58.43s

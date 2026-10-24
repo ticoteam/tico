@@ -1,0 +1,128 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_three_start_and_finishing_one_starts_next_by_rank ____________
+
+api = <starlette.testclient.TestClient object at 0xf92862738830>
+
+    def test_three_start_and_finishing_one_starts_next_by_rank(api):
+        machine = task_bot(api, lanes=True, capacity=8)
+>       tasks = deck(api)
+                ^^^^^^^^^
+
+backend/tests/test_auto_tasks.py:40: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+backend/tests/test_auto_tasks.py:13: in deck
+    tasks = [post(api, 'tasks', {'owner': 'ops', 'title': f'Implement item {i}', 'type_id': typ['id'],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xf92862738830>, path = 'tasks'
+body = {'owner': 'ops', 'title': 'Implement item 0', 'type_id': '432be405-cac5-40aa-b7d8-7ab4954f99be', 'step_id': '63a21ab2-4742-4d73-9a91-2f4f0b8b600f'}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.body: Field required; body.type_id: Extra inputs are not permitted; body.step_id: Extra inputs are not permitted","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+____ test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes ____
+
+api = <starlette.testclient.TestClient object at 0xf92853ccde50>
+
+    def test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes(api):
+        from backend import task_snooze
+        machine = task_bot(api, lanes=True)
+>       tasks = deck(api, 3)
+                ^^^^^^^^^^^^
+
+backend/tests/test_auto_tasks.py:54: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+backend/tests/test_auto_tasks.py:13: in deck
+    tasks = [post(api, 'tasks', {'owner': 'ops', 'title': f'Implement item {i}', 'type_id': typ['id'],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xf92853ccde50>, path = 'tasks'
+body = {'owner': 'ops', 'title': 'Implement item 0', 'type_id': 'a8888c8e-a58f-43e9-af0d-ed01cfb377b0', 'step_id': 'c17a3a4e-c53f-474e-9a54-7f5441cc6157'}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.body: Field required; body.type_id: Extra inputs are not permitted; body.step_id: Extra inputs are not permitted","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+________ test_usage_hold_and_off_start_none_and_waiting_work_frees_cap _________
+
+api = <starlette.testclient.TestClient object at 0xf928617d5bd0>
+
+    def test_usage_hold_and_off_start_none_and_waiting_work_frees_cap(api):
+        machine = task_bot(api, lanes=True)
+>       tasks = deck(api, 2)
+                ^^^^^^^^^^^^
+
+backend/tests/test_auto_tasks.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+backend/tests/test_auto_tasks.py:13: in deck
+    tasks = [post(api, 'tasks', {'owner': 'ops', 'title': f'Implement item {i}', 'type_id': typ['id'],
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xf928617d5bd0>, path = 'tasks'
+body = {'owner': 'ops', 'title': 'Implement item 0', 'type_id': 'e7652d05-5302-469f-9b7f-04eb3be962b1', 'step_id': 'f3d2b57c-ba66-4bed-9ac2-524ad4fdda89'}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.body: Field required; body.type_id: Extra inputs are not permitted; body.step_id: Extra inputs are not permitted","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+____________ test_setting_revision_permissions_and_private_counters ____________
+
+api = <starlette.testclient.TestClient object at 0xf92852e07230>
+
+    def test_setting_revision_permissions_and_private_counters(api):
+        from backend.tests.test_api import as_member
+        as_member(api, 'ben@acme.example')
+        revision = get(api, 'bots/ops')['revision']
+        post(api, 'bots/ops/keep-tasks-going', {'keep_tasks_going': 3, 'expected_revision': revision}, token='cara-test', expected=403)
+        set_cap(api, 3)
+        post(api, 'bots/ops/keep-tasks-going', {'keep_tasks_going': 1, 'expected_revision': revision}, expected=409)
+        post(api, 'bots/ops/keep-tasks-going', {'keep_tasks_going': -1, 'expected_revision': revision}, expected=422)
+>       private = post(api, 'tasks', {'owner': 'ops', 'title': 'Private work', 'private': True})
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_auto_tasks.py:97: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xf92852e07230>, path = 'tasks'
+body = {'owner': 'ops', 'title': 'Private work', 'private': True}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.body: Field required","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+=========================== short test summary info ============================
+FAILED backend/tests/test_auto_tasks.py::test_three_start_and_finishing_one_starts_next_by_rank
+FAILED backend/tests/test_auto_tasks.py::test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes
+FAILED backend/tests/test_auto_tasks.py::test_usage_hold_and_off_start_none_and_waiting_work_frees_cap
+FAILED backend/tests/test_auto_tasks.py::test_setting_revision_permissions_and_private_counters
+4 failed in 10.81s

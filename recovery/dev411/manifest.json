@@ -1,0 +1,153 @@
+{
+  "original_head": "ebd04e5c60b8695e7f35649eee47cb28e80b2ed0",
+  "source_audit": {
+    "checked": 3778,
+    "known_blobs": 3777,
+    "unique_variant": [
+      "backend/tests/test_auto_tasks.py"
+    ]
+  },
+  "preserved": [
+    {
+      "source": "review-request.md",
+      "sha256": "5df60039d8ed3f8e44661b2f31c4ba5369dda73c79d881a826688d8ed3a58866",
+      "bytes": 2439
+    },
+    {
+      "source": "pr-body.md",
+      "sha256": "9e6ea72dae7689630f554b81b21291855526215de0e5761365468d8336fc22ac",
+      "bytes": 3342
+    },
+    {
+      "source": "control-main/backend/tests/test_auto_tasks.py",
+      "sha256": "bb9c4e070fd31dcc74681a5262fd19402a63a724320e28895c5163acd4936d37",
+      "bytes": 6666
+    },
+    {
+      "source": "receipts/auto-first.txt",
+      "sha256": "814a8237ca4a5a9a7dc030b0c1cf6e7b664a6b1012ca36a46646c74fab590bfb",
+      "bytes": 7850
+    },
+    {
+      "source": "receipts/auto-reviews.txt",
+      "sha256": "e4d44403da113c357ad333fbd40b3514993b4210294b645760d8581a32dd6956",
+      "bytes": 99
+    },
+    {
+      "source": "receipts/auto-second.txt",
+      "sha256": "fc42c259ef4ea2df8aec0930090a71bd0e1cb295e54eee38fae5de4f7b2cb3f0",
+      "bytes": 4306
+    },
+    {
+      "source": "receipts/auto-third.txt",
+      "sha256": "879166cdbc01570f21c324b74b21cc4714e0ef99fd7bcf0306c404d479ddf01b",
+      "bytes": 1878
+    },
+    {
+      "source": "receipts/browser-final.txt",
+      "sha256": "e5ca4693477596177907bb8c5b260530d34d866184d572f4b288cd0e99237b6c",
+      "bytes": 160
+    },
+    {
+      "source": "receipts/browser-fixed.txt",
+      "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "bytes": 3
+    },
+    {
+      "source": "receipts/browser.txt",
+      "sha256": "c433b6f570ca59f4abaf2d00711b8c01ad2f88cfbc575bb9c3f623c2ec3fab40",
+      "bytes": 579
+    },
+    {
+      "source": "receipts/contracts-final.txt",
+      "sha256": "118a742d3c1d223778d79317bd856e095318e722f64aead803b3225d2ec279ee",
+      "bytes": 143
+    },
+    {
+      "source": "receipts/corrected-final.txt",
+      "sha256": "faa288c64265807338e20d2887f4dbe3ccedbc21e50c8b78275486126c919912",
+      "bytes": 143
+    },
+    {
+      "source": "receipts/final-ownership.txt",
+      "sha256": "58ec24767f3a942d183506da025a4bc191d54f1a08c61cc246b71821e72ccfed",
+      "bytes": 7966
+    },
+    {
+      "source": "receipts/final-related.txt",
+      "sha256": "3dd1d1caaa3a8dc15efbc37413d99732ad631324f277fed83618168fa70ddd16",
+      "bytes": 223
+    },
+    {
+      "source": "receipts/flow-fixes.txt",
+      "sha256": "e6b175474c156a371d09180652da330197bccc48238d2306cef11bf1838312cf",
+      "bytes": 100
+    },
+    {
+      "source": "receipts/focused-final.txt",
+      "sha256": "e2944de57ac15285832599985ea31ae16e0eee76cb9740fa669463a4d562a2c5",
+      "bytes": 15263
+    },
+    {
+      "source": "receipts/focused-first.txt",
+      "sha256": "eb4f4a695f57d00009bea8d80c3bb282c6c57add6e3b91c13278ab3baec7d000",
+      "bytes": 2619
+    },
+    {
+      "source": "receipts/main-controls.txt",
+      "sha256": "0713c2e4b642f6b6b64e8c1159589f9fba1ade9b5610c941ed5edd4161f7c21c",
+      "bytes": 4814
+    },
+    {
+      "source": "receipts/merged-final.txt",
+      "sha256": "3badd16c5661f656d9f7bb68568aaa43f307c6f99a26fa590dad25457f71e00c",
+      "bytes": 314
+    },
+    {
+      "source": "receipts/npm-ci.txt",
+      "sha256": "9f4dd8562c3542284f03c9383f2f214ee459b0befea51eaaaf5900e9ab662d24",
+      "bytes": 264
+    },
+    {
+      "source": "receipts/wake-fixes.txt",
+      "sha256": "65b63f0a71e8aaf1680b6641454ec5dc138fa2d9217fb057172ca24cc9106660",
+      "bytes": 143
+    },
+    {
+      "source": "dev411/browser-conflict.txt",
+      "sha256": "edf84da6a691b898819e34a54aa2849b07b23b4a2a72b740d4d3f80d862bb4fc",
+      "bytes": 129
+    },
+    {
+      "source": "dev411/final.txt",
+      "sha256": "6ef6b8387cdb889c78784c8fa8eefe2aa7bcbc7b558fd988f2c90ee8070f6bb6",
+      "bytes": 475
+    },
+    {
+      "source": "dev411/pr-body.md",
+      "sha256": "514470102411b574726afefb95dccc80b17f2fda2eda2c0d00ad76de06d19ae8",
+      "bytes": 4284
+    },
+    {
+      "source": "dev411/regressions.txt",
+      "sha256": "84714be157bd3dbdeea618093c736d5b6728bf6339aedbb6851d3d998a284d33",
+      "bytes": 1963
+    },
+    {
+      "source": "dev411/same-state-final.txt",
+      "sha256": "950458dd997b8fc21241e81e14b806d7e897a867b5271f748daef537c64be4d5",
+      "bytes": 475
+    },
+    {
+      "source": "dev411/same-state-repair.diff",
+      "sha256": "cac79dae4256375d87f37203636838eba2521337892eb385e74100c67a119d7c",
+      "bytes": 4137
+    },
+    {
+      "source": "dev411/same-state-repair.txt",
+      "sha256": "ed3cb53f51aaa74941ac1d61d2fff6b04f7ed269c8b0a56bd405b9cb0aa1de53",
+      "bytes": 143
+    }
+  ],
+  "excluded": "All remaining build artifacts: source-copy duplicates, caches, symlinks and synthetic pytest fixture directories/databases. No database opened or copied; no flagged source paths staged."
+}

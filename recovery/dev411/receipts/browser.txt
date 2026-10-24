@@ -1,0 +1,28 @@
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++ actual - expected
+... Skipped lines
+
+  [
+    {
+      body: {
+        expected_revision: 8,
+        keep_tasks_going: 3
+...
+    },
++   {
++     body: {
++       expected_revision: 8,
++       keep_tasks_going: 3
++     },
++     what: 'keep-tasks-going'
++   }
+  ]
+
+    at /home/runner/workspace/tasks/3dedb547/ticoteam__tico/ui/tests/settings-task-model.cjs:175:16 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: [Array],
+  expected: [Array],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}

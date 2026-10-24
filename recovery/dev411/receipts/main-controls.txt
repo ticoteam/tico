@@ -1,0 +1,84 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_three_start_and_finishing_one_starts_next_by_rank ____________
+
+api = <starlette.testclient.TestClient object at 0xf8fc7c7fc1a0>
+
+    def test_three_start_and_finishing_one_starts_next_by_rank(api):
+        machine = task_bot(api, lanes=True, capacity=8)
+        tasks = deck(api)
+        set_cap(api, 3)
+        attempts = [take(api, machine) for _ in range(3)]
+>       assert [a['task']['id'] for a in attempts] == [t['id'] for t in reversed(tasks[2:])]
+                ^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_auto_tasks.py:45: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+____ test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes ____
+
+api = <starlette.testclient.TestClient object at 0xf8fc7a874cd0>
+
+    def test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes(api):
+        from backend import task_snooze
+        machine = task_bot(api, lanes=True)
+        tasks = deck(api, 3)
+        post(api, 'tasks/' + tasks[2]['id'] + '/snooze', {'until': H.shift(H.now(), days=1)})
+        post(api, 'tasks/' + tasks[1]['id'] + '/relations', {'kind': 'blocked_by', 'task': tasks[0]['id']})
+        first = take(api, machine)
+>       assert first['task']['id'] == tasks[0]['id']
+               ^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_auto_tasks.py:60: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+________ test_usage_hold_and_off_start_none_and_waiting_work_frees_cap _________
+
+api = <starlette.testclient.TestClient object at 0xf8fc7b8b1950>
+
+    def test_usage_hold_and_off_start_none_and_waiting_work_frees_cap(api):
+        machine = task_bot(api, lanes=True)
+        tasks = deck(api, 2)
+        set_cap(api, 0)
+        assert take(api, machine) is None
+        set_cap(api, 1)
+        with api.app.state.store.transaction() as c:
+            H.status_set(c, H.KEEPER, 'ops', state='limited')
+        assert take(api, machine) is None
+        assert get(api, 'tasks/' + tasks[1]['id'])['task']['status'] == 'open'
+        with api.app.state.store.transaction() as c:
+            H.status_set(c, H.KEEPER, 'ops', state='idle')
+        first = take(api, machine)
+>       post(api, f"attempts/{first['id']}/started", {'thread_id': first['lane']}, machine['token'])
+                              ^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_auto_tasks.py:83: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+_ test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies _
+
+api = <starlette.testclient.TestClient object at 0xf8fc5bb903e0>
+
+    def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api):
+        machine = task_bot(api, lanes=True, capacity=10)
+        typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': 'Review 1', 'status': 'review'}]})['type']
+        parent = post(api, 'tasks', {'owner': 'finance', 'title': 'Implementation awaiting review', 'body': 'Review it.',
+                                     'type': typ['id'], 'step': 'Review 1'})
+        children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',
+                     'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(11)]
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE jobs SET state='cancelled'")
+        set_cap(api, 1)
+        attempts = [take(api, machine) for _ in range(10)]
+>       assert all(attempts), 'the optional task cap never holds review children'
+E       AssertionError: the optional task cap never holds review children
+E       assert False
+E        +  where False = all([None, None, None, None, None, None, ...])
+
+backend/tests/test_auto_tasks.py:117: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+4 failed, 1 deselected in 11.04s

@@ -1,0 +1,30 @@
+F...                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_three_start_and_finishing_one_starts_next_by_rank ____________
+
+api = <starlette.testclient.TestClient object at 0xfd5af24bbcb0>
+
+    def test_three_start_and_finishing_one_starts_next_by_rank(api):
+        machine = task_bot(api, lanes=True, capacity=8)
+        tasks = deck(api)
+        set_cap(api, 3)
+        attempts = [take(api, machine) for _ in range(3)]
+        assert [a['task']['id'] for a in attempts] == [t['id'] for t in reversed(tasks[2:])]
+>       assert all(get(api, 'tasks/' + t['id'])['task']['step_name'] == 'In Progress' for t in tasks[2:])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_auto_tasks.py:44: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = [{'id': '80f18bf3-d42b-4278-93a0-8911520b8798', 'short_id': '80f18bf3', 'title': 'Implement item 2', 'body': 'Build th...-943d-97052301361e', 'short_id': '20516b27', 'title': 'Implement item 4', 'body': 'Build the requested feature.', ...}]
+
+>   assert all(get(api, 'tasks/' + t['id'])['task']['step_name'] == 'In Progress' for t in tasks[2:])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'step_name'
+
+backend/tests/test_auto_tasks.py:44: KeyError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+=========================== short test summary info ============================
+FAILED backend/tests/test_auto_tasks.py::test_three_start_and_finishing_one_starts_next_by_rank
+1 failed, 3 passed in 9.57s

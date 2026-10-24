@@ -1,0 +1,65 @@
+diff --git a/backend/tests/test_same_state.py b/backend/tests/test_same_state.py
+index 0aed832d..f39a4811 100644
+--- a/backend/tests/test_same_state.py
++++ b/backend/tests/test_same_state.py
+@@ -38,6 +38,7 @@ def complete_task(api, r, tid, during=None):
+         during()
+     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Waiting on review.",
+                                                      "last_seq": 0}, token=r["token"])
++    return attempt
+ 
+ 
+ def check(c, tid, wake="status_check"):
+@@ -246,12 +247,11 @@ def test_an_existing_related_task_changing_mid_turn_is_not_checkpointed_unseen(a
+     tid = task["id"]
+     with api.app.state.store.transaction() as c:
+         H.TR.relate(c, "human:ana", tid, other["id"], "related")
+-        parent_version = H.task(c, tid)["version"]
+-    complete_task(api, r, tid, during=lambda: post(api, f"tasks/{other['id']}", {
++    attempt = complete_task(api, r, tid, during=lambda: post(api, f"tasks/{other['id']}", {
+         "status": "doing", "version": other["version"]}))
+     with api.app.state.store.transaction() as c:
+         assert H.task(c, other["id"])["status"] == "doing"
+-        assert H.task(c, tid)["version"] == parent_version
++        assert H.task(c, tid)["version"] == attempt["task"]["version"]
+         assert H.task(c, tid)["checkpoint"] == "Waiting on review."
+         assert H.task(c, tid)["checkpoint_state"] is None
+         check(c, tid)
+@@ -312,7 +312,7 @@ def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, mo
+     with api.app.state.store.transaction() as c:
+         c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+         row = H.task(c, tid)
+-        assert row["status"] == "open" and not row["next_run"]
++        assert row["status"] == "doing" and not row["next_run"]
+         assert row["checkpoint_state"] == W.state_of(c, row)
+         start = H.now()
+         # A real second turn, resuming the same thread, has made no task progress.
+@@ -339,17 +339,17 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
+     second = post(api, "tasks", {"owner": "cpo", "title": "Lane B", "body": "Build it too."})
+     with api.app.state.store.transaction() as c:
+         H.TR.relate(c, "human:ana", first["id"], second["id"], "related")
+-        before = H.task(c, first["id"])
+     a, b = [post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
+             for _ in range(2)]
+     assert [a["lane"], b["lane"]] == ["task:" + first["id"], "task:" + second["id"]]
+     for attempt in (a, b):
+         post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, token=r["token"])
+     with api.app.state.store.read() as c:
++        before = H.task(c, first["id"])
+         comments_before = c.execute("SELECT count(*) FROM messages WHERE conversation_id=? AND from_actor<>?",
+                                     (first["conversation_id"], H.KEEPER)).fetchone()[0]
+     # B's leased identity changes an already-related General task while A runs.
+-    post(api, f"tasks/{second['id']}", {"status": "doing", "version": second["version"]}, token=b["token"])
++    post(api, f"tasks/{second['id']}", {"status": "waiting", "version": b["task"]["version"]}, token=b["token"])
+     # B can finish before A; checking only currently running siblings would miss the write.
+     post(api, f"attempts/{b['id']}/complete", {"outcome": "completed", "text": "B moved.", "last_seq": 0},
+          token=r["token"])
+@@ -359,7 +359,7 @@ def test_a_related_task_changed_by_another_lane_of_the_same_bot_is_not_seen(api)
+     post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "A checkpoint.", "last_seq": 0},
+          token=r["token"])
+     with api.app.state.store.transaction() as c:
+-        assert H.task(c, second["id"])["status"] == "doing"
++        assert H.task(c, second["id"])["status"] == "waiting"
+         row = H.task(c, first["id"])
+         assert row["version"] == before["version"]
+         assert row["checkpoint"] == "A checkpoint."

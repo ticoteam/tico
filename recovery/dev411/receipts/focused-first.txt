@@ -1,0 +1,44 @@
+bringing up nodes...
+bringing up nodes...
+
+..............................................F...............F......... [ 82%]
+...............                                                          [100%]
+=================================== FAILURES ===================================
+_ test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_checkpoints_the_parent _
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xf2e93d0348d0>
+
+    def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_checkpoints_the_parent(api):
+        machine = roots_runner(api, ["task_lanes_v2", "session_roots_v1"])
+        parent, sub = tasks(api, ("bot:ops", None), ("bot:ops", 0))
+        first = claim(api, machine)
+        assert first["lane"] == "task:" + parent and first["task"]["session_task_id"] == parent
+        assert claim(api, machine) is None, "the subtask waits behind its parent's turn in the same lane"
+        post(api, f"attempts/{first['id']}/started", {"thread_id": "t-parent"}, machine["token"])
+        post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Planned."},
+             machine["token"])
+        turn = claim(api, machine)
+>       assert turn["task"]["id"] == sub
+               ^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_subtask_sessions.py:103: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+_ test_an_older_runner_and_subtask_session_own_keep_each_subtask_its_own_session _
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xf2e927017bd0>
+
+    def test_an_older_runner_and_subtask_session_own_keep_each_subtask_its_own_session(api):
+        machine = roots_runner(api, ["task_lanes_v2"])
+        parent, sub = tasks(api, ("bot:ops", None), ("bot:ops", 0))
+>       lanes = {claim(api, machine)["lane"] for _ in range(2)}
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: 'NoneType' object is not subscriptable
+
+backend/tests/test_subtask_sessions.py:140: TypeError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+2 failed, 85 passed in 46.80s

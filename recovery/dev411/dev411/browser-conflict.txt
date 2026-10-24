@@ -1,0 +1,4 @@
+UI tests: jobs=1, slowdown=4, timeout=480s, cores=8, idle=2.0%
+ok    settings-task-model.cjs (14.8s)
+
+1 UI scripts passed in 15s

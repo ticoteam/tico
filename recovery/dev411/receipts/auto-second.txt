@@ -1,0 +1,76 @@
+FF..                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_three_start_and_finishing_one_starts_next_by_rank ____________
+
+api = <starlette.testclient.TestClient object at 0xe028b3babb60>
+
+    def test_three_start_and_finishing_one_starts_next_by_rank(api):
+        machine = task_bot(api, lanes=True, capacity=8)
+        tasks = deck(api)
+        set_cap(api, 3)
+        attempts = [take(api, machine) for _ in range(3)]
+        assert [a['task']['id'] for a in attempts] == [t['id'] for t in reversed(tasks[2:])]
+        assert all(get(api, 'tasks/' + t['id'])['task']['step']['name'] == 'In Progress' for t in tasks[2:])
+        assert take(api, machine) is None
+        assert get(api, 'bots/ops')['task_flow'] == {'going': 3, 'waiting': 2}
+>       finish(api, machine, attempts[0], tasks[4])
+
+backend/tests/test_auto_tasks.py:47: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+backend/tests/test_auto_tasks.py:29: in finish
+    post(api, 'tasks/' + task['id'], {'step': 'Done'})
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xe028b3babb60>
+path = 'tasks/72d28ead-9dda-42f5-972a-e3942b5352a0', body = {'step': 'Done'}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.version: Field required","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+____ test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes ____
+
+api = <starlette.testclient.TestClient object at 0xe028b238b110>
+
+    def test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes(api):
+        from backend import task_snooze
+        machine = task_bot(api, lanes=True)
+        tasks = deck(api, 3)
+        post(api, 'tasks/' + tasks[2]['id'] + '/snooze', {'until': H.shift(H.now(), days=1)})
+        post(api, 'tasks/' + tasks[1]['id'] + '/relations', {'kind': 'blocked_by', 'task': tasks[0]['id']})
+        first = take(api, machine)
+        assert first['task']['id'] == tasks[0]['id']
+        assert take(api, machine) is None
+>       finish(api, machine, first, tasks[0])
+
+backend/tests/test_auto_tasks.py:60: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+backend/tests/test_auto_tasks.py:29: in finish
+    post(api, 'tasks/' + task['id'], {'step': 'Done'})
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+api = <starlette.testclient.TestClient object at 0xe028b238b110>
+path = 'tasks/12825090-9532-4756-b1b0-578aace4cbe6', body = {'step': 'Done'}
+token = 'ana-test', key = None, expected = 200
+
+    def post(api, path, body, token="ana-test", key=None, expected=200):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+>       assert r.status_code == expected, r.text
+E       AssertionError: {"error":{"code":"validation","detail":"body.version: Field required","retryable":false}}
+E       assert 422 == 200
+E        +  where 422 = <Response [422 Unprocessable Entity]>.status_code
+
+backend/tests/test_api.py:89: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+=========================== short test summary info ============================
+FAILED backend/tests/test_auto_tasks.py::test_three_start_and_finishing_one_starts_next_by_rank
+FAILED backend/tests/test_auto_tasks.py::test_default_starts_snoozed_and_blocked_skip_then_reuse_existing_wakes
+2 failed, 2 passed in 9.54s

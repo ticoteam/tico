@@ -1,0 +1,264 @@
+bringing up nodes...
+bringing up nodes...
+
+.......................................................FF..FF.F.FFFFFF.F [ 80%]
+FFFFF......FF..F.                                                        [100%]
+=================================== FAILURES ===================================
+_ test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation _
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xe181a6709f50>
+
+    def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation(monkeypatch):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:42: IndentationError
+____ test_product_repository_cli_never_writes_without_matching_confirmation ____
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xe181a563b110>
+
+    def test_product_repository_cli_never_writes_without_matching_confirmation(monkeypatch):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:69: IndentationError
+_ test_product_repository_cli_refuses_missing_capability_and_noninteractive_confirmation _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+    def test_product_repository_cli_refuses_missing_capability_and_noninteractive_confirmation():
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:89: IndentationError
+_ test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_target _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+    def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_target():
+        """A bot's turn has no terminal: `--confirm org/name` stands in for typing it, and must match the preview."""
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:113: IndentationError
+______________ AgainstAStub.test_a_refusal_from_the_api_exits_two ______________
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_a_refusal_from_the_api_exits_two>
+
+    def test_a_refusal_from_the_api_exits_two(self):
+        code, out = run_hub("message", "send", "nobody", "hello", env=self.env)
+>       self.assertEqual(code, 2)
+E       AssertionError: 1 != 2
+
+clients/tests/test_hubcli.py:334: AssertionError
+___________ AgainstAStub.test_decision_readout_reads_the_days_asked ____________
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_decision_readout_reads_the_days_asked>
+
+    def test_decision_readout_reads_the_days_asked(self):
+        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
+>       self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
+                                ^^^^^^^^^^^
+E       KeyError: 'text'
+
+clients/tests/test_hubcli.py:271: KeyError
+_________ Remote.test_human_override_is_refused_remotely_with_exit_two _________
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.Remote testMethod=test_human_override_is_refused_remotely_with_exit_two>
+
+    def test_human_override_is_refused_remotely_with_exit_two(self):
+        code, out = run_hub("--human", "ana", "whoami",
+                            env={"HUB_API_URL": "http://127.0.0.1:9", "HUB_TOKEN": "x"})
+>       self.assertEqual(code, 2)
+E       AssertionError: 1 != 2
+
+clients/tests/test_hubcli.py:160: AssertionError
+_ AgainstAStub.test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it>
+
+    def test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.md"
+            report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
+            code, out = run_hub("support", "report", "--file", str(report), "--no-ids", env=self.env)
+>       self.assertEqual(code, 0, out)
+E       AssertionError: 1 != 0 : {'error': "IndentationError: expected an indented block after 'if' statement on line 237 (remotecli.py, line 238)"}
+
+clients/tests/test_hubcli.py:291: AssertionError
+____ AgainstAStub.test_task_child_on_a_check_model_is_the_bots_own_subtask _____
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_task_child_on_a_check_model_is_the_bots_own_subtask>
+
+    def test_task_child_on_a_check_model_is_the_bots_own_subtask(self):
+        code, out = run_hub("task", "child", "T1", "--check-model", "grok", "--role", "review",
+                            "--title", "Review PR 700", "--body", "https://github.com/ticoteam/tico/pull/700", env=self.env)
+>       self.assertEqual(code, 0, out)
+E       AssertionError: 1 != 0 : {'error': "IndentationError: expected an indented block after 'if' statement on line 237 (remotecli.py, line 238)"}
+
+clients/tests/test_hubcli.py:258: AssertionError
+____________ AgainstAStub.test_task_list_still_filters_closed_tasks ____________
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_task_list_still_filters_closed_tasks>
+
+    def test_task_list_still_filters_closed_tasks(self):
+        code, out = run_hub("task", "list", "--status", "closed", env=self.env)
+>       self.assertEqual(code, 0, out)
+E       AssertionError: 1 != 0 : {'error': "IndentationError: expected an indented block after 'if' statement on line 237 (remotecli.py, line 238)"}
+
+clients/tests/test_hubcli.py:250: AssertionError
+_ AgainstAStub.test_task_update_reads_the_version_first_so_a_stale_write_cannot_clobber _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_task_update_reads_the_version_first_so_a_stale_write_cannot_clobber>
+
+    def test_task_update_reads_the_version_first_so_a_stale_write_cannot_clobber(self):
+        code, out = run_hub("task", "update", "T1", "--status", "done", "--note", "shipped", env=self.env)
+>       self.assertEqual(code, 0)
+E       AssertionError: 1 != 0
+
+clients/tests/test_hubcli.py:236: AssertionError
+______ AgainstAStub.test_whoami_is_the_api_identity_under_the_turn_token _______
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_whoami_is_the_api_identity_under_the_turn_token>
+
+    def test_whoami_is_the_api_identity_under_the_turn_token(self):
+        code, out = run_hub("whoami", env=self.env)
+>       self.assertEqual(code, 0)
+E       AssertionError: 1 != 0
+
+clients/tests/test_hubcli.py:230: AssertionError
+_ BotSetup.test_a_bot_created_without_a_slug_takes_the_one_picked_from_its_name _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.BotSetup testMethod=test_a_bot_created_without_a_slug_takes_the_one_picked_from_its_name>
+
+    def setUp(self):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:394: IndentationError
+__ BotSetup.test_creating_a_bot_the_server_has_not_registered_keeps_it_local ___
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.BotSetup testMethod=test_creating_a_bot_the_server_has_not_registered_keeps_it_local>
+
+    def setUp(self):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:394: IndentationError
+_ BotSetup.test_creating_a_bot_twice_refuses_rather_than_overwriting_its_memory _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.BotSetup testMethod=test_creating_a_bot_twice_refuses_rather_than_overwriting_its_memory>
+
+    def setUp(self):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:394: IndentationError
+_ BotSetup.test_creating_a_bot_without_repo_permission_fails_and_says_a_person_must_act _
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.BotSetup testMethod=test_creating_a_bot_without_repo_permission_fails_and_says_a_person_must_act>
+
+    def setUp(self):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:394: IndentationError
+____________ test_keep_tasks_going_cli_preserves_explicit_unlimited ____________
+[gw2] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0xfec7486647d0>
+
+    def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:478: IndentationError
+_ AgainstAStub.test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run _
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run>
+
+    def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
+        code, out = run_hub("tool", "add", "writer", "notion", "--can", "read",
+                            "--mcp-url", "https://mcp.notion.example/mcp", "--dry-run", env=self.env)
+>       self.assertEqual(code, 0, out)
+E       AssertionError: 1 != 0 : {'error': "IndentationError: expected an indented block after 'if' statement on line 237 (remotecli.py, line 238)"}
+
+clients/tests/test_hubcli.py:280: AssertionError
+_ BotSetup.test_creating_a_bot_in_a_persons_turn_registers_it_with_the_server_first _
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.BotSetup testMethod=test_creating_a_bot_in_a_persons_turn_registers_it_with_the_server_first>
+
+    def setUp(self):
+>       from clients import remotecli
+E         File "/home/runner/workspace/tasks/3dedb547/ticoteam__tico/clients/remotecli.py", line 238
+E           fields["limit"] = args.limit  # explicit null restores the default; omission only reads
+E           ^^^^^^
+E       IndentationError: expected an indented block after 'if' statement on line 237
+
+clients/tests/test_hubcli.py:394: IndentationError
+________ AgainstAStub.test_roadmap_commands_send_what_their_tools_send _________
+[gw1] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+self = <clients.tests.test_hubcli.AgainstAStub testMethod=test_roadmap_commands_send_what_their_tools_send>
+
+    def test_roadmap_commands_send_what_their_tools_send(self):
+        def last(method, path):
+            return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+        for argv in (["task", "requesters", "T1", "--limit", "5"],
+                     ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
+                     ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
+                     ["task", "requester-remove", "T1", "R1"],
+                     ["task", "publication-preview", "T1", "--visibility", "public", "--public-title", "Exports", "--label", "roadmap"],
+                     ["task", "comment-moderate", "T1", "C1", "hide"],
+                     ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
+                     ["roadmap", "settings"],
+                     ["roadmap", "settings", "--label", "roadmap", "--suggestion-limit", "5", "--no-bot-public-approval"],
+                     ["roadmap", "settings", "--label", ""]):
+            code, out = run_hub(*argv, env=self.env)
+>           self.assertEqual(code, 0, (argv, out))
+E           AssertionError: 1 != 0 : (['task', 'requesters', 'T1', '--limit', '5'], {'error': "IndentationError: expected an indented block after 'if' statement on line 237 (remotecli.py, line 238)"})
+
+clients/tests/test_hubcli.py:317: AssertionError
+20 failed, 69 passed in 41.97s

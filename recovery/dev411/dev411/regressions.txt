@@ -1,0 +1,34 @@
+bringing up nodes...
+bringing up nodes...
+
+........................................................................ [ 46%]
+........................................................................ [ 92%]
+.......F....                                                             [100%]
+=================================== FAILURES ===================================
+____________ test_three_start_and_finishing_one_starts_next_by_rank ____________
+[gw3] linux -- Python 3.15.0 /home/runner/workspace/tasks/3dedb547/venv/bin/python
+
+api = <starlette.testclient.TestClient object at 0xee05d34ca7a0>
+
+    def test_three_start_and_finishing_one_starts_next_by_rank(api):
+        machine = task_bot(api, lanes=True, capacity=8)
+        tasks = deck(api)
+        set_cap(api, 3)
+        attempts = [take(api, machine) for _ in range(3)]
+        assert [a['task']['id'] for a in attempts] == [t['id'] for t in reversed(tasks[2:])]
+        assert all(get(api, 'tasks/' + t['id'])['task']['step']['name'] == 'In Progress' for t in tasks[2:])
+        assert take(api, machine) is None
+        assert get(api, 'bots/ops')['task_flow'] == {'going': 3, 'waiting': 2}
+        finish(api, machine, attempts[0], tasks[4])
+>       assert take(api, machine)['task']['id'] == tasks[1]['id']
+E       AssertionError: assert '8e874ca9-d10...-3618dcb79434' == '605b9ba6-937...-572a934cd854'
+E         
+E         - 605b9ba6-9370-4dc3-a8d2-572a934cd854
+E         + 8e874ca9-d10c-402d-a573-3618dcb79434
+
+backend/tests/test_auto_tasks.py:46: AssertionError
+------------------------------ Captured log setup ------------------------------
+WARNING  tico.support:support.py:543 Support ticket secrets kept in plaintext by an earlier release are not sealed yet: OperationalError
+=========================== short test summary info ============================
+FAILED backend/tests/test_auto_tasks.py::test_three_start_and_finishing_one_starts_next_by_rank
+1 failed, 155 passed in 88.06s (0:01:28)
