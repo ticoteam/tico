@@ -418,12 +418,19 @@ MAIL_RETENTION_DAYS = 180
 # answers again, and an empty claim handed out no lease. They arrive every 15 s per runner
 # (the heartbeat reply carries every assignment), and grew to most of the database file. A claim that leased a job stays replayable so a lost reply cannot
 # strand the lease.
+# A running turn asks for steering input every few seconds, and almost every answer is empty; an answer that
+# took input stays replayable. Output events replay by their own sequence numbers (execution.events), so a
+# stored receipt for each batch only grew the table: together they were most of its writes.
 def is_poll(operation, result):
     if operation in ("/api/v2/runners/heartbeat", "/api/v2/runners/performance"):
         return True
     if operation == "/api/v2/jobs/claim":
         return isinstance(result, dict) and result.get("attempt") is None
-    return operation.startswith("/api/v2/attempts/") and operation.endswith("/renew")
+    if not operation.startswith("/api/v2/attempts/"):
+        return False
+    if operation.endswith("/inputs"):
+        return isinstance(result, dict) and not result.get("messages")
+    return operation.endswith(("/renew", "/events"))
 
 
 def encode(value):
@@ -686,7 +693,10 @@ class Store:
         # As hubdb.connect: a writer waits out a backup checkpoint or a long scheduler pass
         # rather than answering storage_unavailable.
         c.execute("PRAGMA busy_timeout=30000")
-        c.execute("PRAGMA synchronous=FULL")
+        # In WAL mode NORMAL syncs at checkpoints, not on every commit inside the writer gate, where a sync
+        # waiting behind other disk writes on the host held every writer for seconds. The database cannot
+        # corrupt; an OS crash or power loss can lose the last commits, as with hubdb.connect.
+        c.execute(f"PRAGMA synchronous={H.synchronous('NORMAL')}")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
@@ -735,6 +745,8 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import bot_task_tabs as _bot_task_tabs
+            c.executescript(_bot_task_tabs.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).

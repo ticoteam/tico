@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Run one heavy command on a fresh RunsOn VM (.github/workflows/remote-run.yml) instead of on this computer.
+
+    python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8|16] [--minutes N] [--ref SHA] -- CMD...
+
+It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
+command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
+signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = 'remote-run.yml'
+TAIL = 200
+
+
+def gh(*args, capture=True):
+    result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
+    if result.returncode != 0:
+        raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
+    return result.stdout
+
+
+def git(*args):
+    return subprocess.run(['git', *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def portable(command):
+    """A local interpreter path (a venv's python, a node install) becomes the VM's own interpreter of that name."""
+    if command and '/' in command[0]:
+        name = Path(command[0]).name
+        if name.startswith('python'):
+            return ['python', *command[1:]]
+        if name == 'node':
+            return ['node', *command[1:]]
+    return list(command)
+
+
+def setup_for(command):
+    """The least setup that runs this command: browsers for the UI scripts, Rust for cargo, both for a release check."""
+    text = ' '.join(command)
+    browser = any(word in text for word in ('ui-tests', 'playwright', 'npm ', 'npx ', '.cjs'))
+    rust = 'cargo' in text
+    if 'release_checks.py' in text and '--release' in text:
+        browser = rust = True
+    return 'all' if browser and rust else 'browser' if browser else 'rust' if rust else 'python'
+
+
+def find_run(run_id, deadline):
+    title = f'Remote run {run_id}'
+    while time.monotonic() < deadline:
+        runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
+                             '--json', 'databaseId,displayTitle,url'))
+        for run in runs:
+            if run['displayTitle'] == title:
+                return run
+        time.sleep(3)
+    raise SystemExit(f'remote: dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
+
+
+def wait(run):
+    last = None
+    while True:
+        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion'))
+        if view['status'] != last:
+            print(f'remote: {view["status"]}', file=sys.stderr, flush=True)
+            last = view['status']
+        if view['status'] == 'completed':
+            return view['conclusion']
+        time.sleep(10)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    parser.add_argument('--setup', choices=('python', 'browser', 'rust', 'all'),
+                        help='what the VM installs first (default: guessed from the command)')
+    parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
+    parser.add_argument('--minutes', type=int, default=30, help='time limit for the command (1 to 60)')
+    parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
+    parser.add_argument('command', nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    if not command:
+        parser.error('a command is required, after --')
+    ref = git('rev-parse', args.ref or 'HEAD')
+    if not git('branch', '-r', '--contains', ref):
+        raise SystemExit(f'remote: {ref[:7]} is not pushed; push it first (the VM runs the pushed commit)')
+    if git('status', '--porcelain', '--untracked-files=no'):
+        print(f'remote: uncommitted changes are not included; running {ref[:7]} as pushed', file=sys.stderr)
+    command = portable(command)
+    run_id = uuid.uuid4().hex[:12]
+    setup = args.setup or setup_for(command)
+    print(f'remote: {shlex.join(command)} at {ref[:7]} on {args.cpus} vCPUs ({setup} setup), id {run_id}',
+          file=sys.stderr, flush=True)
+    # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
+    gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
+       '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={args.cpus}',
+       '-f', f'minutes={args.minutes}')
+    run = find_run(run_id, time.monotonic() + 120)
+    print(f'remote: {run["url"]}', file=sys.stderr, flush=True)
+    conclusion = wait(run)
+    logs = ROOT / '.remote-runs' / run_id
+    logs.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as scratch:
+        fetched = subprocess.run(['gh', 'run', 'download', str(run['databaseId']), '-n', f'remote-run-{run_id}',
+                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
+        for name in ('command', 'output.log', 'exit-code'):
+            if (Path(scratch) / name).is_file():
+                (logs / name).write_bytes((Path(scratch) / name).read_bytes())
+    output = logs / 'output.log'
+    if output.is_file():
+        print('\n'.join(output.read_text(errors='replace').splitlines()[-TAIL:]))
+    code_file = logs / 'exit-code'
+    if not fetched or not code_file.is_file():
+        # No result file means the VM never ran the command to the end (setup failed, cancelled, timed out).
+        print(f'remote: no result ({conclusion}); see {run["url"]}', file=sys.stderr)
+        return 1
+    code = int(code_file.read_text().strip() or 1)
+    print(f'remote: exit code {code}; full log {output.relative_to(ROOT)}; {run["url"]}', file=sys.stderr)
+    return code
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

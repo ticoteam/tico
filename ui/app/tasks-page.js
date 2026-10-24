@@ -8,7 +8,7 @@ const TASK_PREF = 'tasks.view';
 function pageTasks(forced, openId = '') {
   TASKS_ST?.layoutAbort?.abort();
   PROP_TASKS = null;                       // the pickers' copy of the open tasks starts fresh with the page
-  const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '',
+  const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '', who: 'me', side: 'plate',
     loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
     filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
     selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map()};
@@ -40,6 +40,7 @@ function pageTasks(forced, openId = '') {
         <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
       </header>
       <div class="tl-bar" id="task-bar">
+        <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span>
           <button type="button" class="tl-addf" id="task-filter" aria-haspopup="true">${TL_ICON.filter}<span>Filter</span></button>
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
@@ -69,7 +70,7 @@ function pageTasks(forced, openId = '') {
     clearTimeout(state.searchTimer);
     state.searchTimer = setTimeout(() => {
       tasksRender(state);
-      if (state.view === 'done' && state.q && state.doneNext != null) void tasksLoadAllDone(state);
+      if (tasksFinishedView(state.view) && state.q && state.doneNext != null) void tasksLoadAllDone(state);
     }, 150);
   };
   search.onkeydown = ev => {
@@ -114,6 +115,7 @@ function pageTasks(forced, openId = '') {
     tasksFiltersChanged(state);
     $('#task-filter')?.focus();
   };
+  $('#task-who-wrap').onclick = ev => { const b = ev.target.closest('#task-who'); if (b) tasksWhoMenu(state, b); };
   $('#task-group-wrap').onclick = ev => { const b = ev.target.closest('#task-group'); if (b) tasksGroupMenu(state, b); };
   $('#task-select-mode').onclick = () => {
     state.selectMode = !state.selectMode;
@@ -159,6 +161,7 @@ function pageTasks(forced, openId = '') {
     tasksBodyClick(state, ev);
   });
   state.layoutAbort = new AbortController();
+  taskBoardBind(state, body);
   document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
@@ -182,7 +185,7 @@ function pageTasks(forced, openId = '') {
     }
     tasksTools(state);
     tasksRender(state);
-    if ((state.view === 'done' || state.view === 'board') && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
+    if (tasksFinishedView(state.view) && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
     await loading;
   })();
 }
@@ -192,8 +195,8 @@ function tasksSetView(state, view) {
   state.selectMode = false;
   if (state.selected.size || state.bulkMsg) tasksSelectionClear(state);
   tasksRemember(state); tasksURLWrite(state); tasksTools(state); tasksRender(state);
-  if ((state.view === 'done' || state.view === 'board') && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
-  else if (state.view === 'done') void tasksDoneMerge(state);
+  if (tasksFinishedView(state.view) && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
+  else if (tasksFinishedView(state.view)) void tasksDoneMerge(state);
 }
 function tasksNormalise(state, forced) {
   if (!TASK_VIEWS.some(([k]) => k === state.view)) state.view = forced || 'foryou';
@@ -330,9 +333,9 @@ const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_
 const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
 async function tasksLoad(state, opts = {}) {
   const seq = ++state.loadSeq;
-  // Done keeps its own paging. A reload after a change folds in its newest page; the poll does that too, but only while
-  // Done (or a type's board, which shows finished steps) is on screen, and never more than that one page.
-  const doneShown = state.view === 'done' || state.view === 'board';
+  // Done and Closed keep their own paging. A reload after a change folds in the newest page; the poll does that too, but
+  // only while one of them is on screen, and never more than that one page.
+  const doneShown = tasksFinishedView(state.view);
   const reloadDone = opts.poll ? doneShown && state.doneLoaded : (state.doneLoaded || doneShown);
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
@@ -430,7 +433,7 @@ async function tasksLoadDone(state, reset = false) {
   }
   state.doneLoading = false;
   tasksTools(state); tasksRender(state);
-  if (page && state.view === 'done' && state.q && state.doneNext != null && !state.doneDrain) {
+  if (page && tasksFinishedView(state.view) && state.q && state.doneNext != null && !state.doneDrain) {
     void tasksLoadAllDone(state);
   }
   return !!page;
@@ -531,6 +534,7 @@ function tasksPatch(el, html) {
 function tasksRender(state) {
   const el = $('#task-body');
   if (!el || TASKS_ST !== state) return;
+  if (taskBoardHolding(state)) return;      // a card is being dragged: the board redraws once it is let go
   state.memo = new Map();
   const active = document.activeElement, inBody = el.contains(active);
   const focusKey = inBody ? active.closest('[data-task-key]')?.dataset.taskKey || '' : '';
@@ -545,9 +549,9 @@ function tasksRender(state) {
   if (state.view === 'recurring') html = tasksRecurringHTML(state);
   else {
     const items = taskItems(state);
-    html = state.loading && state.view !== 'done' && !items.length
+    html = state.loading && !tasksFinishedView(state.view) && !items.length
       ? skelRows(6)
-      : state.view === 'done' ? tasksDoneHTML(items, state)
+      : tasksFinishedView(state.view) ? tasksDoneHTML(items, state)
       : state.view === 'board' ? tasksBoardHTML(items, state)
       : tasksListHTML(items, state);
   }

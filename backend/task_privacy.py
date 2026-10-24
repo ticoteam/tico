@@ -7,6 +7,7 @@ import json
 import re
 
 from .store import H, Problem
+from .live_privacy import sources as meeting_sources
 
 
 def snapshot(c):
@@ -133,7 +134,8 @@ def record_moved_input(c, from_attempt, to_attempt, message):
     """Before an input row moves to another run, keep its tasks against the run that read it."""
     H.event(c, H.KEEPER, INPUT_MOVED, from_attempt,
             {"message_id": message["id"], "to_attempt": to_attempt,
-             "tasks": sorted(message_tasks(c, message, include_run=False))})
+             "tasks": sorted(message_tasks(c, message, include_run=False)),
+             "live_meetings": sorted(meeting_sources(c).message(message, include_run=False))})
 
 
 def readable(c, actor, ids):
@@ -158,7 +160,8 @@ def message_readable(c, actor, message, current=False):
     if message.get("deleted_at") or message.get("deleted"):
         return False
     try:
-        return readable(c, actor, message_tasks(c, message, current=bool(stored)))
+        return (meeting_sources(c).message_readable(actor, message)
+                and readable(c, actor, message_tasks(c, message, current=bool(stored))))
     except Problem:
         return False
 
@@ -232,7 +235,8 @@ def deleted_comment_ack(c, principal, payload):
             or not H.is_comment(current) or set(current.get("refs", {})) != {"task", "comment"}
             or payload != current):
         return False
-    return readable(c, principal, message_tasks(c, current))
+    return (meeting_sources(c).message_readable(principal, current)
+            and readable(c, principal, message_tasks(c, current)))
 
 
 def require_payload(c, who, payload, principal=None, checked_for=None):
@@ -273,6 +277,8 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
         return payload
     if principal != checked_for and not readable(c, principal, references(c, payload)):
         raise Problem("privacy", "This response contains a task you can no longer read", 403)
+    if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
+        raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
         key = payload.get("key")
         if isinstance(key, str) and key.startswith("report:") and not message_readable(c, principal, H.message(c, key[7:])):
@@ -355,7 +361,8 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        return readable(c, actor, attempt_tasks(c, aid, memo))
+        return (meeting_sources(c).attempt_readable(actor, aid)
+                and readable(c, actor, attempt_tasks(c, aid, memo)))
     except Problem:
         return False
 
@@ -365,9 +372,15 @@ def require_attempt(c, who, aid):
         raise Problem("not_found", "Turn not found", 404)
 
 
+def private_meetings(c, ids):
+    # A removed source fails closed, just as it does for derived reads.
+    return {rid for rid in ids if not (row := c.execute(
+        "SELECT visibility FROM live_meetings WHERE id=?", (rid,)).fetchone()) or row["visibility"] != "team"}
+
+
 def private_execution(c, who):
-    return bool(who.attempt_id and any(H.task_private(c, H.task(c, tid))
-                                     for tid in attempt_tasks(c, who.attempt_id)))
+    return bool(who.attempt_id and (private_meetings(c, meeting_sources(c).attempt(who.attempt_id)) or
+                any(H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))))
 
 
 def question_party(c, who, person, parent=None, guest=None):
@@ -448,18 +461,33 @@ def require_batch(c, who, row):
 
 
 def content_readable(c, actor, payload):
-    return readable(c, actor, references(c, payload))
+    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+            and readable(c, actor, references(c, payload)))
 
 
 def guard_write(c, who, path, auth):
     """A private execution has no automatic company-publication capability."""
+    # These controls already enforce their own run ownership and never publish company content.
+    if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/")):
+        return
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
+    meetings = meeting_sources(c).attempt(who.attempt_id)
+    if private_meetings(c, meetings):
+        # A meeting turn is one scoped reply, not an ordinary task or company publisher.
+        # Run artifacts retain their attempt provenance through the existing file/read fence.
+        if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/files/uploads", "/api/v2/files/imports"):
+            return
+        scoped = re.fullmatch(r"/api/v2/live-meetings/([^/]+)/(chat|turns/[^/]+/claim)", path)
+        if (scoped and meetings == {scoped[1]} and not any(
+                H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))):
+            return
+        raise Problem("privacy", "Private meeting work can only reply to its meeting or retain scoped run files", 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
     if path == "/api/v2/task-questions":
         return              # a private task of its own, to a person question_party lets read the run's work (media.py)
-    if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/", "/api/v2/files/", "/api/v2/messages",
+    if path.startswith(("/api/v2/files/", "/api/v2/messages",
                         "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")):
         task_path = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/.*)?", path)
         if task_path and task_path[1] not in ("dry-run", "labels", "stuck"):
@@ -492,13 +520,22 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
         ids.update(attempt_tasks(c, who.attempt_id))
+    meetings = meeting_sources(c)
+    meeting_ids = meetings.references(refs)
+    if reply:
+        meeting_ids.update(meetings.message(reply))
+    if who.attempt_id:
+        meeting_ids.update(meetings.attempt(who.attempt_id))
+    restricted_meetings = private_meetings(c, meeting_ids)
     private = [H.task(c, tid) for tid in ids if H.task_private(c, H.task(c, tid))]
-    if not private:
+    if not private and not restricted_meetings:
         return
     conv = H.conversation(c, conversation_id) if conversation_id else None
     audience = set((conv or {}).get("participants") or []) | {who.actor, to}
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)
+    if not all(meetings.readable(actor, restricted_meetings) for actor in audience):
+        raise Problem("privacy", "Private meeting content stays with its current members", 403)
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
     target = H.task(c, target) if isinstance(target, str) else None
     for row in private:
@@ -633,6 +670,8 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
         if row["scope"].startswith("task:"):
             ids.add(row["scope"][5:])
         if row["attempt_id"]:
+            if not meeting_sources(c).attempt_readable(actor, row["attempt_id"]):
+                return False
             ids.update(attempt_tasks(c, row["attempt_id"], memo))
     linked = bool(ids)
     for row in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id "
@@ -648,6 +687,9 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    meetings = meeting_sources(c)
+    if not meetings.readable(actor, meetings.references(H._json(event.get("detail_json"), {}) or {})):
+        return False
     ids = references(c, H._json(event.get("detail_json"), {}) or {}) | references(c, event.get("target"))
     target = event.get("target")
     if H.task(c, target):
@@ -656,11 +698,21 @@ def event_readable(c, actor, event):
     if msg and not message_readable(c, actor, msg):
         return False
     if c.execute("SELECT 1 FROM attempts WHERE id=?", (target,)).fetchone():
+        if not meetings.attempt_readable(actor, target):
+            return False
         ids.update(attempt_tasks(c, target))
+    if c.execute("SELECT 1 FROM conversations WHERE id=?", (target,)).fetchone():
+        if not meetings.conversation_readable(actor, target):
+            return False
+    if c.execute("SELECT 1 FROM live_meetings WHERE id=?", (target,)).fetchone():
+        if not meetings.readable(actor, {target}):
+            return False
     # Tool/audit events from a private execution often have no explicit task ref.
     if H.is_bot(event.get("actor")):
         for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created<=? "
                              "AND coalesce(finished,?)>=?", (H.actor_id(event["actor"]),
                                                             event["ts"], H.now(), event["ts"])):
+            if not meetings.attempt_readable(actor, row[0]):
+                return False
             ids.update(attempt_tasks(c, row[0]))
     return readable(c, actor, ids)

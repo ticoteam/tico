@@ -172,7 +172,11 @@ asking for each message, to three kinds of recipient:**
 
 Everyone else needs one of: an allowance in `registry/mail-policy.yaml` that lists the recipient (Influencer's creator
 table is one), or `--approval-issue N` where N is a **closed** task in Tico with `owner:ana` and `type:decision`
-whose title or body names that address or the thread. With sending off in Tico a send is always a draft. The
+whose title or body names that address or the thread. A Tico `send` approval (`hub approval request --kind send`) is
+for one exact text: put the `body_sha256` that `mail draft --json` returns in its payload. At send time the connector
+hashes the draft's text as it stands in Gmail (line ends and the space around the whole text don't count) and refuses a
+draft whose text differs, with "the draft changed after it was approved; ask for a new yes". A changed draft needs a
+new approval. With sending off in Tico a send is always a draft. The
 daily cap, the wait between messages to one person, the blocklist and the people the owner handles personally apply
 to every send, the three kinds above included. `mail policy show` says which of these you have, which forward targets
 Tico holds, what bot.yaml asks, and which policy it is reading.

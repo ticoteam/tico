@@ -30,7 +30,7 @@ html.no-support [data-setup-help]{display:none}
 .feedback-row{display:flex;align-items:center;gap:8px}
 .privacy-row{display:flex;align-items:center;gap:8px;font-size:var(--t-md)}.privacy-row input{width:auto;flex:none}
 html.demo{--demo-h:30px;padding-top:var(--demo-h)}
-html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap;overflow:hidden}
+html.demo #demo-banner{position:fixed;top:0;left:0;right:0;z-index:3000;height:var(--demo-h);display:flex;align-items:center;justify-content:center;gap:10px;padding:0 12px;background:var(--wait-bg);color:var(--wait-ink);border-bottom:1px solid var(--wait);font-size:var(--t-sm);line-height:1.2;white-space:nowrap;overflow:hidden}
 html.demo #demo-banner strong{color:var(--ink);font-weight:600}
 html.demo #demo-banner span{overflow:hidden;text-overflow:ellipsis}
 html.demo body{min-height:calc(100vh - var(--demo-h))}
@@ -93,3 +93,5 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
+/* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.js). */
+.page-hidden *,.page-hidden *::before,.page-hidden *::after{animation-play-state:paused!important}

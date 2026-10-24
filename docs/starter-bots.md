@@ -1,6 +1,6 @@
 # Starter bots
 
-There are 93 templates: 90 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+There are 98 templates: 95 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
 Product and Engineering), a small Leadership extra and one message bot, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
@@ -30,8 +30,8 @@ Chief of Staff is no longer a default.
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 8 | Turn interest into revenue |
 | Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 13 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
-| Finance | `account_balance` | Head of Finance (`finance-lead`) | 11 | Know where the money is |
-| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 11 | Run smoothly, nothing dropped |
+| Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
+| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
 | Product | `category` | Head of Product (`product-lead`) | 8 | Build what customers need |
@@ -120,6 +120,9 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `percent` | `tax` | Tax Specialist | A monthly tax calendar for the next 90 days with each filing's inputs and filer, a sales tax and VAT threshold watch, and the accountant's document lists; not tax advice | niche | Tico only; sales exports and last year's returns list |
 | `price_check` | `revenue-accountant` | Revenue Accountant | A monthly revenue close pack: billing reconciled to the books, the deferred revenue roll-forward, proposed journal entries, recognition notes and the recurring revenue bridge | niche | Billing and ledger exports on a task |
 | `receipt` | `billing` | Billing Specialist | A checked invoice run each cycle built from contracts, usage or hours (PO numbers, tax, terms), unbilled work found, and draft credit notes | common | Contracts and usage or hours on a task; a CRM optional |
+| `fact_check` | `controller` | Controller | A month-end close review: the checklist with status per step, reconciliations done and open, entries and balances to explain, open items by owner and adjustments proposed for the accountant; never pays or posts | niche | Trial balance and reconciliation exports on a task |
+| `monitoring` | `equity-manager` | Equity Manager | A monthly cap table check: the fully diluted table with its sources, option pool left, grants vesting soon, grants missing an approval, the 409A date and round scenario tables; the cap table change log lives here; never issues, signs or advises | niche | A cap table export and grant documents on a task |
+| `handshake` | `fundraising-manager` | Fundraising Manager | A weekly raise review: the investor pipeline, the data room checklist, the raise tracker (target, committed, closed), meeting prep briefs and follow-up drafts; never sends to investors or promises terms | niche | An investor list on a task; mail, calendar and docs optional |
 
 ### Operations
 
@@ -136,6 +139,8 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `inventory_2` | `inventory` | Inventory Planner | A weekly reorder list from reorder points and observed lead times, a draft purchase order per supplier, stock-out and overstock risks | niche | Sales and stock exports on a task |
 | `local_shipping` | `logistics` | Logistics Coordinator | A weekly on-time and in-full report by carrier and lane, exceptions worked with draft customer updates, claims before deadline, carrier invoice overcharges | niche | Shipment exports and carrier invoices on a task |
 | `route` | `dispatcher` | Dispatcher | Tomorrow's plan for field crews by skill, area and window, the clash list with options, draft arrival notices, jobs not closed out | niche | A jobs export on a task; crew calendars optional |
+| `calendar_month` | `scheduling-bookings` | Scheduling & Bookings | The booking rules, a weekly bookings page with clashes and gaps, reschedule options that fit the rules and no-show follow-up drafts; never changes prices or sends without a person | niche | A bookings export on a task; calendar and mail optional |
+| `task_alt` | `quality-inspections` | Quality & Inspections | Inspection checklists per job type, an inspection log, re-do tracking with causes and a quality score per crew with the jobs behind it; never disciplines staff | niche | Inspection results and a jobs export on a task |
 
 ### Legal
 

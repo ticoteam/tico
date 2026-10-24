@@ -1,0 +1,28 @@
+name: quality-inspections                     # the slug: it matches the repository bot-quality-inspections and the label owner:quality-inspections
+display_name: "Quality & Inspections"
+labels: [owner:quality-inspections]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
+# the bot puts what it prepared on the task and drafts until a person turns mail sending on in Tico.
+outbound_send: false
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-quality-page
+    title: Weekly quality page
+    cron: "0 9 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-quality-page.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []

@@ -15,7 +15,7 @@
 .side-rec .dot{animation:pulse 1.6s ease-in-out infinite;--run-bg:var(--fail-bg)}
 .side-rec .side-rec-time{font-variant-numeric:tabular-nums;color:var(--fail);font-weight:600;flex:none}
 .side-rec .side-rec-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--muted)}
-.side-rec.finishing{background:var(--wait-bg)}.side-rec.finishing .dot{background:var(--wait);animation:none}.side-rec.finishing .side-rec-time{color:var(--wait)}
+.side-rec.finishing{background:var(--wait-bg)}.side-rec.finishing .dot{background:var(--wait);animation:none}.side-rec.finishing .side-rec-time{color:var(--wait-ink)}
 .nav-link:hover{background:var(--surface2);text-decoration:none}.nav-link.cur{background:var(--surface2);font-weight:600}
 .nav-icon{
   width:20px;height:20px;flex:none;overflow:hidden;user-select:none;
