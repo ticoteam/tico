@@ -170,8 +170,7 @@ Companies approved through the waitlist have the balance enforced:
   up to about 5 minutes before the stop takes hold.
 - A company is paused at the minimum exactly: $0.00 with a $0 minimum is paused. It runs only while the balance is
   above the minimum.
-- Add credit, or ask Tico staff to lower the minimum, and Tico models work again within about 5 minutes, usually
-  within a minute.
+- Add credit, or ask Tico staff to lower the minimum, and Tico models work again within about 5 minutes.
 
 Companies that are only recorded are never stopped; their use is charged to the balance and nothing more.
 

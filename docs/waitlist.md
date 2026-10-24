@@ -38,6 +38,21 @@ If setup is still running, the page does not say ready. Staff can retry a failed
 
 See [Your starting credit and what happens at $0](account.md#your-starting-credit-and-what-happens-at-0) for expiry, pauses, retained data, and recovery.
 
+## Your automatic visual address
+
+**Unreleased:** this describes the intended setup behavior; live availability is not confirmed.
+
+Every new and existing company whose Tico server we host gets its own visual address, such as `acme.ticofiles.com`.
+Tico sets it up automatically, free, whether or not you buy Tico file hosting.
+You have no setup step or visuals on/off switch. Paid file storage is separate.
+
+Until Tico verifies the address, your conversations use the fallback: pictures, video, and audio show inline.
+Pages and SVG show a card with **Open**, which opens the isolated file viewer.
+If address setup fails or is interrupted, Tico keeps retrying while you use the fallback.
+You see the fallback visual status, with no pending or stuck address state.
+Full inline visuals become available only after the address is verified.
+See [Visuals in replies](visuals.md#with-and-without-a-visual-address).
+
 ## If Tico can't offer a spot
 
 You get a short email with the subject **Your place on the Tico waitlist**. It says "We can't offer a spot right now." Staff can keep a private note about the decision. It is never sent to you.
