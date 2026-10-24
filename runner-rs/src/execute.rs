@@ -376,6 +376,56 @@ async fn drop_session(state: &crate::state::State, bot: &str, conversation: &str
     state.off(move |s| s.forget_session(&bot, &conversation, &runtime, &thread)).await
 }
 
+/// A new provider thread on a host that says when its session is up (Host::confirms_threads), kept only then:
+/// saved for the conversation, the thread it replaces forgotten, and Tico told. Until then the old thread stays this
+/// conversation's here and on the task, so a session that never comes up costs nothing but the turn.
+pub struct Fresh {
+    pub bot: String,
+    pub conversation: String,
+    pub runtime: String,
+    pub aid: String,
+    /// The thread a rotation leaves.
+    pub left: Option<String>,
+    /// The thread the turn's `started` named: the one the task had, when this server takes a later update
+    /// (`thread_updates`), else the new one as before.
+    pub told: String,
+    /// The session the host confirmed.
+    pub confirmed: Mutex<Option<String>>,
+}
+
+/// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
+/// an older one has no such route).
+fn thread_updates() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::THREAD_UPDATES.with(|on| on.get()) {
+        return on;
+    }
+    crate::follow::feature("attempt_thread")
+}
+
+impl Runner {
+    /// The host said the new thread's session is up (`thread_confirmed`): keep it, let the thread it replaces go,
+    /// and tell Tico when its `started` named another. Once per turn; a later confirmation changes nothing.
+    pub(crate) async fn confirm_thread(&self, fresh: &Fresh, session: &str) -> Result<(), Fail> {
+        if fresh.confirmed.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        keep_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, session).await?;
+        if let Some(old) = fresh.left.as_deref().filter(|old| *old != session) {
+            drop_session(&self.state, &fresh.bot, &fresh.conversation, &fresh.runtime, old).await?;
+        }
+        *fresh.confirmed.lock().unwrap() = Some(session.to_string());
+        if session != fresh.told && thread_updates() {
+            let aid = &fresh.aid;
+            // Not fatal: the next turn resumes this thread, and its `started` names it.
+            if let Err(e) = self.client.post(&format!("attempts/{aid}/thread"), &json!({"thread_id": session}), Some(&format!("thread:{aid}"))).await {
+                log(&format!("Tico runner: {}: could not tell Tico the new session of run {aid}: {e}", fresh.bot));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Give a bot's local history its first home on GitHub (git_credentials.publish_history): a checkout with commits
 /// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
@@ -698,6 +748,9 @@ impl Runner {
     fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
         #[cfg(test)]
         if let Some(command) = tests::HOST_COMMAND.with(|command| command.borrow().clone()) {
+            if tests::HOST_CLAUDE.with(|claude| claude.get()) {
+                return Ok(Host::Claude(ClaudeHost::new(bot, command, tx)));
+            }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(bot, command, tx)));
         }
         if let Some(delivery) = crate::appdriver::delivery(config) {
@@ -1073,8 +1126,8 @@ impl Runner {
                     log(&format!("Tico runner: {bot}: {}", r.diagnostic()));
                     let _ = self.state.append(&aid, "diagnostic", &json!({"text": r.diagnostic(), "rotated": r.report()}));
                     since = self.state.cursor(&prev, None)?;
-                    // Forgotten only once the fresh thread is saved: a turn that fails before then leaves it, so
-                    // its retry rotates again with the same seed and record.
+                    // Forgotten only once the fresh thread is up and saved (Fresh): a turn that fails before then
+                    // leaves it, so its retry rotates again with the same seed and record.
                     left = previous.take();
                     rotated = Some(r);
                 }
@@ -1124,9 +1177,23 @@ impl Runner {
                 thread = Some(h.start_thread(&bot, &settings).await?);
             }
             let th = thread.clone().unwrap();
-            self.state.save_session(&bot, &conv, &session_runtime, &th)?;
-            if let Some(old) = left.as_deref().filter(|old| *old != th) {
-                self.state.forget_session(&bot, &conv, &session_runtime, old)?;
+            // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
+            // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
+            // leaves the next turn the old one.
+            let fresh = (!resumed && h.confirms_threads()).then(|| Fresh {
+                bot: bot.clone(),
+                conversation: conv.clone(),
+                runtime: session_runtime.clone(),
+                aid: aid.clone(),
+                told: if thread_updates() { left.clone().or_else(|| previous.clone()).unwrap_or_else(|| th.clone()) } else { th.clone() },
+                left: left.clone(),
+                confirmed: Mutex::new(None),
+            });
+            if fresh.is_none() {
+                self.state.save_session(&bot, &conv, &session_runtime, &th)?;
+                if let Some(old) = left.as_deref().filter(|old| *old != th) {
+                    self.state.forget_session(&bot, &conv, &session_runtime, old)?;
+                }
             }
             if flags.lost.load(Ordering::SeqCst) || Instant::now() >= *flags.deadline.lock().unwrap() {
                 return Err(Fail::runtime("Lease expired while preparing runtime"));
@@ -1134,7 +1201,9 @@ impl Runner {
             unstopped(&flags)?;
             // Acknowledge before execution. Any later crash is explicitly uncertain.
             let active = self.active.lock().unwrap().len();
-            let started = crate::perf::with_snapshot(json!({"thread_id": th}), active).await;
+            // The thread the task has until the new one is confirmed (Fresh::told).
+            let told = fresh.as_ref().map_or(th.as_str(), |f| f.told.as_str());
+            let started = crate::perf::with_snapshot(json!({"thread_id": told}), active).await;
             self.client.post(&format!("attempts/{aid}/started"), &started, Some(&format!("started:{aid}"))).await?;
             self.state.phase(&aid, "running")?;
             // A resumed thread already holds the repo rules unless they changed since it was given them.
@@ -1173,17 +1242,27 @@ impl Runner {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
             turn = Some(t.clone());
-            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held) };
-            drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
+            let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
+            let driven = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await;
+            if let Some(f) = fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
+                // Confirmed in an event the drive did not reach (a person stopped the turn, its time ran out).
+                if let Some(session) = h.confirmed(&th) {
+                    self.confirm_thread(f, &session).await?;
+                }
+            }
+            drove = driven?;
             turn = Some(drove.turn.clone());
-            let saved = h.session_id(&th);
-            keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
-            // What this turn read, so the next one knows whether to resume the thread (crate::rotate). Only a turn that
-            // completed counts: one stopped or out of time leaves no checkpoint, and its continuation needs the thread
-            // that holds its partial work.
-            if drove.outcome == "completed" {
-                let read = segments.last().map_or(0, |s| s.meter.read());
-                self.state.off(move |s| s.note_turn(&saved, read)).await?;
+            // A new session that never came up keeps nothing: the next turn has the thread it was to replace.
+            if fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
+                let saved = h.session_id(&th);
+                keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
+                // What this turn read, so the next one knows whether to resume the thread (crate::rotate). Only a turn
+                // that completed counts: one stopped or out of time leaves no checkpoint, and its continuation needs the
+                // thread that holds its partial work.
+                if drove.outcome == "completed" {
+                    let read = segments.last().map_or(0, |s| s.meter.read());
+                    self.state.off(move |s| s.note_turn(&saved, read)).await?;
+                }
             }
             // A runtime that cannot sign itself in is as unavailable as one out of quota: a bot with a fallback
             // harness runs the turn there instead of losing it.
@@ -1347,6 +1426,8 @@ impl Runner {
                     bot: &bot,
                     session: &key,
                     login: yields(&attempt, &login_held),
+                    // A fallback's thread is for this turn only: never kept for the conversation.
+                    fresh: None,
                 };
                 drove = self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal).await?;
                 turn = Some(drove.turn.clone());
@@ -1756,6 +1837,8 @@ mod tests {
         pub(super) static RUN_CLOCK: RefCell<VecDeque<Instant>> = const { RefCell::new(VecDeque::new()) };
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     struct RunControls;
@@ -1765,6 +1848,8 @@ mod tests {
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
+            THREAD_UPDATES.with(|on| on.set(None));
+            HOST_CLAUDE.with(|claude| claude.set(false));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
     }
@@ -2076,7 +2161,7 @@ for line in sys.stdin:
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
-                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
+                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
@@ -2152,7 +2237,7 @@ for line in sys.stdin:
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, limit: Instant::now() + Duration::from_secs(60), flags: &flags,
-                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()) };
+                                      wake: &wake, redactor: None, runtime: "codex", bot: "ops", session: "th1", login: Some(held.cap()), fresh: None };
         let mut segment = crate::drive::Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "subscription" };
         let mut goal = crate::drive::GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("ops".into(), "task-7".into()) };
         let drove = tokio::time::timeout(Duration::from_secs(20), runner.drive(&d, &mut rx, t, &mut segment, &mut BTreeMap::new(), &mut None, &mut goal))
@@ -2295,6 +2380,97 @@ for line in sys.stdin:
         let (sessions, _, diagnostics) = rotating_turns(300, true, &[("m1", json!({})), ("m5", json!({"command": "compact"}))]).await;
         assert_eq!(sessions[0], sessions[1], "/compact left its thread");
         assert!(!diagnostics.iter().any(|d| d.get("rotated").is_some()), "{diagnostics:?}");
+    }
+
+    /// Turns of one task's session on a fake Claude (`claude`) or pi, each `(mode, rotate_at)`: `up` answers as a
+    /// session that came up (348 input tokens read), `down` exits before its session does. (Each turn's thread id,
+    /// as its command line named it; the thread saved here after each turn; every request Tico got.)
+    async fn confirming_turns(claude: bool, updates: bool, turns: &[(&str, i64)]) -> (Vec<String>, Vec<Option<String>>, Vec<(String, String, Value)>) {
+        let _controls = RunControls;
+        let dir = std::env::temp_dir().join(format!("tico-confirm-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let modes: String = turns.iter().map(|(mode, _)| format!("{mode}\n")).collect();
+        std::fs::write(dir.join("modes"), modes).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        // The thread a command line names: Claude's --session-id or --resume, pi's --session-id.
+        let script = format!(
+            "case \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\n\
+             n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'\n\
+             if [ {claude} = 1 ]; then IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n; else cat > '{d}/prompt-'$n; fi\n\
+             mode=$(sed -n \"$((n+1))p\" '{d}/modes'); [ \"$mode\" = up ] || {{ echo 'model endpoint unreachable' >&2; exit 1; }}\n\
+             id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
+             if [ {claude} = 1 ]; then\n\
+             echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
+             echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Watching.\"}}]}}}}'\n\
+             echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Watching.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
+             cat >/dev/null\n\
+             else cat '{f}'; fi\n",
+            d = dir.display(), f = fixture.display(), claude = if claude { 1 } else { 0 });
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "fake".into()]));
+        HOST_CLAUDE.with(|on| on.set(claude));
+        THREAD_UPDATES.with(|on| on.set(Some(updates)));
+        let (url, seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
+        let (runtime, model) = if claude { ("claude", "claude-opus-5-5") } else { ("pi", "kimi-k3") };
+        let mut saved = vec![];
+        for (n, (_, rotate_at)) in turns.iter().enumerate() {
+            let attempt = json!({"id": format!("a-confirm-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
+                                 "lease_seconds": 120, "conversation": {"id": "c-watch", "kind": "task"},
+                                 "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example"},
+                                 "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+                                 "history": [], "config": {"runtime": runtime, "harness": runtime, "model": model, "rotate_at": rotate_at}});
+            tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
+            saved.push(runner.state.with(|c| c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| r.get::<_, String>(0)).map(Some).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })).unwrap());
+        }
+        server.abort();
+        let threads = std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
+            .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id" && *a != "--resume").nth(1).unwrap_or_default().to_string()).collect();
+        let seen = seen.lock().unwrap().clone();
+        std::fs::remove_dir_all(&dir).ok();
+        (threads, saved, seen)
+    }
+
+    /// The thread_id of each `started`, and the body of each `thread` update, Tico got for run `aid`.
+    fn told(seen: &[(String, String, Value)], aid: &str) -> (Vec<Value>, Vec<Value>) {
+        let of = |route: &str| seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/{aid}/{route}"))).map(|(_, _, b)| b.clone()).collect::<Vec<_>>();
+        (of("started").iter().map(|b| b["thread_id"].clone()).collect(), of("thread"))
+    }
+
+    #[tokio::test]
+    async fn a_rotation_whose_session_never_comes_up_keeps_the_old_thread_here_and_on_the_task() {
+        for claude in [true, false] {
+            // The second turn leaves its large thread, and its new session dies before it starts. The third, with the
+            // limit raised, finds the old thread again and resumes it.
+            let (threads, saved, seen) = confirming_turns(claude, true, &[("up", 300), ("down", 300), ("up", 1000)]).await;
+            let old = threads[0].clone();
+            assert_ne!(threads[1], old, "the second turn did not rotate (claude {claude})");
+            assert_eq!(saved, vec![Some(old.clone()); 3], "the old thread was lost (claude {claude}): {threads:?}");
+            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(old)], vec![]), "Tico was told of a session that never came up (claude {claude})");
+            assert_eq!(threads[2], old, "the next turn did not resume the old thread (claude {claude})");
+            assert_eq!(told(&seen, "a-confirm-2"), (vec![json!(old)], vec![]));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rotation_keeps_its_new_thread_once_the_session_is_up_and_tells_tico() {
+        for claude in [true, false] {
+            let (threads, saved, seen) = confirming_turns(claude, true, &[("up", 300), ("up", 300)]).await;
+            let (old, new) = (threads[0].clone(), threads[1].clone());
+            assert_ne!(old, new);
+            assert_eq!(saved, vec![Some(old.clone()), Some(new.clone())], "claude {claude}");
+            // Started on the thread the task had; the new one once its session said it was up, after the start.
+            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(old)], vec![json!({"thread_id": new})]), "claude {claude}");
+            let at = |route: &str| seen.iter().position(|(_, p, _)| p.ends_with(&format!("/attempts/a-confirm-1/{route}"))).unwrap();
+            assert!(at("started") < at("thread"));
+            // A server without the update route is told the new thread at the start, as before.
+            let (threads, saved, seen) = confirming_turns(claude, false, &[("up", 300), ("up", 300)]).await;
+            assert_eq!(saved[1].as_ref(), Some(&threads[1]));
+            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(threads[1])], vec![]), "claude {claude}");
+        }
     }
 
     #[test]

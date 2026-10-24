@@ -213,7 +213,8 @@ function parseServerTime(value) {
   return naive - offset * 60000;
 }
 // A task's due date is one of two things. For a bot's task it is when the bot looks again (the scheduler wakes it
-// then: a parked task), shown as a muted "Wakes Oct 2". For a person's open task it is a deadline, red once passed.
+// then: a parked task), shown as a muted "Wakes Oct 2". For a person's open task it is a deadline: amber within two
+// days, red once passed.
 function taskDueInfo(t) {
   if (!t?.due || taskFinished(t)) return null;
   const at = parseServerTime(t.due); if (!at) return null;
@@ -224,7 +225,7 @@ function taskDueInfo(t) {
   const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(at) - start(Date.now())) / 864e5);
   const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
     ? new Date(at).toLocaleDateString(undefined, {weekday: 'short'}) : day;
-  return {at, day, kind: 'deadline', late, words: late ? `Overdue ${day}` : `Due ${when}`};
+  return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
 }
 // Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
 function taskSnoozed(t) {
@@ -238,7 +239,7 @@ function snoozeChip(t) {
 }
 function dueChip(t) {
   const due = taskDueInfo(t); if (!due) return '';
-  return `<span class="tl-due${due.late ? ' late' : ''}${due.kind === 'wake' ? ' wake' : ''}" title="${esc(due.kind === 'wake' ? 'Looks again' : 'Due')} ${esc(fmt(new Date(due.at).toISOString()))}">${esc(due.words)}</span>`;
+  return `<span class="tl-due${due.late ? ' late' : due.soon ? ' soon' : ''}${due.kind === 'wake' ? ' wake' : ''}" title="${esc(due.kind === 'wake' ? 'Looks again' : 'Due')} ${esc(fmt(new Date(due.at).toISOString()))}">${esc(due.words)}</span>`;
 }
 // Tags on a row: two, then "+N" (the rest are in the tooltip).
 function rowTagChips(t, max = 2) {

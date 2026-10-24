@@ -8,8 +8,8 @@ const TASK_FILTER_FIELDS = [['owner', 'Owner'], ['team', 'Team'], ['tag', 'Tag']
 const TASK_FILTER_WORDS = {pr: {yes: 'Yes', no: 'No'}, due: {overdue: 'Overdue', week: 'Next 7 days', any: 'Has a date', none: 'No date'}};
 const TASK_GROUPS = [['need', 'What it takes'], ['status', 'Status'], ['owner', 'Owner'], ['team', 'Team'], ['parent', 'Parent task'], ['tag', 'Tag'], ['requester', 'Asked by']];
 const TASK_GROUP_DEFAULT = {list: 'status', foryou: 'need'};
-// What it takes groups Needs you only: elsewhere the list holds work nobody is asked for.
-const taskGroupsFor = view => TASK_GROUPS.filter(([k]) => k !== 'need' || view === 'foryou');
+// What it takes groups your own Needs you only: it follows the server's queue, which is yours alone.
+const taskGroupsFor = (view, state) => TASK_GROUPS.filter(([k]) => k !== 'need' || (view === 'foryou' && (!state || tasksNeedsQueue(state, view))));
 const tasksEmptyFilters = () => Object.fromEntries(TASK_FILTER_FIELDS.map(([k]) => [k, []]));
 const isTasksRoute = r => [TASKS, BOARD, ISSUES, RECURRING].includes(String(r || '').split('?')[0]);
 const PHONE = '(max-width:760px)';
@@ -40,6 +40,12 @@ function tasksFiltersFromURL(state) {
   }
   state.urlType = query.get('type') || '';
   state.urlView = query.get('view') || '';
+  // An address with any of these says whose tasks the first tab shows (Me when it names nobody).
+  if ([...query.keys()].length) {
+    state.who = query.get('who') || 'me';
+    state.side = query.get('side') === 'asked' ? 'asked' : 'plate';
+    state.whoFixed = true;
+  }
   return query;
 }
 function tasksActiveFilterCount(state) {
@@ -51,6 +57,8 @@ function tasksQuery(state) {
   const query = new URLSearchParams();
   for (const [k, values] of Object.entries(state.filters)) if (values.length) query.set(k, values.join(','));
   if (state.type) query.set('type', state.type);
+  if (state.who && state.who !== 'me') query.set('who', state.who);
+  if (state.side === 'asked') query.set('side', 'asked');
   // Any view but the default is named too, so #/tasks?view=board&type=video is a link that stays put.
   if ([...query.keys()].length || state.view !== 'foryou') query.set('view', state.view);
   return query;
@@ -81,7 +89,7 @@ let TASK_PINS = (() => { try { return (JSON.parse(localStorage.getItem(TASK_PINS
 const tasksPinHash = state => TASKS + tasksQueryText(tasksQuery(state));
 function tasksPinName(state) {
   const type = state.type ? (TASK_TYPES || []).find(t => t.id === state.type)?.name || (state.type === 'general' ? 'General' : state.type) : '';
-  const view = TASK_VIEWS.find(([k]) => k === state.view)?.[1] || 'Tasks';
+  const view = tasksViewLabel(state, state.view) || 'Tasks';
   const words = TASK_FILTER_FIELDS.filter(([k]) => state.filters[k]?.length).map(([k]) => {
     const opts = new Map(tasksFilterOptions(state, k).map(o => [o.value, o.label]));
     return state.filters[k].map(v => opts.get(v) || (k === 'owner' || k === 'asked' ? actorLabel(v) : v)).join(', ');
@@ -185,16 +193,150 @@ function taskItems(state, view = state.view) {
     if (view === 'board' && pipelineSelectedType(state)) return it.col !== 'done' && it.task.status !== 'declined';
     if (tasksFinishedView(view)) return it.col === 'done' && it.task.status === view;
     if (it.col === 'done') return false;
-    return view === 'foryou' ? (taskNeedsViewer(it.task) || taskOlderAsk(it.task)) && !needsFolded(it.id) : true;
+    return view === 'foryou' ? tasksFirstTabHas(state, it) : true;
   });
   state.memo?.set(view, out);
   return out;
 }
+// Your Needs you count: the tasks, then the approvals and questions asked outside any task.
+const tasksMyCount = active => active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length;
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');
-  return {foryou: active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length, list: active.length,
+  return {foryou: tasksNeedsQueue(state, 'foryou') ? tasksMyCount(active) : taskItems(state, 'foryou').length, list: active.length,
     snoozed: taskItems(state, 'snoozed').length, recurring: typeof routineItems === 'function' ? routineItems(state).length : 0};
+}
+
+// ---- whose tasks the first tab shows: Me (Needs you, in the server's queue with its asks and approvals), Everyone
+// (no person), or one teammate's: what is on their plate now, or what they asked of someone else. Another person's
+// plate is worked out here from the loaded tasks. The Owner and Asked by chips still narrow whatever it shows.
+function tasksWhoKnown(who) {
+  if (who === 'me' || who === 'all') return true;
+  const pid = actorPerson(who), slug = actorSlug(who);
+  if (pid) return !(S.people || []).length || S.people.some(p => p.id === pid);
+  if (slug) return !(S.emps || []).length || S.emps.some(e => e.name === slug);
+  return false;
+}
+// 'me', 'all' or an actor id; anyone this install does not know is Me
+function tasksWhoKey(state) {
+  const who = state.who || 'me';
+  return !tasksWhoKnown(who) || who === myActor() ? 'me' : who;
+}
+const tasksWhoActor = state => { const key = tasksWhoKey(state); return key === 'me' ? myActor() : key === 'all' ? '' : key; };
+// Your own Needs you: the queue the server orders, with asks and approvals
+const tasksNeedsQueue = (state, view = state.view) => view === 'foryou' && tasksWhoKey(state) === 'me' && state.side !== 'asked';
+// A person's plate (not Everyone, not their asks): blocked tasks fold away at its foot
+const tasksPlateView = state => state.view === 'foryou' && state.side !== 'asked' && tasksWhoKey(state) !== 'all';
+// On someone's plate: it waits on them now. Yours is exactly Needs you; anyone else's is the person a waiting task
+// names, else its owner, and a question asked of them, and a declined task handed back to whoever asked for it.
+function taskOnPlate(t, actor) {
+  if (!t || !actor || taskFinished(t)) return false;
+  if (actor === myActor()) return taskNeedsViewer(t);
+  const on = t.status === 'waiting' && t.waiting_on ? t.waiting_on : '';
+  return (on ? on === actor : t.owner === actor) || (t.ask?.to_actor === actor && !t.ask?.older)
+    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner));
+}
+const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner !== actor;
+function tasksFirstTabHas(state, it) {
+  const key = tasksWhoKey(state), t = it.task;
+  if (state.side === 'asked') return taskAskedBy(t, tasksWhoActor(state));
+  if (key === 'me') return (taskNeedsViewer(t) || taskOlderAsk(t)) && !needsFolded(it.id);
+  return key === 'all' || taskOnPlate(t, key);
+}
+// Blocked by a task that is still open (as the loaded list has it, else as the relation says)
+function taskOpenlyBlocked(t, state) {
+  const byId = tasksById(state);
+  return taskBlockers(t).some(b => !['done', 'closed', 'declined'].includes(String(byId.get(String(b.id))?.status || b.status || 'open')));
+}
+const tasksActorShort = a => actorPerson(a) ? personShortName(actorPerson(a)) : actorLabel(a);
+// The first tab's name says whose it is: Needs you, Needs Sam, Asked by Sam, Everyone.
+function tasksViewLabel(state, view) {
+  const label = TASK_VIEWS.find(([k]) => k === view)?.[1] || '';
+  if (view !== 'foryou') return label;
+  const key = tasksWhoKey(state), asked = state.side === 'asked';
+  if (key === 'all') return 'Everyone';
+  if (key === 'me') return asked ? 'Asked by you' : label;
+  const name = clipLine(tasksActorShort(key), 18);
+  return asked ? `Asked by ${name}` : `Needs ${name}`;
+}
+function tasksWhoButtonHTML(state) {
+  const key = tasksWhoKey(state), asked = state.side === 'asked';
+  const words = key === 'me' ? 'Me' : key === 'all' ? 'Everyone' : tasksActorShort(key);
+  const face = key === 'all' ? `<span class="tl-gglyph">${TL_ICON.team}</span>` : actorFace(key === 'me' ? myActor() : key, 16);
+  return `<button type="button" class="tl-chip tl-chip-main tl-who" id="task-who" aria-haspopup="true" aria-label="${esc(`${asked ? 'Asked by' : 'Whose tasks'}: ${words}. Change`)}">${face}${asked ? '<span class="k">Asked by</span>' : ''}<span class="v">${esc(words)}</span>${TL_ICON.caret}</button>`;
+}
+function tasksWhoSet(state, who, side = state.side) {
+  side = side === 'asked' ? 'asked' : 'plate';
+  if (who === myActor()) who = 'me';
+  if (side === 'asked' && who === 'all') who = 'me';       // Everyone asks nothing of its own
+  state.who = who; state.side = side;
+  state.view = 'foryou';
+  state.selectMode = false;
+  if (state.selected.size || state.bulkMsg) tasksSelectionClear(state);
+  state.memo = new Map();
+  tasksRemember(state); tasksURLWrite(state); tasksTools(state); tasksRender(state);
+}
+// The picker: On their plate / Asked by them, a find box (Enter takes the first match), Me and Everyone, then people
+// by team (yours first), each with a count; the bots fold behind one line until opened or searched for.
+function tasksWhoMenu(state, anchor, toggle = true) {
+  const asked = state.side === 'asked', key = tasksWhoKey(state), me = myActor();
+  const active = taskItems(state, 'list');
+  const count = actor => active.filter(it => asked ? taskAskedBy(it.task, actor) : taskOnPlate(it.task, actor)).length;
+  const opt = (value, face, label, n, find) => `<button type="button" class="tl-mi" data-who="${esc(value)}" data-label="${esc(find.toLowerCase())}"${value === key ? ' aria-current="true"' : ''}><span class="tl-opt-face">${face}</span><span class="tl-who-name">${esc(label)}</span>${n ? `<span class="tl-mi-n tnum">${n}</span>` : ''}${value === key ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
+  const mine = mePerson();
+  const people = (S.people || []).filter(p => !p.hidden && 'human:' + p.id !== me);
+  const teams = new Map();
+  for (const p of people) { const team = p.team || ''; if (!teams.has(team)) teams.set(team, []); teams.get(team).push(p); }
+  const order = [...teams.keys()].sort((a, b) => (b === (mine?.team || null)) - (a === (mine?.team || null)) || (a === '') - (b === '') || taskTeamLabel(a).localeCompare(taskTeamLabel(b)));
+  const name = p => p.name || titleCase(p.id);
+  const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name))
+    .sort((a, b) => String(botDisplayName(a.name)).localeCompare(String(botDisplayName(b.name))));
+  const html = `<div class="tl-menu tl-who-menu" role="group" aria-label="Whose tasks">
+    <div class="tl-seg" role="group" aria-label="Show">${[['plate', 'On their plate'], ['asked', 'Asked by them']].map(([k, label]) =>
+      `<button type="button" data-who-side="${k}" aria-pressed="${(k === 'asked') === asked}">${esc(label)}</button>`).join('')}</div>
+    <input type="search" class="tl-menu-q" placeholder="Find a person" aria-label="Find a person" autocomplete="off" spellcheck="false">
+    <div class="tl-menu-list">
+      ${opt('me', actorFace(me, 16), 'Me', asked ? count(me) : tasksMyCount(active), `me you ${S.me?.name || ''}`)}
+      ${asked ? '' : opt('all', `<span class="tl-gglyph">${TL_ICON.team}</span>`, 'Everyone', active.length, 'everyone all')}
+      ${order.map(team => `<div class="tl-who-team"><div class="tl-menu-h" aria-hidden="true">${esc(taskTeamLabel(team))}</div>
+        ${teams.get(team).sort((a, b) => name(a).localeCompare(name(b))).map(p => opt('human:' + p.id, actorFace('human:' + p.id, 16), name(p), count('human:' + p.id), `${name(p)} ${p.email || ''} ${taskTeamLabel(team)}`)).join('')}</div>`).join('')}
+      ${bots.length ? `<button type="button" class="tl-mi tl-who-more" data-who-bots>${bots.length} bot${bots.length === 1 ? '' : 's'}</button>
+        <div class="tl-who-team tl-who-bots" hidden><div class="tl-menu-h" aria-hidden="true">Bots</div>
+        ${bots.map(e => opt('bot:' + e.name, actorFace('bot:' + e.name, 16), botDisplayName(e.name), count('bot:' + e.name), `${botDisplayName(e.name)} ${e.name}`)).join('')}</div>` : ''}
+      <div class="tl-menu-none" hidden>Nobody by that name</div>
+    </div></div>`;
+  tasksMenu(state, anchor, html, pop => {
+    const q = pop.querySelector('.tl-menu-q'), box = pop.querySelector('.tl-who-bots'), more = pop.querySelector('[data-who-bots]');
+    if (box && String(key).startsWith('bot:')) { box.hidden = false; more.hidden = true; }
+    const open = box ? !box.hidden : false;
+    q.oninput = () => {
+      const words = q.value.trim().toLowerCase();
+      for (const b of pop.querySelectorAll('[data-who]')) b.hidden = !!words && !b.dataset.label.includes(words);
+      if (box) { box.hidden = !words && !open; more.hidden = !!words || open; }
+      for (const team of pop.querySelectorAll('.tl-who-team:not(.tl-who-bots)')) team.hidden = !team.querySelector('[data-who]:not([hidden])');
+      if (box && words && !box.querySelector('[data-who]:not([hidden])')) box.hidden = true;
+      pop.querySelector('.tl-menu-none').hidden = !words || !![...pop.querySelectorAll('[data-who]')].some(b => !b.hidden && !b.closest('[hidden]'));
+    };
+    q.onkeydown = ev => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      [...pop.querySelectorAll('[data-who]')].find(b => !b.hidden && !b.closest('[hidden]'))?.click();
+    };
+    pop.onclick = ev => {
+      const side = ev.target.closest('[data-who-side]');
+      if (side) {
+        if ((side.dataset.whoSide === 'asked') === asked) return;
+        tasksWhoSet(state, state.who || 'me', side.dataset.whoSide);
+        tasksWhoMenu(state, $('#task-who') || anchor, false);
+        return;
+      }
+      if (ev.target.closest('[data-who-bots]')) { box.hidden = false; more.hidden = true; box.querySelector('[data-who]')?.focus(); return; }
+      const b = ev.target.closest('[data-who]'); if (!b) return;
+      pop.hidePopover();
+      tasksWhoSet(state, b.dataset.who);
+      $('#task-who')?.focus();
+    };
+  }, toggle);
 }
 
 // ---- options a chip can take, from what is loaded (and whatever the address already asks for)
@@ -228,7 +370,7 @@ function tasksFilterOptions(state, field) {
 function tasksGroupBy(state) {
   if (tasksFinishedView(state.view)) return 'none';
   const by = state.group?.[state.view] || TASK_GROUP_DEFAULT[state.view] || 'status';
-  return taskGroupsFor(state.view).some(([k]) => k === by) ? by : 'status';
+  return taskGroupsFor(state.view, state).some(([k]) => k === by) ? by : 'status';
 }
 const tagHue = key => [...String(key)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
 const tasksById = state => {
@@ -249,7 +391,7 @@ function tasksGroupsFor(items, by, state) {
     for (const it of items.slice().sort((a, b) => at(a) - at(b))) buckets.get(needsItem(it.id)?.need || 'do').items.push(it);
     return [...buckets.values()];
   }
-  if (by === 'requester' && state.view === 'foryou') {
+  if (by === 'requester' && tasksNeedsQueue(state)) {
     return companyNeedGroups(items).map(g => ({key: 'a:' + g.actor, label: actorLabel(g.actor), icon: actorFace(g.actor, 16), items: g.items,
       chat: chatOf(g.actor), chatName: actorLabel(g.actor)}));
   }
@@ -340,7 +482,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
   const when = ctx.done ? (it.closed || it.updated) : it.updated;
   const ageText = ctx.done ? ageShort(when) : taskAge(t);
   const ageTitle = ctx.done ? `${t.status === 'closed' ? 'Closed' : 'Done'} ${fmt(when)}` : taskAgeTitle(t);
-  const need = state.view === 'foryou' ? needsItem(t.id) : null;
+  const need = tasksNeedsQueue(state) ? needsItem(t.id) : null;
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
@@ -352,12 +494,48 @@ function taskListRowHTML(it, ctx, depth = 0) {
     ${note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
     <span class="tl-chips">${need?.folded?.length ? `<span class="tl-folded" title="${esc(`Also waiting on this: ${need.folded.map(f => f.title).join('; ')}`)}">+${need.folded.length}</span>` : ''}${waitsOnMe ? '<span class="tl-waiting" title="Its bot is waiting on you">Waiting</span>' : taskStatusLabel(t) === 'Waiting' ? '' : taskWaitTag(t)}${taskChipsHTML(t)}</span>
     ${need?.recommend ? recommendButton(need.recommend, 'tl-rec', t.version) : ''}
-    ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskStatusText(t)}
+    ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskRowStatus(t, key)}
     <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner))}">${actorFace(t.owner, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${esc(ageTitle)}">${esc(ageText)}</time>
     ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
   </div>`);
   return row + (open ? kids.map(k => taskListRowHTML(k, ctx, depth + 1)).join('') : '');
+}
+// Whether a plate shows its blocked tasks: this browser's choice (folded until opened)
+function tasksShowBlocked() { try { return localStorage.getItem('hub.tasks.blocked') === '1'; } catch { return false; } }
+function tasksShowBlockedSet(on) { try { localStorage.setItem('hub.tasks.blocked', on ? '1' : '0'); } catch {} }
+// The row's status word, as a chip that moves the task when the viewer may: its steps for a typed task, else the
+// statuses, saved the way the peek's Status row saves them.
+function taskRowStatus(t, key) {
+  if (!taskPropRights(t).edit) return taskStatusText(t);
+  const label = taskStatusLabel(t);
+  return `<button type="button" class="task-status tl-status" data-status="${esc(t.status || 'open')}" data-row-status="${esc(key)}" tabindex="-1" aria-haspopup="menu" aria-label="${esc(`Status: ${label}. Change`)}" title="${esc(label)}">${esc(label)}</button>`;
+}
+function tasksRowStatusMenu(state, anchor) {
+  const id = anchor.dataset.rowStatus.slice(1), t = tasksById(state).get(id);
+  const host = $('#tasks-pane');
+  if (!t || !host) return;
+  const type = pipelineType(t), typed = !!type && pipelineTypeId(t) !== 'general';
+  const items = typed ? stepItems(t, type).slice(1)
+    : TASK_SET_STATUSES.map(s => ({value: s, text: STATUS_WORD[s] || s, html: `<span>${esc(STATUS_WORD[s] || s)}</span>`, checked: t.status === s}));
+  propMenu(host, anchor, {label: typed ? 'Step' : 'Status', items, onPick: it => void tasksRowStatusSave(state, id, cur => typed
+    ? (it.value === cur.step_id ? null : {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})})
+    : (it.value === cur.status ? null : {status: it.value}))});
+}
+// One update with the task's version; a 409 reads it again and tries once more; a refusal is named.
+async function tasksRowStatusSave(state, id, bodyFor) {
+  let t = tasksById(state).get(id);
+  for (let attempt = 0; t && attempt < 2; attempt++) {
+    const body = bodyFor(t);
+    if (!body) return;
+    try { await post(`/v2/tasks/${encodeURIComponent(t.id)}`, {version: t.version, ...body}); break; }
+    catch (e) {
+      if (e.status === 409 && attempt === 0) { t = (await v2Get(`/v2/tasks/${encodeURIComponent(id)}`))?.task; continue; }
+      toast(`Not changed: ${e.message || 'not saved'}`, true);
+      break;
+    }
+  }
+  if (TASKS_ST === state) await tasksLoad(state);
 }
 function tasksEmptyHTML(state, what) {
   const filtered = tasksActiveFilterCount(state) || state.q;
@@ -366,9 +544,10 @@ function tasksEmptyHTML(state, what) {
 function tasksListHTML(items, state) {
   const by = tasksGroupBy(state), done = tasksFinishedView(state.view);
   // Approvals and questions asked outside any task lead Needs you; a filter or a search is about tasks, so it hides them.
-  const cards = state.view === 'foryou' && !state.q && !tasksActiveFilterCount(state);
+  const queue = tasksNeedsQueue(state);
+  const cards = queue && !state.q && !tasksActiveFilterCount(state);
   // Grouped by what it takes, approvals and questions go in their groups instead of leading the list.
-  const byNeed = by === 'need' && state.view === 'foryou';
+  const byNeed = by === 'need' && queue;
   const asks = cards && !byNeed ? approvalsHTML() + staleCardsHTML() + looseAsksHTML() : '';
   const extra = new Map();
   if (cards && byNeed) for (const it of [...pendingApprovals(), ...staleCards(), ...looseAsks()]) {
@@ -377,7 +556,9 @@ function tasksListHTML(items, state) {
   }
   if (!items.length && asks) return `<div class="tl">${asks}</div>`;
   if (!items.length && !extra.size) {
-    const emptyWhat = state.view === 'foryou' ? 'Nothing needs you.' : state.view === 'snoozed' ? 'Nothing snoozed.'
+    const who = tasksWhoKey(state);
+    const emptyWhat = queue ? 'Nothing needs you.' : state.view === 'foryou' ? who === 'all' ? 'Nothing open.' : state.side === 'asked' ? 'Nothing asked.'
+      : `Nothing needs ${tasksActorShort(who)}.` : state.view === 'snoozed' ? 'Nothing snoozed.'
       : done ? state.doneNext != null ? 'No matching finished tasks on this page.' : state.view === 'closed' ? 'Nothing closed.' : 'Nothing finished yet.' : 'Nothing open.';
     const empty = tasksEmptyHTML(state, emptyWhat);
     // Done is paged before type and chip filters are applied. An empty page can still have older rows to scan.
@@ -386,10 +567,13 @@ function tasksListHTML(items, state) {
       : empty;
   }
   // Needs you ends with the questions nobody answered in three days, folded until opened.
-  const older = state.view === 'foryou' ? items.filter(it => taskOlderAsk(it.task)) : [];
-  const live = older.length ? items.filter(it => !taskOlderAsk(it.task)) : items;
+  const older = queue ? items.filter(it => taskOlderAsk(it.task)) : [];
+  // A plate's tasks blocked by another open task fold under Blocked at its foot (remembered on this browser).
+  const blocked = tasksPlateView(state) ? items.filter(it => !older.includes(it) && taskOpenlyBlocked(it.task, state)) : [];
+  const live = older.length || blocked.length ? items.filter(it => !older.includes(it) && !blocked.includes(it)) : items;
   const groups = [...(by === 'none' ? [{key: 'all', label: older.length ? 'Needs you' : '', items: live}] : tasksGroupsFor(live, by, state)),
-    ...(older.length ? [{key: 'older', label: 'Older questions', items: older, folded: true}] : [])];
+    ...(older.length ? [{key: 'older', label: 'Older questions', items: older, folded: true}] : []),
+    ...(blocked.length ? [{key: 'blocked', label: 'Blocked', items: blocked}] : [])];
   const nest = by === 'status' || by === 'owner';
   const select = tasksCanSelect();
   return `<div class="tl${select ? ' can-select' : ''}" data-group-by="${esc(by)}">${asks}${groups.map((g, i) => {
@@ -399,7 +583,8 @@ function tasksListHTML(items, state) {
     if (!tops.length && !more.length) return '';
     const ctx = {state, kids, done, by, select};
     const count = more.length + tops.reduce((n, it) => n + 1 + tasksDescendants(it.key, kids), 0);
-    const ck = `${state.view}:${by}:${g.key}`, collapsed = state.collapsed.has(ck) !== !!g.folded;
+    const ck = g.key === 'blocked' ? 'blocked' : `${state.view}:${by}:${g.key}`;
+    const collapsed = g.key === 'blocked' ? !tasksShowBlocked() : state.collapsed.has(ck) !== !!g.folded;
     const id = `tl-g-${i}`;
     const head = g.label ? `<header class="tl-ghead">
         <button type="button" class="tl-gtoggle" data-group-toggle="${esc(ck)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="${id}" aria-label="${esc(g.label)}, ${count}">
@@ -424,9 +609,9 @@ function tasksDoneHTML(items, state) {
 function tasksTabsHTML(state) {
   const counts = tasksCounts(state);
   // Snoozed is a tab only while something is snoozed (or it is the open view).
-  return TASK_VIEWS.filter(([k]) => k !== 'snoozed' || counts.snoozed || state.view === 'snoozed').map(([k, label]) => {
-    const on = k === state.view, n = counts[k];
-    return `<button type="button" role="tab" id="task-tab-${k}" data-view="${k}" aria-selected="${on}" aria-controls="task-body" tabindex="${on ? 0 : -1}"${n != null ? ` aria-label="${esc(label)}, ${n}"` : ''}>${esc(label)}${n != null ? `<span class="cnt tnum${k === 'foryou' && n ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}</button>`;
+  return TASK_VIEWS.filter(([k]) => k !== 'snoozed' || counts.snoozed || state.view === 'snoozed').map(([k]) => {
+    const on = k === state.view, n = counts[k], label = tasksViewLabel(state, k);
+    return `<button type="button" role="tab" id="task-tab-${k}" data-view="${k}" aria-selected="${on}" aria-controls="task-body" tabindex="${on ? 0 : -1}"${n != null ? ` aria-label="${esc(label)}, ${n}"` : ''}>${esc(label)}${n != null ? `<span class="cnt tnum${k === 'foryou' && n && tasksNeedsQueue(state, k) ? ' hot' : ''}" aria-hidden="true">${n}</span>` : ''}</button>`;
   }).join('') + (pipelineSelectedType(state)?.role === 'product-roadmap' ? '<a class="tl-ranked" href="#/roadmap">Ranked</a>' : '');
 }
 function tasksPaint(el, html) {
@@ -442,8 +627,17 @@ function tasksTools(state) {
   const tabs = $('#task-view');
   if (!tabs || TASKS_ST !== state) return;
   taskPipelineTools(state);
+  // Someone this install does not know (an old link, a person who left) falls back to Me; Everyone asks nothing itself.
+  if (state.who && state.who !== 'me' && (!tasksWhoKnown(state.who) || (state.who === 'all' && state.side === 'asked'))) {
+    state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);
+  }
   tasksPaint(tabs, tasksTabsHTML(state));
   $('#task-bar').hidden = state.view === 'recurring';
+  const who = $('#task-who-wrap');
+  if (who) {
+    who.hidden = state.view !== 'foryou';
+    if (!who.hidden) tasksPaint(who, tasksWhoButtonHTML(state));
+  }
   const chips = [];
   for (const [field, name] of TASK_FILTER_FIELDS) {
     const values = state.filters[field];
@@ -554,7 +748,7 @@ function tasksFieldMenu(state, anchor) {
 function tasksGroupMenu(state, anchor) {
   const by = tasksGroupBy(state);
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Group by"><div class="tl-menu-h" aria-hidden="true">Group by</div>
-    ${taskGroupsFor(state.view).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi" data-pick-group="${k}"><span>${esc(label)}</span>${k === by ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
+    ${taskGroupsFor(state.view, state).map(([k, label]) => `<button type="button" role="menuitemradio" aria-checked="${k === by}" class="tl-mi" data-pick-group="${k}"><span>${esc(label)}</span>${k === by ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>`, pop => {
     pop.onclick = ev => {
       const b = ev.target.closest('[data-pick-group]'); if (!b) return;
       pop.hidePopover();
@@ -577,11 +771,13 @@ function tasksPrefsFromLocal(state) {
   } catch {}
 }
 function tasksPrefsApply(state, value) {
+  if (!state.whoFixed && typeof value?.who === 'string' && value.who) state.who = value.who;
+  if (!state.whoFixed && typeof value?.side === 'string') state.side = value.side === 'asked' ? 'asked' : 'plate';
   if (value?.group && typeof value.group === 'object') state.group = {...state.group, ...value.group};
   if (Array.isArray(value?.collapsed)) state.collapsed = new Set(value.collapsed.map(String));
   if (Array.isArray(value?.folded)) state.folded = new Set(value.folded.map(String));
 }
-const tasksPrefsValue = state => ({group: state.group, collapsed: [...state.collapsed].slice(-200), folded: [...state.folded].slice(-200)});
+const tasksPrefsValue = state => ({who: state.who || 'me', side: state.side === 'asked' ? 'asked' : 'plate', group: state.group, collapsed: [...state.collapsed].slice(-200), folded: [...state.folded].slice(-200)});
 
 // ---- selection and bulk changes. What is selected is always what can be seen selected: a filter, a search or a fold
 // that hides a row drops it from the selection on the next draw.
@@ -967,11 +1163,14 @@ function tasksBodyClick(state, ev) {
     $(`#task-body [data-expand="${CSS.escape(key)}"]`)?.focus();
     return true;
   }
+  const status = ev.target.closest('[data-row-status]');
+  if (status) { ev.stopPropagation(); tasksRowStatusMenu(state, status); return true; }
   const toggle = ev.target.closest('[data-group-toggle]');
   if (toggle) {
     const k = toggle.dataset.groupToggle;
-    state.collapsed.has(k) ? state.collapsed.delete(k) : state.collapsed.add(k);
-    tasksRemember(state); tasksRender(state);
+    if (k === 'blocked') tasksShowBlockedSet(!tasksShowBlocked());
+    else { state.collapsed.has(k) ? state.collapsed.delete(k) : state.collapsed.add(k); tasksRemember(state); }
+    tasksRender(state);
     $(`#task-body [data-group-toggle="${CSS.escape(k)}"]`)?.focus();
     return true;
   }
