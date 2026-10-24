@@ -398,6 +398,10 @@ def refused(c, identity, exc):
     """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it."""
     c.execute("ROLLBACK TO domain_write")
     c.execute("RELEASE domain_write")
+    # Gate notifications survive the refused move, while its step and reviewer wake roll back.
+    if getattr(exc, "review_gate", None):
+        from . import review_gate
+        review_gate.notify(c, identity.actor, exc.review_gate)
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
