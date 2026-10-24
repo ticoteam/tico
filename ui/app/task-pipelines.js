@@ -67,6 +67,7 @@ function taskPipelineSelect(state, id) {
   tasksSelectionClear(state);
   taskPipelineRemember(state); tasksRemember(state);
   tasksFiltersChanged(state); tasksPeekSync(state);
+  tasksDoneEnsure(state);          // this type's board may have its finished steps unfolded
 }
 function taskPipelineMenu(state, anchor) {
   const dev = taskPipelineDevType();

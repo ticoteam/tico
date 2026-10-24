@@ -105,6 +105,28 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
+    // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
+    // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
+    const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
+    const finishedCol = (col, title) => page.waitForFunction(([col, title]) => {
+      const el = document.querySelector(`#task-body [data-col="${col}"]`);
+      return el?.querySelector('header .cnt')?.textContent === String(title.length)
+        && [...el.querySelectorAll('.bcard-title')].map(n => n.textContent).sort().join('|') === title.join('|');
+    }, [col, title], {timeout: t(5000)});
+    await page.evaluate(() => localStorage.setItem('tico.board.fold', JSON.stringify({marketing: {finished: false}})));
+    await page.reload();
+    await boardLoaded();
+    assert.equal(await page.evaluate(() => TASKS_ST.view), 'board');
+    await finishedCol('complete', ['Finished campaign']);
+    await finishedCol('archive', ['Dropped campaign']);
+    tasks.push({...tasks[2], id: 'done-later', title: 'Finished later', updated: '2026-10-02T12:00:00Z'});
+    await page.evaluate(() => tasksLoad(TASKS_ST, {poll: true}));
+    await finishedCol('complete', ['Finished campaign', 'Finished later']);
+    tasks.pop();
+    await page.evaluate(() => localStorage.removeItem('tico.board.fold'));
+    await page.reload();
+    await boardLoaded();
+    assert.equal(await page.locator('#task-body .bcard').count(), 3, 'folded again, finished work leaves the board');
     // Done and Closed are their own tabs, Closed right after Done; each lists only its status.
     assert.deepEqual((await page.locator('#task-view [role=tab]').allTextContents()).slice(-2), ['Done', 'Closed']);
     for (const [view, title] of [['done', 'Finished campaign'], ['closed', 'Dropped campaign']]) {

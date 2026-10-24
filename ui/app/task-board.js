@@ -22,8 +22,13 @@ function taskBoardFoldSet(state, fold, folded) {
   all[type.id] = {...all[type.id], [fold]: folded};
   try { localStorage.setItem(BOARD_FOLD_KEY, JSON.stringify(all)); } catch {}
   // Finished tasks come from the Done list's newest page; the first unfold reads it.
-  if (fold === 'finished' && !folded && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
+  tasksDoneEnsure(state);
   tasksRender(state);
+}
+// The board's finished steps show: the selected type's board, with its finished strip unfolded (also when restored).
+function taskBoardFinishedShown(state) {
+  const type = state.view === 'board' && pipelineSelectedType(state);
+  return !!type && !taskBoardFolds(state, type).finished;
 }
 // A type's board holds its open work, and its finished and declined tasks while its finished steps show.
 function taskBoardShows(it, state) {
