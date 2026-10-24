@@ -2,7 +2,11 @@
 Add bot makes a seat first) is the page's: ui/tests/team-groups.cjs."""
 import json
 
-from backend.store import H
+import pytest
+
+from backend import recruiting
+from backend.auth import Identity
+from backend.store import H, Problem
 from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
 from backend.tests.test_ceo_bot import as_bot
 
@@ -129,3 +133,36 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     assert [t["status"] for t in draft_tasks(api)] == ["done"]
     again = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": pick["template"]}, headers=headers())
     assert again.status_code == 409 and "Support lead" in again.text
+
+
+def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):
+    providers(api, "anthropic", "openai")
+    ceo = ceo_bot(api)
+    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers customer email."})
+    pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]
+    # A template that is not a starter: BotOps builds its repository, so a team with no BotOps cannot hire it.
+    real = recruiting._recruitable
+    def no_starters(onboarding):
+        value, cards = real(onboarding)
+        return value, [{**card, "raw": {**card["raw"], "starter": False}} for card in cards]
+    monkeypatch.setattr(recruiting, "_recruitable", no_starters)
+    api.app.state.store.settings.test_identities["ana-assistant"] = Identity("human:ana", "owner", via="assistant")
+
+    def state():
+        with api.app.state.store.read() as c:
+            return ({r["slug"] for r in c.execute("SELECT slug FROM bots")},
+                    dict(c.execute("SELECT filled_by,closed_at,reports_to FROM seats WHERE id=?", (seat["id"],)).fetchone()),
+                    c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Set up %'").fetchone()[0])
+    before = state()
+    for caller in (ceo, headers("ana-assistant")):          # a bot; the Assistant's own turn for the owner
+        assert api.post(f"/api/v2/seats/{seat['id']}/hire", headers=caller,
+                        json={"template": pick["template"]}).status_code == 403
+    # The pick's own rule, behind the route's: a bot, or anyone acting for a person without their confirmation.
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()
+        for who in (Identity("bot:goal-manager", "bot"), Identity("human:ana", "owner", via="botops")):
+            with pytest.raises(Problem, match="Only a person picks"):
+                recruiting._may_hire(api.app.state.auth, c, who, row)
+    refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": pick["template"]})
+    assert refused.status_code == 409 and "BotOps" in refused.text
+    assert state() == before
