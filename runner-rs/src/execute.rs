@@ -1311,7 +1311,7 @@ impl Runner {
             let started = crate::perf::with_snapshot(json!({"thread_id": told}), active).await;
             let mut start_try = 0;
             loop {
-                let key = format!("started:{aid}:{start_try}");
+                let key = if start_try == 0 { format!("started:{aid}") } else { format!("started:{aid}:{start_try}") };
                 match self.client.post(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
                     Ok(_) => break,
                     Err(e) if e.code == "start_wait" => {
