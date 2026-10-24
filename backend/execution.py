@@ -1604,8 +1604,10 @@ class Execution:
             f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot IN ({marks}) AND a.runner_id=? "
+            # An onboarding bot takes a person's message and its manager's, nothing else (backend/lifecycle.py).
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
-            "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
+            "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + " "
+            "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
             f"AND {unfenced_sql()} "
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;

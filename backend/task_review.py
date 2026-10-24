@@ -17,7 +17,10 @@ def readable_text(value):
 
 
 def comment_rights(c, auth, who, task_id):
+    """Whether the caller may write on the task: every comment, answer, review question, edit and file goes through here."""
     row = auth.task(c, who, task_id)
+    from . import lifecycle
+    lifecycle.refuse_send(c, who, None, what="task comments")
     if who.role == "bot" and who.actor not in (row["owner"], row["requester"]):
         delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                               (task_id, who.actor, H.now())).fetchone()

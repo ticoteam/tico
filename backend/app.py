@@ -25,7 +25,7 @@ from clients.agent_skill import WHO_NEEDS_ME
 from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
-from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
 from . import ceo_bot, owner_link
 from . import login_holds
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
@@ -898,7 +898,9 @@ def create_app(settings=None):
                 raise Problem("routine", "Resume the routine and bot before running it", 409)
             setup = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (bot,)).fetchone()
             if setup and is_parked(setup["onboarding_state"]):
-                raise Problem("routine", "Finish the bot's setup before running its routines", 409)
+                raise Problem("onboarding", f"{H.bot(c, bot)['display_name'] or bot} is still onboarding, so it can't run "
+                              "its routines yet. Someone above it on the org chart marks onboarding complete when it is "
+                              "ready", 409)
             current = routines.latest_task(c, schedule_id)
             if current and current["status"] in ("open", "doing", "waiting", "review", "ready"):
                 raise Problem("routine", "This routine already has unfinished work", 409)
@@ -1264,6 +1266,8 @@ def create_app(settings=None):
             conversation_id = task["conversation_id"]
         if not conversation_id and who.role in ("owner", "human") and to.startswith("bot:"):
             conversation_id = rooms.chat_room(c, auth, who, H.actor_id(to))["id"]
+        # An onboarding bot only learns: it answers in chat and talks with its manager, and sends nothing else.
+        lifecycle.refuse_send(c, who, to, H.conversation(c, conversation_id) if conversation_id else None)
         privacy.require_destination(c, who, to, conversation_id, refs,
                                     H.message(c, body.in_reply_to) if body.in_reply_to else None)
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
@@ -1287,9 +1291,9 @@ def create_app(settings=None):
             if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):
                 c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (who.attempt_id, conv["id"]))
             auth.conversation(c, who, conv["id"])
-        # A bot still in setup starts only a person's message; anyone else's waits for its setup.
+        # An onboarding bot starts only a person's message or its manager's; anyone else's waits for it to be Active.
         if note := (H.held_note(c, to) or usage_limits.warning(c, to)
-                    or (None if H.is_human(who.actor) else H.setup_hold(c, to))):
+                    or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))):
             message = {**message, "warning": note}
         if held := bot_to_bot.held_reason(message):
             message = {**message, "woke": False, "held": held}
@@ -1885,7 +1889,8 @@ def create_app(settings=None):
     # What a caller who may only see a bot is told about it: its name, role, who runs it and who it
     # reports to. Its status, machine, queue and configuration are its activity, which is Read.
     SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
-                "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default")
+                "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
+                "can_complete_onboarding")
 
     def bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows):
         """One bot as the bot list and the bot detail show it: everything for a caller who may read
@@ -1901,6 +1906,11 @@ def create_app(settings=None):
         # `needs_setup` for a starter bot until it says its setup is done, then
         # `onboarded`; empty for every other bot (backend/onboarding.py).
         row["onboarding_state"] = (config["onboarding_state"] or "") if config else ""
+        # Onboarding or Active (backend/lifecycle.py); a seat being recruited is not a bot and is never in this list.
+        row["stage"] = lifecycle.stage(row["onboarding_state"])
+        if row["stage"] == lifecycle.ONBOARDING:
+            row["can_complete_onboarding"] = lifecycle.may_complete(auth, c, who, bot["slug"])
+            row["onboarding_ready"] = lifecycle.ready_of(config["config_json"]) if config else None
         if config:
             repo = config["repo"] or ("emp-" + bot["slug"])
             from .shared_bots import follow
@@ -2070,7 +2080,29 @@ def create_app(settings=None):
                     shown["reports_to"] = parent[2:] if parent.startswith("b:") else (
                         "human:" + parent[2:] if parent.startswith("p:") else "")
                 bots.append(shown)
-            return {**view, "bots": bots}
+            # Recruiting seats hang where a bot in that place would; one under a bot the caller may not see hangs from
+            # the nearest thing above it that they may, like that bot's own reports.
+            placed = {"b:" + r["id"] for r in bots} | {"p:" + r["id"] for r in view["people"]} | {
+                "g:" + r["id"] for r in view["org_groups"]}
+            seats = []
+            for seat in c.execute("SELECT * FROM seats WHERE closed_at IS NULL ORDER BY created,id").fetchall():
+                parent, seen = lifecycle.org_parent(seat, roster, chart, archived), set()
+                while parent.startswith("b:") and parent[2:] in by_id and parent not in seen \
+                        and not access.get(parent[2:], auth.FULL)["see"]:
+                    seen.add(parent)
+                    parent = by_id[parent[2:]]["org_parent"]
+                if (person or team) and parent not in placed:
+                    continue
+                shown = {k: v for k, v in dict(seat).items() if k in ("id", "title", "description", "team", "created")}
+                reports = seat["reports_to"]
+                if reports and not reports.startswith("human:") and not access.get(reports, auth.FULL)["see"]:
+                    reports = parent[2:] if parent.startswith("b:") else (
+                        "human:" + parent[2:] if parent.startswith("p:") else "")
+                seats.append({**shown, "kind": "seat", "stage": lifecycle.RECRUITING, "reports_to": reports,
+                              "org_parent": parent})
+            for row in bots:
+                row["stage"] = lifecycle.stage(row["onboarding_state"])
+            return {**view, "bots": bots, "seats": seats}
 
     def may_edit_person(c, who, pid):
         """Yourself, or someone who reports up to you (backend/people.py `manages`)."""
@@ -2718,7 +2750,8 @@ def create_app(settings=None):
             msg = H.message(c, mid)
             if not msg:
                 raise Problem("not_found", "Message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"], write=True)
+            conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
+            lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -2888,6 +2921,7 @@ def create_app(settings=None):
             who = request.state.identity
             to = auth.target(c, who, body.to, need="write")
             auth.require_bot_contact(c, who, to, kind="note")
+            lifecycle.refuse_send(c, who, to, what="a note")
             return {"note": note_view(H.note_create(c, who.actor, to, body.text), c)}
         return mutate(request, body, work)
 
@@ -3360,6 +3394,7 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
+            lifecycle.refuse_send(c, request.state.identity, None, what="task questions")
             return H.task_ask(c, request.state.identity.actor, task_id, body.text)
         return mutate(request, body, work)
 
@@ -3702,6 +3737,8 @@ def create_app(settings=None):
             require_on(settings)            # nothing to draft where nothing can be sent (docs/support.md)
         def work(c):
             auth.domain(who)
+            # What an approval clears is a send, a spend or a publication; an onboarding bot does none of them.
+            lifecycle.refuse_send(c, who, None, what="anything")
             if body.task_id:
                 auth.task(c, who, body.task_id)
             return H.approval_request(c, who.actor, body.kind, body.payload, body.task_id,
@@ -3794,11 +3831,42 @@ def create_app(settings=None):
         return mutate(request, body, work)
 
     @app.post("/api/v2/bots/{bot}/onboarded")
-    def bot_onboarded(request: Request, bot: str, body: M.Empty):
-        """A starter bot's own call (`hub bot setup-done`), or its manager's, once its setup is done: the bot
-        stops being `needs_setup`. Repeating it changes nothing."""
+    def bot_onboarded(request: Request, bot: str, body: M.OnboardingComplete):
+        """Mark onboarding complete: a person above the bot on the org chart makes it Active (backend/lifecycle.py).
+        The bot's own call (`hub bot ready`) is its "I'm ready", with `summary` saying what it learned, and leaves it
+        Onboarding. Repeating either changes nothing more."""
         who = request.state.identity
-        return mutate(request, body, lambda c: onboarding.onboarded(c, who, bot))
+        return mutate(request, body, lambda c: onboarding.onboarded(c, who, bot, summary=body.summary))
+
+    @app.get("/api/v2/seats")
+    def seat_list(request: Request):
+        """The Recruiting seats: roles on the org chart with a job description and reporting line, and no bot yet."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            return {"seats": lifecycle.seats(c)}
+
+    @app.post("/api/v2/seats")
+    def seat_create(request: Request, body: M.SeatCreate):
+        """Add a Recruiting seat: the owner anywhere, a person under themselves or someone below them."""
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: lifecycle.create_seat(auth, c, who, body.title, body.description,
+                                                                     body.reports_to, body.team))
+
+    @app.patch("/api/v2/seats/{seat_id}")
+    def seat_update(request: Request, seat_id: str, body: M.SeatUpdate):
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: lifecycle.update_seat(auth, c, who, seat_id,
+                                                                     body.model_dump(exclude_unset=True)))
+
+    @app.post("/api/v2/seats/{seat_id}/close")
+    def seat_close(request: Request, seat_id: str, body: M.Empty):
+        """Take a seat off the chart; its row stays for the record."""
+        who = request.state.identity
+        auth.domain(who)
+        return mutate(request, body, lambda c: lifecycle.close_seat(auth, c, who, seat_id))
 
     @app.post("/api/v2/bots/{bot}/archive")
     def archive_bot(request: Request, bot: str, body: M.BotArchive):

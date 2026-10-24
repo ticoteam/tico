@@ -83,6 +83,12 @@ async function taskModalOpen(key, d) {
   }
   taskModalShow(it.task, d);
 }
+// The runs section drawn for the open task, held across a redraw of that task (taskModalShow).
+const taskModalRuns = new WeakMap();
+function taskModalRunsKeep(d, keep) {
+  const runs = keep && $('[data-task-runs]', d);
+  if (runs) { runs.dataset.task = String(d.dataset.task); taskModalRuns.set(d, runs); } else taskModalRuns.delete(d);
+}
 // The one way a hub task opens in full: from the board, from a link, from a chat card. In the peek it opens beside the list.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
 async function taskModalShow(task, d = taskModal(), opts = {}) {
@@ -95,7 +101,16 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
   const opening = d.taskOpening;
-  taskChatStop();
+  // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
+  // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
+  // instead of "Loading the conversation…" and a fresh read every time something on the task is saved.
+  const kept = d.open && String(d.dataset.task) === String(task.id) && TASK_CHAT?.dialog === d && d.contains(TASK_CHAT.host) ? TASK_CHAT : null;
+  const adopt = () => {
+    const host = kept && TASK_CHAT === kept ? kept.host : null, runs = taskModalRuns.get(d);
+    if (host && !d.contains(host)) $('.task-chat', d)?.replaceWith(host);
+    if (runs && runs.dataset.task === String(task.id) && !d.contains(runs)) $('[data-task-runs]', d)?.replaceWith(runs);
+  };
+  if (!kept) taskChatStop();
   // A menu open on this task (a property picked while a save was still on its way) is never pulled away: the redraw
   // waits for it to close, then draws the newest copy.
   if (d.open && String(d.dataset.task) === String(task.id) && $('.prop-pop', d)?.matches(':popover-open')) {
@@ -117,7 +132,9 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // Session copy commands need the CLI's manifest even when Tasks is the first page opened.
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
+  taskModalRunsKeep(d, kept);
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
+  adopt();
   taskModalBind(d, task);
   taskPropFocus(d);
   if (!d.open) {
@@ -150,12 +167,15 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a.matches('.tthread-title') ? '.tthread-title'
     : a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
   askDraftCapture(d);
+  taskModalRunsKeep(d, kept);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
+  adopt();
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
   taskPropFocus(d); d.focusProp = '';
   void taskRailLoad(d, full, detail);
-  void taskChatLoad(task.id, d, detail);
+  if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
+  else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
   if (typing) { const box = $('.task-chat textarea', d); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length); }
@@ -369,6 +389,11 @@ async function taskSave(d, id, body, then, field) {
     // task reached from inside the peek (a parent's subtask): its row's neighbour is some other task, and edits made
     // after the save would land on it, so the peek stays on the task that was saved.
     if (state && state.peekVia !== 'link') state.pendingFinish = {key, at, after: state.loadSeq};
+    // The list shows the saved task at once (a card moves to its new step); the load that follows brings the rest.
+    if (TASKS_ST && data.task && TASKS_ST.tasks?.some(x => String(x.id) === String(data.task.id))) {
+      TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [data.task]);
+      tasksRender(TASKS_ST);
+    }
     if (TASKS_ST) void tasksLoad(TASKS_ST);
     roadmapRankingRefresh();
     return true;
