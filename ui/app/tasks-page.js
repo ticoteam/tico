@@ -55,7 +55,7 @@ function pageTasks(forced, openId = '') {
       <div id="task-body"></div>
       <div class="tl-bulk" id="task-bulk" role="toolbar" aria-label="Selected tasks" hidden></div>
     </div></div>
-    <div id="task-filter-pop" class="tl-pop" popover></div>`;
+    <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
   $('#task-type').onclick = ev => {
     const button = ev.target.closest('[data-task-type]');
     if (button) taskPipelineSelect(state, button.dataset.taskType);
@@ -513,18 +513,19 @@ function tasksPatchNode(live, next) {
   if (a.length !== b.length) { live.replaceChildren(...b); return; }
   a.forEach((node, i) => tasksPatchNode(node, b[i]));
 }
-// Children that all carry a `data-patch-key` (the Stale tickets card's rows) are matched by key: a row that went is
-// removed, a new one inserted, and one that stayed is patched where it is, so focus on it is not lost, also when
-// one row goes and another comes in the same redraw.
+// Children that all carry a key (a `data-patch-key`, as the Stale tickets card's rows do, or a task's `data-task-key`,
+// as a board column's cards do) are matched by it: a row that went is removed, a new one inserted, and one that stayed
+// is patched where it is, so focus on it is not lost, also when one row goes and another comes in the same redraw.
+// A card moved to another step rebuilds that one card, not both columns.
 function tasksPatchKeyed(live, a, b) {
-  const keyed = n => n.nodeType === 1 && !!n.dataset.patchKey;
-  if (!a.length || !b.length || !a.every(keyed) || !b.every(keyed)) return false;
-  const old = new Map(a.map(n => [n.dataset.patchKey, n]));
-  if (old.size !== a.length || new Set(b.map(n => n.dataset.patchKey)).size !== b.length) return false;
-  const want = new Set(b.map(n => n.dataset.patchKey));
-  for (const n of a) if (!want.has(n.dataset.patchKey)) n.remove();
+  const key = n => n.nodeType === 1 ? n.dataset.patchKey || (n.dataset.taskKey ? 't:' + n.dataset.taskKey : '') : '';
+  if (!a.length || !b.length || !a.every(key) || !b.every(key)) return false;
+  const old = new Map(a.map(n => [key(n), n]));
+  if (old.size !== a.length || new Set(b.map(key)).size !== b.length) return false;
+  const want = new Set(b.map(key));
+  for (const n of a) if (!want.has(key(n))) n.remove();
   b.forEach((n, i) => {
-    const o = old.get(n.dataset.patchKey), at = live.childNodes[i] || null;
+    const o = old.get(key(n)), at = live.childNodes[i] || null;
     if (!o) { live.insertBefore(n, at); return; }
     if (o !== at) live.insertBefore(o, at);
     tasksPatchNode(o, n);
