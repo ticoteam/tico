@@ -11,6 +11,7 @@
 # --release keeps the stages nothing else covers and drops the ones docker/smoke.sh already proves (server restart)
 # or that run on demand (replica restore, runner restart, backup). With TICO_JOURNEY_IMAGES_READY=<file> the candidate
 # images are built by the caller: the upgrade waits for that file to say "ok" instead of building them.
+# TICO_JOURNEY_CANDIDATE=vX.Y.Z names a local candidate built (or pulled and tagged) as that version instead of v9.9.9.
 #
 # What it does, in one throwaway install directory and Docker project (tico-journey), auth none:
 #   1 install     the PREVIOUS release: its checksummed bundle unpacked, a .env, `docker compose up -d`
@@ -58,7 +59,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
-[ "$LOCAL" = 1 ] && CAND=v9.9.9
+[ "$LOCAL" = 1 ] && CAND="${TICO_JOURNEY_CANDIDATE:-v9.9.9}"
 BROKEN=v9.9.10   # newer than the candidate: the updater refuses a downgrade
 THIRD=v9.9.11    # the second updater hop's target: the candidate again, as another release
 RELEASES="${TICO_JOURNEY_RELEASES_URL:-https://github.com/ticoteam/tico/releases}"
@@ -115,7 +116,7 @@ cleanup() {
   docker volume rm journey-runner >/dev/null 2>&1
   # The updater writes the install's bundle as the image's user; hand it back so the directory can go.
   docker run --rm --user 0 --entrypoint chown -v "$WORK:/w" "$SERVER_IMAGE:$PREV" -R "$(id -u):$(id -g)" /w >/dev/null 2>&1
-  for v in v9.9.9 "$BROKEN" "$THIRD"; do docker rmi "$SERVER_IMAGE:$v" "$RUNNER_IMAGE:$v" "$UPDATER_IMAGE:$v" >/dev/null 2>&1; done
+  for v in $([ "$LOCAL" = 1 ] && echo "$CAND") "$BROKEN" "$THIRD"; do docker rmi "$SERVER_IMAGE:$v" "$RUNNER_IMAGE:$v" "$UPDATER_IMAGE:$v" >/dev/null 2>&1; done
   for v in "$PREV" "$CAND" "$THIRD"; do docker rmi "$INSTALL_UPDATER:$v" >/dev/null 2>&1; done
   rm -rf "$WORK"
 }

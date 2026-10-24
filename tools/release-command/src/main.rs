@@ -76,7 +76,7 @@ impl Freeze {
         fs::rename(temp, path).map_err(|e| e.to_string())
     }
     fn title(&self, candidate: &str) -> String {
-        format!("Validate {candidate} from {}", self.previous)
+        format!("Validate {candidate} as {} from {}", self.version, self.previous)
     }
 }
 fn main_head() -> Result<String> {
@@ -234,6 +234,8 @@ fn validate_and_tag(
                 &format!("candidate_sha={candidate}"),
                 "-f",
                 &format!("previous_release={}", state.previous),
+                "-f",
+                &format!("version={}", state.version),
             ],
         )?;
         for _ in 0..20 {
