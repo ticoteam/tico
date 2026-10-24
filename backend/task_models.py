@@ -48,8 +48,8 @@ def task_keyed(config, bot, task_id, session_task_id, conversation_id):
 
 def readiness(c, bot, choice, runner_id=None):
     """`can_run` for the task model on `bot`'s computer, as a task turn would see it. A runtime the computer has not
-    installed is not "installing": a runner installs only its bots' own models and fallbacks
-    (runner-rs/src/relays.rs), so nothing ever will. And a runtime that is not signed in is not signed in, even where
+    installed is not ready yet: until the computer syncs and installs it (runner-rs/src/relays.rs), tasks run on the
+    bot's own model. And a runtime that is not signed in is not signed in, even where
     the Gateway would run the bot's own turns before sign-in (models_preset): a task turn falls back to the bot's own
     model instead of spending Gateway credit under the task model's name."""
     can = can_run(c, bot, choice["runtime"], runner=runner_id, harness=choice["harness"], model=choice["model"])
@@ -196,7 +196,10 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
     if why:
         own = providers.bot_choice(c, settings, followed)[1] or "the bot's own model"
         effort = followed.get("reasoning_effort") or ""
-        return followed, {"source": "fallback", "asked": asked, "why": why,
+        # A provider thread on the bot's runtime can predate task-model turns on another runtime. Each fallback
+        # starts fresh from the task checkpoint rather than resuming that incomplete history. This flag is only
+        # handed to this turn; it is never stored in the bot's configuration.
+        return {**followed, "task_model_fallback": True}, {"source": "fallback", "asked": asked, "why": why,
                           "ran": f"{own}{f' ({effort})' if effort else ''}",
                           "note": f"Ran on the bot's model {own}{f' ({effort})' if effort else ''}: task model "
                                   f"{label(choice)} could not run ({why})"}

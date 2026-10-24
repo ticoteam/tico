@@ -106,7 +106,8 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
     # The estimate from each run's measured token counts (backend/usage.py).
     # A subscription run costs nothing extra, so only runs billed by the API count.
     row = conn.execute("SELECT sum(est_cost_usd), count(est_cost_usd) FROM turns "
-                       "WHERE bot=? AND started>? AND started<=? AND coalesce(billing, 'api') != 'subscription'",
+                       "WHERE bot=? AND started>? AND started<=? AND usage_reason IS NULL "
+                       "AND coalesce(billing, 'api') != 'subscription'",
                        (slug, since, end)).fetchone()
     return round(row[0], 4) if row and row[1] else None
 

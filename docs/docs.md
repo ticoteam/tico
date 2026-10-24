@@ -20,6 +20,9 @@ body. The page lists them grouped by folder.
   textarea with a **Preview** toggle, and an optional "what changed?" note. Save with the button or
   Cmd/Ctrl+S. Text is shown through the same sanitizing Markdown renderer as the rest of the app, so a pasted
   `<script>` or `onerror=` does nothing.
+- **First visit.** While Docs holds nothing a person wrote or linked, the Librarian asks "Where are your docs?" above
+  the list: links become sources at once and it reads them and builds the map of the docs. **Skip for now** is yours
+  alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
 - **Import** a file from the `...` menu: `.md`, `.markdown`, `.txt`, `.html`, `.docx` or `.pdf`, up to 20 MB. It becomes
   a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and a scan with no
   text is refused). The title is the first `#` heading, else the file name.

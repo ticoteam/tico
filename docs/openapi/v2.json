@@ -9170,6 +9170,169 @@
         ]
       }
     },
+    "/api/v2/librarian/setup": {
+      "get": {
+        "summary": "The Librarian's first-run setup for the caller: whether Docs asks where the docs are, and the owner's market answers so far",
+        "operationId": "getLibrarianSetup",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibrarianSetup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ]
+      }
+    },
+    "/api/v2/librarian/setup/docs": {
+      "post": {
+        "summary": "Add the places the caller's docs are as sources and file one \"Set up Docs\" task to the Librarian; `skip` hides the first-visit question for the caller only",
+        "operationId": "setUpDocs",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocsSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/librarian/setup/market": {
+      "post": {
+        "summary": "Owner only: keep the answers to the Librarian's four market questions (`save`, `skip`), or `finish` and file \"Set up the market map\", which builds the map and sets what Market tracks",
+        "operationId": "setUpMarket",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketSetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibrarianMarketSetup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Docs"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/librarian/turn-on": {
       "post": {
         "summary": "Owner only: add the Librarian from the catalog (or wake a planned one) and activate it",
@@ -20318,6 +20481,33 @@
         ],
         "additionalProperties": true
       },
+      "DocsSetup": {
+        "properties": {
+          "sources": {
+            "items": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Sources"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Note",
+            "default": ""
+          },
+          "skip": {
+            "type": "boolean",
+            "title": "Skip",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DocsSetup"
+      },
       "Empty": {
         "properties": {},
         "additionalProperties": false,
@@ -24299,6 +24489,58 @@
         ],
         "additionalProperties": true
       },
+      "LibrarianMarketSetup": {
+        "type": "object",
+        "properties": {
+          "can_answer": {
+            "type": "boolean"
+          },
+          "answers": {
+            "type": "object",
+            "properties": {
+              "sell": {
+                "type": "string"
+              },
+              "buyers": {
+                "type": "string"
+              },
+              "competitors": {
+                "type": "string"
+              },
+              "watch": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "buyers",
+              "competitors",
+              "sell",
+              "watch"
+            ],
+            "additionalProperties": true
+          },
+          "step": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "boolean"
+          },
+          "task": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "answers",
+          "can_answer",
+          "skipped",
+          "step",
+          "task"
+        ],
+        "additionalProperties": true
+      },
       "LibrarianResearch": {
         "properties": {
           "target": {
@@ -24350,6 +24592,50 @@
           "kind",
           "target",
           "task_id"
+        ],
+        "additionalProperties": true
+      },
+      "LibrarianSetup": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "docs": {
+            "type": "object",
+            "properties": {
+              "show": {
+                "type": "boolean"
+              },
+              "empty": {
+                "type": "boolean"
+              },
+              "skipped": {
+                "type": "boolean"
+              },
+              "task": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "empty",
+              "show",
+              "skipped",
+              "task"
+            ],
+            "additionalProperties": true
+          },
+          "market": {
+            "$ref": "#/components/schemas/LibrarianMarketSetup"
+          }
+        },
+        "required": [
+          "available",
+          "docs",
+          "market"
         ],
         "additionalProperties": true
       },
@@ -24603,6 +24889,60 @@
         ],
         "title": "LocalFinding",
         "description": "A process the bot's watcher saw busy on its computer: a name and two numbers, never free text."
+      },
+      "MarketAnswers": {
+        "properties": {
+          "sell": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Sell",
+            "default": ""
+          },
+          "buyers": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Buyers",
+            "default": ""
+          },
+          "competitors": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Competitors",
+            "default": ""
+          },
+          "watch": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Watch",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MarketAnswers"
+      },
+      "MarketSetup": {
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/MarketAnswers"
+          },
+          "step": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Step",
+            "default": 0
+          },
+          "action": {
+            "type": "string",
+            "pattern": "^(save|skip|finish)$",
+            "title": "Action",
+            "default": "save"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MarketSetup"
       },
       "Me": {
         "type": "object",

@@ -34,6 +34,15 @@ def serve(request, blobs, row, versioned=False):
     etags = request.headers.get("if-none-match", "").split(",")
     if any(tag.strip().removeprefix("W/") in (headers["ETag"], "*") for tag in etags):
         return Response(status_code=304, headers=headers)
+    if request.method == "GET" and not request.headers.get("range"):
+        # A picture, video or audio file in Tico file hosting's bucket comes from the company's address, on a link
+        # that lasts five minutes (backend/tico_storage.py); the caller has checked access already. A Range read
+        # streams from here, so each part is checked again and no five-minute link outlives a long playback.
+        from .tico_storage import edge_link
+        link = edge_link(blobs, digest, size, mime)
+        if link:
+            return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
+                                                      "Referrer-Policy": "no-referrer"})
     start, end, status = 0, size - 1, 200
     value = request.headers.get("range")
     if value and "," not in value and request.method != "HEAD" and request.headers.get("if-range", headers["ETag"]) == headers["ETag"]:

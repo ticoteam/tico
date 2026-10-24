@@ -16,6 +16,7 @@ const TASKS = '#/tasks';              // hub tasks and Issues in one page (List 
 const DECIDE = '#/decide';            // what is on my plate, one card at a time (ui/app/decide.js)
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.js)
+const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/app/learned.js)
 const BOARD = '#/board';              // the old links still work, each opening its view
 const ISSUES = '#/issues';
 const RECURRING = '#/recurring';      // the Tasks page, opened on the Routines view

@@ -275,3 +275,11 @@
 .market-reset{position:absolute;top:10px;right:10px;z-index:1;background:var(--surface)}
 .market-paging{display:flex;justify-content:space-between;gap:8px;margin:10px 8px}
 .market-paging button{font:inherit;font-size:12px;color:var(--ink);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer}
+/* The Librarian's first-run question on Docs (ui/docs-page.js docsSetup) */
+.docs-setup{flex:none;max-width:640px;margin:0 0 16px;padding:16px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.docs-setup h2{margin:2px 0 6px;font-size:var(--t-lg)}
+.docs-setup>form>p.muted,.docs-setup>p.muted{margin:0 0 12px;line-height:1.5}
+.docs-setup-who{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:var(--t-sm)}
+.docs-setup-who .nav-icon{font-size:17px;color:var(--accent)}
+.docs-setup .gs-field{max-width:none}
+.docs-setup-off{margin:0 0 12px;font-size:var(--t-sm)}

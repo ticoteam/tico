@@ -565,6 +565,16 @@ class CompanyUpdate(Contract):
     description: str | None = Field(default=None, max_length=10_000)
 
 
+# What a person's chat bot learned (backend/learned.py): one short line, in their own layer or the company's.
+class LearnedAdd(Contract):
+    layer: Literal["personal", "company"] = "personal"
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class LearnedEdit(Contract):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class GoalWhy(Contract):
     why: str = Field(default="", max_length=1000)     # "" clears it: the goal is not tied to the vision
 

@@ -26,6 +26,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
+from . import outcome_stats
 from . import ceo_bot, owner_link
 from . import login_holds
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
@@ -2664,19 +2665,30 @@ def create_app(settings=None):
     @app.get("/api/v2/live/stats")
     def live_stats(request: Request, days: int = 7, via: str = ""):
         """How an outside assistant's tool calls perform (backend/mcp.py record_call), per tool:
-        calls, median and p90 server time, typical answer size, errors. For people and BotOps, which
-        tunes them."""
+        calls, median and p90 server time, typical answer size, errors. People and BotOps read all callers;
+        a bot granted outcome stats reads only bot calls. Delegated turns are refused."""
         who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "Tool-call stats are for people and BotOps", 403)
+        with store.read() as c:
+            granted = outcome_stats.may_read(c, who) and who.role == "bot"
+        if (who.via or who.task_actor or
+                (who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted)):
+            raise Problem("forbidden", "Tool-call stats are for people, BotOps and a bot the owner granted outcome stats", 403)
+        if granted and via:
+            raise Problem("forbidden", "A bot granted outcome stats reads the totals, not one assistant's calls", 403)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         tools = {}
         with store.read() as c:
-            for row in c.execute("SELECT detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+            for row in c.execute("SELECT actor, detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+                if granted and not (row["actor"] or "").startswith("bot:"):
+                    continue
                 d = json.loads(row["detail_json"] or "{}")
                 if via and d.get("via") != via:
                     continue
-                t = tools.setdefault(d.get("tool") or "?", {"ms": [], "bytes": [], "errors": 0})
+                name = d.get("tool") or "?"
+                # Unknown names are caller text; only registered tool names leave the event for a granted bot.
+                if granted and name not in outcome_stats.TOOL_NAMES:
+                    name = "other"
+                t = tools.setdefault(name, {"ms": [], "bytes": [], "errors": 0})
                 t["ms"].append(int(d.get("ms") or 0)); t["bytes"].append(int(d.get("bytes") or 0))
                 t["errors"] += bool(d.get("error"))
         def pct(values, p):
@@ -5788,6 +5800,8 @@ def create_app(settings=None):
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
+    from . import tico_storage
+    tico_storage.install(app, store, auth)
     from .sql import install_sql
     install_sql(app, store, auth)
     from .judge import install_judge
@@ -5796,6 +5810,7 @@ def create_app(settings=None):
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
     system_routines.install(app, store, auth, mutate)
+    outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail
@@ -5808,6 +5823,8 @@ def create_app(settings=None):
     install_memory_history(app, store, auth, mutate)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)
+    from .learned import install as install_learned
+    install_learned(app, store, auth, mutate)
     from .mcp import install_mcp
     install_mcp(app, settings)
     from .github import install_github
@@ -5837,6 +5854,8 @@ def create_app(settings=None):
     install_assistant(app, store, auth, mutate, onboarding)
     from .librarian import install as install_librarian
     install_librarian(app, store, auth, mutate, onboarding)
+    from .librarian_setup import install as install_librarian_setup
+    install_librarian_setup(app, store, auth, mutate)
     from .goal_routes import install as install_goal_routes
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay

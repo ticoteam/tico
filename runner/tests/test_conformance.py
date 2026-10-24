@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from runner import engine
@@ -249,6 +249,56 @@ def bot_attempts(api, computer, bot):
         rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thread(api, computer):
+    from backend.tests.test_check_models import company
+    from backend.tests.test_task_models import set_task_model
+
+    company(api, "anthropic", "xai")
+    computer.start()
+    task = post(api, "tasks", {"owner": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
+
+    def completed(count):
+        turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
+                                else None), f"task turn {count}")
+        assert all(t["result"]["outcome"] == "completed" for t in turns), turns
+        return get(api, f"tasks/{task['id']}")["runs"][0]
+
+    completed(1)
+    old = next(c for c in computer.prompts() if c["harness"] == "claude")
+    old_thread = old["argv"][old["argv"].index("--session-id") + 1]
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the task model."})
+    grok = completed(2)
+    assert grok["ran_on"]["task_model"]["source"] == "task"
+    assert "grok-4.6" in grok["ran_on"]["task_model"]["note"]
+    assert computer.prompts()[-1]["harness"] == "grok"
+    # Only synthetic fixture state: represent the checkpoint left by the task-model turn, then make it unavailable.
+    checkpoint = "The Grok turn verified Acme build 42; continue with its release checklist."
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET checkpoint=?,checkpoint_at=?,checkpoint_blocked=0 WHERE id=?",
+                  (checkpoint, H.now(), task["id"]))
+    company(api, "anthropic")
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue after the task model became unavailable."})
+    fallback = completed(3)
+    assert fallback["ran_on"]["task_model"]["source"] == "fallback"
+    assert fallback["ran_on"]["segments"][0]["runtime"] == "claude"
+    call = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
+    assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
+    assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
+    # The cheaper policy deliberately starts every task-model fallback fresh, including consecutive fallbacks.
+    with api.app.state.store.read() as c:
+        latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
+    assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
+    completed(4)
+    last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in last["argv"]
+    assert f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}" in last["prompt"]
+    assert last["argv"] != call["argv"]
 
 
 def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
@@ -582,6 +632,31 @@ def test_a_usage_limit_with_no_fallback_set_runs_on_another_signed_in_provider(a
     assert [p["harness"] for p in computer.prompts()] == ["codex", "claude"]
     assert any(d.startswith("codex hit its usage limit; running this turn on claude (no fallback set; another provider signed in here)")
                for d in diagnostics), diagnostics
+
+
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{}, {"bot": {"fallback": {"harness": "codex", "model": "gpt-5.5"}}}])
+@pytest.mark.parametrize("alternate", [False, True])
+def test_a_limited_primary_never_retries_its_login_as_a_fallback(api, computer, alternate):
+    from backend.store import H
+    view = get(api, "providers")
+    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"] if alternate else ["openai"],
+                                       "model": "gpt-6-luna", "expected_revision": view["revision"], "auto_fallback": True},
+            headers={**headers(), "Idempotency-Key": H.new_id()}).raise_for_status()
+    computer.start()
+    msg = post(api, "chat/ops", {"text": "Please LIMIT yourself"})
+    first = until(lambda: (computer.attempts() or [None])[0], "the primary's attempt")
+    aid = first["id"]
+    result = until(lambda: next((a["result"] for a in computer.attempts() if a["id"] == aid), None), "the completion")
+    assert [p["harness"] for p in computer.prompts()] == (["codex", "claude"] if alternate else ["codex"])
+    if alternate:
+        assert result["outcome"] == "completed" and result["fallback"] == "claude"
+        assert until(lambda: reply_to(api, msg["conversation_id"]), "the fallback reply")["body"] == "Acme reply."
+    else:
+        assert result["limited"] and not result.get("fallback")
+        status = until(lambda: get(api, "bots/ops")["status"], "the held status")
+        assert status["state"] == "limited" and "codex" in status["focus"].lower()
+        assert "retrying after" in status["focus"]   # this fake gives no reset, so the normal backoff holds it
 
 
 # TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
