@@ -125,11 +125,14 @@ def main():
         @app.get("/test/shared-fetch")
         def shared_fetch_state():
             return {"waiting": paused.is_set()}
+        app.router.routes.insert(0, app.router.routes.pop())
 
         @app.post("/test/shared-fetch")
         def shared_fetch_release():
             release.set()
             return {"released": True}
+        # Test controls precede the application's static-file mount.
+        app.router.routes.insert(0, app.router.routes.pop())
     app.state.vault.cipher = CredentialCipher("test-key", FakeKMS())
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
