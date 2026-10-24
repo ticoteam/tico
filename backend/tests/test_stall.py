@@ -337,3 +337,59 @@ def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_cou
         escalated = c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' AND target=?",
                               (task["id"],)).fetchone()[0]
         assert json.loads(escalated)["wakes"] == 3
+
+
+def test_stall_checks_back_off_while_a_task_stands_unchanged_and_start_over_when_it_changes(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        stuck = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance")
+        tid = stuck["id"]
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        aged(c, tid, 6)
+        assert H.wake_stalled(c)["woke"] == [tid]
+        stand = H._stall_stand(c, H.task(c, tid))
+        assert [e for (e,) in c.execute("SELECT json_extract(detail_json,'$.stand') FROM events "
+                                        "WHERE action='task.stall_wake' AND target=?", (tid,))] == [stand]
+
+        def add_wakes(n):
+            for _ in range(n):
+                c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(lower(hex(randomblob(8))),?,?,"
+                          "'task.stall_wake',?,?)", (H.now(), H.KEEPER, tid, json.dumps({"stand": stand})))
+
+        def gap():
+            return H._stall_gap(c, H.task(c, tid), H._stall_stand(c, H.task(c, tid)))
+        # Unchanged through each check: 30, 60, 120, 240 minutes, then the 8 hour cap.
+        assert [gap(), (add_wakes(1), gap())[1], (add_wakes(1), gap())[1], (add_wakes(1), gap())[1]] == [30, 60, 120, 240]
+        add_wakes(1)
+        assert gap() == H.STALL_BACKOFF_CAP_MINUTES == 480
+        # The next check waits that long, not 30 minutes.
+        c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
+                  (H.shift(H.now(), seconds=-31 * 60), tid))
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert H.wake_stalled(c)["woke"] == []
+        # The bot saying "still waiting" is not a change; a person's comment is, and the gap starts over.
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+                  "VALUES(lower(hex(randomblob(8))),?,'bot:finance','human:ana','comment','Still waiting.',?)",
+                  (H.task(c, tid)["conversation_id"], H.now()))
+        assert gap() == H.STALL_BACKOFF_CAP_MINUTES
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+                  "VALUES(lower(hex(randomblob(8))),?,'human:ana','bot:finance','comment','Any news?',?)",
+                  (H.task(c, tid)["conversation_id"], H.now()))
+        assert gap() == H.STALL_REPEAT_MINUTES
+
+
+def test_a_task_unchanged_through_three_spread_out_checks_still_goes_to_botops(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        stuck = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance")
+        tid = stuck["id"]
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        stand = H._stall_stand(c, H.task(c, tid))
+        # Three checks 9 hours apart: only two fall in the last day, yet nothing moved through all three.
+        for hours in (27, 18, 9):
+            c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(lower(hex(randomblob(8))),?,?,"
+                      "'task.stall_wake',?,?)", (H.shift(H.now(), hours=-hours), H.KEEPER, tid, json.dumps({"stand": stand})))
+        aged(c, tid, 30 * 60)
+        assert H.wake_stalled(c)["escalated"] == [tid]
+        assert H.wake_stalled(c)["escalated"] == []                          # once a day

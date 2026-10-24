@@ -6052,7 +6052,8 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
 # touches. If waking does not move it, BotOps gets one task to find out why.
 STALL_MINUTES = 5            # quiet this long with nothing set to move it: wake the bot
 STALL_NEXT_RUN_MINUTES = 30  # a next-run task was filed not to wake the bot at once; give it longer
-STALL_REPEAT_MINUTES = 30    # between two wakes for the same task
+STALL_REPEAT_MINUTES = 30    # between two wakes for the same task; doubles while the task stands unchanged
+STALL_BACKOFF_CAP_MINUTES = 480  # the longest wait between two wakes for a task that has not changed (token saving 4/9)
 STALL_WAKES_PER_DAY = 3      # then BotOps takes it
 # Spot checks, on the same path and the same cap: a task whose own session ran lately (or runs now) but
 # that has made no progress (a checkpoint, a comment, a status change, a message from its bot, a turn
@@ -6356,9 +6357,42 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
+def _stall_stand(conn, row):
+    """What a stall check can tell moved: the task's status, step, owner, what it waits on, its relations and their
+    states, and every comment from anyone but its bot. The bot's own notes ("still waiting") are not a change."""
+    tid = row["id"]
+    parts = [row["status"], row.get("step_id"), row["owner"], row.get("waiting_on"),
+             [list(r) for r in conn.execute(
+                 "SELECT r.kind, r.from_task, r.to_task, o.status FROM task_relations r JOIN tasks o "
+                 "ON o.id=CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
+                 "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
+             [list(r) for r in conn.execute(
+                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND from_actor NOT IN (?,?) "
+                 "ORDER BY rowid", (row["conversation_id"], row["owner"], KEEPER))]]
+    return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
+
+
+def _stall_streak(conn, row, stand):
+    """How many of the task's latest stall wakes in a row it stood unchanged through."""
+    streak = 0
+    for (detail,) in conn.execute("SELECT detail_json FROM events WHERE action='task.stall_wake' AND target=? "
+                                  "ORDER BY ts DESC LIMIT 6", (row["id"],)):
+        if _json(detail, {}).get("stand") != stand:
+            break
+        streak += 1
+    return streak
+
+
+def _stall_gap(conn, row, stand):
+    """Minutes to leave between two stall wakes. STALL_REPEAT_MINUTES after a wake that the task has changed since;
+    doubled for each earlier wake in a row the task stood unchanged through (30, 60, 120, then the cap)."""
+    streak = _stall_streak(conn, row, stand)
+    return min(STALL_REPEAT_MINUTES * 2 ** max(streak - 1, 0), STALL_BACKOFF_CAP_MINUTES)
+
+
 def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
-    """Wake the owner of each stalled task (at most once per STALL_REPEAT_MINUTES, STALL_WAKES_PER_DAY
-    a day); past that, one diagnostic per stuck task, for BotOps. No diagnostic is filed about another
+    """Wake the owner of each stalled task (at most once per STALL_REPEAT_MINUTES, doubling to
+    STALL_BACKOFF_CAP_MINUTES while the task has not changed; STALL_WAKES_PER_DAY a day); past that, one diagnostic per stuck task, for BotOps. No diagnostic is filed about another
     diagnostic or sent to a person: when BotOps cannot take one, the stuck task carries the cause instead
     (_settle_undiagnosed). A bot still in setup
     is not woken: its task says why once and its setup goes to a person (_hold_for_setup).
@@ -6411,13 +6445,21 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                                  (row["id"], since)).fetchone()[0] or 0
             last = conn.execute("SELECT max(ts) FROM events WHERE action='task.stall_wake' AND target=?",
                                 (row["id"],)).fetchone()[0]
+            stand = _stall_stand(conn, row)
+            streak = _stall_streak(conn, row, stand)
             if last and last > shift(at, seconds=-STALL_REPEAT_MINUTES * 60):
                 continue
-            if count >= STALL_WAKES_PER_DAY:
+            # Escalation reads the same count as before, or the same number of checks in a row that moved nothing,
+            # which the back-off spreads over more than a day.
+            if count >= STALL_WAKES_PER_DAY or streak >= STALL_WAKES_PER_DAY:
                 if not conn.execute("SELECT 1 FROM events WHERE action='task.stall_escalated' AND target=? AND ts>?",
                                     (row["id"], shift(at, seconds=-86400))).fetchone():
-                    _escalate_stuck(conn, row, count)
+                    _escalate_stuck(conn, row, max(count, streak))
                     escalated.append(row["id"])
+                    continue
+                if count >= STALL_WAKES_PER_DAY:
+                    continue
+            if last and last > shift(at, seconds=-_stall_gap(conn, row, stand) * 60):
                 continue
             if row["id"] not in stalled:
                 # A spot check: one status check into the task's session per quiet stretch.
@@ -6430,7 +6472,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     continue     # no attempted wake for the retry/escalation machinery to count
                 event(conn, KEEPER, "task.stall_wake", row["id"],
                       {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1,
-                       "kind": "status_check"})
+                       "kind": "status_check", "stand": stand})
                 checked.append(row["id"])
                 continue
             if row.get("own_blockers"):
@@ -6452,7 +6494,8 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
             if row.get("next_run"):
                 conn.execute("UPDATE tasks SET next_run=0 WHERE id=?", (row["id"],))
             event(conn, KEEPER, "task.stall_wake", row["id"],
-                  {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1})
+                  {"bot": actor_id(row["owner"]), "quiet_minutes": row["quiet_minutes"], "wake": count + 1,
+                   "stand": stand})
             woke.append(row["id"])
     return {"woke": woke, "escalated": escalated, "checked": checked, "stuck": stuck, "held": held,
             "retried": retried_ids}
