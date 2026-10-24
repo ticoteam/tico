@@ -225,6 +225,17 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.setViewportSize({width: 1440, height: 900});
     await page.keyboard.press('Escape');
 
+    // The list's stacked phone cards must expose the same counts as the pop-up.
+    await page.setViewportSize({width: 390, height: 844});
+    const phoneCounts = row('box').locator('.machine-turn-counts');
+    assert.equal(await phoneCounts.innerText(), box.turn_summary);
+    assert.ok(await phoneCounts.evaluate(el => {
+      const cell = el.closest('td'), card = el.closest('tr');
+      return cell.clientWidth >= card.clientWidth - 1 &&
+        el.scrollWidth <= el.clientWidth + 1 && cell.scrollWidth <= cell.clientWidth + 1;
+    }), 'computer row exposes the full counts, wait age and queue on a phone');
+    await page.setViewportSize({width: 1440, height: 900});
+
     // 25. Revoked computers on request; Revoke lives in the pop-up only.
     await page.locator('#set-machines [data-show-revoked-computers]').check();
     await row('old').waitFor();
