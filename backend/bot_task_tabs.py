@@ -1,18 +1,21 @@
-"""The tabs over a bot's task list (Task-list tabs 2/3): their names, their order and what each one shows.
+"""A bot's sidebar layout (Task-list tabs 2/3, Editable bot sidebar): the order of its widgets, which are hidden and how
+tall each may grow, and the tabs over its task list, with their names, their order and what each one shows.
 
-A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same tabs, and changing
-one bot's tabs never moves another's. The Assistant is the exception, since its list is each person's own: there every
-person keeps a layout of their own. A bot without a saved layout shows the four built-in tabs (Needs You, Doing,
-Blocked, Done Recently; ui/app/bot-tasks.js).
+A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same sidebar, and
+changing one bot's never moves another's. The Assistant is the exception, since its list is each person's own: there
+every person keeps a layout of their own. A bot without a saved layout shows Tasks, Updates, Files and Routines in that
+order with the four default tabs (Needs You, Doing, Blocked, Assigned to Others).
 
-A tab is either one of those built-ins, which may be renamed, moved or removed but keeps its own view, or a filter the
-bot's owner (or the bot itself) wrote: which task types, which states, and whom a task waits on. Nothing else: the
-filter is not a query language. There is no cap on how many tabs a bot keeps; only the request body limit
-(backend/app.py) bounds one write. The layout is display state only: it changes no task and no one's access, and a tab shows only tasks the
-viewer could already read.
+A tab is either a built-in (Needs You, Doing, Blocked, Done Recently; ui/app/bot-tasks.js), which may be renamed,
+moved or removed but keeps its own view, or a filter: rows of field and value that a task must all match, over the
+tasks the bot holds or asked for. The fields are a fixed list (FIELDS), not a query language. "me" and "others" mean
+the person looking, so the server counts each filter for its viewer. There is no cap on how many tabs a bot keeps;
+only the request body limit (backend/app.py) bounds one write. The layout is display state only: it changes no task
+and no one's access, and a tab shows only tasks the viewer could already read.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
 
@@ -25,12 +28,31 @@ CREATE TABLE IF NOT EXISTS bot_task_tabs (
   updated TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
 """
 
-DEFAULT = [{"builtin": "needs", "name": "Needs You"}, {"builtin": "active", "name": "Doing"},
-           {"builtin": "blocked", "name": "Blocked"}, {"builtin": "done", "name": "Done Recently"}]
+ACTIVE = ["open", "doing", "waiting"]
+FINISHED = ("done", "closed", "declined")
+# Finished tasks a filter shows unless it says Done within: the last two weeks, as Done Recently.
+RECENT_DAYS = 14
+# Rows sent per filter tab; its count is exact.
+ROWS = 200
+
+DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
+           {"builtin": "active", "name": "Doing", "show_count": True},
+           {"builtin": "blocked", "name": "Blocked", "show_count": True},
+           {"name": "Assigned to Others", "show_count": True, "conditions": [
+               {"field": "asked_by", "value": "this_bot"}, {"field": "assigned_to", "value": "others"},
+               {"field": "status", "value": ACTIVE}]}]
+WIDGETS = ("tasks", "updates", "files", "routines")
+DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
+
+# field -> what its value is. Lists are "any of"; every row of a tab must match.
+FIELDS = {"status": "statuses", "step": "steps", "type": "types", "assigned_to": "party", "asked_by": "party",
+          "waiting_on": "waiting", "created_within": "days", "updated_within": "days", "done_within": "days",
+          "due": "due", "label": "label"}
+WAITING = ("any", "person", "bot", "me")
 
 
 def personal(settings, bot):
-    """Whether this bot's tabs are each viewer's own: only the Assistant's."""
+    """Whether this bot's layout is each viewer's own: only the Assistant's."""
     return bot == settings.assistant_bot
 
 
@@ -39,7 +61,7 @@ def viewer_key(settings, who, bot):
 
 
 def may_edit(c, auth, settings, who, bot):
-    """The Assistant's tabs: any person, for their own. Any other bot's: the bot in its own run, or a person who may
+    """The Assistant's layout: any person, for their own. Any other bot's: the bot in its own run, or a person who may
     manage it (the owner, an Admin, its owners, someone above it; `Auth.bot_manager`)."""
     if personal(settings, bot):
         return who.role in ("owner", "human")
@@ -48,41 +70,209 @@ def may_edit(c, auth, settings, who, bot):
     return who.role == "owner" or auth.bot_manager(c, who, bot)
 
 
+def legacy(tab):
+    """A tab as stored before filters had rows (Task-list tabs 2/3: types, states, whom it waits on, over the bot's
+    own tasks), as the rows that show the same tasks."""
+    if tab.get("builtin"):
+        return {"builtin": tab["builtin"], "name": tab["name"], "show_count": tab.get("show_count", True)}
+    if "conditions" in tab:
+        return {"name": tab["name"], "show_count": tab.get("show_count", True), "conditions": tab["conditions"]}
+    rows = [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": list(tab.get("states") or [])}]
+    if tab.get("types"):
+        rows.append({"field": "type", "value": list(tab["types"])})
+    if tab.get("waiting_on"):
+        rows.append({"field": "waiting_on", "value": tab["waiting_on"]})
+    return {"name": tab["name"], "show_count": True, "conditions": rows}
+
+
+def widgets_of(stored):
+    """The four widgets in their saved order, with any the saved list lacks after them as they come by default."""
+    out, seen = [], set()
+    for w in stored or []:
+        if w.get("id") in WIDGETS and w["id"] not in seen:
+            seen.add(w["id"])
+            out.append({"id": w["id"], "hidden": bool(w.get("hidden")), "height": w.get("height")})
+    return out + [dict(w) for w in DEFAULT_WIDGETS if w["id"] not in seen]
+
+
+def stored(c, settings, who, bot):
+    return c.execute("SELECT tabs_json,widgets_json,updated,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
+                     (bot, viewer_key(settings, who, bot))).fetchone()
+
+
 def read(c, settings, who, bot):
-    row = c.execute("SELECT tabs_json,updated,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
-                    (bot, viewer_key(settings, who, bot))).fetchone()
-    tabs = json.loads(row["tabs_json"]) if row else DEFAULT
-    return {"bot": bot, "tabs": tabs, "saved": bool(row), "personal": personal(settings, bot),
+    row = stored(c, settings, who, bot)
+    tabs = [legacy(t) for t in json.loads(row["tabs_json"])] if row else DEFAULT
+    widgets = widgets_of(json.loads(row["widgets_json"]) if row and row["widgets_json"] else None)
+    return {"bot": bot, "tabs": tabs, "widgets": widgets, "saved": bool(row), "personal": personal(settings, bot),
             "updated": row["updated"] if row else None, "updated_by": row["updated_by"] if row else None}
 
 
+def bad(message):
+    return Problem("validation", message, 422)
+
+
+def names(value, label):
+    """A list value ("any of"), or one value; never empty."""
+    values = [value] if isinstance(value, str) else value
+    if not isinstance(values, list) or not values or not all(isinstance(v, str) and v for v in values):
+        raise bad(f"{label} needs one or more values")
+    return list(dict.fromkeys(values))
+
+
+def days(value, label, low=1):
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= 3650:
+        raise bad(f"{label} is a number of days from {low} to 3650")
+    return value
+
+
+def condition(c, row):
+    """One row, checked and in its stored form: unknown fields and values are refused, named people and bots must
+    exist."""
+    field, value = row.field, row.value
+    kind = FIELDS[field]
+    if kind == "statuses":
+        value = names(value, "Status")
+        if unknown := [v for v in value if v not in H.TASK_STATUSES]:
+            raise bad("Unknown status: " + ", ".join(unknown))
+    elif kind in ("steps", "types"):
+        value = names(value, "Step" if kind == "steps" else "Type")
+        table = "task_steps" if kind == "steps" else "task_types"
+        known = {r[0] for r in c.execute(f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?))",
+                                         (json.dumps(value),))}
+        if unknown := [v for v in value if v not in known]:
+            raise bad(f"Unknown {'step' if kind == 'steps' else 'task type'}: " + ", ".join(unknown))
+    elif kind == "party":
+        mine = ("this_bot", "me", "others") if field == "assigned_to" else ("this_bot", "me")
+        if not isinstance(value, str) or not value:
+            raise bad("Pick whom for " + field.replace("_", " "))
+        if value not in mine:
+            actor = value if H.actor_kind(value) in ("bot", "human") else None
+            if not actor or H.resolve_actor(c, actor) != actor:
+                raise bad("Unknown person or bot: " + value)
+    elif kind == "waiting":
+        if value not in WAITING:
+            raise bad("Waiting on is any, person, bot or me")
+    elif kind == "days":
+        value = days(value, field.replace("_", " ").capitalize())
+    elif kind == "due":
+        if value != "overdue":
+            value = days(value, "Due within", 0)
+    elif kind == "label":
+        if not isinstance(value, str) or not 1 <= len(value.strip()) <= 60:
+            raise bad("A label is 1 to 60 characters")
+        value = value.strip().lower()
+    return {"field": field, "value": value}
+
+
 def clean(c, tabs):
-    """The tabs as stored: each built-in at most once and without a filter; a filter's types must exist."""
+    """The tabs as stored: each built-in at most once and without rows; every filter row checked."""
     out, builtins = [], set()
-    known = {r[0] for r in c.execute("SELECT id FROM task_types")}
     for tab in tabs:
         if tab.builtin:
             if tab.builtin in builtins:
-                raise Problem("validation", "Each built-in tab can be listed once", 422)
-            if tab.types or tab.states or tab.waiting_on:
-                raise Problem("validation", "A built-in tab keeps its own filter", 422)
+                raise bad("Each built-in tab can be listed once")
+            if tab.types or tab.states or tab.waiting_on or tab.conditions:
+                raise bad("A built-in tab keeps its own filter")
             builtins.add(tab.builtin)
-            out.append({"builtin": tab.builtin, "name": tab.name})
+            out.append({"builtin": tab.builtin, "name": tab.name, "show_count": tab.show_count})
             continue
-        if not tab.states:
-            raise Problem("validation", "Pick at least one state for " + tab.name, 422)
-        if unknown := [t for t in tab.types if t not in known]:
-            raise Problem("validation", "Unknown task type: " + ", ".join(unknown), 422)
-        out.append({"name": tab.name, "types": list(dict.fromkeys(tab.types)),
-                    "states": list(dict.fromkeys(tab.states)), "waiting_on": tab.waiting_on})
+        if tab.conditions and (tab.types or tab.states or tab.waiting_on):
+            raise bad("A tab has rows or types and states, not both")
+        if not tab.conditions and (tab.types or tab.states or tab.waiting_on):
+            # Task-list tabs 2/3's shape, from a client that still sends it.
+            if not tab.states:
+                raise bad("Pick at least one state for " + tab.name)
+            rows = legacy({"name": tab.name, "types": tab.types, "states": tab.states, "waiting_on": tab.waiting_on})["conditions"]
+            tab = tab.model_copy(update={"conditions": [M.BotTaskCondition(**r) for r in rows]})
+        out.append({"name": tab.name, "show_count": tab.show_count, "conditions": [condition(c, r) for r in tab.conditions]})
     return out
 
 
-def install(app, store, auth, mutate, settings):
+def clean_widgets(widgets):
+    ids = [w.id for w in widgets]
+    if len(ids) != len(set(ids)):
+        raise bad("Each widget can be listed once")
+    return widgets_of([w.model_dump() for w in widgets])
+
+
+# ---- what a filter shows
+
+def ago(n):
+    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def party_sql(column, value, bot, viewer):
+    if value == "this_bot":
+        return f"{column}=?", ["bot:" + bot]
+    if value == "me":
+        return f"{column}=?", [viewer]
+    if value == "others":
+        return f"coalesce({column},'') NOT IN (?,?)", [viewer, "bot:" + bot]
+    return f"{column}=?", [value]
+
+
+def tab_sql(tab, bot, viewer):
+    """A filter's WHERE over the bot's tasks: every row, then finished tasks only for the window it names (two weeks
+    when it names none) and never a routine's finished runs."""
+    where, args, window = ["id IN (SELECT id FROM tasks WHERE owner=? UNION SELECT id FROM tasks WHERE requester=?)"], \
+        ["bot:" + bot, "bot:" + bot], RECENT_DAYS
+    for row in tab["conditions"]:
+        field, value = row["field"], row["value"]
+        many = lambda column: (f"{column} IN (SELECT value FROM json_each(?))", [json.dumps(value)])  # noqa: E731
+        if field == "status":
+            part = many("status")
+        elif field == "step":
+            part = many("step_id")
+        elif field == "type":
+            part = many("type_id")
+        elif field == "assigned_to":
+            part = party_sql("owner", value, bot, viewer)
+        elif field == "asked_by":
+            part = party_sql("requester", value, bot, viewer)
+        elif field == "waiting_on":
+            part = {"any": ("status='waiting'", []),
+                    "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),
+                    "bot": ("status='waiting' AND waiting_on LIKE 'bot:%'", []),
+                    "me": ("status='waiting' AND waiting_on=?", [viewer])}[value]
+        elif field == "created_within":
+            part = "created>=?", [ago(value)]
+        elif field == "updated_within":
+            part = "updated>=?", [ago(value)]
+        elif field == "done_within":
+            window = None
+            part = "coalesce(done_at,closed_at,'')>=?", [ago(value)]
+        elif field == "due":
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if value == "overdue":
+                part = ("coalesce(due,'')!='' AND substr(due,1,10)<? AND status NOT IN ('done','closed','declined')",
+                        [today])
+            else:
+                until = (datetime.now(timezone.utc) + timedelta(days=value)).strftime("%Y-%m-%d")
+                part = "coalesce(due,'')!='' AND substr(due,1,10) BETWEEN ? AND ?", [today, until]
+        else:  # label
+            part = ("EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
+                    "WHERE task_tags.task_id=tasks.id AND tags.key=?)", [value])
+        where.append(part[0])
+        args += part[1]
+    finished = "status IN ('done','closed','declined')"
+    if window:
+        where.append(f"(NOT {finished} OR coalesce(done_at,closed_at,updated,'')>=?)")
+        args.append(ago(window))
+    where.append(f"NOT ({finished} AND (EXISTS (SELECT 1 FROM schedule_occurrences s WHERE s.task_id=tasks.id) "
+                 "OR coalesce(body,'') LIKE '%from schedule%'))")
+    return " AND ".join(where), args
+
+
+BRIEF = ("body", "acceptance_criteria", "acceptance_json", "public_title", "public_summary", "requester_count",
+         "external_requesters", "internal_requesters", "important_requesters", "organization", "size")
+
+
+def install(app, store, auth, mutate, settings, task_views=None):
     @app.get("/api/v2/bots/{bot}/task-tabs")
     def task_tabs(request: Request, bot: str):
-        """The tabs over this bot's task list, in order (the defaults until someone saves a layout), and whether the
-        caller may change them. The Assistant's are the caller's own."""
+        """The bot's sidebar: its widgets in order and its task tabs in order (the defaults until someone saves a
+        layout), and whether the caller may change them. The Assistant's are the caller's own."""
         who = request.state.identity
         with store.read() as c:
             if not H.bot(c, bot):
@@ -90,26 +280,62 @@ def install(app, store, auth, mutate, settings):
             auth.require_see(c, who, bot)
             return {**read(c, settings, who, bot), "can_edit": may_edit(c, auth, settings, who, bot)}
 
+    @app.get("/api/v2/bots/{bot}/task-tabs/tasks")
+    def task_tabs_tasks(request: Request, bot: str):
+        """What each filter tab shows the caller: its count and the newest of its tasks, among the tasks the bot holds
+        or asked for that the caller may read. Built-in tabs are drawn by the page from its own reads."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read_transaction() as c:
+            if not H.bot(c, bot):
+                raise Problem("not_found", "Bot not found", 404)
+            auth.require_see(c, who, bot)
+            visible = auth.task_sql(c, who)
+            out, ids = [], []
+            for at, tab in enumerate(read(c, settings, who, bot)["tabs"]):
+                if tab.get("builtin"):
+                    continue
+                where, args = tab_sql(tab, bot, who.actor)
+                where = f"({visible}) AND {where}"
+                count = c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
+                found = [r[0] for r in c.execute(f"SELECT id FROM tasks WHERE {where} ORDER BY created DESC, id DESC "
+                                                 "LIMIT ?", (*args, ROWS))]
+                out.append({"key": "c" + str(at), "name": tab["name"], "count": count, "ids": found})
+                ids += found
+            unique = list(dict.fromkeys(ids))
+            rows = H.tasks(c, ids=unique, limit=max(1, len(unique)), visible=visible) if unique else []
+            rows = task_views(rows, c, who, visible) if task_views else rows
+            for row in rows:
+                for field in BRIEF:
+                    row.pop(field, None)
+            return {"bot": bot, "tabs": out, "tasks": rows}
+
     @app.put("/api/v2/bots/{bot}/task-tabs")
     def task_tabs_save(request: Request, bot: str, body: M.BotTaskTabs):
-        """Save the bot's tabs: the whole list, in order. `tabs: null` goes back to the four built-in tabs."""
+        """Save the bot's sidebar: the whole tab list in order and, when sent, the widgets in order. `tabs: null` goes
+        back to the defaults, widgets and all; leaving `widgets` out keeps the saved ones."""
         def work(c):
             who = request.state.identity
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
             if not may_edit(c, auth, settings, who, bot):
-                raise Problem("forbidden", "Only the bot or a person who manages it changes its tabs", 403)
+                raise Problem("forbidden", "Only the bot or a person who manages it changes its sidebar", 403)
             viewer = viewer_key(settings, who, bot)
             if body.tabs is None:
                 c.execute("DELETE FROM bot_task_tabs WHERE bot=? AND viewer=?", (bot, viewer))
             else:
                 if not body.tabs:
-                    raise Problem("validation", "Keep at least one tab", 422)
-                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,updated,updated_by) VALUES(?,?,?,?,?) "
-                          "ON CONFLICT(bot,viewer) DO UPDATE SET tabs_json=excluded.tabs_json,updated=excluded.updated,"
-                          "updated_by=excluded.updated_by",
-                          (bot, viewer, json.dumps(clean(c, body.tabs)), H.now(), who.actor))
+                    raise bad("Keep at least one tab")
+                was = stored(c, settings, who, bot)
+                if "widgets" in body.model_fields_set:
+                    widgets = json.dumps(clean_widgets(body.widgets)) if body.widgets is not None else None
+                else:
+                    widgets = was["widgets_json"] if was else None
+                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,widgets_json,updated,updated_by) "
+                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs_json=excluded.tabs_json,"
+                          "widgets_json=excluded.widgets_json,updated=excluded.updated,updated_by=excluded.updated_by",
+                          (bot, viewer, json.dumps(clean(c, body.tabs)), widgets, H.now(), who.actor))
             if not viewer:
                 H.event(c, who.actor, "bot.task_tabs_changed", bot,
                         {"tabs": None if body.tabs is None else len(body.tabs)})
