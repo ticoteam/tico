@@ -172,13 +172,14 @@ async function v2ChatMessages(state) {
 // bytes itself and shows them from a blob URL of the file's own image type; other files stay links.
 const CHAT_IMAGE_RE = /\.(png|jpe?g|gif|webp|heic|avif)$/i;
 const isChatImage = f => /^image\//.test(String(f?.content_type || '')) && !/svg/.test(f.content_type) || (!f?.content_type && CHAT_IMAGE_RE.test(String(f?.name || '')));
-const CHAT_IMAGES = new Map();                 // file id -> Promise<object URL>
+const CHAT_IMAGES = new Map();                 // file id -> {promise: Promise<object URL>, url, bytes}; a byte budget (fileKeep)
 function chatImageURL(f) {
-  if (!CHAT_IMAGES.has(f.id)) CHAT_IMAGES.set(f.id, fetch(`${API}/v2/files/${encodeURIComponent(f.id)}`, {credentials: 'same-origin'})
+  return fileKeep(CHAT_IMAGES, f.id, () => fetch(`${API}/v2/files/${encodeURIComponent(f.id)}`, {credentials: 'same-origin'})
     .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
-    .then(b => URL.createObjectURL(new Blob([b], {type: /^image\//.test(f.content_type || '') ? f.content_type : 'image/png'})))
-    .catch(error => { CHAT_IMAGES.delete(f.id); throw error; }));
-  return CHAT_IMAGES.get(f.id);
+    .then(b => {
+      const blob = new Blob([b], {type: /^image\//.test(f.content_type || '') ? f.content_type : 'image/png'}), url = URL.createObjectURL(blob);
+      return {value: url, url, bytes: blob.size};
+    }));
 }
 // The first visuals show as cards (ui/app/visual-cards.js); the rest stay these chips and thumbnails.
 function chatAttachmentsHTML(files, key = '') {
@@ -643,7 +644,8 @@ function v2ChatRender(state) {
     state.stick.update(() => {
       // A Confirm card kept through the rebuild (assistantChat.cards puts the same element back) keeps its focus too.
       const focused = thread.contains(document.activeElement) ? document.activeElement : null;
-      visualSwap(thread, html);              // cards both trees share keep their node (ui/app/visual-cards.js)
+      // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
+      patchHTML(thread, html, visualSwap);
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
       if (focused?.isConnected && document.activeElement !== focused) focused.focus({preventScroll: true});

@@ -227,9 +227,14 @@ at the same time, each with its own Docker names; the journey proceeds once thos
 - `docker/side-jobs-smoke.sh`: a runner starts and stops the side job the hub assigns to it;
 - `runner/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
   `TICO_RUNNER_TEST_IMAGE=tico-rc-runner:local` and the same Python worker cap;
-- `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle, upgrade to the
-  candidate with "Update now", and roll back an update that migrates the database and never turns healthy (the
-  pre-update snapshot is restored, with the server's real entrypoint running Litestream).
+- `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle and seed it like a
+  real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to BotOps, a bot
+  turn that opens a session and adds a task worktree), upgrade to the candidate with "Update now" (the updater
+  applies the candidate's bundle and replaces itself), take a turn and add a worktree on the previous runner against
+  the candidate server, move the computer to the candidate runner and check the variable, the session, the worktree
+  and the rows survived and that a turn still answers once the harness's saved session is gone, roll back an update that migrates the database and never turns healthy (the pre-update
+  snapshot is restored, with the server's real entrypoint running Litestream), and update once more to a third build
+  so the replaced updater has to pull its image, refresh the bundle and replace itself again.
 
 It prints a phase table with each check's start offset, duration and exit code, plus total time and starting/ending
 load. It keeps the logs in a temporary directory and prints the end of any failed log. If any build fails, the
@@ -245,12 +250,12 @@ scripts/journey-test.sh                  # this checkout is the candidate; start
 scripts/journey-test.sh --tag vX.Y.Z     # a published candidate (its images and bundle must exist)
 ```
 
-It installs the previous release into a throwaway directory (auth none), enrolls a computer with a one-time code, runs one
-bot run through a fake `codex` (`scripts/journey-fake-codex.py`), restarts the server, upgrades to the candidate with
-"Update now", rolls back an update that migrates the database and never turns healthy (checking the pre-update snapshot
-is restored, with the server's real entrypoint running Litestream), wipes the data volume and checks the server restores
-from its replica without the migration, restarts a runner started as `runner.compose.yaml` starts it after a run and
-requires a second run to work, and finishes with `docker/backup-test.sh` (MinIO and a file replica, wipe, restore). It prints a table of
+It runs the release stages above (bot turns through a fake `codex`, `scripts/journey-fake-codex.py`), plus a server
+restart before the upgrade; after the rollback it wipes the data volume and checks the server restores from its
+replica without the migration, restarts the runner (started as `runner.compose.yaml` starts it) after a run and
+requires a second run to work, and finishes with `docker/backup-test.sh` (MinIO and a file replica, wipe, restore). The
+updater's images go through a throwaway registry on 127.0.0.1 and its bundles through a throwaway release server, since
+an updater replaces itself only with an image it can pull. It prints a table of
 PASS, FAIL or SKIP per step and exits non-zero on a failure. `scripts/install.sh` itself needs Linux and root, so the
 script does what the installer does after its preflight (checksummed bundle, `.env`, `docker compose up -d`). For a
 release that adds updater or migration behavior, the upgrade step is done by the *previous* updater, so also read the
