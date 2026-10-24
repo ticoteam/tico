@@ -369,8 +369,8 @@ def before_create(store, primary, who, owner, type_id, title, body):
 
 
 def on_create(c, actor, check, reason):
-    """In the create's write, before the task is made. Refuses a block with no reason; returns the warning for a warn
-    (or None). The rule and the matching task are read again: a rule switched off or a match closed since lets it by."""
+    """In the create's write, once the create's own checks have passed: refuses a block with no reason (the savepoint
+    takes the new task back); returns the warning for a warn (or None). The rule and the matching task are read again: a rule switched off or a match closed since lets it by."""
     if not check or not check.get("match"):
         return None
     rule = c.execute("SELECT * FROM task_rules WHERE id=?", (check["rule"]["id"],)).fetchone()

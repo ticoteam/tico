@@ -3334,7 +3334,6 @@ def create_app(settings=None):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if guest:
             H.task_reach(c, who.actor, parent, owner)
-        checked = task_checks.on_create(c, who.actor, found, body.reason)
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
@@ -3346,6 +3345,8 @@ def create_app(settings=None):
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             override_duplicate=bool(found and found.get("match") and str(body.reason or "").strip()))
+        # After the create's own refusals (access, approval, lint): a blocked duplicate rolls this task back.
+        checked = task_checks.on_create(c, who.actor, found, body.reason)
         task_checks.after_create(c, who.actor, found, row["id"], body.reason)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if check:

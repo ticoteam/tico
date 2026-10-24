@@ -57,6 +57,9 @@ def api(tmp_path, api_database):
             # backend/tests/test_onboarding.py, not to every other test's front page.
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
+            # Fixtures file the same synthetic titles again and again; the Duplicate task check belongs to
+            # backend/tests/test_task_checks.py, which switches it back on.
+            c.execute("UPDATE task_rules SET enabled=0 WHERE id='task-check-duplicate'")
         yield client
 
 

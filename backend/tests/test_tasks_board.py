@@ -42,6 +42,8 @@ def api(tmp_path, monkeypatch):
                           (slug, encode(config), "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
+            # As in backend/tests/test_api.py: the Duplicate task check is backend/tests/test_task_checks.py's.
+            c.execute("UPDATE task_rules SET enabled=0 WHERE id='task-check-duplicate'")
         yield client
 
 

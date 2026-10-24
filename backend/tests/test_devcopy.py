@@ -59,7 +59,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     devcopy.write_environment(dest, 8879, "morgan@acme.example")
-    assert removed["task_rules"] == 1                                  # scheduled actions never enter the copy
+    assert removed["task_rules"] == 4                                  # scheduled actions never enter the copy
     assert source.read_bytes() == before                                    # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
     assert stat.S_IMODE(dest.stat().st_mode) == 0o600

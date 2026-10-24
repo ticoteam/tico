@@ -23,6 +23,13 @@ class Decide:
                 "answers": {"covered": {"type": "choice", "choice": self.choice, "confidence": self.confidence}}}
 
 
+@pytest.fixture(autouse=True)
+def duplicate_on(api):
+    """The shared fixture switches the day-one Duplicate check off; here it is as shipped."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_rules SET enabled=1 WHERE id='task-check-duplicate'")
+
+
 def events(api, action, target):
     with api.app.state.store.read() as c:
         return [r[0] for r in c.execute("SELECT detail_json FROM events WHERE action=? AND target=?", (action, target))]
