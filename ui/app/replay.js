@@ -148,7 +148,7 @@ function replayFace(actor, size, state) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
   if (slug) {
     const html = botAvatar(slug, size, state === 'running' ? 'running' : '');
-    return state === 'running' ? html : html.replace(/ morph"/, '"').replace(/<animate [^>]*\/>/, '').replace(/ style="--d0:[^"]*"/, '');
+    return state === 'running' ? html : html.replace(/ morph"/, '"').replace(/ data-breathe/, '').replace(/ style="animation-delay:[^"]*"/, '');
   }
   if (pid) return personAvatar((S.people || []).find(p => p.id === pid) || {id: pid, name: personDisplay(pid)}, size);
   return personCircle(replayName({})(actor) || '?', size);
