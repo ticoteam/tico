@@ -179,8 +179,8 @@ def test_turning_it_off_ends_an_open_overload(api):
     assert not any(x["id"] == "performance:" + rid and "overloaded now" in x["summary"] for x in get(api, "health")["checks"])
 
 
-def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id(api):
-    """The computer list shows a bot only some computers; performance is every bot's to read, by label or id. An unknown
+def test_a_bot_discovers_computers_and_reads_performance_by_label_or_id(api):
+    """The computer list lets bots discover computers; performance is every bot's to read, by label or id. An unknown
     name and a removed computer's get the same answer, and a caller who may not read it learns nothing either way."""
     from backend.tests.test_mcp import call
     r, _, attempt = setup_attempt(api)
@@ -191,7 +191,7 @@ def test_a_bot_the_computer_list_does_not_show_reads_any_computer_by_label_or_id
         c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), gone))
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))    # not opened to members' bots
     bot = attempt["token"]
-    assert get(api, "computers", token=bot)["computers"] == []
+    assert rid in {x["id"] for x in get(api, "computers", token=bot)["computers"]}
     for wanted in ("Test Mac", "test mac ", rid):
         failed, seen = call(api, "hub_computer_performance", {"computer": wanted, "hours": 1}, token=bot)
         assert not failed, seen
@@ -267,3 +267,61 @@ def test_an_open_overload_reads_only_the_turns_of_its_window_however_long_the_co
         plan = " ".join(row[3] for row in c.execute(
             "EXPLAIN QUERY PLAN SELECT rowid FROM attempts WHERE runner_id=? AND finished>=?", (rid, P._iso(start))))
     assert "attempts_runner_finished" in plan
+
+
+def test_steering_polls_and_output_batches_store_no_retry_receipts_and_replay_the_same(api):
+    r, _, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t"}, token=r["token"])
+
+    def receipts():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM idempotency WHERE operation LIKE ?", (f"/api/v2/attempts/{aid}/%",)
+                             ).fetchone()[0]
+    before = receipts()
+    for _ in range(3):
+        assert post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"] == []
+    batch = {"events": [{"seq": 1, "kind": "delta", "payload": {"text": "Hel"}},
+                        {"seq": 2, "kind": "delta", "payload": {"text": "lo"}}]}
+    first = post(api, f"attempts/{aid}/events", batch, token=r["token"], key="batch-1")
+    # A lost reply retried with the same key answers the same, from the sequence numbers already stored.
+    assert post(api, f"attempts/{aid}/events", batch, token=r["token"], key="batch-1") == first
+    assert first["ack_seq"] == 2
+    assert receipts() == before, "an empty poll or an output batch needs no stored receipt"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempt_events WHERE attempt_id=?", (aid,)).fetchone()[0] == 2
+
+
+def test_one_tasks_history_of_one_field_reads_by_task(api):
+    with api.app.state.store.read() as c:
+        for sql in ("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='status' "
+                    "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
+                    "SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY ts DESC, rowid DESC LIMIT 1"):
+            plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, ("t",)))
+            assert "task_events_task_field" in plan, plan
+
+
+def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, monkeypatch):
+    r, origin, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "t"}, token=r["token"])
+    store = api.app.state.store
+    write = store.transaction
+
+    def no_writer(*a, **k):
+        raise AssertionError("an idle steering poll took the writer gate")
+    monkeypatch.setattr(store, "transaction", no_writer)
+    for _ in range(3):
+        assert post(api, f"attempts/{aid}/inputs", {}, token=r["token"]) == {"attempt_id": aid, "messages": []}
+    monkeypatch.setattr(store, "transaction", write)
+    # A follow-up in the turn's chat is queued work: the poll takes it as the write, and redelivers it from a
+    # read until the runtime acknowledges it.
+    follow = post(api, "chat/ops", {"text": "Include the archive"})
+    assert [m["id"] for m in post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"]] == [follow["id"]]
+    monkeypatch.setattr(store, "transaction", no_writer)
+    assert [m["id"] for m in post(api, f"attempts/{aid}/inputs", {}, token=r["token"])["messages"]] == [follow["id"]]
+    monkeypatch.setattr(store, "transaction", write)
+    # A stale lease is refused from the read as it was from the write.
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until='2000-01-01T00:00:00Z' WHERE id=?", (aid,))
+    assert api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(r["token"])).status_code == 409

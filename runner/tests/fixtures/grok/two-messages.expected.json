@@ -1,0 +1,36 @@
+[
+ {
+  "kind": "delta",
+  "text": "Still holding until ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "the outage clears.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "\n\nStill holding: ",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "nothing changed.",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "message",
+  "text": "Still holding until the outage clears.\n\nStill holding: nothing changed.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed",
+  "stop_reason": "end_turn"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

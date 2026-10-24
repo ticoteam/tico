@@ -85,7 +85,7 @@ APP_READS_REFUSED = re.compile(r"/api/v2/(?:attempts/[^/]+/capture|runners/[^/]+
 # a computer to read its subscriptions' allowance again. No model sign-in (its code would let support choose the
 # account a computer runs on), approvals, messages, tasks, runs, publishing, spending, people, access or credentials.
 APP_WRITES = tuple((method, re.compile(pattern)) for method, pattern in (
-    ("POST", r"/api/v2/bots/[^/]+/(?:model|fallback|compact-at)"),
+    ("POST", r"/api/v2/bots/[^/]+/(?:model|task-model|fallback|compact-at)"),
     ("POST", r"/api/v2/runners/[^/]+/restart"),
     ("POST", r"/api/v2/subscriptions/refresh"),
 ))

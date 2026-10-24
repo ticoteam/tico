@@ -46,6 +46,8 @@ def release_version():
 SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+# Bots cannot set ready; a task is closed through its separate requester action.
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status not in ("ready", "closed"))
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
@@ -818,7 +820,7 @@ def task_question(api, args):
 
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
-      "Done stays Done, including tasks you requested for yourself; closing is a separate decision.",
+      "Done stays Done, including tasks you requested for yourself; the requester closes with hub_task_close.",
       {"id": TASK_ID,
        "private": {"type": "boolean", "description": "Tighten visibility; only the direct human requester can publish"},
        "visibility": _s("Roadmap publication", enum=["public", "private"]),
@@ -826,7 +828,7 @@ def task_question(api, args):
        "public_summary": _s("Public summary, separate from internal body"),
        "approval_id": _s("Exact publish approval for bot public edits"), "size": {"type": "number", "minimum": 0},
        "title": _s("A new title; it is checked as a new task's title would be"),
-       "status": {"type": "string", "enum": ["open", "doing", "waiting", "review", "done", "declined"]},
+       "status": {"type": "string", "enum": list(TASK_UPDATE_STATUSES)},
        "type": _s("Task type id or name"),
        "step": _s("Step id or name within the task type; sets status. An empty string clears it"),
        "step_rank": {"type": "number", "description": "Its place within its step, lower first"},
@@ -2439,6 +2441,19 @@ def agent_pair_decline(api, args):
     return _as_person(api).post("agents/pairings/decline", {"code": args["code"]}, key=_key(args))
 
 
+@tool("hub_bot_keep_tasks_going", "Read or set automatic assigned-task starts for a bot you manage. "
+      "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
+      {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
+       "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
+def bot_keep_tasks_going(api, args):
+    who = api.on_behalf_of_requester()
+    bot = who.get(f"bots/{args['bot']}")
+    if 'limit' not in args:
+        return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
+    return who.post(f"bots/{args['bot']}/keep-tasks-going", {
+        "keep_tasks_going": args['limit'], "expected_revision": bot['revision']}, key=_key(args))
+
+
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
       "run in progress to end.",
       {"bot": _s("The bot's slug"), "model": _s("A model id or name from the list; leave out to list them"),
@@ -2517,7 +2532,8 @@ def computer_summary(row):
             "update": state, "readiness": level, "bots": len(row.get("bots") or []),
             "signed_in": sorted(name for name, r in (readiness.get("runtimes") or {}).items()
                                 if isinstance(r, dict) and r.get("authenticated") == "ready"),
-            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or [])}
+            "warnings": warnings, "errors": errors, "recent_errors": len(readiness.get("recent_errors") or []),
+            "latest_sample": row.get("latest_sample"), "overloaded": bool(row.get("overloaded"))}
 
 
 def _bounded(value, cap, text=COMPUTER_TEXT):
@@ -2600,7 +2616,7 @@ def computer_detail(row, section=None, offset=0):
                           for name, items in sections.items() if items}}
 
 
-@tool("hub_computer_list", "The computers a bot may go on, as the person who asked you, one short row each: id, label, "
+@tool("hub_computer_list", "Company computers and their latest CPU/memory/swap, running turns and overloaded flag, one short row each: id, label, "
       "online and last seen, operator, release (Tico), version (runner software), wanted release, update (current, "
       "update_available, updating, failed, incompatible or unknown), readiness (ready, warnings, not_ready or offline), "
       "how many bots run there, the AI tools signed in, and counts of warnings, errors and recent log errors; and "
@@ -2639,7 +2655,7 @@ def computers(api, args):
       {"computer": _s("The computer's label or id (hub computer list)"),
        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24}}, required=("computer",))
 def computer_performance(api, args):
-    # The route takes a label or an id: the computer list shows a bot only some computers, the route every one.
+    # The route accepts either a computer label or id.
     wanted = str(args["computer"]).strip()
     seen = api.get(f"computers/{quote(wanted, safe='')}/performance?hours={int(args.get('hours') or 24)}")
     points = seen.get("points") or []
@@ -3208,15 +3224,15 @@ def status_history(api, args):
     return api.get(f"bots/{args['bot']}/history", since=args.get("since"))
 
 
-@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with attempt ids, reasons, tokens and "
-      "estimated cost (`est_cost_usd`). Yours, and those of the bots that report to you.",
+@tool("hub_run_list", "A bot's recent runs and failed or expired attempts, with end_reason, last_event_at, stalled, tokens and "
+      "estimated cost (`est_cost_usd`) and start/end load snapshots (`load_start`, `load_end`). Yours, and those of the bots that report to you.",
       {"bot": _s("Bot slug"), "since": _s("Window like `24h` or an ISO timestamp")}, required=("bot",))
 def turns(api, args):
     return api.get(f"bots/{args['bot']}/turns", since=args.get("since"))
 
 
 @tool("hub_run_export", "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
-      "Write the replay fixture with `hub run export <attempt> --fixture`. Only bots with capture_stream on have one, "
+      "Write the replay fixture with `hub run export <attempt> --fixture`. A bounded stderr tail is available even without a stream; streams require capture_stream on, "
       "kept a week.", {"attempt": _s("The attempt id, from hub_run_list")}, required=("attempt",))
 def run_export(api, args):
     return api.get(f"attempts/{args['attempt']}/capture", full="false")
@@ -3236,6 +3252,8 @@ def write_fixture(found, parent):
     files = {"input.json": json.dumps({**found["input"], "source": meta}, indent=2, ensure_ascii=False) + "\n",
              f"{provider}_transcript.ndjson": found["transcript"].rstrip("\n") + "\n",
              "output.json": json.dumps(found["output"], indent=2, ensure_ascii=False) + "\n"}
+    if found.get("stderr_tail"):
+        files["stderr.log"] = found["stderr_tail"].rstrip("\n") + "\n"
     for name, text in files.items():
         (folder / name).write_text(text, encoding="utf-8")
     return [str(folder / name) for name in files]
@@ -3884,11 +3902,12 @@ AUDIENCE = {
     "hub_bot_repo_create": ("owner", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
-    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
+    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_keep_tasks_going", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
-    **{name: REQUESTER_READ for name in ("hub_computer_list", "hub_credential_list", "hub_health_check")},
+    **{name: REQUESTER_READ for name in ("hub_credential_list", "hub_health_check")},
+    "hub_computer_list": KINDS,
     "hub_health_metrics": REQUESTER,
     **{name: REQUESTER for name in ("hub_bot_archive", "hub_doc_archive", "hub_file_archive", "hub_meeting_delete", "hub_meeting_granola_status", "hub_meeting_granola_sync",
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},

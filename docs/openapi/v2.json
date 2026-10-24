@@ -20,7 +20,7 @@
     },
     {
       "name": "Subscriptions",
-      "description": "Named provider logins on Computers and the one each bot runs on."
+      "description": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it."
     },
     {
       "name": "Team chart",
@@ -288,7 +288,7 @@
     },
     "/api/v2/assistant": {
       "get": {
-        "summary": "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
+        "summary": "The caller's Assistant (the CEO Bot, for the owner): their private room id, whether it is on, the recent messages and what waits for their OK",
         "operationId": "getAssistant",
         "responses": {
           "200": {
@@ -1384,6 +1384,75 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/keep-tasks-going": {
+      "post": {
+        "summary": "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap",
+        "operationId": "setKeepTasksGoing",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotKeepTasksGoing"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/kpis": {
       "get": {
         "summary": "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)",
@@ -1683,7 +1752,7 @@
     },
     "/api/v2/bots/{bot}/subscription": {
       "get": {
-        "summary": "Effective bot subscription",
+        "summary": "The Computer login a bot runs on",
         "operationId": "getBotSubscription",
         "parameters": [
           {
@@ -12359,7 +12428,7 @@
     },
     "/api/v2/subscriptions": {
       "get": {
-        "summary": "Profiles and assignments",
+        "summary": "Subscription logins reported by each Computer",
         "operationId": "listSubscriptions",
         "responses": {
           "200": {
@@ -12368,55 +12437,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SubscriptionList"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Subscriptions"
-        ]
-      },
-      "put": {
-        "summary": "Assign or clear a subscription",
-        "operationId": "assignSubscription",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubscriptionAssignment"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubscriptionAssignmentResult"
                 }
               }
             }
@@ -17498,6 +17518,38 @@
           "pending": {
             "type": "array"
           },
+          "ceo": {
+            "type": "boolean",
+            "description": "True for the owner, who talks to the CEO Bot in place of an Assistant: `bot` is the CEO Bot and `name` its name"
+          },
+          "earlier": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "room_id": {
+                    "type": "string"
+                  },
+                  "bot": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bot",
+                  "name",
+                  "room_id"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's own earlier Assistant chats, read-only (GET /api/v2/conversations/{room_id}/messages); null for everyone else, or none"
+          },
           "actors": {
             "type": "object",
             "additionalProperties": {
@@ -17511,6 +17563,8 @@
           "available",
           "bot",
           "can_turn_on",
+          "ceo",
+          "earlier",
           "execution",
           "has_more",
           "messages",
@@ -17740,6 +17794,15 @@
               "null"
             ]
           },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
+          },
           "access": {
             "$ref": "#/components/schemas/Access"
           },
@@ -17889,6 +17952,15 @@
           },
           "goals": {
             "type": "string"
+          },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
           },
           "access": {
             "$ref": "#/components/schemas/Access"
@@ -18126,6 +18198,34 @@
         ],
         "additionalProperties": true
       },
+      "BotKeepTasksGoing": {
+        "properties": {
+          "keep_tasks_going": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Tasks Going",
+            "description": "Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "BotKeepTasksGoing"
+      },
       "BotKpis": {
         "type": "object",
         "properties": {
@@ -18232,7 +18332,6 @@
           },
           "source": {
             "enum": [
-              "bot",
               "computer"
             ]
           },
@@ -19069,6 +19168,9 @@
             }
           },
           "woke": {
+            "type": "boolean"
+          },
+          "delivered": {
             "type": "boolean"
           },
           "warning": {
@@ -22211,6 +22313,72 @@
           },
           "checked": {
             "type": "string"
+          },
+          "computers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "turn_counts": {
+                  "$ref": "#/components/schemas/TurnCounts"
+                },
+                "turn_summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "stalled_runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "run": {
+                  "type": "string"
+                },
+                "bot": {
+                  "type": "string"
+                },
+                "stalled": {
+                  "type": "boolean"
+                },
+                "stalled_at": {
+                  "type": "string"
+                },
+                "last_event": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_event_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stall_minutes": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "bot",
+                "last_event",
+                "last_event_at",
+                "run",
+                "stall_minutes",
+                "stalled",
+                "stalled_at"
+              ],
+              "additionalProperties": true
+            }
           },
           "storage": {
             "$ref": "#/components/schemas/Storage",
@@ -25412,6 +25580,12 @@
                     "null"
                   ]
                 },
+                "effort": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "family": {
                   "type": [
                     "string",
@@ -25420,6 +25594,7 @@
                 }
               },
               "required": [
+                "effort",
                 "family",
                 "harness",
                 "model",
@@ -25428,6 +25603,13 @@
               ],
               "additionalProperties": true
             }
+          },
+          "task_model": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For a turn in a task's own session on a bot with a task model: `source` is task (it ran on the task model), fallback (the task model could not run, so the bot's own model did) or check (a check subtask kept its check model), and `note` says it in plain words"
           },
           "fallback": {
             "type": [
@@ -25447,7 +25629,8 @@
         "required": [
           "fallback",
           "family",
-          "segments"
+          "segments",
+          "task_model"
         ],
         "additionalProperties": true
       },
@@ -26731,66 +26914,6 @@
         ],
         "additionalProperties": true
       },
-      "SubscriptionAssignment": {
-        "properties": {
-          "scope": {
-            "type": "string",
-            "const": "bot",
-            "title": "Scope",
-            "default": "bot"
-          },
-          "target": {
-            "type": "string",
-            "maxLength": 100,
-            "minLength": 1,
-            "title": "Target"
-          },
-          "profile": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 80,
-                "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Profile"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "target"
-        ],
-        "title": "SubscriptionAssignment"
-      },
-      "SubscriptionAssignmentResult": {
-        "type": "object",
-        "properties": {
-          "scope": {
-            "enum": [
-              "bot"
-            ]
-          },
-          "target": {
-            "type": "string"
-          },
-          "profile": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "profile",
-          "scope",
-          "target"
-        ],
-        "additionalProperties": true
-      },
       "SubscriptionIdentity": {
         "type": "object",
         "properties": {
@@ -26856,41 +26979,9 @@
               ],
               "additionalProperties": true
             }
-          },
-          "assignments": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "scope": {
-                  "type": "string"
-                },
-                "target": {
-                  "type": "string"
-                },
-                "profile": {
-                  "type": "string"
-                },
-                "updated": {
-                  "type": "string"
-                },
-                "updated_by": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "profile",
-                "scope",
-                "target",
-                "updated",
-                "updated_by"
-              ],
-              "additionalProperties": true
-            }
           }
         },
         "required": [
-          "assignments",
           "profiles_by_computer"
         ],
         "additionalProperties": true
@@ -27750,12 +27841,16 @@
           },
           "woke": {
             "type": "boolean"
+          },
+          "delivered": {
+            "type": "boolean"
           }
         },
         "required": [
           "answer",
           "comment",
           "comments",
+          "delivered",
           "woke"
         ],
         "additionalProperties": true
@@ -28369,6 +28464,22 @@
           "mime",
           "name",
           "versions"
+        ],
+        "additionalProperties": true
+      },
+      "TaskFlow": {
+        "type": "object",
+        "properties": {
+          "going": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "going",
+          "waiting"
         ],
         "additionalProperties": true
       },
@@ -29416,6 +29527,58 @@
         "type": "object",
         "title": "ToolUpdate",
         "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
+      },
+      "TurnCounts": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer"
+          },
+          "starting": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "start_seconds": {
+            "type": "integer"
+          },
+          "waits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "oldest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "count",
+                "oldest",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "queued",
+          "running",
+          "start_seconds",
+          "starting",
+          "waiting",
+          "waits"
+        ],
+        "additionalProperties": true
       },
       "Unread": {
         "type": "object",

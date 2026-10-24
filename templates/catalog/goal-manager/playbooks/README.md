@@ -7,6 +7,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `goals-make-sense.md`: flag vague, duplicate and unmeasured goals; suggest a measure or clearer words.
 - `weekly-goals-review.md`: the short review for the owner.
 - `recoveries.md`: where the CEO Bot is on at level 2, recoveries for red or stalled goals and merged asks.
+- `owner-chat.md`: a turn in the owner's chat with you, where you are their Assistant and act as them.
 
 ## Proposals
 Every change to a goal or a KPI that is not yours to make is a proposal the owner confirms. Write the payload

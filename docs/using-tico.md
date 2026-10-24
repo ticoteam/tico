@@ -5,7 +5,7 @@ How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in
 
 ![Tasks in the demo team](images/tasks-desktop-light.png)
 
-Every picture in these docs is a screenshot of [demo mode](demo.md), which you can run yourself.
+The screenshots use demo mode or synthetic examples. You can run [demo mode](demo.md) yourself.
 
 **How do I give work to a bot or a human?**
 On **Tasks**, press **New task** and pick who it is for — any human or bot. On a human's profile,
@@ -19,12 +19,32 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 
 **What is on a bot's page?**
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
-and a rail down the right. The rail opens with one **Tasks** section with four tabs, each with a count:
+and a rail down the right. The rail opens with one **Tasks** section with four default tabs, each with a count:
 **Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (every open task the bot holds, of every type, newest first),
 **Blocked** (each task says who or what it waits on) and **Done Recently** (finished in the last 14 days). An empty tab says so.
+A bot with just one tab shows its list without a tab bar.
+
+The board icon beside **Tasks** opens the tasks board with this bot selected as owner. You can change the owner filter there.
+If you can only send this bot requests, you see neither the board icon nor the tab settings icon.
+
 Below it come **Assigned to others**, the latest **Updates** (all of them behind the small icon), **Files** and **Routines** (a row opens the routine to read or edit);
 a section with nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
 Tasks are one tab each.
+
+**How do I change a bot's task tabs?**
+If you manage the bot, you can change its tabs. The bot can also change its own layout.
+
+1. Open the settings icon beside **Tasks** (**Tab settings**).
+2. Choose **Add a tab**, give it a name, and pick its **Task types**, **States** and **Waiting on** filter.
+   For example, name it "Product tasks", select **Product roadmap**, and keep **Open**, **Doing** and **Waiting** checked.
+   Leave task types unchecked to include every type. Pick at least one state.
+3. Choose **Save**. The tab appears with its count and matching tasks. If saving fails, the window shows the error for you to correct.
+
+In the same window, edit a tab's name, use the arrows to reorder it, or remove it. Keep at least one tab.
+You can edit a custom tab's filters; built-in tabs keep their filters.
+**Reset to the four built-in tabs** restores the defaults immediately. **Cancel** discards unsaved edits.
+Everyone opening the bot sees its saved layout. Your **Assistant** is the exception: its tabs are personal to you.
+Tabs scroll sideways when they do not fit, with no limit on the number of tabs.
 
 **How do I ask a bot a question?**
 Open the bot's page and use its **Chat** tab; the reply comes back into the same conversation.
@@ -32,6 +52,56 @@ Work on a task happens in that task's own thread: tap the task's row in the chat
 The chat itself gets one line when the task starts, is blocked, done, declined or stuck ([Sessions](sessions.md)).
 For anything across the team, ask your own external agent: **Connect an external agent** (the plug button beside
 your email) gives it a token and Tico's MCP ([Connect an external agent](connect-an-agent.md)).
+
+**Why is Chat still sending?**
+**Unreleased.** While your message is sending, **Send** shows a spinner and stays disabled to prevent another press.
+After about five seconds, **Still sending…** appears by the message box.
+If Tico retries on a slow connection, the line says **Still sending… the connection is slow, trying again.**
+When the send finishes, the spinner and line disappear.
+
+![Send shows a spinner while the slow-send line says Still sending…](images/chat-still-sending.png)
+
+*Slow-send example with synthetic message text.*
+
+**What should I do if Chat says Not confirmed?**
+**Unreleased.** A text send without attachments has a 30-second deadline, including connection retries and sign-in checks.
+If it times out, Tico says **Not confirmed** and **It may still arrive.** Your draft stays in the message box.
+
+1. Leave the draft unchanged.
+2. Within 48 hours of the first send attempt, choose **Retry** in the notification to try that send again.
+
+In the same tab, the unchanged draft keeps its original request ID and first-attempt time when you switch bots and return.
+Reloading that tab also preserves them if your browser allows session storage.
+Temporary edits or clearing and restoring the draft while the send is still in progress keep the original send identity.
+Retry reuses that ID within the server's 48-hour replay window, so a message that reached the server is not saved twice.
+Retrying does not restart that window.
+
+After that window expires, Tico keeps the draft, disables **Send**, and offers no **Retry** action.
+Pressing Enter or reconnecting does not send it either.
+The warning says **This message may already have sent. Check the chat before resending; edit or clear the draft to send a new message.**
+Check the chat before deciding whether to send it again.
+
+After the send finishes or reports an error, deliberately editing or clearing the text, or changing attachments, forgets the pending request ID.
+Tico also forgets it when the server confirms the send, including in a message box restored after switching bots and returning.
+An identical message sent later can be a new send.
+For example, retry an unchanged “Please review the Acme draft” after ten minutes in the same tab to avoid saving it twice.
+
+For text sends, only a server-confirmed refusal proves no message was created.
+Tico says **Not sent** and forgets the pending request ID.
+Resolve the refusal, then press **Send** to try the unchanged text as a new send.
+
+Other server refusals, including sign-in and access errors, leave delivery uncertain even on the first attempt.
+Tico says **Not confirmed**, includes the server's reason, and warns **This message may already have sent.** and **Check the chat before resending.**
+This warning also appears alongside the sign-in banner.
+Your draft keeps its original request ID and first-attempt time.
+Check the chat before resending.
+After signing in again or regaining access, press **Send** with the draft unchanged to reuse the same ID within the original 48-hour window.
+The expiry guard and deliberate draft changes described above still apply.
+
+**Do file uploads have the same deadline?**
+**Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
+The slow-send line says **Still sending… uploading the file.** or gives the file count.
+If Tico retries the upload, the line adds **trying again**.
 
 **How do I know my bot ran?**
 The conversation goes *Saved — queued* → *Starting* → *Working* → the reply. When the bot marks

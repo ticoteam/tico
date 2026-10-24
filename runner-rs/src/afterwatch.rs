@@ -271,10 +271,32 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
 
-    /// The tests that use the runner-wide list, one at a time.
-    fn serial() -> std::sync::MutexGuard<'static, ()> {
+    struct WatchGuard { _one: std::sync::MutexGuard<'static, ()> }
+    impl Drop for WatchGuard {
+        fn drop(&mut self) {
+            let mut w = watched().lock().unwrap();
+            w.turns.clear();
+            w.redactors.clear();
+        }
+    }
+
+    /// Each fixture represents a separate runner. A panic must not leave watches for the next fixture to persist
+    /// or deliver to its server, including when it simulates a restart.
+    fn serial() -> WatchGuard {
         static S: Mutex<()> = Mutex::new(());
-        S.lock().unwrap_or_else(|e| e.into_inner())
+        WatchGuard { _one: S.lock().unwrap_or_else(|e| e.into_inner()) }
+    }
+
+    struct Child(std::process::Child);
+    impl std::ops::Deref for Child {
+        type Target = std::process::Child;
+        fn deref(&self) -> &Self::Target { &self.0 }
+    }
+    impl std::ops::DerefMut for Child {
+        fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0 }
+    }
+    impl Drop for Child {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
     }
 
     #[test]
@@ -282,9 +304,11 @@ mod tests {
         let _one = serial();
         let dir = std::env::temp_dir().join(format!("afterwatch-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
+        // Events from lsof name the real path, including /private/var on macOS.
+        let dir = std::fs::canonicalize(dir).unwrap();
         let out = dir.join("s1.output");
         // A kept shell: writing to its output file, its exit code to come from its reaping parent's status file.
-        let mut shell = std::process::Command::new("sh").arg("-c").arg("echo '3790 passed'; exec sleep 30").stdout(std::fs::File::create(&out).unwrap()).spawn().unwrap();
+        let mut shell = Child(std::process::Command::new("sh").arg("-c").arg("echo '3790 passed'; exec sleep 30").stdout(std::fs::File::create(&out).unwrap()).spawn().unwrap());
         let status = dir.join("status");
         std::fs::write(&status, "").unwrap();
         let event = json!({"kept": [{"task_id": "s1", "description": "Run the full suite", "pid": shell.id(), "output_file": out.display().to_string()}], "status_file": status});
@@ -306,6 +330,12 @@ mod tests {
         late["status_file"] = Value::Null;
         late["commands"][0]["ended"] = Value::Null;
         late["commands"][0]["exit"] = Value::Null;
+        // A live pid alone is not authority to kill: it must still hold this command's output file.
+        let mut different = late.clone();
+        different["commands"][0]["output_file"] = json!(dir.join("another.output"));
+        assert!(poll(&mut different, epoch_s()));
+        assert!(different["commands"][0]["killed"].is_null());
+        assert!(shell.try_wait().unwrap().is_none(), "a different process was killed");
         assert!(poll(&mut late, epoch_s()));
         assert_eq!(shell.wait().unwrap().signal(), Some(libc::SIGKILL));
         assert_eq!(report(&late, None)["commands"][0]["killed"], true);
@@ -319,7 +349,10 @@ mod tests {
         if unsafe { libc::kill(pid as i32, 0) } != 0 {
             return true;
         }
-        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit_once(')').is_some_and(|(_, r)| r.trim_start().starts_with('Z')))
+        #[cfg(target_os = "linux")]
+        { std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit_once(')').is_some_and(|(_, r)| r.trim_start().starts_with('Z'))) }
+        #[cfg(not(target_os = "linux"))]
+        { std::process::Command::new("ps").args(["-p", &pid.to_string(), "-o", "stat="]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim_start().starts_with('Z')) }
     }
 
     #[test]
@@ -327,17 +360,18 @@ mod tests {
         use std::os::unix::process::CommandExt;
         let dir = std::env::temp_dir().join(format!("afterwatch-tree-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
         let out = dir.join("s1.output");
         // A suite under a shell that waits for it, with a worker under that: no exec anywhere.
-        let mut shell = std::process::Command::new("sh")
+        let mut shell = Child(std::process::Command::new("sh")
             .arg("-c")
             .arg("sh -c 'sleep 30; true'; true")
             .stdout(std::fs::File::create(&out).unwrap())
             .process_group(0)
             .spawn()
-            .unwrap();
+            .unwrap());
         // Another command's job, in a group of its own.
-        let mut other = std::process::Command::new("sleep").arg("30").stdout(std::process::Stdio::null()).process_group(0).spawn().unwrap();
+        let mut other = Child(std::process::Command::new("sleep").arg("30").stdout(std::process::Stdio::null()).process_group(0).spawn().unwrap());
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let workload = loop {
             let parent = crate::hosts::claude::parents();

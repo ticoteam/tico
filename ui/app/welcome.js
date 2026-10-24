@@ -17,7 +17,7 @@ const ONB_TITLES = {providers: 'AI providers', names: 'Names', about: 'About the
 // The progress row's words: one each, so the row stays on one line (a phone shows the current one only).
 const ONB_SHORT = {providers: 'Providers', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
 // At most one short hint line under a step's title; most steps have none.
-const ONB_BLURB = {providers: 'Bots wait until you add one in Settings > Computers.', agent: 'Optional.'};
+const ONB_BLURB = {providers: 'Choose the subscriptions or API keys your bots use, with Tico Gateway if you want it.', agent: 'Optional.'};
 const ONB_CUSTOMERS = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
 // The four the server accepts (models.WorkArrival). Adding one here needs the same word there.
 const ONB_ARRIVES = [['email', 'Email'], ['slack', 'Slack'], ['crm', 'CRM'], ['tickets', 'Tickets']];
@@ -123,9 +123,9 @@ function onbRender(state) {
     ${done ? '' : `<ol class="onb-progress" aria-label="Setup steps">${state.steps.map((step, i) =>
       `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}><span>${esc(ONB_SHORT[step])}</span></li>`).join('')}</ol>
       <p class="onb-count sr-only" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
-    ${onbSampleHTML(state, done)}
-    ${onbCompanyFileHTML(state, done)}
-    <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>`;
+    ${key === 'providers' ? '' : onbSampleHTML(state, done) + onbCompanyFileHTML(state, done)}
+    <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>
+    ${key === 'providers' ? onbSampleHTML(state, done) + onbCompanyFileHTML(state, done) : ''}`;
   onbWire(state, key);
 }
 function onbStepHTML(state, key) {
@@ -263,20 +263,34 @@ async function onbUseCompanyFile(state) {
 const onbMachineLabel = state => state?.kind === 'linux' && S.config?.local ? 'This computer'
   : `${firstName(S.me?.name) || 'This'}'s ${state?.kind === 'linux' ? 'server' : 'Mac'}`;
 // [label, command, other]: `other` marks a line that is instead of one above, shown under Other ways.
+function onbSignIns(state) {
+  const view = state.providers || {}, preset = view.preset;
+  if (preset === 'gateway') return [];
+  if (PRESET_PROVIDERS[preset]) return [{runtime: 'claude', label: 'Claude'}, {runtime: 'codex', label: 'ChatGPT through Codex'}];
+  if (preset === 'own-keys') {
+    return (view.providers || []).filter(row => !row.gateway && (view.enabled || []).includes(row.id))
+      .filter((row, i, rows) => rows.findIndex(other => other.runtime === row.runtime) === i)
+      .map(row => ({runtime: row.runtime, label: row.label}));
+  }
+  const runtime = view.default?.runtime || S.config?.default_runtime || '';
+  return runtime ? [{runtime, label: harnessWords(runtime)}] : [];
+}
 function onbCommands(state) {
-  // Signing in to a model comes after a provider is chosen; with none, that step is left out.
-  const runtime = state.providers?.default?.runtime || S.config?.default_runtime || '';
+  // The preset can use several subscriptions, independently of the default model. Key-only harnesses have no login.
+  const signIns = onbSignIns(state).filter(row => state.kind === 'linux'
+    ? harnessCaps(row.runtime).container_login : harnessCaps(row.runtime).terminal_login || harnessCaps(row.runtime).browser_sign_in);
   if (state.kind === 'linux') {
-    const [run, login, plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), runtime);
-    return [run, login, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]].filter(Boolean);
+    const [run, , plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), '');
+    const logins = signIns.map(row => [`Sign in to ${row.label} (use Sign in in Settings > Computers, or run this after the runner installs the model CLI)`,
+      dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), row.runtime)[1][1]]);
+    return [run, ...logins, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]];
   }
   const file = state.enrollment || '<setup-file>.json';
   return [
     ['Register this Mac for the team',
      `scripts/tico -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
-    runtime ? ['Add the subscription the bots run on',
-     `scripts/tico -e <slug> profile add default\nscripts/tico -e <slug> profile login default ${runtime}`]
-            : null,
+    ...signIns.map((row, i) => [`Add your ${row.label} subscription`,
+     `${i === 0 ? 'scripts/tico -e <slug> profile add default\n' : ''}scripts/tico -e <slug> profile login default ${row.runtime}`]),
     ['Start the bot service', 'scripts/tico -e <slug> install bot'],
   ].filter(Boolean);
 }
@@ -320,6 +334,9 @@ function onbSummaryHTML(state) {
     ${label('Sells to', ONB_CUSTOMERS.find(([value]) => value === a.customers)?.[1] || '')}
     ${label('Software is the product', a.software_product ? (a.software_product === 'yes' ? 'Yes' : 'No') : '')}
     ${label('Team size', a.team_size)}
+    ${label('AI providers', PROVIDER_PRESETS.find(row => row.id === state.providers?.preset)?.label
+      || (state.providers?.providers || []).filter(row => (state.providers.enabled || []).includes(row.id)).map(row => row.label).join(', ')
+      || 'Choose later in Settings > Computers')}
     ${label('Computers', onbMachineStatus(r))}
     ${frSummaryTeamHTML(state)}
   </div>`;

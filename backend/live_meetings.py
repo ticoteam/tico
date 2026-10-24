@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import uuid
+from typing import Literal
 
 from fastapi import Request
 from fastapi.responses import StreamingResponse
@@ -26,6 +27,8 @@ class Connect(Contract):
     threshold: float = Field(default=0.7, ge=0.5, le=1)
     reply_cap: int = Field(default=3, ge=1, le=20)
     cooldown_seconds: int = Field(default=60, ge=0, le=3600)
+    # Private: only the owner, people they add and attached bots. Team: anyone on the team may join.
+    visibility: Literal["private", "team"] = "team"
 
     @model_validator(mode="after")
     def nonblank_title(self):
@@ -75,6 +78,12 @@ class Correction(Contract):
 
 class Join(Contract):
     pass
+
+
+class LiveMeetingAccess(Contract):
+    visibility: Literal["private", "team"] | None = None
+    add: list[str] = Field(default_factory=list, max_length=50)
+    remove: list[str] = Field(default_factory=list, max_length=50)
 
 
 class AttachBots(Contract):
@@ -133,13 +142,28 @@ def _meeting(c, rid):
     return dict(row)
 
 
+def _sees(c, who, row):
+    """Joining is presence, not a lasting grant to a private meeting."""
+    from .live_privacy import member
+    from .task_privacy import actor
+    principals = actor(who) if row["visibility"] == "private" else who.actor
+    return all(member(c, principal, row) for principal in
+               (principals if isinstance(principals, tuple) else (principals,)))
+
+
 def _require_read(c, auth, who, rid):
+    from .task_privacy import snapshot
+    snapshot(c)
     row = _meeting(c, rid)
     if who.role in ("human", "owner"):
         auth.domain(who)
+        if not _sees(c, who, row):
+            # A private meeting's existence is private too.
+            raise Problem("not_found", "Live meeting not found", 404)
     elif who.role == "bot":
-        slug = H.actor_id(who.actor)
-        if not c.execute("SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot=?", (rid, slug)).fetchone():
+        if not _sees(c, who, row):
+            if row["visibility"] == "private":
+                raise Problem("not_found", "Live meeting not found", 404)
             raise Problem("forbidden", "This bot is not attached to the live meeting", 403)
     else:
         raise Problem("forbidden", "Live meetings are available to team members and attached bots", 403)
@@ -149,7 +173,7 @@ def _require_read(c, auth, who, rid):
 def _connector(c, auth, who, rid, *, states=None):
     human_only(who)
     auth.domain(who)
-    row = _meeting(c, rid)
+    row = _require_read(c, auth, who, rid)
     if who.actor != row["owner_actor"]:
         raise Problem("forbidden", "Only the person who connected this meeting can control its transcript", 403)
     if states and row["state"] not in states:
@@ -191,8 +215,13 @@ def _view(c, auth, who, rid):
         payload = json.loads(event["payload_json"])
         if payload.get("bypass") == "named":
             bypasses.append({"event_id": event["event_id"], "created": event["created"], **payload})
+    access = []
+    for r in c.execute("SELECT actor FROM live_meeting_access WHERE meeting_id=? ORDER BY added_at,actor", (rid,)):
+        person = H.human(c, H.actor_id(r["actor"]))
+        access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
         "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
+        "visibility": row["visibility"], "access": access,
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
         "created": row["created"], "started_at": row["started_at"], "ended_at": row["ended_at"],
@@ -307,7 +336,7 @@ def _dispatch_turn(c, rid, turn_id, slug):
     """Put one scoped reply request on the existing durable runner job queue."""
     meeting = _meeting(c, rid)
     conv = H.open_conversation(c, H.KEEPER, ["bot:" + slug], kind="chat",
-                               subject="Live meeting: " + meeting["title"])
+                               subject="Live meeting: " + meeting["title"], room_key="live-meeting:" + rid)
     refs = {"live_meeting": {"meeting_id": rid, "turn_id": turn_id}}
     H.feed(c, "bot:" + slug, _turn_prompt(c, rid, turn_id, slug), conv, refs=refs)
 
@@ -815,7 +844,27 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
     return dict(c.execute("SELECT * FROM live_meeting_chat WHERE id=?", (cid,)).fetchone())
 
 
-def install_live_meetings(app, store, auth, mutate):
+def install_live_meetings(app, store, auth, write):
+    def mutate(request, body, work):
+        # Store checks run under the write lock before looking up an idempotency receipt.
+        rid = request.path_params.get("rid")
+        def check(c):
+            who = request.state.identity
+            if rid:
+                _require_read(c, auth, who, rid)
+            elif isinstance(body, Connect):
+                # Connect has no path id; both ways of recovering an existing meeting are reads.
+                if body.client_id:
+                    existing = c.execute("SELECT id FROM live_meetings WHERE owner_actor=? AND client_id=?",
+                                         (who.actor, body.client_id)).fetchone()
+                    if existing:
+                        _require_read(c, auth, who, existing["id"])
+                cached = c.execute("SELECT response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                   (who.actor, request.url.path, request.headers.get("idempotency-key"))).fetchone()
+                if cached:
+                    _require_read(c, auth, who, (H._json(cached["response_json"], {}) or {}).get("id"))
+        return write(request, body, work, check=check)
+
     @app.post("/api/v2/live-meetings")
     def connect(request: Request, body: Connect):
         who = request.state.identity
@@ -827,16 +876,19 @@ def install_live_meetings(app, store, auth, mutate):
                                      (who.actor, body.client_id)).fetchone()
                 if existing:
                     return _view(c, auth, who, existing[0])
+            if body.visibility == "private" and who.task_actor:
+                raise Problem("forbidden", "Connect a private meeting directly, then explicitly attach the bot", 403)
             rid = str(uuid.uuid4())
             stamp = H.now()
             window_ms = _window_ms(app, body)
             c.execute("INSERT INTO live_meetings(id,owner_actor,title,state,client_id,window_ms,cooldown_ms,"
-                      "reply_cap,threshold,created,updated,started_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                      "reply_cap,threshold,created,updated,started_at,visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, who.actor, body.title, "live", body.client_id, window_ms,
-                       body.cooldown_seconds * 1000, body.reply_cap, body.threshold, stamp, stamp, stamp))
+                       body.cooldown_seconds * 1000, body.reply_cap, body.threshold, stamp, stamp, stamp,
+                       body.visibility))
             c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (rid, who.actor, stamp))
             _event(c, rid, "meeting.state", {"state": "live", "connected_by": who.actor,
-                                              "visibility": "team", "window_ms": window_ms,
+                                              "visibility": body.visibility, "window_ms": window_ms,
                                               "cooldown_ms": body.cooldown_seconds * 1000,
                                               "reply_cap": body.reply_cap})
             return _view(c, auth, who, rid)
@@ -848,8 +900,10 @@ def install_live_meetings(app, store, auth, mutate):
         human_only(who)
         auth.domain(who)
         with store.read() as c:
-            rows = c.execute("SELECT id FROM live_meetings WHERE state!='ended' ORDER BY updated DESC,id").fetchall()
-            meetings = [_view(c, auth, who, row[0]) for row in rows]
+            from .task_privacy import snapshot
+            snapshot(c)
+            rows = c.execute("SELECT * FROM live_meetings WHERE state!='ended' ORDER BY updated DESC,id").fetchall()
+            meetings = [_view(c, auth, who, row["id"]) for row in rows if _sees(c, who, row)]
             return {"meetings": meetings, "count": len(meetings)}
 
     @app.get("/api/v2/live-meetings/bot-candidates")
@@ -882,12 +936,54 @@ def install_live_meetings(app, store, auth, mutate):
         human_only(who)
         auth.domain(who)
         def work(c):
-            row = _meeting(c, rid)
+            row = _require_read(c, auth, who, rid)
             if row["state"] == "ended":
                 raise Problem("meeting_state", "Ended meetings cannot be joined", 409)
             cursor = c.execute("INSERT OR IGNORE INTO live_meeting_humans VALUES(?,?,?)", (rid, who.actor, H.now()))
             if cursor.rowcount:
                 _event(c, rid, "meeting.joined", {"actor": who.actor})
+            return _view(c, auth, who, rid)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/live-meetings/{rid}/access")
+    def change_access(request: Request, rid: str, body: LiveMeetingAccess):
+        who = request.state.identity
+        def work(c):
+            row = _connector(c, auth, who, rid, states=("live", "paused"))
+            added, removed = [], []
+            for person in body.add:
+                actor = "human:" + H.actor_id(person)
+                if actor == row["owner_actor"]:
+                    continue
+                if not H.human(c, actor):
+                    raise Problem("not_found", f"{person} is not a person on this team", 404)
+                if c.execute("INSERT OR IGNORE INTO live_meeting_access VALUES(?,?,?,?)",
+                             (rid, actor, who.actor, H.now())).rowcount:
+                    added.append(actor)
+            for person in body.remove:
+                actor = "human:" + H.actor_id(person)
+                if actor == row["owner_actor"]:
+                    continue
+                gone = c.execute("DELETE FROM live_meeting_access WHERE meeting_id=? AND actor=?", (rid, actor)).rowcount
+                gone += c.execute("DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor=?", (rid, actor)).rowcount
+                if gone:
+                    removed.append(actor)
+            visibility = body.visibility or row["visibility"]
+            if visibility != row["visibility"]:
+                c.execute("UPDATE live_meetings SET visibility=?,updated=? WHERE id=?", (visibility, H.now(), rid))
+            if visibility == "private":
+                # Implicit team participation cannot expand the newly private audience.
+                c.execute("DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor<>? AND actor NOT IN "
+                          "(SELECT actor FROM live_meeting_access WHERE meeting_id=?)", (rid, row["owner_actor"], rid))
+                for bot in c.execute("SELECT bot FROM live_meeting_bots WHERE meeting_id=? AND joined_by<>?",
+                                     (rid, row["owner_actor"])).fetchall():
+                    for turn in c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
+                                          "AND status IN ('pending','claimed')", (rid, bot["bot"])).fetchall():
+                        _finish_pass(c, rid, turn, "meeting_access_revoked")
+                c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND joined_by<>?", (rid, row["owner_actor"]))
+            if added or removed or visibility != row["visibility"]:
+                _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
+                                                   "changed_by": who.actor})
             return _view(c, auth, who, rid)
         return mutate(request, body, work)
 
@@ -988,7 +1084,9 @@ def install_live_meetings(app, store, auth, mutate):
         def work(c):
             human_only(who)
             auth.domain(who)
-            meeting = _meeting(c, rid)
+            meeting = _require_read(c, auth, who, rid)
+            if meeting["visibility"] == "private" and who.actor != meeting["owner_actor"]:
+                raise Problem("forbidden", "Only the person who connected a private meeting can attach bots", 403)
             if meeting["state"] not in ("live", "paused"):
                 raise Problem("meeting_state", "Bots can only be attached to a live or paused meeting", 409)
             if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",
@@ -1023,7 +1121,7 @@ def install_live_meetings(app, store, auth, mutate):
         def work(c):
             human_only(who)
             auth.domain(who)
-            meeting = _meeting(c, rid)
+            meeting = _require_read(c, auth, who, rid)
             if meeting["state"] not in ("live", "paused"):
                 raise Problem("meeting_state", "Bots can only be removed from a live or paused meeting", 409)
             if not c.execute("SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor=?",

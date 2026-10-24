@@ -22,6 +22,10 @@ first other page you open (for example Tasks), and counting starts only once it 
 The first screen also offers **Start with a sample company**, which skips the wizard and starts a made-up five-bot
 team instead ([The sample company](sample-company.md)).
 
+**Unreleased:** When the **AI providers** step appears, its main choice comes before the sample-company and
+**Company YAML file** options. Provider checkboxes, **Via OpenRouter** and **Default model** appear only when you
+choose **Your company's plans or API keys**.
+
 If you already chose a team on the public setup page, the first screen also accepts its **Company YAML file**.
 Choose the file, check the company and employee preview, then press **Use this team**. Tico uses the selected
 templates, names and reporting lines, includes its current required built-ins once, and starts employees marked
@@ -33,7 +37,9 @@ the owner; a file does not add sign-in accounts. Additional people, existing ext
 refused with an explanation. The file's goals are imported onto [Goals](goals-and-kpis.md): the owner's goals become
 company goals, and so do goals the file gives a built-in bot such as the Assistant (Goals keeps the built-ins out of
 its tree). Each other bot's goal sits under that bot, with the goal's measure as a KPI carrying the file's baseline and
-target (the file holds no readings, so a new KPI starts with no history). First jobs, routines, model choices and tool
+target (the file holds no readings, so a new KPI starts with no history). A file holds up to 325 goals: the company's 3,
+2 for each department and 1 for each of up to 300 bots, which covers every goal the setup page suggests; a file with
+more is refused before anything is created. First jobs, routines, model choices and tool
 connections are saved for later setup and listed in the preview; the team uses its currently configured AI providers. Bots follow their normal setup and
 computer-enrollment flow after import.
 
@@ -49,14 +55,18 @@ Every **Next** saves the whole draft with `PUT /api/v2/setup`, so a closed tab l
 
 | Screen | What it asks | What it stores |
 |---|---|---|
-| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at Names. Which AI providers the bots may use. Optional: leave none ticked and Skip for now moves on | The team's providers, as Settings > Computers > Models saves them |
+| AI providers | Only while no provider is chosen yet; otherwise the wizard starts at Names. Choose [how bots get their models](ai-gateway.md#choose-how-bots-get-their-models). To choose later, select **Your company's plans or API keys**, untick its providers and press **Skip for now** | The team's providers, as Settings > Computers > Models saves them |
 | Names | **Team/Company name**, app name, and optionally your own name | `names`. From the moment they are saved they override `TICO_TEAM_NAME` (the old `TICO_COMPANY_NAME` remains an alias) and `TICO_APP_NAME` everywhere, including in the template cards. **Your name** (`names.owner_name`) is saved on the owner's roster entry, so the team chart and the sidebar show it instead of the address; it is prefilled from the roster, or from the display name the sign-in proxy vouches for (a `name` claim from Cloudflare Access or the AWS load balancer), and left blank it changes nothing. **Team email domain** (`names.team_domain`) is asked only when the owner signs in with public email such as gmail.com and no team address is on the roster; it is optional, and lets members add teammates at that domain (it does not let anyone sign in). The wizard does not ask for an assistant name: the tab is always called Assistant, and `names.assistant_name` is `TICO_ASSISTANT_NAME`, which is `Assistant` unless set (a name equal to the team's reads as `Assistant`) |
 | About the team | What you do, who you sell to, whether software is your product, and team size | `answers`. Whether software is the product decides which groups start picked, and the description helps the suggestions. It is also written into every bot's `knowledge/company.md` |
 | Your team chart | The groups, then one question per group and the bots to recruit into it, with the chart growing beside it, and the message bot switch under the finished chart ([The team builder](#the-team-builder)) | `answers.departments`, `answers.briefings` and `selected`: for each chosen slug, its template, display name, the `AGENT.md` text and `reports_to` (a human `human:<id>` or a bot slug). Nothing is created yet |
 | Add the computer that runs your bots | If a runner is already online (the server's own) the step is one line, `<label> online`. Otherwise the kind of computer, **A Linux or cloud server (Docker)** when the server itself runs in Docker (`in_docker` in `GET /api/v2/config`, the usual install) and **A Mac** when it does not, then a one-time code or setup file and the commands | Nothing. It polls `GET /api/v2/setup` every ten seconds and reports the enrolled computer |
 | Connect an external agent | Optional: **Connect an external agent** makes a personal token and the MCP setup to paste into Grok, Dots, Muse or any MCP agent ([Connect an external agent](connect-an-agent.md)) | Nothing in the record; the token is the owner's own (`POST /api/v2/me/tokens`) |
-| Review and create | A summary of all of it, the team with each bot's reports-to | **Create my team** calls `POST /api/v2/setup/complete` |
+| Review and create | A summary of all of it, including the **AI providers** choice (Unreleased), and the team with each bot's reports-to | **Create my team** calls `POST /api/v2/setup/complete` |
 | After Create | One screen, below | Nothing in the record |
+
+**Unreleased:** The Computer step's model sign-in commands match your provider choice. Both subscription choices show
+Claude and **ChatGPT through Codex**; **Tico Gateway only** shows no model sign-in commands. With
+**Your company's plans or API keys**, commands appear only for enabled providers. Each tool must support sign-in on that kind of computer.
 
 ### The answers
 
@@ -374,7 +384,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 93 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
+Tico ships 98 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
@@ -439,7 +449,8 @@ questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a
 `bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > Humans. An owner or a bot's manager can
 also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
 
-In **AI providers**, **Skip for now** continues without a provider; bots wait until one is added.
+In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
+With none ticked, **Skip for now** continues without a provider; bots wait until one is added.
 Settings > Computers > Models can also save with no providers enabled. After choosing providers, sign in on each computer
 from that page, or store the model key in **Tools > Credentials** and grant **Every computer**. For a model API key or token
 named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`, a blank **Bot variable name** is

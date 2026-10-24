@@ -322,11 +322,6 @@ function machineSharedLoginHTML(machine, runtime, profile = '') {
   const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
   return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
 }
-function machineProfileSignIn(state, runtime) {
-  if (state?.signed_in === true) return machineAccountHTML(state.account, runtime);
-  if (state?.signed_in === false) return '<span class="pill fail">Signed out</span>';
-  return '<span class="pill waiting">Couldn\'t check</span>';
-}
 // Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
 // one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
 // computer without a driver reports no `appdriver`, so it shows nothing here.
@@ -378,6 +373,7 @@ function renderSettingsMachines() {
     const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
       <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
+        ${machine.turn_summary ? `<p class="muted machine-turn-counts">${esc(machine.turn_summary)}</p>` : ''}
         <span class="settings-cell-note machine-facts">${esc(facts)} ${machineUpdateWords(machine.update)}</span>${failures ? `<span class="settings-cell-note err">${failures} bot${failures === 1 ? '' : 's'} not ready</span>` : ''}${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td>
       <td data-label="AI tools">${machineChipsHTML(machine)}</td></tr>`;
   }).join('');
@@ -427,7 +423,6 @@ function renderSettingsMachines() {
       await loadSettings();
     } catch (error) { toast(error.message, true); box.checked = !box.checked; box.disabled = false; }
   };
-  el.onsubmit = event => { subsHandleSubmit(event); };   // a bare `false` would cancel any other form's submit
   el.onclick = async event => {
     // The pop-up: a click on a row (its name, a chip, anywhere on it) opens it; ✕ or the backdrop closes it.
     const dialog = el.querySelector('dialog.computer-detail');
@@ -438,9 +433,6 @@ function renderSettingsMachines() {
     if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
     const row = event.target.closest('[data-computer-open], [data-computer-row]');
     if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
-    if (subsHandleClick(event)) return;
-    const removeLine = event.target.closest('[data-connection-remove]');
-    if (removeLine) { if (!removeLine.disabled) computerRemoveOpen(removeLine); return; }
     const perfLink = event.target.closest('[data-computer-performance]');
     if (perfLink) { dialog?.close(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
     const shown = event.target.closest('[data-computer-bots]');
@@ -493,7 +485,6 @@ function renderSettingsMachines() {
       <div class="machine-enroll-status" id="machine-enroll-status"></div></div>`;
   el.querySelector('[data-machines-list]').innerHTML = `${window.runnerOutdatedBanner?.(machines, S.me?.id, settingsPersonName) || ''}${list}`;
   computerDetailPaint();
-  subsScheduleRefresh();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
     : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };

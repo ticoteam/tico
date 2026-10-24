@@ -621,6 +621,18 @@ def writer_for(c, settings, store=None, vault=None):
     return J.llm_writer(*found) if found else None
 
 
+def drafter(c, settings, author, assistant):
+    """Whose draft a person's update is labelled: their Assistant's, and for the owner the CEO Bot's, which is the
+    owner's Assistant (backend/assistant.py). The draft is written the same way for both."""
+    from . import access, ceo_bot
+    from .assistant import ceo_on
+    if not is_person(author) or not ceo_on(c):
+        return assistant
+    human = H.human(c, H.actor_id(author)) or {}
+    owner = access.load_owner(c, settings)["email"]
+    return ceo_bot.SLUG if owner and str(human.get("email") or "").strip().lower() == owner else assistant
+
+
 def write_draft(store, author, write, assistant):
     """Draft the person's update Tico has out, with `write(system, user)`, and post it labelled. Runs
     outside a transaction (the model call holds no lock). The call carries the instructions and
@@ -631,6 +643,7 @@ def write_draft(store, author, write, assistant):
         row = c.execute("SELECT * FROM update_queue WHERE bot=? AND state='sent'", (author,)).fetchone()
         if not row:
             return None
+        assistant = drafter(c, store.settings, author, assistant)
         own = own_words(c, author, row["day"])
         if not own:
             system = draft_instructions(row["kind"])
@@ -681,7 +694,7 @@ def send_request(c, row, assistant=None):
         return None
     message = H.say(c, H.KEEPER, H.bot_actor(row["bot"]), request_text(c, row["bot"], row["kind"], row["day"], redo),
                     kind="notice", refs=run_triggers.stamp({"update_request": row["id"], "wake": "update"}, "schedule",
-                                                           row["id"]))
+                                                           row["id"], purpose="write update"))
     c.execute("UPDATE update_queue SET state='sent', message_id=?, sent_at=? WHERE id=?",
               (message["id"], H.now(), row["id"]))
     return message

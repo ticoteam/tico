@@ -146,7 +146,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | **Gateway cap reached** | Waits until the next month (UTC). |
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute, so it is back on them within about a minute of credit being added. |
-| Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
+| Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
 | The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap 1.1, Mid 1.0 or Power 1.0. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |

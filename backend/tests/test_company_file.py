@@ -64,7 +64,8 @@ def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or
     """Org chart models spec test 1, against the data files."""
     real = {role["slug"] for role in C.ROLES}
     open_seats = {seat["slug"] for seat in C.SEATS}
-    assert open_seats == {"controller", "equity-manager", "fundraising-manager", "scheduling-bookings", "quality-inspections"}
+    assert not open_seats, "all five seats the first models placed now have templates"
+    assert {"controller", "equity-manager", "fundraising-manager", "scheduling-bookings", "quality-inspections"} <= real
     assert not open_seats & real, "a seat to build that has a template is a real seat"
     for key, count in SPEC_COUNTS.items():
         model = C.MODELS[key]
@@ -141,14 +142,17 @@ def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model
     assert {"Scheduling & Bookings", "Quality & Inspections", "Dispatcher", "Logistics Coordinator"} <= set(titles(draft))
 
 
-def test_5_the_software_company_s_finance_holds_investor_relations_and_two_seats_with_no_bot_yet():
+def test_5_the_software_company_s_finance_holds_investor_relations_equity_and_fundraising_with_templates():
     draft, _ = first_chart("SaaS.", ["sells_software"])
     by = {b["title"]: b for b in draft["bots"]}
     for title in ("Investor Relations Manager", "Equity Manager", "Fundraising Manager"):
-        assert by[title]["dept"] == "finance"
-    assert {b["title"] for b in draft["bots"] if b["template"] in D.OPEN_SEATS} == {"Equity Manager", "Fundraising Manager"}
-    assert by["Investor Relations Manager"]["template"] not in D.OPEN_SEATS
-    # A seat with no bot yet goes into the file marked so, and an installed Tico makes no bot for it.
+        assert by[title]["dept"] == "finance" and by[title]["template"] not in D.OPEN_SEATS
+    assert not [b for b in draft["bots"] if b["template"] in D.OPEN_SEATS]
+
+
+def test_a_seat_with_no_template_goes_into_the_file_marked_no_bot_yet(monkeypatch):
+    monkeypatch.setattr(D, "OPEN_SEATS", {"equity-manager"})
+    draft, _ = first_chart("SaaS.", ["sells_software"])
     doc = yaml.safe_load(C.to_yaml(draft, CREATED))
     row = next(e for e in doc["employees"] if e["title"] == "Equity Manager")
     assert row["template"] == "equity-manager" and row["no_bot_yet"] is True
@@ -237,12 +241,14 @@ def test_8_a_company_no_model_fits_starts_from_everything():
 
 def test_9_the_cap_table_belongs_to_the_equity_manager_only():
     for role in C.ROLES:
-        assert "cap table" not in role["summary"].lower(), role["slug"]
-        assert "cap-table" not in role["tags"], role["slug"]
-    seats = {seat["slug"]: seat["summary"] for seat in C.SEATS}
-    assert [slug for slug, summary in seats.items() if "cap table" in summary.lower()] == ["equity-manager"]
+        if role["slug"] != "equity-manager":
+            assert "cap table" not in role["summary"].lower() and "cap-table" not in role["tags"], role["slug"]
+    equity = next(role for role in C.ROLES if role["slug"] == "equity-manager")
+    assert equity["department"] == "finance" and "cap table" in equity["summary"].lower() and equity["recommend_when"]
     secretary = next(role for role in C.ROLES if role["slug"] == "corporate-secretary")["summary"]
     assert all(word in secretary for word in ("board", "minutes", "entity register"))
+    card = yaml.safe_load((Path(__file__).resolve().parents[2] / "templates/catalog/corporate-secretary/card.yaml").read_text())
+    assert not [line for line in card["owns"] if "cap table" in line.lower()]
 
 
 def test_5_the_visitor_s_own_edits_stand_and_a_removed_bot_stays_off():
@@ -487,6 +493,32 @@ def test_10_a_label_ending_a_longer_name_loses_its_value(label, value, form):
     "token: 5 per user", "Token: 120 a day", "the api_key is optional",
 ])
 def test_10_names_that_only_contain_a_label_are_left_alone(text):
+    assert C.scrub(text) == (text, False)
+
+
+# 32 or more letters and digits in a row are key-shaped however regular they look; HQ's copy of the scrubber has the
+# same rule. Invented strings, built at run time, each too regular for the randomness check alone.
+REGULAR = ["a1" * 16, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA7", "key" + "0" * 29, "Ab12" * 10]
+
+
+@pytest.mark.parametrize("value", REGULAR)
+def test_10_a_long_run_of_letters_and_digits_is_removed_however_regular(value):
+    assert C.scrub("Use " + value + " now") == ("Use [removed] now", True)
+
+
+@pytest.mark.parametrize("value", [REGULAR[0] + "-", REGULAR[0] + "_", REGULAR[0] + "=", "x_" + REGULAR[0] + "=="])
+def test_10_a_long_run_inside_a_longer_token_is_removed(value):
+    out, cut = C.scrub("Use " + value + " now")
+    assert cut and REGULAR[0] not in out and "[removed]" in out
+
+
+@pytest.mark.parametrize("text", [
+    "aaaaaaaa-0000-aaaa-0000-aaaaaaaaaaaa",                  # a UUID: dashes, so not a letters-and-digits run
+    "a1" * 15 + "a",                                         # 31 letters and digits
+    "Supercalifragilisticexpialidociousness",                # letters only
+    "12345678901234567890123456789012345",                   # digits only
+])
+def test_10_a_uuid_and_runs_short_of_the_shape_stay(text):
     assert C.scrub(text) == (text, False)
 
 
@@ -768,3 +800,67 @@ def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_com
     # The starter import takes the owner and the bots: all 300 of them.
     owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]]}
     assert len(starter.load(C.to_yaml(owner_only, CREATED))["bots"]) == 300
+
+
+def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_words():
+    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 325th lands, the 326th is refused,
+    and the full plan passes the check and its file reads back."""
+    draft = started()
+    draft["goals"] = [{"id": "goal-%d" % i, "title": "Goal %d" % i, "owner": "you", "measure": "", "unit": "",
+                       "direction": "up", "target": None, "baseline": None, "deadline": None}
+                      for i in range(C.LIMITS["goals"] - 1)]
+    draft, (last, over) = run(draft, ("goal_add", {"title": "The last goal"}), ("goal_add", {"title": "One too many"}))
+    assert C.LIMITS["goals"] == 325 and last["ok"] and len(draft["goals"]) == 325
+    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (325)."
+    assert C.Turn(draft, TODAY).finish()["goals"] == draft["goals"]
+    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 325
+
+
+# ------------------------------------------------------------------ goals from POST /goals keep their layer (Dev 321 parity)
+def layered_goals():
+    """A draft with a company goal, a group goal serving it and a role goal serving that, as the page keeps them."""
+    draft = started()
+    owner = D.owner(draft)["id"] if D.owner(draft) else "you"
+    aim = {"measure": "things", "unit": "things", "direction": "up", "target": 4, "baseline": None, "deadline": "2027-01-15"}
+    dept = "marketing"
+    draft["goals"] = [
+        {"id": "goal-1", "title": "Sign 4 customers", "owner": owner, "level": "company", "parent": None, **aim},
+        {"id": "goal-2", "title": "Publish 2 guides", "owner": owner, "level": "group", "parent": "goal-1", "dept": dept, **aim},
+        {"id": "goal-3", "title": "Hand in work early", "owner": owner, "level": "role", "parent": "goal-2", "dept": dept, **aim}]
+    return draft
+
+
+def layers(draft):
+    return [(g["id"], g.get("level"), g.get("parent"), g.get("dept")) for g in draft["goals"]]
+
+
+def test_goals_with_a_level_parent_and_dept_pass_the_check_and_keep_them():
+    draft = layered_goals()
+    assert layers(D.check(draft)) == layers(draft)
+    kept, results = run(draft, ("goal_edit", {"goal": "goal-3", "title": "Hand in each guide early"}))
+    assert results[0]["ok"] and layers(kept) == layers(draft)
+    assert layers(kept["undo"]) == layers(draft)
+
+
+def test_a_parent_not_among_the_goals_or_itself_is_let_go_not_refused():
+    draft = layered_goals()
+    draft["goals"][1]["parent"] = "goal-999"
+    draft["goals"][2]["parent"] = "goal-3"
+    out = D.check(draft)
+    assert out["goals"][1]["parent"] is None and out["goals"][2]["parent"] is None
+    assert out["goals"][1]["level"] == "group" and out["goals"][1]["dept"] == draft["goals"][1]["dept"]
+
+
+def test_the_company_file_holds_no_level_parent_or_dept():
+    text = C.to_yaml(layered_goals(), CREATED)
+    assert "level:" not in text and "parent:" not in text
+    assert [g["title"] for g in yaml.safe_load(text)["goals"]] == ["Sign 4 customers", "Publish 2 guides", "Hand in work early"]
+
+
+@pytest.mark.parametrize("field, value", [("level", "team"), ("level", 2), ("dept", "space"), ("parent", "Not an id!"),
+                                          ("kind", "role")])
+def test_a_goal_with_a_bad_level_dept_or_parent_or_another_field_is_still_refused(field, value):
+    draft = layered_goals()
+    draft["goals"][-1][field] = value
+    with pytest.raises(D.DraftError):
+        D.check(draft)

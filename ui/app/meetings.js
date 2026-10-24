@@ -665,11 +665,11 @@ function meetPaint(state, rec) {
   const send = $('#meet-send');
   if (send) send.onclick = async () => {
     const msg = $('#meet-msg');
-    send.disabled = true; msg.textContent = 'Sending…';
+    send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
       toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {slug: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
       await refresh(true); await meetLoad(state, true);
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; }
+    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
   };
   if (!typed && !reviewing) meetItemsWire(state, rec);
 }

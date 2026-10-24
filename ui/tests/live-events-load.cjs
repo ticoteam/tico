@@ -85,7 +85,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
 
   // The task board: new tasks arrive whole and changes in place; no list is read again.
   await page.goto('https://tico-ui.test/#/board');
-  await page.waitForFunction(() => window.__liveStream && TASKS_ST && !TASKS_ST.loading && TASKS_ST.doneLoaded && !TASKS_ST.doneLoading
+  await page.waitForFunction(() => window.__liveStream && TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)});
   await settle();
   const board = await burst();

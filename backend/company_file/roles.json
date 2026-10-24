@@ -487,6 +487,41 @@
    "default": true
   },
   {
+   "slug": "controller",
+   "template": "controller",
+   "name": "Controller",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the month-end close: the close checklist and calendar, review of the books and the reconciliations. Never pays or approves a payment.",
+   "when": "A team whose month-end close is ad hoc: no checklist, reconciliations done when someone remembers, and numbers that move after they are reported.",
+   "tags": [
+    "close",
+    "month-end",
+    "reconciliation",
+    "books",
+    "accounting",
+    "controls"
+   ],
+   "pains": [
+    "the month-end close drags on for weeks",
+    "nobody knows which accounts have been reconciled",
+    "the numbers change after we report them",
+    "our accountant keeps asking for the same support"
+   ],
+   "recommend_when": [
+    "sells_services",
+    "sells_to_businesses",
+    "uses_docs"
+   ],
+   "first_routine": "Month-end close review · The 3rd of each month at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs"
+   ],
+   "default": false
+  },
+  {
    "slug": "coo",
    "template": "assistant",
    "name": "Assistant",
@@ -851,6 +886,42 @@
    "default": false
   },
   {
+   "slug": "equity-manager",
+   "template": "equity-manager",
+   "name": "Equity Manager",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the cap table: option grants and vesting schedules, the option pool left, 409A and board-approval dates, the cap table change log and scenario tables for a new round. Never issues shares, signs, or gives legal or tax advice.",
+   "when": "A funded team with investors and employee options, where the cap table lives in a spreadsheet that nobody has reconciled to the signed grants since the last round.",
+   "tags": [
+    "equity",
+    "cap-table",
+    "options",
+    "vesting",
+    "409a",
+    "fundraising",
+    "investors"
+   ],
+   "pains": [
+    "nobody can say how much of the option pool is left",
+    "we can't find the board approval for last year's grants",
+    "our 409A is out of date and we are about to grant options",
+    "every new round starts with a week of rebuilding the cap table"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_meetings",
+    "uses_docs"
+   ],
+   "first_routine": "Monthly cap table check · The 5th of each month at 09:00 team time",
+   "tools": [
+    "docs",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
    "slug": "escalations",
    "template": "escalations",
    "name": "Escalations Manager",
@@ -1035,6 +1106,42 @@
     "mail"
    ],
    "default": true
+  },
+  {
+   "slug": "fundraising-manager",
+   "template": "fundraising-manager",
+   "name": "Fundraising Manager",
+   "department": "finance",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the raise: the investor pipeline, the data room checklist, the raise tracker (target, committed, closed), meeting prep and follow-up drafts. Never sends to investors without a person or promises terms.",
+   "when": "A team raising money, where the investor list, the data room and the follow-ups live in a founder's head and a spreadsheet.",
+   "tags": [
+    "fundraising",
+    "investors",
+    "data-room",
+    "pipeline",
+    "round",
+    "venture"
+   ],
+   "pains": [
+    "we lost track of which investors we owe a follow-up",
+    "the data room is never complete when an investor asks",
+    "we don't know how much of the round is committed",
+    "every investor meeting starts with rereading old emails"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_crm",
+    "uses_meetings"
+   ],
+   "first_routine": "Weekly raise review · Mondays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": false
   },
   {
    "slug": "general-counsel",
@@ -2372,6 +2479,42 @@
    "default": false
   },
   {
+   "slug": "quality-inspections",
+   "template": "quality-inspections",
+   "name": "Quality & Inspections",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the inspection checklists, tracks re-dos and scores quality per crew. Never disciplines staff.",
+   "when": "A team whose crews do jobs on site, where quality depends on who did the job, re-dos are found by customer complaints and nobody keeps the score.",
+   "tags": [
+    "quality",
+    "inspections",
+    "checklists",
+    "re-dos",
+    "crews",
+    "on-site",
+    "field-service"
+   ],
+   "pains": [
+    "we only hear about a bad job from the customer",
+    "re-dos eat our margin and nobody counts them",
+    "every crew checks the job differently",
+    "we can't say which crew is slipping"
+   ],
+   "recommend_when": [
+    "onsite_jobs",
+    "sells_to_consumers",
+    "small_team"
+   ],
+   "first_routine": "Weekly quality page · Mondays at 09:00 team time",
+   "tools": [
+    "calendar",
+    "docs"
+   ],
+   "default": false
+  },
+  {
    "slug": "recruiting",
    "template": "recruiting",
    "name": "Recruiter",
@@ -2809,6 +2952,42 @@
     "chat",
     "crm",
     "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "scheduling-bookings",
+   "template": "scheduling-bookings",
+   "name": "Scheduling & Bookings",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the booking rules and the schedule, handles reschedules and drafts no-show follow-ups. Never changes prices or sends without a person.",
+   "when": "A team that takes bookings or appointments from customers, where the rules live in someone's head and reschedules and no-shows are handled by hand.",
+   "tags": [
+    "bookings",
+    "scheduling",
+    "appointments",
+    "reschedules",
+    "no-shows",
+    "calendar",
+    "services"
+   ],
+   "pains": [
+    "double bookings keep happening",
+    "reschedule requests sit in an inbox for days",
+    "nobody follows up with customers who didn't show",
+    "the booking rules are different depending on who you ask"
+   ],
+   "recommend_when": [
+    "onsite_jobs",
+    "sells_to_consumers",
+    "small_team"
+   ],
+   "first_routine": "Weekly bookings page · Mondays at 08:00 team time",
+   "tools": [
+    "calendar",
+    "mail"
    ],
    "default": false
   },

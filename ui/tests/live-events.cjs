@@ -101,8 +101,8 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
 
   // The task board: a task changed elsewhere is redrawn from the event; the list is not read again.
   await page.evaluate(() => { location.hash = '#/board'; });
-  // Done's page lands after the list: wait for both.
-  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.doneLoaded && !TASKS_ST.doneLoading
+  // The board shows working steps only, so Done's page is not read.
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)})
     .catch(async e => { throw new Error(e.message + ' ' + JSON.stringify(errors) + (await page.evaluate(() => document.querySelector('#main')?.innerText.slice(0, 400)))); });
   const listed = reads.tasks;
