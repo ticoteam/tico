@@ -283,7 +283,9 @@ data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "
 - **Only what you may read is sent.** A private task, a conversation you are not in, or a bot whose activity you may
   not read never shows up, not even as a number. Bots cannot open the stream (`403`).
 - **Narrow it.** `topics` defaults to all five. `conversation=<id>` (up to 20, comma-separated) limits messages and runs to
-  those conversations; `bot=<slug>` limits runs and bots. A chat page opens `topics=messages,runs&conversation=<id>`.
+  those conversations; `bot=<slug>` limits runs and bots; `task=<id>` and `party=<actor>` limit tasks to those tasks
+  and to the ones that actor owns or asked for (a bot's or person's page). A chat page opens
+  `topics=messages,runs&conversation=<id>`.
 - **A live reply.** On a `messages` or `runs` event for the open chat, read `GET /api/v2/conversations/{id}/snapshot`
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`

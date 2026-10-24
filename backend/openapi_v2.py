@@ -265,7 +265,7 @@ STABLE = [
     ("/api/v2/events", "get", "Live events", "streamEvents",
      "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
      "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, "
-     "needs=changes sends Needs you as changed ids", None),
+     "task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller, with its `version`; count=true for the number alone, version=<held> answers "
      "`unchanged` without items while it holds, ids=<comma list> only those items and their `positions`", "NeedsYou"),

@@ -424,6 +424,7 @@ const TASK_DRAFTS = new Map();         // an unsent comment, per task, kept acro
 function taskChatStop() {
   if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
   TASK_CHAT = null;
+  liveTasksSync();                     // the router calls this on every page change too (ui/app/live.js)
 }
 // The open task changed, or a comment landed in its conversation (live events, ui/app/live.js): read it again, with
 // its files (a new file or version, or an answer on one), once per burst.
@@ -660,6 +661,7 @@ async function taskChatRead(state) {
 async function taskChatLoad(id, dialog, data = null) {
   const state = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, poll: 0, sending: false, reading: false};
+  liveTasksSync();
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
   if (data) taskCommentsRender(state, data); else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;

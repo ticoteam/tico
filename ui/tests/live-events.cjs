@@ -3,7 +3,8 @@
 //  - the chat follows its conversation on the page's one stream and reads its snapshot once per change, not on a timer;
 //  - the Needs-you count beside a bot follows the `needs` topic: the event names what changed, and only that is read;
 //  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again,
-//    and does not redraw for a write that shows nothing new (a worktree heartbeat);
+//    and does not redraw for a write that shows nothing new (a worktree heartbeat); a bot's page is sent only its tasks',
+//    a page with no task on it none;
 //  - each reconnect resumes from the last change number;
 //  - the 2-minute refresh asks only for the tasks changed since the list's cursor and applies them, and asks for the
 //    labels with the tag it was given (a 304 then).
@@ -87,6 +88,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:ops', body: 'The notes are in the doc.', created: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'tasks']);
+  assert.equal(first.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
   await page.getByText('The notes are in the doc.').waitFor();
   // Settled: no snapshot read queued, running or asked for again.
   await page.waitForFunction(() => !LIVE_SOON.has('chat:c-ops') && !V2C.reading && !V2C.readAgain, null, {timeout: t(5000)});
@@ -109,6 +111,17 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   const listed = reads.tasks;
   const third = await send(() => true, block(13, 'tasks', {id: 't1', actor: 'human:ben', task: task({title: 'Draft the final release notes', version: 4})}));
   assert.equal(third.searchParams.get('after'), '12');
+  assert.equal(third.searchParams.get('party'), null, 'a task list is sent every task');
+  // A page with no task on it is sent no task changes; one open task there, only its own.
+  assert.deepEqual(await page.evaluate(() => {
+    const route = S.route, open = TASK_CHAT;
+    S.route = '#/meetings';
+    const none = new URL(liveUrl(), location.href).searchParams.get('topics').split(',');
+    TASK_CHAT = {id: 't9'};
+    const one = new URL(liveUrl(), location.href).searchParams;
+    S.route = route; TASK_CHAT = open; LIVE.taskKey = liveTaskKey(liveTaskScope());
+    return [none.includes('tasks'), one.get('task'), one.get('topics').includes('tasks')];
+  }), [false, 't9', true]);
   await page.locator('#task-body', {hasText: 'Draft the final release notes'}).waitFor();
   assert.equal(reads.tasks, listed, 'the change came with the event');
   // A new task arrives whole too: a busy team's bots create tasks every few seconds, and every open tab gets each one.

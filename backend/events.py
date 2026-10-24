@@ -5,7 +5,9 @@ everything to find nothing. Here the database keeps a numbered row per change (`
 written by triggers so no write path can forget one, and `GET /api/v2/events` streams them to a
 signed-in person as they commit, filtered to what that person may read:
 
-- `tasks`: a task as the list shows it to the viewer, or `gone` for one deleted. Anything the list
+- `tasks`: a task as the list shows it to the viewer, or `gone` for one deleted. `task=<ids>` and `party=<actors>`
+  narrow it to those tasks and to the tasks those actors own or asked for (now, or before the change moved them): a
+  page that shows one bot's or one person's tasks, or a single open task, is not sent every task's change. Anything the list
   shows of a task (its tags, files, relations, open ask, routine, step) logs the task, so a task
   list can also be caught up from a change number (backend/task_reads.py). One change to more than
   FAN_CAP tasks (a type or tag edit) is a single `bulk: true`: read task lists in full.
@@ -61,7 +63,7 @@ def gathered(window, read_at):
     a quiet window is read almost at once instead of a full window later (a chat reply, a job for a computer)."""
     return max(LEAD_SECONDS, window - (time.monotonic() - read_at))
 BATCH = 500
-MAX_FILTER = 20           # conversation= and bot= values per stream
+MAX_FILTER = 20           # conversation=, bot=, task= and party= values per stream
 
 _NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')"
 TABLE = [
@@ -671,7 +673,7 @@ class _Viewer:
         return self._conversations[cid]
 
 
-def _tasks(view, rows, task_views):
+def _tasks(view, rows, task_views, tasks=(), parties=()):
     c, who = view.c, view.who
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
@@ -686,6 +688,21 @@ def _tasks(view, rows, task_views):
     visible_sql = view.auth.task_sql(c, who)
     marks = ",".join("?" * len(ids))
     found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
+    if tasks or parties:
+        # Before each task is built for the viewer: the parties it has now, or had before a change in this batch moved
+        # it (`ref`, on that change's row, which a later row of the same task may follow).
+        had = {}
+        for row in rows:
+            was = H._json(row["ref"], None) if row["kind"] != "bulk" and row["ref"] else None
+            if isinstance(was, list):
+                had.setdefault(row["subject_id"], set()).update(was[:2])
+
+        def wanted(task_id, task):
+            return task_id in tasks or bool(parties) and any(
+                actor in parties for actor in (*had.get(task_id, ()), *((task["owner"], task["requester"]) if task else ())))
+        by_id = {task["id"]: task for task in found}
+        last = {task_id: row for task_id, row in last.items() if wanted(task_id, by_id.get(task_id))}
+        found = [task for task in found if task["id"] in last]
     views = {item["id"]: item for item in task_views(found, c, who, visible_sql)}
     present = {r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks})", ids)}
     for task_id, row in last.items():
@@ -833,8 +850,8 @@ def _needs_list(view, rows, task_view, held=None):
     return [(rows[-1], entry)]
 
 
-def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), task_views=None, task_view=None,
-         limit=BATCH, needs_held=None, visuals=None):
+def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks=(), parties=(), task_views=None,
+         task_view=None, limit=BATCH, needs_held=None, visuals=None):
     """What `who` may be sent after change `after`: (events, cursor, reset, more). Each event is
     (seq, topic, data). `cursor` moves past every row read, sent or not, so a resume starts after
     what this viewer could not see. `more` when a full batch was read and more waits. `needs_held`
@@ -853,6 +870,9 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), task_
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
+        if tasks and not parties:       # a party's tasks are known only from the task (_tasks)
+            clauses.append("(topic!='tasks' OR kind='bulk' OR subject_id IN (%s))" % ",".join("?" * len(tasks)))
+            args += list(tasks)
         if "needs" in topics:
             clauses.append("(topic!='needs' OR subject_id=?)")
             args.append(who.actor)
@@ -868,7 +888,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), task_
             by_topic.setdefault(row["topic"], []).append(row)
         picked = []
         if by_topic.get("tasks"):
-            picked += [("tasks", r, e) for r, e in _tasks(view, by_topic["tasks"], task_views)]
+            picked += [("tasks", r, e) for r, e in _tasks(view, by_topic["tasks"], task_views, tasks, parties)]
         if by_topic.get("messages"):
             found = _messages(view, by_topic["messages"])
             if visuals:                 # a visual on a new message carries this reader's own address (backend/visuals.py)
@@ -934,7 +954,8 @@ def install(app, store, auth, task_views, task_view):
 
     @app.get("/api/v2/events")
     async def events(request: Request, topics: str | None = None, after: int | None = None,
-                     conversation: str | None = None, bot: str | None = None, needs: str | None = None):
+                     conversation: str | None = None, bot: str | None = None, needs: str | None = None,
+                     task: str | None = None, party: str | None = None):
         """Server-sent events for people's pages: see the module docstring."""
         who = request.state.identity
         auth.domain(who)
@@ -945,6 +966,7 @@ def install(app, store, auth, task_views, task_view):
         if unknown:
             raise Problem("validation", "Unknown topic: " + ", ".join(unknown) + " (one of " + ", ".join(TOPICS) + ")", 422)
         conversations, bots = _list(conversation, "conversation"), _list(bot, "bot")
+        tasks, parties = _list(task, "task"), _list(party, "party")
         # The browser resends the last id it was given when it reconnects on its own.
         resume = request.headers.get("last-event-id", "")
         if resume.isdigit():
@@ -967,6 +989,7 @@ def install(app, store, auth, task_views, task_view):
             auth.authenticate(request.headers)
             with store.read() as c:
                 return read(c, auth, who, cursor, topics=wanted, conversations=conversations, bots=bots,
+                            tasks=tasks, parties=parties,
                             task_views=task_views, task_view=task_view, needs_held=held,
                             visuals=lambda c, who, rows: V.for_reader(app, auth.settings, c, who, rows))
 
