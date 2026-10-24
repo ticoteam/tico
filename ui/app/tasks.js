@@ -19,7 +19,9 @@ const STATUS_WORD = {open: 'Open', doing: 'Doing', waiting: 'Waiting', review: '
                      done: 'Done', closed: 'Closed', declined: 'Declined'};
 const BOARD_COLS = [...COMPANY_COLS, ['done', 'Done', 'Finished in the last 7 days']];   // legacy name, kept for the routine rows
 // The view tabs: labelled, with counts. The keys are the routes' and the saved preference's.
-const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['recurring', 'Routines'], ['snoozed', 'Snoozed'], ['done', 'Done']];
+const TASK_VIEWS = [['foryou', 'Needs you'], ['list', 'Open'], ['board', 'Board'], ['recurring', 'Routines'], ['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+// Done and Closed share one feed of finished tasks, newest first; each shows its own status.
+const tasksFinishedView = view => view === 'done' || view === 'closed';
 const DONE_CAP = 20;                // The Done list shows 20 at a time
 const ACTIVE_TASK_STATUSES = 'open,doing,waiting,review,ready,declined';
 let TASKS_ST = null;
@@ -272,6 +274,8 @@ function taskRowTip(t) {
   if (note) lines.push(plainMd(note));
   return lines.join('\n');
 }
+// Waiting is not a step: a waiting task stays in its step, and its card and row carry this tag. Amber, like every wait.
+const taskWaitTag = t => t?.status === 'waiting' ? '<span class="tl-waiting" title="Waiting">Waiting</span>' : '';
 // The note a row shows: what a waiting, blocked or asking task waits on. Amber only when it waits on you.
 function taskRowNote(t) {
   if (!t || taskFinished(t) || (t.status !== 'waiting' && !taskBlockers(t).length && !taskAskToPerson(t) && t.status !== 'declined')) return null;
@@ -296,7 +300,7 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       <span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>
       <span class="age tnum" title="${esc(fmt(it.updated))}">${esc(ageShort(it.updated))}</span></div>
   </div>`);

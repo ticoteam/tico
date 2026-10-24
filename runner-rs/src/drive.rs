@@ -68,6 +68,8 @@ pub struct Drive<'a> {
     /// The shared login this stretch holds, when its server can take a turn back that gave it up at the cap
     /// (crate::login_turns::HOLD_CAP).
     pub login: Option<crate::login_turns::Cap>,
+    /// A new thread this stretch started, kept only once its host says the session is up (`thread_confirmed`).
+    pub fresh: Option<&'a crate::execute::Fresh>,
 }
 
 /// What a turn holding a shared login is told when another turn has waited out the cap for it.
@@ -185,6 +187,14 @@ impl Runner {
                     continue;
                 }
                 let kind = text_of(&event["kind"]);
+                if kind == "thread_confirmed" {
+                    // Its `session_id` where the harness names the session apart from the thread (Claude), else the thread.
+                    if let Some(f) = d.fresh {
+                        let session = Some(text_of(&event["session_id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| thread.to_string());
+                        self.confirm_thread(f, &session).await?;
+                    }
+                    continue;
+                }
                 let event_turn = text_of(&event["turn_id"]);
                 if goal_running && kind == "status" && !event_turn.is_empty() {
                     let fresh = event_turn != turn;
@@ -517,7 +527,7 @@ mod tests {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
         let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None };
+                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
@@ -548,7 +558,7 @@ mod tests {
         let wake = Notify::new();
         let d = Drive { aid: "diagnostics", host: &host, thread: "th", effort: None,
             limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
-            redactor: None, runtime: "claude", bot: "acme", session: "th", login: None };
+            redactor: None, runtime: "claude", bot: "acme", session: "th", login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
         let err = runner.drive(&d, &mut rx, "turn".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await.err().unwrap();

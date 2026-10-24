@@ -207,7 +207,7 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.setViewportSize({width: 1200, height: 900});
     // Labelled tabs (no icon-only buttons), the selected one marked for screen readers.
     assert.deepEqual(await page.locator('#task-view [role=tab]').evaluateAll(tabs => tabs.map(b => [b.firstChild.textContent, b.getAttribute('aria-selected')])),
-      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false']]);
+      [['Needs you', 'true'], ['Open', 'false'], ['Board', 'false'], ['Routines', 'false'], ['Done', 'false'], ['Closed', 'false']]);
     assert.equal(await page.locator('#task-view .nav-icon').count(), 0);
     await page.locator('#task-q').focus();
     await page.keyboard.press('Tab');
@@ -231,15 +231,24 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     // Stats: status changes over time. A tile picks the charted stage; an owner row narrows to that owner.
     await page.locator('#task-stats').click();
     await page.locator('#task-stats-dialog .flow-chart .flow-bar').first().waitFor();
-    assert.equal(await page.locator('#task-stats-dialog .flow-col').count(), 30, 'one column per day in the range');
+    assert.equal(await page.locator('#task-stats-dialog .flow-col').count(), 12, 'twelve weeks by default');
+    assert.equal(await page.locator('#task-stats-dialog .flow-bar.so-far').count(), 1, 'the running week is marked');
+    assert.ok(await page.locator('#task-stats-dialog .flow-avg').count(), 'a moving-average line');
     assert.match(await page.locator('#task-stats-dialog .flow-tile.cur').innerText(), /Done/);
+    assert.ok(flowAsked.some(q => q.days === '60'), 'the previous period is read too');
     await page.locator('#task-stats-dialog [data-stage="created"]').click();
-    assert.match(await page.locator('#task-stats-dialog .flow-chart-head').innerText(), /New per day/);
+    assert.match(await page.locator('#task-stats-dialog .flow-chart-head').innerText(), /New per week/);
+    await page.locator('#task-stats-dialog [data-unit="day"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#task-stats-dialog .flow-col').length === 14);
+    await page.locator('#task-stats-dialog select[data-flow-who]').selectOption('human:reviewer');
+    await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow-who]')?.value === 'human:reviewer');
+    assert.equal(flowAsked.at(-1).owner, 'human:reviewer', 'the chart reads one person');
+    await page.locator('#task-stats-dialog [data-days="365"]').click();
+    await page.waitForFunction(() => !document.querySelector('#task-stats-dialog .flow-tile-d'), null, {timeout: 5000});   // a year has no previous period
     await page.locator('#task-stats-dialog [data-days="7"]').click();
-    await page.waitForFunction(() => document.querySelectorAll('#task-stats-dialog .flow-col').length === 7);
     await page.locator('#task-stats-dialog .flow-people tr[data-owner="cmo"]').click();
     await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow="owner"]').value === 'cmo');
-    assert.deepEqual([flowAsked.at(-1).owner, flowAsked.at(-1).days], ['cmo', '7']);
+    assert.ok(flowAsked.some(q => q.owner === 'cmo' && q.days === '7'));
     if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, 'task-stats.png')});
     await page.locator('#task-stats-dialog [data-close]').click();
     // A card with related tasks shows how many, like an attachment count; one without shows nothing.

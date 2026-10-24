@@ -1849,6 +1849,10 @@ class Started(Contract):
     load_snapshot: LoadSnapshot | None = None
 
 
+class AttemptThread(Contract):
+    thread_id: ID
+
+
 class AttemptStderr(Contract):
     tail: str = Field(max_length=65536)
 

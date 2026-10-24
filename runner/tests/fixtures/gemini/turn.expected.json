@@ -4,6 +4,9 @@
   "state": "active"
  },
  {
+  "kind": "thread_confirmed"
+ },
+ {
   "kind": "delta",
   "text": "Acme ",
   "delta_kind": "text"
