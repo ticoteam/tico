@@ -152,24 +152,26 @@ const FILE_KEEP_BYTES = 64e6;
 const fileShown = url => [...document.querySelectorAll('[src^="blob:"], object[data^="blob:"], a[href^="blob:"]')]
   .some(el => el.getAttribute('src') === url || el.getAttribute('data') === url || el.getAttribute('href') === url);
 // `load()` gives {value, url, bytes}; the cache hands out `value`. A failed load is forgotten, so the next asks again.
+// The file just loaded is never trimmed: its caller has not shown it yet, and a file over the budget on its own (a
+// video, a big PDF) opened blank.
 function fileKeep(cache, key, load) {
   let entry = cache.get(key);
   if (entry) { cache.delete(key); cache.set(key, entry); return entry.promise; }   // most recently used last
   entry = {url: '', bytes: 0};
   entry.promise = load().then(got => {
     entry.url = got.url; entry.bytes = got.bytes;
-    fileKeepTrim(cache);
+    fileKeepTrim(cache, entry);
     return got.value;
   }, error => { if (cache.get(key) === entry) cache.delete(key); throw error; });
   cache.set(key, entry);
   return entry.promise;
 }
-function fileKeepTrim(cache) {
+function fileKeepTrim(cache, keep) {
   let total = 0;
   for (const entry of cache.values()) total += entry.bytes;
   for (const [key, entry] of cache) {
     if (total <= FILE_KEEP_BYTES) break;
-    if (!entry.url || fileShown(entry.url)) continue;
+    if (entry === keep || !entry.url || fileShown(entry.url)) continue;
     URL.revokeObjectURL(entry.url);
     cache.delete(key);
     total -= entry.bytes;
