@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Conservative PR selection, measured Python groups, and read-only check receipts."""
+"""Conservative PR selection, measured Python and browser groups, and read-only check receipts."""
 import argparse
 from collections import Counter
 import json
@@ -22,6 +22,13 @@ CONFORMANCE = "runner/tests/test_conformance.py"
 CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
                      "Remove your CHANGELOG.md changes.")
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)
+# Each check VM has 4 vCPUs and runs 4 test workers. Groups are sized so a VM finishes in about
+# TICO_CI_JOB_SECONDS, setup included: short Spot jobs are rarely interrupted and lose little when one is.
+WORKERS = 4
+JOB_SECONDS = float(os.environ.get("TICO_CI_JOB_SECONDS", 180))
+SETUP_SECONDS = {"python": 45, "browser": 70}  # measured boot, checkout and warm install
+MAX_JOBS = 16
+UNTIMED_SCRIPT_SECONDS = 20  # a browser script with no measured time yet
 
 
 def guard_changelog(base, head="HEAD", root=None):
@@ -110,19 +117,31 @@ def collect(root=ROOT):
     return counts
 
 
-def groups(counts, timings, total=4):
+def weights(counts, timings, fallback=1.0):
     # Use measured per-file wall time, including setup/teardown. Unknown files use
     # the observed seconds/test, so adding files cannot put all unknown work in one VM.
     known = {name: float(timings[name]) for name in counts if name in timings
              and isinstance(timings[name], (int, float)) and math.isfinite(timings[name])
              and 0 < timings[name] < 86400}
-    seconds_per_test = sum(known.values()) / sum(counts[n] for n in known) if known else 1.0
-    weights = {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
+    seconds_per_test = sum(known.values()) / sum(counts[n] for n in known) if known else fallback
+    return {n: known.get(n, counts[n] * seconds_per_test) for n in counts}
+
+
+def job_count(seconds, kind):
+    """VMs needed for `seconds` of one-worker test time to finish near JOB_SECONDS each."""
+    per_job = WORKERS * max(JOB_SECONDS - SETUP_SECONDS[kind], 30)
+    return max(1, min(MAX_JOBS, math.ceil(seconds / per_job)))
+
+
+def groups(counts, timings, total=None, kind="python", fallback=1.0):
+    seconds = weights(counts, timings, fallback)
+    if total is None:
+        total = job_count(sum(seconds.values()), kind)
     out, loads = [[] for _ in range(total)], [0.0] * total
-    for name in sorted(counts, key=lambda n: (-weights[n], n)):
+    for name in sorted(counts, key=lambda n: (-seconds[n], n)):
         i = min(range(total), key=lambda i: (loads[i], i))
         out[i].append(name)
-        loads[i] += weights[name]
+        loads[i] += seconds[name]
     return [sorted(g) for g in out], loads
 
 
@@ -141,7 +160,12 @@ def prepare(event, base, output, timings_path=None):
     split, loads = groups(counts, timings)
     jobs = [{"suite": f"python-{i + 1}", "files": files} for i, files in enumerate(split) if files]
     if picked["browser"] != []:
-        jobs.append({"suite": "browser", "files": picked["browser"]})
+        scripts = browser_scripts(picked["browser"] or [])
+        browser_times = {name: timings.get(f"ui/tests/{name}.cjs") for name in scripts}
+        browser_split, browser_loads = groups(Counter(dict.fromkeys(scripts, 1)), browser_times, kind="browser",
+                                              fallback=UNTIMED_SCRIPT_SECONDS)
+        jobs += [{"suite": f"browser-{i + 1}", "files": names} for i, names in enumerate(browser_split) if names]
+        loads += browser_loads
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE]})
     # An empty matrix is invalid in Actions; fail rather than silently omit a gate.
@@ -158,30 +182,43 @@ def prepare(event, base, output, timings_path=None):
     return plan
 
 
+def browser_scripts(args, root=ROOT):
+    """The browser scripts these ui-tests.cjs arguments run (CORE for none), by name."""
+    out = subprocess.run(["node", "scripts/ui-tests.cjs", "--list", *args], cwd=root, capture_output=True,
+                         text=True, check=True).stdout.split()
+    if not out:
+        raise RuntimeError(f"Browser selection {args} listed no scripts")
+    return out
+
+
 def run(plan_path, suite):
     plan = json.loads(Path(plan_path).read_text())
     job = next(j for j in plan["matrix"]["include"] if j["suite"] == suite)
     files = job["files"]
-    if suite == "browser":
-        command = ["node", "scripts/ui-tests.cjs", *(files or [])]
+    env = None
+    if suite.startswith("browser-"):
+        if not files:
+            raise RuntimeError("A browser check requires an explicit nonempty script list")
+        command = ["node", "scripts/ui-tests.cjs", "-j", str(WORKERS), *files]
+        env = {**os.environ, "TICO_UI_TIMINGS": str(ROOT / "ci-results" / f"{suite}.json")}
     else:
         if not files or any(not (ROOT / f).is_file() for f in files):
             raise RuntimeError("Python check requires an explicit nonempty existing file list")
-        command = [sys.executable, "-m", "pytest", "-q", "-n", "2",
+        command = [sys.executable, "-m", "pytest", "-q", "-n", str(WORKERS),
                    "-o", "junit_family=xunit1", f"--junitxml=ci-results/{suite}.xml"]
         if suite == "conformance":
             command += ["-m", "slow"]
         command += files
     (ROOT / "ci-results").mkdir(exist_ok=True)
-    result = subprocess.run(command, cwd=ROOT)
-    if result.returncode == 0 and suite != "browser":
+    result = subprocess.run(command, cwd=ROOT, env=env)
+    if result.returncode == 0 and not suite.startswith("browser-"):
         cases = list(ET.parse(ROOT / "ci-results" / f"{suite}.xml").iter("testcase"))
         if not any(t.find("skipped") is None for t in cases):
             raise RuntimeError("A Python job must pass at least one test, not skip every test")
     return result.returncode
 
 
-def durations(paths):
+def durations(paths, browser_paths=()):
     measured = Counter()
     for path in paths:
         for test in ET.parse(path).iter("testcase"):
@@ -189,6 +226,11 @@ def durations(paths):
             seconds = float(test.get("time", "0"))
             if name and math.isfinite(seconds) and seconds >= 0:
                 measured[name] += seconds
+    # Browser scripts are keyed by path, like Python files, so one timings file serves both splits.
+    for path in browser_paths:
+        for name, seconds in json.loads(Path(path).read_text()).items():
+            if isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
+                measured[f"ui/tests/{name}.cjs"] += seconds
     return dict(measured)
 
 
@@ -224,7 +266,7 @@ def main():
     elif args.action == "run":
         return run(args.plan, args.suite)
     elif args.action == "durations":
-        measured = durations(Path("ci-results").glob("python-*.xml"))
+        measured = durations(Path("ci-results").glob("python-*.xml"), Path("ci-results").glob("browser-*.json"))
         if not measured:
             raise RuntimeError("No Python timings were collected")
         Path("durations.json").write_text(json.dumps(measured, indent=2))

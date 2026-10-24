@@ -177,7 +177,7 @@
  "limits": {
   "bots": 300,
   "people": 300,
-  "goals": 20,
+  "goals": 325,
   "removed": 20,
   "pending": 10,
   "chat": 40,

@@ -185,7 +185,12 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
 
     // Spec test 10: the board icon opens the board with the owner pre-selected to this bot, and the owner can be changed.
     await rail.locator('#bot-tasks-board').click();
-    await page.waitForFunction(() => location.hash === '#/tasks?owner=bot:lead&view=board');
+    // The tasks page then names its default type in the address, so read the owner and view out of it.
+    await page.waitForFunction(() => {
+      const [route, query] = location.hash.split('?');
+      const params = new URLSearchParams(query || '');
+      return route === '#/tasks' && params.get('owner') === 'bot:lead' && params.get('view') === 'board';
+    });
     await page.locator('#task-chips [data-chip="owner"]').waitFor();
     assert.equal(await page.locator('#task-view [aria-selected="true"], #task-view .cur').first().innerText().then(s => s.replace(/\s+\d+$/, '').trim()), 'Board');
     assert.equal((await page.locator('#task-chips [data-chip="owner"] .v').innerText()).trim(), 'Head of Engineering');

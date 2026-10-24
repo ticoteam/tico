@@ -101,7 +101,7 @@ dialog.tmodal.over{outline:2px dashed var(--accent);outline-offset:-6px}
 .ask.answered{border-color:var(--line)}
 .ask-q{display:flex;flex-direction:column;gap:6px}
 .ask-line{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px}
-.ask-chip{flex:none;padding:0 6px;border-radius:4px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-xs);font-weight:700;letter-spacing:var(--track-caps);text-transform:uppercase}
+.ask-chip{flex:none;padding:0 6px;border-radius:4px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:700;letter-spacing:var(--track-caps);text-transform:uppercase}
 .ask.answered .ask-chip{background:var(--surface2);color:var(--muted)}
 .ask-text{font-weight:500;color:var(--ink)}
 .ask-opts{display:flex;flex-wrap:wrap;gap:6px}

@@ -7,8 +7,8 @@
 .tree a.node .nm{flex:0 1 auto}
 .botid h1 .rt{width:16px;height:16px;margin-left:8px;vertical-align:middle}
 .tree .cnt{margin-left:auto;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums;background:var(--surface2);padding:0 6px;border-radius:9px}
-.tree .cnt.needs{color:var(--wait);background:var(--wait-bg);font-weight:600;border:1px solid color-mix(in srgb,var(--wait) 35%,transparent);min-width:18px;height:18px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
-.tree-alert{margin-left:auto;margin-right:2px;flex:none;width:16px;height:16px;border-radius:50%;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font-size:var(--t-xs);font-weight:700;line-height:1;color:var(--wait);background:var(--wait-bg);border:1px solid color-mix(in srgb,var(--wait) 35%,transparent)}
+.tree .cnt.needs{color:var(--wait-ink);background:var(--wait-bg);font-weight:600;border:1px solid color-mix(in srgb,var(--wait) 35%,transparent);min-width:18px;height:18px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
+.tree-alert{margin-left:auto;margin-right:2px;flex:none;width:16px;height:16px;border-radius:50%;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font-size:var(--t-xs);font-weight:700;line-height:1;color:var(--wait-ink);background:var(--wait-bg);border:1px solid color-mix(in srgb,var(--wait) 35%,transparent)}
 .tree-limit{margin-left:auto;margin-right:2px;flex:none;width:16px;height:16px;border-radius:50%;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font-size:var(--t-xs);font-weight:700;line-height:1;color:var(--fail);background:var(--fail-bg);border:1px solid color-mix(in srgb,var(--fail) 35%,transparent)}
 .tree-limit+.cnt,.tree-limit+.tree-alert,.tree-limit+.tree-spin{margin-left:2px}
 .tree .cnt.working,.tree-alert.working{position:relative;overflow:visible}

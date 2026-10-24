@@ -54,7 +54,14 @@ pub fn codex_models(home: Option<PathBuf>) -> Vec<String> {
 pub async fn runtime_readiness(runtime: &str, sign: &SignIn, client: &Client, assignments: &[Value], profile: Option<&Profile>) -> Map<String, Value> {
     let caps = crate::harness_tools::caps(runtime, "");
     let exe = if crate::harness_tools::runtimes().iter().any(|r| r == runtime) { executable(runtime) } else { None };
-    let env: Option<Env> = profile.map(|p| p.environment(runtime, &std::env::vars().collect()));
+    let mut process: Env = std::env::vars().collect();
+    if profile.is_some_and(|p| !p.share_operator) {
+        for key in crate::harness_tools::api_key_env(runtime) {
+            process.remove(&key);
+        }
+    }
+    process.extend(crate::harness_tools::env_for(runtime));
+    let env: Option<Env> = Some(profile.map_or_else(|| process.clone(), |p| p.environment(runtime, &process)));
     let env = env.as_ref();
     let mut version = String::new();
     let (authenticated, detail) = match &exe {
@@ -196,13 +203,14 @@ async fn sign_in_state(
         "none" => return ("unknown", "Authentication cannot be checked without starting the runtime".into()),
         "file" => {
             // The host's login file in the config folder its turns run with (its own one, when it keeps one).
-            let mut file_env: Env = std::env::vars().collect();
+            let mut file_env = env.cloned().unwrap_or_else(crate::env::process_environment);
             if caps.own_config_home {
                 crate::hosts::use_own_config_home(runtime, profile, &mut file_env);
             }
             return match crate::hosts::file_signed_in(runtime, &file_env) {
-                Some(true) => ("ready", status.ready_detail.clone()),
-                None => ("failed", format!("{name} sign-in could not be checked (its config folder is not readable)")),
+                Some(true) => ("ready", crate::hosts::file_sign_in_detail(runtime, &file_env).map(String::from).unwrap_or_else(|| status.ready_detail.clone())),
+                None => ("failed", crate::hosts::file_problem(runtime, &file_env)
+                    .unwrap_or_else(|| format!("{name} sign-in could not be checked (its login data is unreadable or unrecognized)"))),
                 Some(false) => ("missing", missing),
             };
         }
@@ -496,7 +504,10 @@ pub async fn preflight(config: &Config, assignments: &[Value], runtimes: &Map<St
             problems.push(problem.clone());
         } else if status["authenticated"] == "rejected" {
             problems.push(signed_out(text_of(&status["detail"])));
-        } else if status["authenticated"] == "missing" || status["authenticated"] == "failed" {
+        } else if (status["authenticated"] == "missing" || status["authenticated"] == "failed")
+            && !(caps.api_key_in_turn && crate::harness_tools::api_key_env(&runtime).iter().any(|key| crate::hosts::gemini::has_grant(&bot, key)))
+        {
+            // A turn's explicit credential grant is independent of its computer's stored subscription login.
             let d = text_of(&status["detail"]);
             let d = if d.is_empty() { "Runtime sign-in is not ready".to_string() } else { d };
             problems.push(signed_out(if profile_name.is_empty() { d } else { format!("{profile_name}: {d}") }));
