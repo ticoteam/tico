@@ -8,8 +8,14 @@ each standard status except waiting and declined: no step has those statuses (be
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
 other types. A type is always selected, and both the list and board show only its tasks. The board
-uses that type's working steps as columns: steps whose status is done or closed are not columns, and
-a task that finishes leaves the board. Done tasks are under **Done**, closed ones under **Closed**.
+uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
+way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
+it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
+**Done**, closed ones under **Closed**. On a desktop, drag a card to another column or to a new place
+in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
+the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
+row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
+card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
 Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
@@ -863,6 +869,16 @@ On the board, a task with a picture shows the newest one as a cover, and a dot m
 question. **Pin** in the Tasks toolbar keeps the current view and filters under **Pipelines** in
 the left rail, for you only; ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
+
+The person picker beside **Filter** says whose tasks the first tab shows. **Me** is Needs you as
+always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
+fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
+that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
+they asked someone else to do. **Everyone** drops the person. The choice is in the address
+(`?who=human:sam&side=asked`), so a link opens the same plate; the Owner and Asked by filters still
+narrow it. On a plate, tasks blocked by an open task fold under **Blocked** at the end. A row's
+status opens its statuses (or a typed task's steps) to move it; a person's due date is amber
+within two days and red once passed.
 
 
 ## Company and private tasks

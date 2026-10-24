@@ -8,7 +8,7 @@ const TASK_PREF = 'tasks.view';
 function pageTasks(forced, openId = '') {
   TASKS_ST?.layoutAbort?.abort();
   PROP_TASKS = null;                       // the pickers' copy of the open tasks starts fresh with the page
-  const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '',
+  const state = TASKS_ST = {view: 'foryou', tasks: [], routines: null, labels: [], kind: 'all', armed: 'all', open: openId, q: '', who: 'me', side: 'plate',
     loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
     filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
     selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map()};
@@ -40,6 +40,7 @@ function pageTasks(forced, openId = '') {
         <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}<span>New task</span></button>
       </header>
       <div class="tl-bar" id="task-bar">
+        <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span>
           <button type="button" class="tl-addf" id="task-filter" aria-haspopup="true">${TL_ICON.filter}<span>Filter</span></button>
           <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
@@ -114,6 +115,7 @@ function pageTasks(forced, openId = '') {
     tasksFiltersChanged(state);
     $('#task-filter')?.focus();
   };
+  $('#task-who-wrap').onclick = ev => { const b = ev.target.closest('#task-who'); if (b) tasksWhoMenu(state, b); };
   $('#task-group-wrap').onclick = ev => { const b = ev.target.closest('#task-group'); if (b) tasksGroupMenu(state, b); };
   $('#task-select-mode').onclick = () => {
     state.selectMode = !state.selectMode;
@@ -159,6 +161,7 @@ function pageTasks(forced, openId = '') {
     tasksBodyClick(state, ev);
   });
   state.layoutAbort = new AbortController();
+  taskBoardBind(state, body);
   document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
@@ -531,6 +534,7 @@ function tasksPatch(el, html) {
 function tasksRender(state) {
   const el = $('#task-body');
   if (!el || TASKS_ST !== state) return;
+  if (taskBoardHolding(state)) return;      // a card is being dragged: the board redraws once it is let go
   state.memo = new Map();
   const active = document.activeElement, inBody = el.contains(active);
   const focusKey = inBody ? active.closest('[data-task-key]')?.dataset.taskKey || '' : '';
