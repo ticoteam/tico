@@ -91,6 +91,22 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     assert lanes == {"task:" + t["id"] for t in (task, child, other)} | {"main"}
 
 
+def test_claim_limit_migration_upgrades_a_database_at_62_without_lifting_a_drain(api):
+    store = api.app.state.store
+    task_bot(api, lanes=True)
+    with store.transaction() as c:                            # a database from before the limit existed
+        c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1) ON CONFLICT(bot) DO UPDATE SET draining=1")
+        c.execute("ALTER TABLE bot_control DROP COLUMN claim_task")
+        c.execute("DELETE FROM cloud_migrations WHERE version=63")
+    store.initialize()
+    store.initialize()                                        # a repeated start takes the same additive path
+    with store.read() as c:
+        assert [dict(r) for r in c.execute("SELECT * FROM bot_control WHERE bot='ops'")] == [
+            {"bot": "ops", "draining": 1, "claim_task": None}]
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=63").fetchone()[0] == 1
+        assert execution.claim_scope(c, "ops") is None
+
+
 def test_a_bot_whose_worktrees_the_runner_is_maintaining(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first")

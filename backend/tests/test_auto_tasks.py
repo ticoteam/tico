@@ -144,3 +144,23 @@ def test_automatic_backfill_uses_free_places_while_waiters_still_fence_their_lan
     post(api, f"attempts/{second['id']}/started", {'thread_id': second['lane']}, machine['token'])
     post(api, f"attempts/{second['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished turn.'}, machine['token'])
     assert claim(api, machine)['task']['id'] == tasks[0]['id']
+
+
+def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api):
+    machine = task_bot(api, lanes=True, capacity=8)
+    tasks = deck(api, 3)
+
+    def control(**body):
+        post(api, 'bots/ops/control', {**body, 'expected_revision': get(api, 'bots/ops')['revision']})
+
+    def starts():
+        with api.app.state.store.read() as c:
+            return {r[0] for r in c.execute("SELECT json_extract(m.refs_json,'$.task') FROM jobs j "
+                                            "JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+                                            "AND j.state='queued' AND json_extract(m.refs_json,'$.auto_start')")}
+
+    control(action='scope', task_id=tasks[0]['id'])           # ranked last: the higher ranked two stay queued
+    assert take(api, machine)['task']['id'] == tasks[0]['id']
+    assert take(api, machine) is None and starts() == set()
+    control(action='unscope')
+    assert take(api, machine)['task']['id'] == tasks[2]['id']

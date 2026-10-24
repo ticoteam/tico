@@ -104,9 +104,14 @@ def missing(c, settings, runner, body):
         if why:
             continue
         config = follow(c, slug, config)
+        scope = E.claim_scope(c, slug)
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status='open' "
                                      "ORDER BY (rank IS NULL),rank,created,id", ('bot:' + slug,))):
             if not startable(c, row) or refusal(c, row, config) or not H.task_private_readable(c, row['owner'], row):
+                continue
+            # A bot limited to one task (execution.scoped_sql) starts only that task or a direct subtask: a start
+            # queued for any other would wait, unclaimable, until the limit is lifted.
+            if scope and not E.in_scope(c, scope, row['id']):
                 continue
             lane = E.job_lane(c, slug, config, {'refs': {'task': row['id']}},
                               H.conversation(c, row['conversation_id']), E.lanes_on(runner), E.roots_on(runner))
