@@ -185,6 +185,25 @@ def test_a_filter_counts_only_what_the_viewer_may_read(api):
     assert shown(api, "ops", "cara-test")["Asked"] == (1, ["Open to all"])
 
 
+def test_a_filter_with_more_than_one_page_reaches_every_task(api, monkeypatch):
+    from backend import bot_task_tabs
+    monkeypatch.setattr(bot_task_tabs, "ROWS", 2)
+    for n in range(5):
+        task(api, f"T{n}", "bot:ops", "human:ana", created=5 - n)
+    save(api, "ops", [DEFAULT[0], {"name": "All", "conditions": [{"field": "assigned_to", "value": "this_bot"}]}])
+    first = get(api, "bots/ops/task-tabs/tasks", "ben-test")["tabs"][0]
+    assert first["key"] == "c1" and first["count"] == 5 and len(first["ids"]) == 2 and first["next"]
+    seen, page = list(first["ids"]), first
+    while page["next"]:
+        out = get(api, f"bots/ops/task-tabs/tasks?tab=c1&before={page['next']}", "ben-test")
+        [page] = out["tabs"]
+        assert {t["id"] for t in out["tasks"]} == set(page["ids"])
+        seen += page["ids"]
+    title = {t["id"]: t["title"] for t in get(api, "bots/ops/task-tabs/tasks?tab=c1", "ben-test")["tasks"]}
+    assert len(seen) == len(set(seen)) == 5 and [title[i] for i in seen[:2]] == ["T4", "T3"]
+    get(api, "bots/ops/task-tabs/tasks?before=x|y", "ben-test", expected=422)
+
+
 def test_each_field_filters(api):
     task(api, "New", "bot:ops", "human:ana", created=1)
     task(api, "Old", "bot:ops", "human:ana", created=10, updated=10)

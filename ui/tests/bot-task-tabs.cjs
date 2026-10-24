@@ -79,8 +79,13 @@ async function open(browser, viewport, colorScheme, server) {
     const filtered = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs\/tasks$/);
     if (filtered) {
       const bot = filtered[1], tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab, key: 'c' + at})).filter(({tab}) => !tab.builtin);
-      const counted = tabs.map(({tab, key}) => ({key, name: tab.name, ids: TASKS.filter(t => matches(bot, tab, t)).map(t => t.id)}));
-      return json({bot, tabs: counted.map(c => ({...c, count: c.ids.length})), tasks: TASKS.filter(t => counted.some(c => c.ids.includes(t.id)))});
+      // A page of server.page rows; `before` here is the index the next page starts at.
+      const from = Number(q.get('before') || 0), wanted = tabs.filter(({key}) => !q.get('tab') || key === q.get('tab'));
+      const counted = wanted.map(({tab, key}) => {
+        const all = TASKS.filter(t => matches(bot, tab, t)).map(t => t.id), ids = all.slice(from, from + server.page);
+        return {key, name: tab.name, count: all.length, ids, next: from + server.page < all.length ? String(from + server.page) : null};
+      });
+      return json({bot, tabs: counted, tasks: TASKS.filter(t => counted.some(c => c.ids.includes(t.id)))});
     }
     if (p === '/api/v2/tasks') {
       const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner' : 'requester';
@@ -100,7 +105,7 @@ async function open(browser, viewport, colorScheme, server) {
     for (const [scheme, viewport] of [['light', {width: 1280, height: 900}], ['dark', {width: 375, height: 800}]]) {
       const phone = viewport.width < 760, at = `${scheme} ${viewport.width}`;
       let release;
-      const server = {layouts: {}, puts: [], hold: new Promise(resolve => { release = resolve; })};
+      const server = {layouts: {}, puts: [], page: 1, hold: new Promise(resolve => { release = resolve; })};
       const {context, page, errors} = await open(browser, viewport, scheme, server);
       const rail = page.locator('#pane-tasks');
       const tabTexts = async () => (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
@@ -251,7 +256,14 @@ async function open(browser, viewport, colorScheme, server) {
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
       assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs You', 'Doing', 'Blocked 1']);
       await pill('product tasks').click();
+      // A page at a time: Show more reads the next, and a refresh keeps as many as were read.
+      assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page']);
+      await rail.locator('#t-c0 [data-bot-filter-more]').click();
+      await rail.locator('#t-c0 [data-bot-filter-more]').waitFor({state: 'detached'});
       assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
+      await page.evaluate(() => botTaskFilterRead('lead'));
+      assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
+      assert.equal(await rail.locator('#t-c0 [data-bot-filter-more]').count(), 0);
       // Outside edit mode: Files is not drawn, the rest in the new order, and Updates' height is its most.
       assert.equal(await widget('files').isHidden(), true);
       assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);

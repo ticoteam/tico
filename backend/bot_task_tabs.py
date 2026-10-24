@@ -32,7 +32,7 @@ ACTIVE = ["open", "doing", "waiting"]
 FINISHED = ("done", "closed", "declined")
 # Finished tasks a filter shows unless it says Done within: the last two weeks, as Done Recently.
 RECENT_DAYS = 14
-# Rows sent per filter tab; its count is exact.
+# Rows sent per filter tab in one read; its count is exact, and `next` reads the rest a page at a time.
 ROWS = 200
 
 DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
@@ -281,27 +281,39 @@ def install(app, store, auth, mutate, settings, task_views=None):
             return {**read(c, settings, who, bot), "can_edit": may_edit(c, auth, settings, who, bot)}
 
     @app.get("/api/v2/bots/{bot}/task-tabs/tasks")
-    def task_tabs_tasks(request: Request, bot: str):
-        """What each filter tab shows the caller: its count and the newest of its tasks, among the tasks the bot holds
-        or asked for that the caller may read. Built-in tabs are drawn by the page from its own reads."""
+    def task_tabs_tasks(request: Request, bot: str, tab: str = "", before: str = ""):
+        """What each filter tab shows the caller: its count and its newest tasks, among the tasks the bot holds or
+        asked for that the caller may read, with `next` when it has more. `tab` (a key, c0, c1…) reads that tab alone
+        and `before` (a tab's `next`) its next page. Built-in tabs are drawn by the page from its own reads."""
         who = request.state.identity
         auth.domain(who)
+        after = before.rsplit("|", 1) if before else None
+        if after is not None and (not tab or len(after) != 2):
+            raise bad("before needs its tab and is a tab's next")
         with store.read_transaction() as c:
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_see(c, who, bot)
             visible = auth.task_sql(c, who)
             out, ids = [], []
-            for at, tab in enumerate(read(c, settings, who, bot)["tabs"]):
-                if tab.get("builtin"):
+            for at, layout_tab in enumerate(read(c, settings, who, bot)["tabs"]):
+                key = "c" + str(at)
+                if layout_tab.get("builtin") or tab and tab != key:
                     continue
-                where, args = tab_sql(tab, bot, who.actor)
+                where, args = tab_sql(layout_tab, bot, who.actor)
                 where = f"({visible}) AND {where}"
                 count = c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
-                found = [r[0] for r in c.execute(f"SELECT id FROM tasks WHERE {where} ORDER BY created DESC, id DESC "
-                                                 "LIMIT ?", (*args, ROWS))]
-                out.append({"key": "c" + str(at), "name": tab["name"], "count": count, "ids": found})
-                ids += found
+                page, page_args = where, list(args)
+                if after:
+                    page += " AND (created<? OR created=? AND id<?)"
+                    page_args += [after[0], after[0], after[1]]
+                found = c.execute(f"SELECT id, created FROM tasks WHERE {page} ORDER BY created DESC, id DESC "
+                                  "LIMIT ?", (*page_args, ROWS + 1)).fetchall()
+                more = len(found) > ROWS
+                found = found[:ROWS]
+                out.append({"key": key, "name": layout_tab["name"], "count": count, "ids": [r[0] for r in found],
+                            "next": f"{found[-1][1]}|{found[-1][0]}" if more else None})
+                ids += [r[0] for r in found]
             unique = list(dict.fromkeys(ids))
             rows = H.tasks(c, ids=unique, limit=max(1, len(unique)), visible=visible) if unique else []
             rows = task_views(rows, c, who, visible) if task_views else rows

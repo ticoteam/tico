@@ -244,14 +244,37 @@ function botTaskTabWheel(ev) {
   ev.preventDefault();
   bar.scrollLeft += ev.deltaY;
 }
-// What each filter tab shows the person looking, as the server counted it: slug -> {key: {count, ids}, tasks}.
+// What each filter tab shows the person looking, as the server counted it: slug -> {tabs: {key: {count, ids, next}},
+// tasks}. A tab with more than one page has `next`, read on Show more.
 const BOT_TASK_FILTERED = new Map();
+const botTaskFilterPath = slug => `/v2/bots/${encodeURIComponent(slug)}/task-tabs/tasks`;
 async function botTaskFilterRead(slug) {
-  const got = await v2Get(`/v2/bots/${encodeURIComponent(slug)}/task-tabs/tasks`);
+  const got = await v2Get(botTaskFilterPath(slug));
   if (!got || BOT?.slug !== slug) return;
-  BOT_TASK_FILTERED.set(slug, {tabs: Object.fromEntries((got.tabs || []).map(tab => [tab.key, tab])),
-                               tasks: new Map((got.tasks || []).map(t => [String(t.id), t]))});
+  const was = BOT_TASK_FILTERED.get(slug)?.tabs || {};
+  const read = {tabs: Object.fromEntries((got.tabs || []).map(tab => [tab.key, tab])),
+                tasks: new Map((got.tasks || []).map(t => [String(t.id), t]))};
+  // A tab someone read further into stays that far on a refresh: its later pages are read again after the fresh first.
+  for (const tab of Object.values(read.tabs)) {
+    const before = was[tab.key];
+    while (before?.name === tab.name && tab.next && tab.ids.length < before.ids.length)
+      if (!await botTaskFilterPage(slug, tab, read.tasks)) break;
+  }
+  if (BOT?.slug !== slug) return;
+  BOT_TASK_FILTERED.set(slug, read);
   botTaskFilterPaint(slug);
+}
+// The tab's next page onto the rows it holds; false when it could not be read or the tab is no longer the one asked.
+async function botTaskFilterPage(slug, tab, tasks) {
+  const got = await v2Get(`${botTaskFilterPath(slug)}?tab=${tab.key}&before=${encodeURIComponent(tab.next)}`);
+  const page = got?.tabs?.[0];
+  if (!page || page.key !== tab.key || page.name !== tab.name) return false;
+  const held = new Set(tab.ids);
+  tab.ids = [...tab.ids, ...page.ids.filter(id => !held.has(id))];
+  tab.next = page.next;
+  tab.count = page.count;
+  for (const t of got.tasks || []) tasks.set(String(t.id), t);
+  return true;
 }
 // Each filter's list and count. A filter the server has not counted yet (just added) keeps its Loading line.
 function botTaskFilterPaint(slug) {
@@ -262,9 +285,20 @@ function botTaskFilterPaint(slug) {
     if (!counted || counted.name !== tab.name) continue;
     botTaskCount('cnt-' + tab.key, counted.count);
     const rows = counted.ids.map(id => got.tasks.get(String(id))).filter(Boolean);
-    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>');
+    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>',
+      counted.next ? `<button type="button" class="ghost bot-done-more" data-bot-filter-more="${tab.key}">Show more</button>` : '');
   }
 }
+document.addEventListener('click', async ev => {
+  const button = ev.target.closest('[data-bot-filter-more]'), slug = BOT?.slug;
+  const got = slug && BOT_TASK_FILTERED.get(slug), tab = got?.tabs[button?.dataset.botFilterMore];
+  if (!button || !tab?.next || button.disabled) return;
+  button.disabled = true;
+  const read = await botTaskFilterPage(slug, tab, got.tasks);
+  button.disabled = false;
+  if (read) botTaskFilterPaint(slug);
+  else toast('Could not load more. Try again.', true);
+});
 // What a blocked task waits on: the person or bot it names, else the first line of its note.
 function botTaskWaitsOn(t) {
   if (t.waiting_on) return `Waits on ${actorPerson(t.waiting_on) === S.me?.id ? 'you' : actorLabel(t.waiting_on)}`;
