@@ -159,7 +159,7 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
     attempt = claim(api, r)
     post(api, "routines/ops:audit/delete", {})
     with api.app.state.store.read() as c:
-        assert H.task(c, attempt["task"]["id"])["status"] == "open"
+        assert H.task(c, attempt["task"]["id"])["status"] == "doing"
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "leased"
 
 

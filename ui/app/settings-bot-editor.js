@@ -16,6 +16,7 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${settingsWakeRow(e)}
+    ${settingsKeepTasksRow(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
@@ -49,6 +50,27 @@ async function settingsSetCompact(select) {
     select.value = select.dataset.current;
     toast(error.message, true);
   } finally { if (select.isConnected) select.disabled = false; }
+}
+function settingsKeepTasksRow(e) {
+  if (e.agent) return '';
+  const current = e.keep_tasks_going == null ? '' : String(e.keep_tasks_going);
+  return `<div class="sb-row"><span>Keep N tasks going</span><input type="number" min="0" max="1000" step="1" class="settings-inline-select"
+    data-bot-keep-tasks="${esc(e.name)}" data-current="${esc(current)}" value="${esc(current)}" placeholder="No limit"
+    aria-label="Keep N tasks going for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
+    <div class="sb-sub muted">Blank: start assigned work whenever a turn is free. 0: off. Waiting work frees a place; reviews have no cap.</div>`;
+}
+async function settingsSetKeepTasks(input) {
+  const e = S.emps.find(row => row.name === input.dataset.botKeepTasks);
+  if (!e || input.disabled || input.value === input.dataset.current || !input.checkValidity()) return;
+  input.disabled = true;
+  try {
+    await post(`/v2/bots/${encodeURIComponent(e.name)}/keep-tasks-going`, {
+      keep_tasks_going: input.value === '' ? null : Number(input.value), expected_revision: e.revision});
+    await loadSettings();
+    input.dataset.current = input.value;
+    toast('Automatic task starts updated');
+  } catch (error) { input.value = input.dataset.current; toast(error.message, true); }
+  finally { if (input.isConnected) input.disabled = false; }
 }
 // Routine news is batched; direct requests remain immediate in both modes.
 const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
@@ -240,6 +262,8 @@ function settingsEditBot(slug = '', inline = false) {
       if (compact) { touched = true; void settingsSetCompact(compact); }
       const wake = event.target.closest('[data-bot-wake]');
       if (wake) { touched = true; void settingsSetWake(wake); }
+      const keep = event.target.closest('[data-bot-keep-tasks]');
+      if (keep) { touched = true; void settingsSetKeepTasks(keep); }
       const delivery = event.target.closest('[data-bot-app-delivery]');
       if (delivery) { touched = true; void settingsSetAppDelivery(delivery); }
     });
