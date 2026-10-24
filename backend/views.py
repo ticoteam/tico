@@ -1279,14 +1279,33 @@ def business_days_ahead(start, days):
     return H.shift(at.astimezone(timezone.utc).isoformat())
 
 
-def holds_up(c, row, readable):
-    """What answering a card on task `row` lets move, for its header: the roadmap item its task works toward (the task,
-    an ancestor, or a task either of them blocks), else its parent task. {id, title, kind: "roadmap" or "task", step,
-    due, soonest}, or None. `soonest` is the nearest due date of any open work it holds up, whichever title the header
-    names, so a dated task under an undated roadmap item keeps its urgency. Only a task `readable(id)` says the person
-    may read is named or dated."""
+def when_of(ts):
+    """A due or go-ahead time as an aware UTC datetime, so times written with different offsets (or a bare date, read
+    as UTC midnight) compare by when they are, not by their text. None when it cannot be read."""
+    at = H.parse_ts(ts)
+    if at is None:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def roadmap_entry(c, t):
+    """Task `t` as a roadmap item {id, title, kind "roadmap", step, due}, or None when it is not one."""
     from . import roadmap_flow
     product = roadmap_flow.role_type(c, roadmap_flow.PRODUCT)
+    if not product or t.get("type_id") != product:
+        return None
+    step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
+    return {"id": t["id"], "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
+            "due": t.get("due")}
+
+
+def holds_up(c, row, readable):
+    """What answering a card on task `row` lets move, for its header: the roadmap item its task works toward (an
+    ancestor, or a task the task or an ancestor blocks), else its parent task. Never the task itself: a card on a
+    roadmap item would name its own title; Decide's order still counts that item (decide_tier's `own`).
+    {id, title, kind: "roadmap" or "task", step, due, soonest}, or None. `soonest` is the nearest due date of any open
+    work it holds up, the task itself included, whichever title the header names, so a dated task under an undated
+    roadmap item keeps its urgency. Only a task `readable(id)` says the person may read is named or dated."""
     chain = [row["id"], *TR.ancestors(c, row["id"])]
     seen, roadmap, dues = set(), None, []
     for tid in [*chain, *(b for t in chain for b in TR.blocked_ids(c, t))]:
@@ -1296,32 +1315,31 @@ def holds_up(c, row, readable):
         t = H.task(c, tid) if tid != row["id"] else row
         if not t or t["status"] in ("closed", "declined", "done") or not readable(tid):
             continue
-        if t.get("due"):
+        if when_of(t.get("due")):
             dues.append(t["due"])
-        if roadmap is None and product and t.get("type_id") == product:
-            step = c.execute("SELECT name FROM task_steps WHERE id=?", (t.get("step_id"),)).fetchone()
-            roadmap = {"id": tid, "title": t["title"], "kind": "roadmap", "step": step[0] if step else None,
-                       "due": t.get("due")}
+        if roadmap is None and tid != row["id"]:
+            roadmap = roadmap_entry(c, t)
     held = roadmap
     parent = H.task(c, chain[1]) if len(chain) > 1 else None
     if held is None and parent and readable(parent["id"]):
         held = {"id": parent["id"], "title": parent["title"], "kind": "task", "step": None, "due": parent.get("due")}
     if held is not None:
-        held["soonest"] = min(dues) if dues else None
+        held["soonest"] = min(dues, key=when_of) if dues else None
     return held
 
 
-def decide_tier(item, now=None):
+def decide_tier(item, now=None, own=None):
     """Where a card goes in Decide (ui/app/decide.js): 0 when it holds up something due, or it goes ahead on its
     own, within SOON_BUSINESS_DAYS working days; 1 when it holds up a roadmap item at Approved or Building; else 2,
-    newest first. How old a card is never moves it up."""
-    soon = business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS)
-    ask, held = item.get("ask") or {}, item.get("holds_up") or {}
+    newest first. `own` is the card's task as a roadmap item (roadmap_entry) when it is one: the header never names
+    it, but it counts here like the item it holds up. How old a card is never moves it up."""
+    soon = when_of(business_days_ahead(now or H.now(), SOON_BUSINESS_DAYS))
+    ask, held, own = item.get("ask") or {}, item.get("holds_up") or {}, own or {}
     dates = [ask.get("goes_ahead_at"), ((ask.get("refs") or {}).get("if_no_answer") or {}).get("by"), held.get("due"),
-             held.get("soonest"), deadline(item)]
-    if any(d and str(d) <= soon for d in dates):
+             held.get("soonest"), own.get("due"), deadline(item)]
+    if any(when_of(d) and when_of(d) <= soon for d in dates):
         return 0
-    return 1 if held.get("kind") == "roadmap" and held.get("step") in ROADMAP_LIVE_STEPS else 2
+    return 1 if any(r.get("kind") == "roadmap" and r.get("step") in ROADMAP_LIVE_STEPS for r in (held, own)) else 2
 
 
 def card_why(item):
@@ -1426,11 +1444,15 @@ def needs_items(c, auth, who, task_view, older=None):
     for item in items:
         item["pressing"] = pressing(item, at)
         item["need"] = need_of(item)
+        own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
-            item["holds_up"] = holds_up(c, H.task(c, item["id"]) or item, lambda tid: _readable(auth, c, who, tid))
+            row = H.task(c, item["id"]) or item
+            item["holds_up"] = holds_up(c, row, lambda tid: _readable(auth, c, who, tid))
+            if row.get("id") and row.get("status") not in ("closed", "declined", "done"):
+                own = roadmap_entry(c, row)
         if item["kind"] in ("question", "ask"):
             item["why"] = card_why(item)
-        item["tier"] = decide_tier(item, at)
+        item["tier"] = decide_tier(item, at, own)
     return sorted(items, key=needs_key)
 
 

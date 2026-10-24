@@ -129,9 +129,9 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     idle = execution._idle_claim
     selected = []
     candidate, selections = execution.candidate, []
-    def select_again(*args):
+    def select_again(*args, **kwargs):
         selections.append(1)
-        return candidate(*args)
+        return candidate(*args, **kwargs)
     def reassign_after_read(*args):
         result = idle(*args)
         selected.extend(args[-1])

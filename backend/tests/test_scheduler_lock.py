@@ -123,6 +123,8 @@ def test_tick_task_queries_read_an_index_not_the_tasks_table(api):
         from backend import quiet_work
         resume = plan(c, quiet_work.DUE_SQL, "2026-09-11T00:00:00Z")
         assert "tasks_resume_due" in resume and "SCAN tasks" not in resume.replace("SCAN tasks USING", ""), resume
+        leases = plan(c, "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id LIMIT 8", H.now())
+        assert 'attempts_live_lease' in leases and 'TEMP B-TREE' not in leases, leases
 
 
 def test_split_tick_still_fires_each_occurrence_and_reminder_once(api):

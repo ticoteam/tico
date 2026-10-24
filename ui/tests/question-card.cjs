@@ -102,7 +102,9 @@ const card = () => ({
     assert.equal((await page.evaluate(card)).buttons[1].label, 'Send ticked (2)');
     await page.keyboard.press('4');                       // a number ticks or unticks, as on the keyboard row
     assert.equal((await page.evaluate(card)).buttons[1].label, 'Send ticked (3)');
-    await page.locator('.decide .dc-note textarea').fill('Pages: only pricing for now.');
+    await page.keyboard.press('c');                       // C: note works on a several-picks card too
+    assert.ok(await page.evaluate(() => document.activeElement === document.querySelector('.decide .dc-note textarea')));
+    await page.keyboard.type('Pages: only pricing for now.');
     await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
     await page.locator('.decide .dc-actions [data-dc="ticked"]').click();
     assert.equal(await page.locator('.decide .dc-toast span').textContent(), 'Sent 3 ticked · sent to Writer');

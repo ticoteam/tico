@@ -467,6 +467,140 @@ def test_delegated_private_creation_requires_direct_connection_and_team_stays_op
     assert act(live, attempt, "POST", f"live-meetings/{mid}/join", {}).status_code == 200
 
 
+def test_shared_message_provenance_stays_bounded_and_permissions_stay_current(live, derived, monkeypatch):
+    from backend import live_privacy
+    mid, attempt = derived
+    cid = attempt["message"]["conversation_id"]
+    with live.app.state.store.transaction() as c:
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                  "VALUES('shared-common',?,'bot:ops','keeper','say','Synthetic shared parent','{}',?)", (cid, H.now()))
+        for n in range(100):
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created,in_reply_to) "
+                      "VALUES(?,?,'bot:ops','keeper','say','Synthetic shared chain',?,?,?)",
+                      (f"shared-chain-{n}", cid, encode({"answers": ["shared-common"]}),
+                       H.now(), f"shared-chain-{n-1}" if n else None))
+    calls = []
+    original = live_privacy.Sources.references
+
+    def counted(self, value):
+        if isinstance(value, dict):
+            calls.append(1)
+        return original(self, value)
+
+    monkeypatch.setattr(live_privacy.Sources, "references", counted)
+    task_calls = []
+    original_tasks = task_privacy.references
+
+    def task_counted(c, value):
+        task_calls.append(1)
+        return original_tasks(c, value)
+
+    monkeypatch.setattr(task_privacy, "references", task_counted)
+    with live.app.state.store.transaction() as c:
+        index = live_privacy.sources(c)
+        for n in range(99):
+            ids = index.message(H.message(c, f"shared-chain-{n}"), include_run=False)
+            assert ids == {mid} and index.readable("bot:ops", ids)
+            assert task_privacy.message_tasks(c, H.message(c, f"shared-chain-{n}")) == task_privacy.message_tasks(c, H.message(c, "shared-common"))
+        # Shared reply chains must cost their distinct messages, not every prefix again.
+        assert len(calls) <= 110, len(calls)
+        assert len(task_calls) <= 110, len(task_calls)
+        with pytest.raises(Problem, match="too deep"):
+            index.message(H.message(c, "shared-chain-99"), include_run=False)
+        with pytest.raises(Problem, match="too deep"):
+            task_privacy.message_tasks(c, H.message(c, "shared-chain-99"))
+        # Permission results are never memoized, even when provenance is reused.
+        c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
+        assert not index.readable("bot:ops", ids)
+        # A changed source within the same write transaction discards neutral provenance.
+        c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-0'",
+                  (encode({"live_meetings": ["missing-meeting"]}),))
+        fresh = live_privacy.sources(c)
+        assert fresh.message(H.message(c, "shared-chain-98"), include_run=False) == {mid, "missing-meeting"}
+        assert not fresh.readable("human:ben", {"missing-meeting"})
+        # A diamond and a cycle through a reusable closure keep the same reachable sources.
+        c.execute("UPDATE messages SET refs_json=? WHERE id='shared-chain-2'",
+                  (encode({"answers": ["shared-common", "shared-chain-0"]}),))
+        c.execute("UPDATE messages SET in_reply_to='shared-chain-3' WHERE id='shared-chain-0'")
+        cyclic = live_privacy.sources(c)
+        expected = {mid, "missing-meeting"}
+        assert cyclic.message(H.message(c, "shared-chain-3"), include_run=False) == expected
+        assert cyclic.message(H.message(c, "shared-chain-4"), include_run=False) == expected
+        assert task_privacy.message_tasks(c, H.message(c, "shared-chain-3")) == task_privacy.message_tasks(c, H.message(c, "shared-chain-4"))
+
+
+
+def test_shared_attempt_provenance_rechecks_membership_and_source_commits(live, derived):
+    from backend import live_privacy
+    mid, attempt = derived
+    store, aid = live.app.state.store, attempt["id"]
+    with store.read_transaction() as c:
+        assert live_privacy.sources(c).attempt_readable("bot:ops", aid)
+        assert live_privacy.sources(c).conversation(attempt["message"]["conversation_id"]) == {mid}
+    # An unrelated committed write preserves neutral provenance without caching policy.
+    with store.transaction() as c:
+        c.execute("UPDATE live_meetings SET title=title||' updated' WHERE id=?", (mid,))
+    statements = []
+    with store.read_transaction() as c:
+        c.set_trace_callback(statements.append)
+        assert live_privacy.sources(c).attempt(aid) == {mid}
+        assert live_privacy.sources(c).conversation(attempt["message"]["conversation_id"]) == {mid}
+        c.set_trace_callback(None)
+    assert not any("JOIN jobs j ON j.id=a.job_id" in sql for sql in statements), statements
+    with store.transaction() as c:
+        c.execute("DELETE FROM live_meeting_bots WHERE meeting_id=? AND bot='ops'", (mid,))
+    with store.read_transaction() as c:
+        assert not live_privacy.sources(c).attempt_readable("bot:ops", aid)
+    # A rolled-back source must never enter the Store-wide neutral cache.
+    with pytest.raises(RuntimeError, match="synthetic rollback"):
+        with store.transaction() as c:
+            c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+                      (encode({"live_meetings": ["missing-meeting"]}), attempt["message"]["id"]))
+            assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
+            raise RuntimeError("synthetic rollback")
+    with store.read_transaction() as c:
+        assert live_privacy.sources(c).attempt(aid) == {mid}
+    with store.transaction() as c:
+        # Room binding is a neutral source too; access still checks the current meeting row.
+        c.execute("UPDATE conversations SET room_key='live-meeting:missing-meeting' WHERE id=?",
+                  (attempt["message"]["conversation_id"],))
+    with store.read_transaction() as c:
+        assert "missing-meeting" in live_privacy.sources(c).attempt(aid)
+        assert not live_privacy.sources(c).attempt_readable("human:ben", aid)
+
+
+def test_existing_provenance_clock_upgrades_meeting_sources(live, derived):
+    from backend import live_privacy, provenance_clock
+    mid, attempt = derived
+    store, cid = live.app.state.store, attempt["message"]["conversation_id"]
+    with store.transaction() as c:
+        # Simulate the installed pre-meeting UPDATE definitions before startup upgrades them.
+        for table, cols in (("messages", "id,conversation_id,refs_json,in_reply_to"),
+                            ("conversations", "id,task_id")):
+            c.execute(f"DROP TRIGGER provenance_{table}_update_v2")
+            c.execute(f"CREATE TRIGGER provenance_{table}_update AFTER UPDATE OF {cols} ON {table} "
+                      "BEGIN UPDATE provenance_clock SET value=value+1 WHERE id=1; END")
+        provenance_clock.ensure(c)
+        c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (cid,))
+    def source():
+        with store.read_transaction() as c:
+            return live_privacy.sources(c).conversation(cid)
+    assert source() == {mid}
+    with store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor='human:ana' WHERE id=?", (attempt["message"]["id"],))
+    assert source() == set()
+    with store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor=?,to_actor='bot:finance' WHERE id=?",
+                  (H.KEEPER, attempt["message"]["id"]))
+    assert source() == set()
+    with store.transaction() as c:
+        c.execute("UPDATE live_meeting_turns SET bot='finance' WHERE meeting_id=?", (mid,))
+    assert source() == {mid}
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET room_key='live-meeting:missing-meeting' WHERE id=?", (cid,))
+    assert source() == {"missing-meeting"}
+
+
 def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatch):
     task = post(api, "tasks", {"owner": "ops", "title": "Inspect synthetic ordinary work",
                                "body": "Review synthetic notes.", "private": False})

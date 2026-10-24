@@ -420,16 +420,25 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .owner-picker{width:min(520px,92vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .owner-picker-body{padding:18px}
 /* A bot's tab settings (ui/app/bot-tasks.js botTaskTabsSettings): each tab a name, then its filter. */
-.bot-tab-list{display:grid;gap:10px;max-height:60vh;margin:10px 0;padding:0;overflow:auto;list-style:none}
-.bot-tab-item{padding:8px 10px;border:1px solid var(--line);border-radius:8px}
-.bot-tab-line{display:flex;align-items:center;gap:4px}
-.bot-tab-line input[type=text]{flex:1;min-width:0}
-.bot-tab-item fieldset{margin:8px 0 0;padding:0;border:0}
-.bot-tab-item legend{padding:0;font-size:var(--t-sm);color:var(--muted)}
-.bot-tab-opts{display:flex;flex-wrap:wrap;gap:4px 12px}
-.bot-tab-opts label,.bot-tab-wait{display:inline-flex;align-items:center;gap:4px;font-size:var(--t-sm)}
-.bot-tab-wait{margin-top:8px;white-space:nowrap}
-.bot-tab-fixed,.bot-tab-hint{margin:6px 0 0;font-size:var(--t-sm)}
+/* A bot's task tab pop-up (ui/app/bot-sidebar.js): Name, Show count, the rows, Delete and Save. */
+.bot-filter-dialog{width:min(460px,calc(100vw - 24px))}
+.bot-filter-form{display:grid;gap:12px;padding:16px}
+.bot-filter-name{display:grid;gap:4px;font-size:var(--t-sm);color:var(--muted)}
+.bot-filter-name input{width:100%;color:var(--ink)}
+.bot-filter-count{display:inline-flex;align-items:center;gap:6px;width:fit-content}
+.bot-cond-list{display:grid;gap:8px;max-height:50vh;margin:0;padding:0;overflow:auto;list-style:none}
+.bot-cond{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+.bot-cond select{width:auto;min-width:0;max-width:100%}
+.bot-cond-value{display:inline-flex;flex:1 1 180px;flex-wrap:wrap;align-items:center;gap:4px;min-width:0;font-size:var(--t-sm)}
+.bot-cond-value input[type=number]{width:72px}
+.bot-cond-value input[type=text]{flex:1;min-width:0}
+.bot-cond-checks{display:flex;flex-wrap:wrap;gap:2px 10px}
+.bot-cond-checks label{display:inline-flex;align-items:center;gap:4px}
+.bot-cond-x{flex:none;margin-left:auto;padding:2px 6px}
+.bot-cond-add{justify-self:start}
+.bot-filter-actions{align-items:center;gap:8px}
+.bot-filter-actions .spacer{flex:1}
+.bot-filter-actions .err:empty{display:none}
 .access-editor{width:min(660px,94vw);padding:0;border:0;background:var(--surface);color:var(--ink)}
 .access-body{padding:18px;display:flex;flex-direction:column;gap:12px;max-height:82vh;overflow:auto}
 .access-body p{margin:0}

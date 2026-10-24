@@ -772,7 +772,8 @@ def create_app(settings=None):
             found = request.scope.get("route")
             route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
             total = (time.perf_counter() - started) * 1000
-            response.headers["Server-Timing"] = f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+            response.headers["Server-Timing"] = (f"auth;dur={request.state.auth_ms:.1f}, app;dur={total:.1f}"
+                                                + (f", sql;dur={cost[0]:.1f}, wait;dur={cost[1]:.1f}" if cost is not None else ""))
             return response
         finally:
             found = request.scope.get("route")
@@ -4638,7 +4639,10 @@ def create_app(settings=None):
             finally:
                 snapshot.rollback()
             def work(c):
-                unchanged = snapshot.execute("PRAGMA data_version").fetchone()[0] == version
+                from . import provenance_clock
+                clock = selected.get(("provenance_clock",))
+                unchanged = (provenance_clock.current(c) == clock if clock is not None else
+                             snapshot.execute("PRAGMA data_version").fetchone()[0] == version)
                 return execution.heartbeat(c, request.state.identity, body,
                                            live_tasks=selected if unchanged else None)
             return mutate(request, body, work)
@@ -5669,21 +5673,20 @@ def create_app(settings=None):
         # A read first: an idle runner asks every fraction of a second and must not take the write lock.
         with store.read() as c:
             selected = []
-            version = c.execute("PRAGMA data_version").fetchone()[0]
             idle = execution.idle_claim(c, request.state.identity, body,
                                         request.headers.get("idempotency-key"), selected)
             if idle is not None:
                 return idle
-            # Privacy checks open a coherent read snapshot. End it before data_version is
-            # checked under the write lock, or a newer commit stays hidden by that snapshot.
+            if not selected:
+                selected.append(execution.candidate(c, request.state.identity, body,
+                                                    execution.runner(c, request.state.identity)))
+            # End any transaction opened during selection before taking the writer lock. The selected
+            # job is checked against current policy in that transaction.
             if c.in_transaction:
                 c.rollback()
-            # Under the write lock, reuse the read result only if no other connection
-            # committed since that read began. A changed queue is selected afresh.
             def work(write):
-                unchanged = c.execute("PRAGMA data_version").fetchone()[0] == version
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0] if unchanged and selected else None)
+                                       selected=selected[0], prepared=True)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")
@@ -5711,6 +5714,10 @@ def create_app(settings=None):
     @app.post("/api/v2/attempts/{aid}/events")
     def events(request: Request, aid: str, body: M.EventBatch):
         body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
+        # Warm neutral provenance in a read snapshot. The transaction checks current
+        # permissions again, and only reuses this graph while its source clock matches.
+        with store.read_transaction() as c:
+            execution.attempt(c, request.state.identity, aid, active=False)
         return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
@@ -5735,13 +5742,16 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/inputs")
     def inputs(request: Request, aid: str, body: M.Empty):
-        # Most polls find nothing queued: answer those outside the writer gate (execution.idle_inputs).
-        with store.read() as c:
-            validate_identity(c, request.state.identity)
-            idle = execution.idle_inputs(c, request.state.identity, aid)
-            if idle is not None:
-                privacy.require_payload(c, request.state.identity, idle)
-                return idle
+        key = request.headers.get("idempotency-key", "")
+        if 0 < len(key) <= 200:
+            with store.read_transaction() as c:
+                validate_identity(c, request.state.identity)
+                if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                                 (request.state.identity.actor, request.url.path, key)).fetchone():
+                    idle = execution.idle_inputs(c, request.state.identity, aid)
+                    if idle is not None:
+                        privacy.require_payload(c, request.state.identity, idle)
+                        return idle
         return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
@@ -5784,6 +5794,8 @@ def create_app(settings=None):
     from .views import install_views
     from .task_types import install_task_types
     install_task_types(app, store, auth, mutate, mover)
+    from .pipeline_stats import install as install_pipeline_stats
+    install_pipeline_stats(app, store, auth)
     from .roadmaps import install_internal
     install_internal(app, store, auth, mutate, mover)
     from .public_roadmaps import install as install_public_roadmaps
@@ -5802,7 +5814,7 @@ def create_app(settings=None):
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
     from .bot_task_tabs import install as install_bot_task_tabs
-    install_bot_task_tabs(app, store, auth, mutate, settings)
+    install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

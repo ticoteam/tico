@@ -93,7 +93,7 @@ async function open(browser, viewport, options = {}, data = {}) {
   return {page, errors, read, context, cleared};
 }
 
-const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pane-tasks>section.rail-sec')]
+const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pane-tasks>.bot-w>section.rail-sec')]
   .filter(el => !el.hidden).map(el => el.querySelector('.rail-h').firstChild.textContent.trim()));
 
 (async () => {
@@ -124,8 +124,8 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
       // Routines: the bot's routines, one line each.
       assert.deepEqual(await page.locator('#bot-recurring .ttl').allInnerTexts(), ['Morning metrics digest', 'Friday launch review']);
-      // Assigned to others opens while it waits on a person; Done Recently is a tab that stays closed.
-      assert.equal(await page.locator('#bot-assigned').evaluate(el => el.open), true);
+      // Assigned to others is a tab now, not a folded section; Done Recently is a tab that stays closed.
+      assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // Tools beside the name: the runtime mark, then one stack of three icons (not the model again) and "+8".
       const strip = page.locator('#bot-tool-strip');

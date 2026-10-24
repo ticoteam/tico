@@ -21,18 +21,18 @@ const SHARED = 'sk-ant-api03-shared-test-key-0123456789';
 const ROTATED = 'sk-ant-api03-rotated-test-key-987654321';
 
 function start() {
-  const child = spawn(PYTHON, ['ui/tests/support/computers_server.py'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
+  const child = spawn(PYTHON, ['ui/tests/support/computers_server.py', '--hold-shared-fetch'], {cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe']});
   let err = '';
   child.stderr.on('data', d => { err += d; });
   return new Promise((resolve, reject) => {
     let out = '';
+    const timer = setTimeout(() => reject(new Error('computers_server.py did not start: ' + err.slice(-2000))), 60000);
     child.stdout.on('data', d => {
       out += d;
       const line = out.split('\n').find(l => l.startsWith('{'));
-      if (line) resolve({child, ...JSON.parse(line)});
+      if (line) { clearTimeout(timer); resolve({child, ...JSON.parse(line)}); }
     });
-    child.on('exit', code => reject(new Error(`computers_server.py exited ${code}: ${err.slice(-2000)}`)));
-    setTimeout(() => reject(new Error('computers_server.py did not start: ' + err.slice(-2000))), 60000);
+    child.on('exit', code => { clearTimeout(timer); reject(new Error(`computers_server.py exited ${code}: ${err.slice(-2000)}`)); });
   });
 }
 
@@ -61,8 +61,10 @@ function start() {
     };
 
     await page.goto(server.url + '/#/settings');
-    // A new install offers its tour first; skipped, as a person would.
-    await page.locator('[data-tour-skip]').click({timeout: 5000}).catch(() => {});
+    // Stress runs exercise the same watcher more often without changing the production cadence.
+    if (process.env.TICO_TEST_PRESENCE_INTERVAL_MS) await page.evaluate(interval => {
+      SETTINGS_PRESENCE.interval = interval; settingsMachinesWatch();
+    }, Number(process.env.TICO_TEST_PRESENCE_INTERVAL_MS));
     await page.locator('[data-settings-tab=devices]').click();
     const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
     const detail = page.locator('#set-machines dialog.computer-detail[open]');
@@ -154,17 +156,61 @@ function start() {
     assert.equal(await spareChip.evaluate(el => el.classList.contains('attention')), false);
     await neverShown(SHARED);
 
+    // Hold the runner after its cleared heartbeat, before it fetches the shared key. The dialog must use vault
+    // metadata for the kind, even though this computer's report does not name the key yet.
+    await page.waitForFunction(async () => (await (await fetch('/test/shared-fetch')).json()).waiting, null, {timeout: 20000});
+
     // 20: Replace key from Team box, for all listed computers: warned first; both computers take the new key.
     await openDetail(team);
+    const keyInfoRead = page.waitForResponse(response => response.url().includes(`/api/v2/computers/${team}/keys?`) && response.request().method() === 'GET');
     await line.locator('[data-model-key-replace]').click();
+    const keyInfo = await (await keyInfoRead).json();
+    assert.equal(keyInfo.source, 'shared');
+    assert.equal(keyInfo.name, '', 'the runner has not reported its shared key yet');
+    assert.equal(keyInfo.shared.env, 'ANTHROPIC_API_KEY');
     await keyDialog.locator('[data-key-scope]').waitFor();
+    assert.equal(await keyDialog.locator('[name=env]').inputValue(), keyInfo.shared.env, 'Kind defaults to the shared key before the runner reports it');
     assert.match(await keyDialog.locator('[data-key-scope] legend').innerText(), /shared with 3 computers/);
     assert.equal(await keyDialog.locator('[data-key-scope-warn]').isHidden(), true);
     await keyDialog.locator('[name=key-scope][value=all]').check();
     assert.equal(await keyDialog.locator('[data-key-scope-warn]').innerText(), 'This changes every listed computer: Lab box, Spare box, Team box.');
     await keyDialog.locator('[name=secret]').fill(ROTATED);
-    await keyDialog.locator('[data-key-go]').click();
-    await keyDialog.locator('[data-status]', {hasText: 'Replaced.'}).waitFor({timeout: 20000});
+    // A poll can finish while this separate modal owns the scope and the typed key.
+    await page.evaluate(() => settingsMachinesRefresh());
+    assert.equal(await keyDialog.locator('[name=key-scope][value=all]').isChecked(), true, 'presence keeps the shared scope');
+    assert.equal(await keyDialog.locator('[name=secret]').inputValue(), ROTATED, 'presence keeps the pending key');
+    assert.equal(await keyDialog.locator('[name=secret]').evaluate(node => node === document.activeElement), true,
+      'presence leaves focus in the key dialog');
+    // Hold the rotation reply after the server commits it, forcing a presence paint before the dialog gets its receipt.
+    let rotationCommitted, releaseRotation, rotationTimer;
+    const committed = new Promise(resolve => { rotationCommitted = resolve; });
+    const released = new Promise(resolve => { releaseRotation = resolve; });
+    const rotationURL = server.url + `/api/v2/computers/${team}/keys`;
+    await page.route(rotationURL, async route => {
+      if (route.request().method() !== 'POST') { await route.continue(); return; }
+      const response = await route.fetch();
+      rotationCommitted(response.status());
+      await released;
+      await route.fulfill({response});
+    });
+    try {
+      await keyDialog.locator('[data-key-go]').click();
+      const status = await Promise.race([committed, new Promise((_, reject) => {
+        rotationTimer = setTimeout(() => reject(new Error('shared rotation did not commit')), 20000);
+      })]);
+      assert.equal(status, 200, 'shared rotation commits successfully');
+      await page.evaluate(() => settingsMachinesRefresh());
+      assert.match(await keyDialog.locator('[data-status]').innerText(), /Replacing the shared key/);
+      assert.equal(await keyDialog.locator('[data-key-go]').isDisabled(), true);
+      assert.match(await row(team).locator('[data-machine-status]').innerText(), /^online/);
+      assert.match(await detail.locator('[data-computer-status]').innerText(), /^online/);
+    } finally { clearTimeout(rotationTimer); releaseRotation(); }
+    await keyDialog.locator('[data-status]', {hasText: 'Replaced.'}).waitFor({timeout: 20000}).catch(async error => {
+      console.error('Shared replacement status:', await keyDialog.count() ? await keyDialog.locator('[data-status]').innerText() : 'dialog closed');
+      throw error;
+    });
+    await page.unroute(rotationURL);
+    assert.equal((await page.request.post(server.url + '/test/shared-fetch')).status(), 200);
     await keyDialog.locator('[data-close]').last().click();
     for (const id of [team, lab]) await lineShows(id, '.machine-key', 'sk-…321');
     await neverShown(ROTATED);

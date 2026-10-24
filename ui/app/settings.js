@@ -16,6 +16,52 @@ function settingsVisualsLine() {
 // Teams come from the team's data; a name reads as its words (`customer-success` is Customer Success).
 const teamLabel = t => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 let SETTINGS_DATA = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
+// Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
+const SETTINGS_PRESENCE = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
+function settingsMachinesSnapshot(machines, request = ++SETTINGS_PRESENCE.request) {
+  if (request < SETTINGS_PRESENCE.applied) return;
+  SETTINGS_PRESENCE.applied = request;
+  SETTINGS_PRESENCE.at = Date.now();
+  SETTINGS_PRESENCE.failed = false;
+  SETTINGS_DATA.machines = machines;
+}
+async function settingsMachinesRead() {
+  const request = ++SETTINGS_PRESENCE.request;
+  let timer;
+  try {
+    const operations = await Promise.race([
+      get('/v2/operations', {fresh: true}),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
+    ]);
+    if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
+    settingsMachinesSnapshot(operations.machines, request);
+    return operations;
+  } finally { clearTimeout(timer); }
+}
+const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'devices' && !!$('#set-machines');
+function settingsMachinesWatch() {
+  clearTimeout(SETTINGS_PRESENCE.timer);
+  SETTINGS_PRESENCE.timer = null;
+  if (!settingsMachinesVisible() || !S.me?.cloud) return;
+  SETTINGS_PRESENCE.timer = setTimeout(() => {
+    if (!settingsMachinesVisible()) return;
+    void settingsMachinesRefresh().finally(settingsMachinesWatch);
+  }, SETTINGS_PRESENCE.interval);
+}
+function settingsMachinesRefresh() {
+  if (!S.me?.cloud) return Promise.resolve();
+  if (SETTINGS_PRESENCE.pending) return SETTINGS_PRESENCE.pending;
+  SETTINGS_PRESENCE.checking = true;
+  if (settingsMachinesVisible()) renderSettingsMachines();
+  SETTINGS_PRESENCE.pending = settingsMachinesRead().catch(() => {
+    SETTINGS_PRESENCE.failed = true;
+  }).finally(() => {
+    SETTINGS_PRESENCE.pending = null;
+    SETTINGS_PRESENCE.checking = false;
+    if (settingsMachinesVisible()) renderSettingsMachines();
+  });
+  return SETTINGS_PRESENCE.pending;
+}
 // Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner/harnesses/*.toml): what the UI
 // asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
 let HARNESS_ROWS = [];
@@ -201,6 +247,8 @@ function settingsShow(tab) {
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) bots.hidden = SETTINGS_TAB !== 'bots';
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
+  settingsMachinesWatch();
+  if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
   if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
   if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
@@ -332,7 +380,10 @@ async function loadSettings() {
   try {
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me?.cloud ? get('/v2/operations') : Promise.resolve({machines: [], services: []}),
+      S.me?.cloud ? settingsMachinesRead().catch(() => {
+        SETTINGS_PRESENCE.failed = true;
+        return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
+      }) : Promise.resolve({machines: [], services: []}),
       S.me?.cloud ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
       S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
@@ -341,7 +392,7 @@ async function loadSettings() {
     ]);
     S.emps = namedRoster(employees);
     setPeople(people);
-    SETTINGS_DATA = {people: (people.people || []).filter(p => !p.hidden), machines: operations.machines || [],
+    SETTINGS_DATA = {people: (people.people || []).filter(p => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],

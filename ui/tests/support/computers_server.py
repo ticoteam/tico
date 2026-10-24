@@ -30,6 +30,7 @@ from backend.app import create_app  # noqa: E402
 from backend.auth import Identity  # noqa: E402
 from backend.config import Settings  # noqa: E402
 from backend.credentials import CredentialCipher  # noqa: E402
+from backend.getting_started import save_state  # noqa: E402
 from backend.store import H, encode  # noqa: E402
 from backend.tests.test_credentials import FakeKMS  # noqa: E402
 
@@ -45,7 +46,7 @@ def free_port():
         return s.getsockname()[1]
 
 
-def fake_computer(base, admin, label, received, ready, works=True):
+def fake_computer(base, admin, label, received, ready, works=True, shared_fetch=None):
     def call(method, path, body=None, token=admin, **params):
         r = httpx.request(method, base + "/api/v2/" + path, json=body, params=params or None, timeout=20,
                           headers={"Authorization": "Bearer " + token, "Idempotency-Key": H.new_id()})
@@ -87,8 +88,20 @@ def fake_computer(base, admin, label, received, ready, works=True):
             elif job["kind"] == "use_shared_key":
                 state = "done"    # the key fetch below signs it in
             call("POST", f"runner-logins/{job['id']}/report", {"state": state, "message": ""}, token=token)
+            if job["kind"] == "use_shared_key" and shared_fetch:
+                # A real runner can heartbeat its cleared state before it fetches the newly requested shared key.
+                beat()
+                paused, release = shared_fetch
+                paused.set()
+                if not release.wait(30):
+                    raise RuntimeError("the test did not release the shared-key fetch")
         found = call("GET", "runner-model-credentials", token=token, runtime="claude")
         keys = found["credentials"]
+        if shared_fetch and keys and keys[0]["source"] == "shared" and not shared_fetch[0].is_set():
+            # A key poll can race ahead of the request job. Keep this fixture unsigned until that job takes the gate.
+            beat()
+            time.sleep(0.05)
+            continue
         if found.get("signed_out") or found.get("key_off"):
             claude.clear()
             claude.update({"installed": True, "authenticated": "missing"})
@@ -112,6 +125,19 @@ def main():
                         credential_kms_key="test-key", credential_admins=(OWNER,),
                         test_identities={"admin": Identity("human:ana", "owner", OWNER)})
     app = create_app(settings)
+    paused, release = threading.Event(), threading.Event()
+    if "--hold-shared-fetch" in sys.argv:
+        @app.get("/test/shared-fetch")
+        def shared_fetch_state():
+            return {"waiting": paused.is_set()}
+        app.router.routes.insert(0, app.router.routes.pop())
+
+        @app.post("/test/shared-fetch")
+        def shared_fetch_release():
+            release.set()
+            return {"released": True}
+        # Test controls precede the application's static-file mount.
+        app.router.routes.insert(0, app.router.routes.pop())
     app.state.vault.cipher = CredentialCipher("test-key", FakeKMS())
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     threading.Thread(target=server.run, daemon=True).start()
@@ -120,12 +146,15 @@ def main():
     people = [{"id": "ana", "name": "Ana Rivera", "email": OWNER, "title": "CEO", "primary_for": ["*"]}]
     with app.state.store.transaction() as c:
         H.sync_registry(c, {}, {"people": people})
+        # Computers tests start with an existing owner, whose first-visit tour is already complete.
+        save_state(c, Identity("human:ana", "owner", OWNER), {"tour": True})
         c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": people}),))
         c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
     received, ready = tmp / "received.txt", {}
     received.write_text("")
     for label in ("Team box", "Lab box", "Spare box"):
-        threading.Thread(target=fake_computer, args=(url, "admin", label, received, ready, label != "Spare box"),
+        gate = (paused, release) if label == "Team box" and "--hold-shared-fetch" in sys.argv else None
+        threading.Thread(target=fake_computer, args=(url, "admin", label, received, ready, label != "Spare box", gate),
                          daemon=True).start()
     while len(ready) < 3:
         time.sleep(0.05)
