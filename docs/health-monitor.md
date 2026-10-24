@@ -8,6 +8,9 @@ Settings > Health also lists checks that belong to one feature, documented on th
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
+**Unreleased:** the **Turns** check shows each computer's running, starting, waiting and queued counts, with each
+wait reason and oldest age. See [Turn counts](computers.md#turn-counts) for the start deadline, load brake and older-runner rules.
+
 Health's **Stuck bots** check and `hub health check` name the bot, queued job count, oldest queued age,
 why it cannot start, and a fix or a command to inspect its runs. **Tasks not progressing** names visible tasks
 and links their recovery diagnosis. Settings > Health shows the same summaries.

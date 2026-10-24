@@ -645,6 +645,49 @@ async fn an_attached_worktree_is_certified_then_saved_to_a_wip_branch_when_its_t
 }
 
 #[tokio::test]
+async fn a_finished_tasks_rebuildable_scratch_goes_and_its_notes_and_unsaved_checkouts_stay() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "product");
+    let workspace = tmp.0.join("ws");
+    let base = workspace.join("repos").join(crate::repositories::base_folder("org/product"));
+    std::fs::create_dir_all(base.parent().unwrap()).unwrap();
+    sh(&tmp.0, &["clone", "-q", bare.to_str().unwrap(), base.to_str().unwrap()]);
+    let folder = workspace.join("tasks/abcd1234");
+    let suite = folder.join("suite-1");
+    let dirty = folder.join("suite-2");
+    for tree in [&suite, &dirty] {
+        sh(&base, &["worktree", "add", "-q", "--detach", tree.to_str().unwrap(), "origin/HEAD"]);
+    }
+    std::fs::write(dirty.join("draft.txt"), "not saved\n").unwrap();
+    let venv = folder.join("venv");
+    let target = folder.join("validation/target");
+    let pytest = folder.join("tmp-pytest");
+    let inner = dirty.join("node_modules");
+    for dir in [&venv, &target, &pytest.join("test_a0"), &inner, &folder.join("logs")] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(venv.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+    std::fs::write(target.join("CACHEDIR.TAG"), "Signature: 8a477f597d28d172789f06886806bc55\n").unwrap();
+    std::fs::write(folder.join("logs/run.log"), "ok\n").unwrap();
+    std::os::unix::fs::symlink(&venv, folder.join("linked-venv")).unwrap();
+
+    worktrees::clear_task_scratch(&workspace, "tasks/abcd1234/product", &turn_env(&tmp.0, &[])).await;
+
+    for gone in [&venv, &target, &pytest, &inner, &suite] {
+        assert!(!gone.exists(), "{} should be removed", gone.display());
+    }
+    assert_eq!(std::fs::read_to_string(folder.join("logs/run.log")).unwrap(), "ok\n");
+    assert_eq!(std::fs::read_to_string(dirty.join("draft.txt")).unwrap(), "not saved\n");
+    assert!(folder.join("validation").is_dir() && folder.join("linked-venv").symlink_metadata().is_ok());
+    // A path outside `tasks/` is never swept.
+    let outside = workspace.join("work/venv");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("pyvenv.cfg"), "").unwrap();
+    worktrees::clear_task_scratch(&workspace, "work/product", &turn_env(&tmp.0, &[])).await;
+    assert!(outside.exists());
+}
+
+#[tokio::test]
 async fn a_turn_counts_only_its_own_tasks_pushes() {
     let tmp = Tmp::new();
     let (bare, seed) = remote(&tmp.0, "product");

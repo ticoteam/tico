@@ -5,6 +5,10 @@
   "tool_events": true
  },
  {
+  "kind": "thread_confirmed",
+  "session_id": "cd53aea1-720d-4bae-a7cd-7668e6604857"
+ },
+ {
   "kind": "tool",
   "tool": "Bash",
   "status": "started",
@@ -76,6 +80,10 @@
   "text": "The foreground command printed `alpha`. The background command (`sleep 4; echo done`) has not finished yet: its output file is still empty. I'm not going to guess its result. The harness will notify me when it completes, and I'll report its output then.",
   "final": false,
   "item_id": "msg_011Cg5Nod1mnbxvrMDYb97Jx"
+ },
+ {
+  "kind": "thread_confirmed",
+  "session_id": "cd53aea1-720d-4bae-a7cd-7668e6604857"
  },
  {
   "kind": "tool",

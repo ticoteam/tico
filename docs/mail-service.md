@@ -143,8 +143,8 @@ Cc: partner@lawfirm.example; associate@lawfirm.example
 ```
 
 When `--approval-issue` is a full yes — a closed `owner:ana` `type:decision` GitHub Issue with a
-matching block, a decided Tico `send` approval whose payload names every external address,
-or a Tico message in which Ana told this bot to send — that message may carry more
+matching block, a decided Tico `send` approval whose payload names every external address
+and this exact text (its `body_sha256`), or a Tico message in which Ana told this bot to send — that message may carry more
 than one external recipient and external Cc, the cooldown does not apply to it, lint L056
 does not apply to it, the second reviewer runs but advises instead of blocking (its verdict
 is still recorded and shown), and the switch being off is lifted for that

@@ -7,6 +7,12 @@
   "tool_events": true
  },
  {
+  "kind": "thread_confirmed",
+  "thread_id": "thr_1",
+  "turn_id": "turn_1",
+  "session_id": "thr_1"
+ },
+ {
   "kind": "tool",
   "thread_id": "thr_1",
   "turn_id": "turn_1",

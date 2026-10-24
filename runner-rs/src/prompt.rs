@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::util::{py_dumps, text_of};
 
-pub const SETUP_TURN: &str = "Setup: a human is setting you up, and you are parked until your setup is done. Your first routine is already on, so nobody has to approve it. Follow the setup section of AGENT.md and playbooks/onboarding.md in order and do only the step the conversation has reached. On their first message that is: read them, introduce yourself, ask your questions in one message and end the turn. Until they have answered, run no tool that reaches mail, chat or another system, file no task and edit no file. Never edit AGENT.md; what you learn goes in state.md and knowledge/. Missing access is a question to ask, not a task to file. This message is not a request to do work, so give no status report, backlog or contract.";
+pub const SETUP_TURN: &str = "Onboarding: you are learning before you start work. You may answer and ask questions in chat, read, connect tools and talk with your manager; you take no tasks, run no routines and send nothing to anyone else until a person above you on the org chart marks your onboarding complete. Follow the setup section of AGENT.md and playbooks/onboarding.md in order and do only the step the conversation has reached. On their first message that is: read them, introduce yourself, ask your questions in one message and end the turn. Never edit AGENT.md; what you learn goes in state.md and knowledge/. Missing access is a question to ask, not a task to file. When you have learned enough to start, say so with `hub bot ready --summary` and a few lines on what you learned. This message is not a request to do work, so give no status report, backlog or contract.";
 pub const NEXT_RUN_HEADER: &str = "Next-run tasks, carried into this run (filed for your next run instead of waking you). Handle each one in this turn as well as the current message; each is its own task, so mark each done or declined with `hub task update`:";
 pub const NOTES_HEADER: &str = "Quiet notes left for you since your last run, each with the time it was sent. They ask nothing and need no reply; use what bears on your work, and keep what you will need later:";
 pub const PARKED_STATES: &[&str] = &["needs_setup", "needs_onboarding"];
@@ -89,7 +89,9 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
         format!("Conversation: {conv_id}. {app} keeps all of it, even what a compaction, a model change or a new session took out of your context: `hub conversation show {conv_id}` reads the newest 200 messages, and `--before` with its `next_before` reads the page before. Your repository, its files and git log, is the record of your own past work."),
     ];
     crate::sessions::prompt_head(attempt, &mut lines);
-    if bot == "coo" && conversation["scope"] == "personal" {
+    // The Assistant's room, and the owner's CEO Bot chat, where the CEO Bot is the owner's Assistant (backend/rooms.py CEO_ROOM).
+    let ceo_chat = bot == "goal-manager" && conversation["room_key"] == "ceo";
+    if (bot == "coo" || ceo_chat) && conversation["scope"] == "personal" {
         let owner = if truthy(&conversation["owner_actor"]) { s(&conversation["owner_actor"]) } else { s(&attempt["principal"]) };
         lines.extend([
             format!("You are privately assisting {owner}. "),
@@ -280,5 +282,16 @@ mod tests {
             let id = attempt["id"].as_str().unwrap();
             assert_eq!(prompt(&attempt, &names, after, resumed), python_prompt(id), "{id}");
         }
+    }
+
+    #[test]
+    fn the_ceo_bot_assists_the_owner_privately_only_in_their_chat() {
+        let names = Names { company: "Acme".into(), app: "Tico".into() };
+        let turn = |room_key: &str| json!({"id": "a5", "bot": "goal-manager",
+            "conversation": {"id": "c5", "kind": "chat", "scope": "personal", "owner_actor": "human:ana", "room_key": room_key},
+            "message": {"id": "m5", "from_actor": "human:ana", "body": "Plan my week", "refs": {"assistant": true}}, "history": []});
+        assert!(prompt(&turn("ceo"), &names, None, false).contains("You are privately assisting human:ana."));
+        // Its old per-person chat (room_key goal-manager) is not the owner's chat: no person's authority there.
+        assert!(!prompt(&turn("goal-manager"), &names, None, false).contains("privately assisting"));
     }
 }

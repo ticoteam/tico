@@ -288,7 +288,7 @@
     },
     "/api/v2/assistant": {
       "get": {
-        "summary": "The caller's Assistant: their private room id, whether it is on, the recent messages and what waits for their OK",
+        "summary": "The caller's Assistant (the CEO Bot, for the owner): their private room id, whether it is on, the recent messages and what waits for their OK",
         "operationId": "getAssistant",
         "responses": {
           "200": {
@@ -1384,6 +1384,75 @@
         ]
       }
     },
+    "/api/v2/bots/{bot}/keep-tasks-going": {
+      "post": {
+        "summary": "Set automatic assigned-task starts: null is unlimited, 0 is off, N caps active work; reviews have no cap",
+        "operationId": "setKeepTasksGoing",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotKeepTasksGoing"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
     "/api/v2/bots/{bot}/kpis": {
       "get": {
         "summary": "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)",
@@ -1438,7 +1507,7 @@
     },
     "/api/v2/bots/{bot}/onboarded": {
       "post": {
-        "summary": "A starter bot's own call, or its manager's, once its setup is done: `onboarding_state` goes from `needs_setup` to `onboarded`. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
+        "summary": "Mark onboarding complete, by a person above the bot on the org chart (its manager, their managers or the owner; 403 for anyone else): its `stage` goes from onboarding to active (`onboarding_state` `needs_setup` to `onboarded`) and its routines start. The bot's own call is its \"I'm ready\" with a `summary` and leaves it onboarding. Repeating it changes nothing; 409 bot_limit for a member's bot over their limit",
         "operationId": "markBotOnboarded",
         "parameters": [
           {
@@ -1465,7 +1534,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Empty"
+                "$ref": "#/components/schemas/OnboardingComplete"
               }
             }
           }
@@ -12062,6 +12131,249 @@
         ]
       }
     },
+    "/api/v2/seats": {
+      "get": {
+        "summary": "The Recruiting seats: roles on the chart with a job description and reporting line, and no bot. A seat holds no work: a task for it is refused and its role's work stays with its manager",
+        "operationId": "listSeats",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      },
+      "post": {
+        "summary": "Add a Recruiting seat: the owner anywhere, a person under themselves or someone below them",
+        "operationId": "createSeat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seat"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}": {
+      "patch": {
+        "summary": "Change a seat's title, job description, reporting line or group (a person it reports up to, or the owner)",
+        "operationId": "updateSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seat"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/close": {
+      "post": {
+        "summary": "Take a seat off the chart; its row is kept",
+        "operationId": "closeSeat",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatClosed"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/service-keys": {
       "get": {
         "summary": "Service keys, never the secret (owner and admins)",
@@ -17449,6 +17761,38 @@
           "pending": {
             "type": "array"
           },
+          "ceo": {
+            "type": "boolean",
+            "description": "True for the owner, who talks to the CEO Bot in place of an Assistant: `bot` is the CEO Bot and `name` its name"
+          },
+          "earlier": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "room_id": {
+                    "type": "string"
+                  },
+                  "bot": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bot",
+                  "name",
+                  "room_id"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's own earlier Assistant chats, read-only (GET /api/v2/conversations/{room_id}/messages); null for everyone else, or none"
+          },
           "actors": {
             "type": "object",
             "additionalProperties": {
@@ -17462,6 +17806,8 @@
           "available",
           "bot",
           "can_turn_on",
+          "ceo",
+          "earlier",
           "execution",
           "has_more",
           "messages",
@@ -17691,11 +18037,38 @@
               "null"
             ]
           },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
+          },
           "access": {
             "$ref": "#/components/schemas/Access"
           },
           "onboarding_state": {
             "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "onboarding",
+              "active"
+            ],
+            "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"
+          },
+          "can_complete_onboarding": {
+            "type": "boolean",
+            "description": "While onboarding: whether the caller may mark its onboarding complete"
+          },
+          "onboarding_ready": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"
           }
         },
         "required": [
@@ -17841,6 +18214,15 @@
           "goals": {
             "type": "string"
           },
+          "keep_tasks_going": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "task_flow": {
+            "$ref": "#/components/schemas/TaskFlow"
+          },
           "access": {
             "$ref": "#/components/schemas/Access"
           },
@@ -17852,6 +18234,24 @@
           },
           "template_version": {
             "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "onboarding",
+              "active"
+            ],
+            "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"
+          },
+          "can_complete_onboarding": {
+            "type": "boolean",
+            "description": "While onboarding: whether the caller may mark its onboarding complete"
+          },
+          "onboarding_ready": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"
           }
         },
         "required": [
@@ -18077,6 +18477,34 @@
         ],
         "additionalProperties": true
       },
+      "BotKeepTasksGoing": {
+        "properties": {
+          "keep_tasks_going": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keep Tasks Going",
+            "description": "Automatic assigned-task starts: null is unlimited (default), 0 is off, N caps active work. Reviews have no cap."
+          },
+          "expected_revision": {
+            "type": "integer",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "title": "BotKeepTasksGoing"
+      },
       "BotKpis": {
         "type": "object",
         "properties": {
@@ -18111,8 +18539,18 @@
           "onboarding_state": {
             "type": "string"
           },
+          "stage": {
+            "type": "string"
+          },
           "changed": {
             "type": "boolean"
+          },
+          "ready": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The bot's own call: its \"I'm ready\" ({at, summary})"
           },
           "routine": {
             "type": [
@@ -19019,6 +19457,9 @@
             }
           },
           "woke": {
+            "type": "boolean"
+          },
+          "delivered": {
             "type": "boolean"
           },
           "warning": {
@@ -22162,6 +22603,27 @@
           "checked": {
             "type": "string"
           },
+          "computers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "turn_counts": {
+                  "$ref": "#/components/schemas/TurnCounts"
+                },
+                "turn_summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
           "stalled_runs": {
             "type": "array",
             "items": {
@@ -24596,6 +25058,20 @@
           }
         ]
       },
+      "OnboardingComplete": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Summary",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "OnboardingComplete",
+        "description": "Mark onboarding complete (a person above the bot), or the bot's own \"I'm ready\" with what it learned."
+      },
       "Org": {
         "type": "object",
         "properties": {
@@ -24611,6 +25087,12 @@
               "$ref": "#/components/schemas/OrgBot"
             }
           },
+          "seats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Seat"
+            }
+          },
           "org_groups": {
             "type": "array"
           },
@@ -24622,6 +25104,7 @@
           "bots",
           "org_groups",
           "people",
+          "seats",
           "teams"
         ],
         "additionalProperties": true
@@ -24664,6 +25147,13 @@
           },
           "onboarding_state": {
             "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "onboarding",
+              "active"
+            ],
+            "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"
           }
         },
         "required": [
@@ -26406,6 +26896,174 @@
         ],
         "additionalProperties": true
       },
+      "Seat": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "seat"
+            ]
+          },
+          "stage": {
+            "enum": [
+              "recruiting"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reports_to": {
+            "type": "string"
+          },
+          "team": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "org_parent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "id",
+          "kind",
+          "reports_to",
+          "stage",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "SeatClosed": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "closed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "closed",
+          "id"
+        ],
+        "additionalProperties": true
+      },
+      "SeatCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Description",
+            "default": ""
+          },
+          "reports_to": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reports To",
+            "default": ""
+          },
+          "team": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Team",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "SeatCreate",
+        "description": "A Recruiting seat: a role on the org chart with its job description and reporting line, and no bot."
+      },
+      "SeatList": {
+        "type": "object",
+        "properties": {
+          "seats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Seat"
+            }
+          }
+        },
+        "required": [
+          "seats"
+        ],
+        "additionalProperties": true
+      },
+      "SeatUpdate": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "reports_to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reports To"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SeatUpdate"
+      },
       "ServiceKeyCreate": {
         "properties": {
           "label": {
@@ -27668,12 +28326,16 @@
           },
           "woke": {
             "type": "boolean"
+          },
+          "delivered": {
+            "type": "boolean"
           }
         },
         "required": [
           "answer",
           "comment",
           "comments",
+          "delivered",
           "woke"
         ],
         "additionalProperties": true
@@ -28287,6 +28949,22 @@
           "mime",
           "name",
           "versions"
+        ],
+        "additionalProperties": true
+      },
+      "TaskFlow": {
+        "type": "object",
+        "properties": {
+          "going": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "going",
+          "waiting"
         ],
         "additionalProperties": true
       },
@@ -29334,6 +30012,58 @@
         "type": "object",
         "title": "ToolUpdate",
         "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
+      },
+      "TurnCounts": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer"
+          },
+          "starting": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "start_seconds": {
+            "type": "integer"
+          },
+          "waits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "oldest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "count",
+                "oldest",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "queued",
+          "running",
+          "start_seconds",
+          "starting",
+          "waiting",
+          "waits"
+        ],
+        "additionalProperties": true
       },
       "Unread": {
         "type": "object",

@@ -24,7 +24,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import ceo_bot, rooms, routines, statuses
+from . import ceo_bot, lifecycle, rooms, routines, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -574,18 +574,27 @@ class Onboarding:
         self._seed_routines(c, who, slug, template)
         H.event(c, who.actor, "bot.needs_onboarding", slug, {"template": template})
 
-    def onboarded(self, c, who, slug, arm=True):
-        """The bot's own word, or its manager's, that its setup is done: it stops being
-        parked, its routines may run and its work is claimed. A member's bot counts toward their
-        limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
+    def onboarded(self, c, who, slug, arm=True, summary=""):
+        """Mark onboarding complete: a person above the bot on the org chart (its manager, their managers, the owner)
+        says it is done learning, so it becomes Active, its routines run and its work is claimed (backend/lifecycle.py).
+        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage. A member's bot counts toward
+        their limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
         company's bots, set up by the sample's own answers)."""
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
-        if not (who.role == "bot" and H.actor_id(who.actor) == slug):
-            self.admin._manager(c, who, slug)
         row = c.execute("SELECT onboarding_state,created_by FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if who.role == "bot" and H.actor_id(who.actor) == slug:
+            if not statuses.is_parked(row["onboarding_state"]):
+                return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "stage": lifecycle.ACTIVE,
+                        "changed": False}
+            return {**lifecycle.ready(c, who, slug, summary), "onboarding_state": row["onboarding_state"],
+                    "changed": False}
+        if not lifecycle.may_complete(self.auth, c, who, slug):
+            raise Problem("forbidden", "Only a person above this bot on the org chart (its manager, their managers or "
+                          "the owner) marks its onboarding complete", 403)
         if not statuses.is_parked(row["onboarding_state"]):
-            return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "changed": False}
+            return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "stage": lifecycle.ACTIVE,
+                    "changed": False}
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
             if self.admin.counted_bots(c, row["created_by"], excluding=slug) >= limit:
@@ -600,7 +609,7 @@ class Onboarding:
         # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
         # would have given it; once only, so one already armed or turned off by a person is left alone.
         routine = self.arm_first_routine(c, who, slug) if arm else None
-        return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True, "routine": routine}
+        return {"bot": slug, "onboarding_state": ONBOARDED, "stage": lifecycle.ACTIVE, "changed": True, "routine": routine}
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""

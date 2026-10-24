@@ -35,7 +35,7 @@ def test_all_good(environment, monkeypatch):
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
-        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok"}
+        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
@@ -153,8 +153,9 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "last_seen", "platform", "disk", "update"}
-    assert body["failures"] == [] and set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
+        "id", "label", "online", "last_seen", "platform", "disk", "update", "turn_counts", "turn_summary"}
+    assert body["failures"] == [] and set(checks) == {
+        "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 
@@ -426,9 +427,9 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     api = environment()
     add_bot(api, "support")
     with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
         c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state) VALUES('support','{}','ana','needs_setup') "
                   "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
-        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")
     assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
@@ -464,7 +465,7 @@ def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(en
 
 
 def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_to(environment):
-    """The same person as the "Finish setting up" reminder, and nobody while that reminder is open: one ask per bot."""
+    """The same person as the "Finish onboarding" reminder, and nobody while that reminder is open: one ask per bot."""
     from backend import setup_stuck
     api = environment()
     as_person(api, "quinn")

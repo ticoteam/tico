@@ -318,6 +318,10 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await bigTitle(page), true);
     // Until setup is done the wizard has the sidebar to itself: no app pages beside Finish setup.
     assert.equal(await page.locator('#side .side-scroll > [data-nav="tasks"]').isVisible(), false);
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.locator('#mobile-nav').isVisible(), false, 'no phone navigation during setup');
+    await shot(page, 'phone-0-names');
+    await page.setViewportSize({width: 1100, height: 800});
 
     // ---- a: names, prefilled from config, with no explanation under them. The assistant
     // works in the background and is not named here; its configured name rides along unchanged.
@@ -834,6 +838,13 @@ function recruitFor({department, briefing, share}) {
 
     // ---- after Create, one screen: the team is created, and nothing covers it. The tour waits for Show me around.
     assert.equal(await page.locator('#onb h1').textContent(), 'Your team is created');
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
+    assert.equal(await page.locator('#mobile-nav [data-nav="tasks"]').isVisible(), true);
+    assert.equal(await page.locator('#mobile-nav [data-nav="updates"]').isVisible(), true);
+    await shot(page, 'phone-6-nav-restored');
+    await page.setViewportSize({width: 1100, height: 800});
+
     // The full nav is back, and the owner starts caught up: no What's new count left over from before Create.
     assert.equal(await page.locator('#changelog-notice').isVisible(), false, "no What's new count after Create");
     assert.equal(await page.locator('#changelog-badge').isHidden(), true, 'nor its badge in the account menu');
@@ -916,16 +927,16 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(definitions, []);                                    // it was already active: nothing to activate first
     await page.locator('#bot-onboard').waitFor();
     await shot(page, 'desktop-7-bot-page');
-    assert.match(await page.locator('#bot-onboard').textContent(), /Needs setup/);
+    assert.match(await page.locator('#bot-onboard').textContent(), /Onboarding/);
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
-    assert.equal(await page.locator('#bot-start-setup').textContent(), 'Set up');
-    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help setting up?');
+    assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
+    assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
     // The Chat tab shows the setup conversation: the person's line, in the chat Set up wrote to.
     await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
-    await page.locator('#bot-start-setup', {hasText: 'Setup started'}).waitFor();
+    await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
     // Its Chat tab was open and empty when Set up was pressed: the message shows at once, not after a reload.
     await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
     assert.equal(await page.locator('#conv-thread .empty').count(), 0);
@@ -1148,6 +1159,27 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Add a computer']);
     for (const slug of ['coo', 'support', 'meeting-notes', 'content'])
       assert.equal(await waiting.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
+    // Read the actual wizard pills' computed colours, including System following a light OS.
+    const contrast = [];
+    for (const theme of ['light', 'system', 'dark']) {
+      await waiting.emulateMedia({colorScheme: 'light'});
+      await waiting.evaluate(theme => window.ticoTheme.set(theme), theme);
+      const colours = await waiting.locator('#onb-bots .pill.waiting').evaluateAll(els => els.map(el => {
+        const style = getComputedStyle(el);
+        const luminance = rgb => rgb.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => v / 255)
+          .map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
+          .reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+        const fg = luminance(style.color), bg = luminance(style.backgroundColor);
+        return {text: el.textContent, color: style.color, background: style.backgroundColor,
+          ratio: (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05)};
+      }));
+      assert.ok(colours.length > 0, 'measure rendered Waiting pills');
+      for (const colour of colours) assert.ok(colour.ratio >= 4.5, `${theme}: ${JSON.stringify(colour)}`);
+      contrast.push({theme, ...colours[0]});
+    }
+    console.log('Waiting contrast:', JSON.stringify(contrast));
+    await waiting.emulateMedia({colorScheme: scheme});
+    await waiting.evaluate(theme => window.ticoTheme.set(theme), scheme);
     await shot(waiting, 'desktop-6b-created-no-computer');
     await waiting.setViewportSize({width: 390, height: 844});
     assert.equal(await waiting.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);

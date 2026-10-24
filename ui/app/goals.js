@@ -347,6 +347,10 @@ async function goalManagerMount(pageState) {
       } catch (e) { if (current()) status.textContent = e.message; }
       if (current()) on.disabled = false;
     };
+  } else if (!meCeo()) {
+    // Of people, only the owner talks to the CEO Bot (backend/assistant.py); everyone else asks their Assistant.
+    chat.innerHTML = `<h3 class="rail-h" id="gm-chat-h">Chat</h3>
+      <p class="muted gm-on" data-gm-assistant>Only the company's owner talks to ${esc(ceoBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.</p>`;
   } else {
     chat.innerHTML = `<h3 class="rail-h" id="gm-chat-h">Chat</h3>
       <div class="gm-thread" data-gm-thread role="log" aria-label="${esc(ceoBotName())} conversation" tabindex="0"><p class="muted">Loading conversation…</p></div>
@@ -430,7 +434,8 @@ async function goalManagerMount(pageState) {
       try {
         const list = await get('/v2/conversations?chat_with=' + GM);
         if (!current() || conversation) return;
-        conversation = v2ChatRoom(list.conversations, GM);
+        // The owner's one chat with it, the same as their menu tab's (room_key "ceo", backend/rooms.py).
+        conversation = (list.conversations || []).find(c => c.room_key === 'ceo' && !c.closed_at) || null;
         if (conversation) { await snapshot(); watch(); }
         else draw();
       } catch (e) { fail(e.message); }

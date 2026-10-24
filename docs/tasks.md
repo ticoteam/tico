@@ -3,15 +3,22 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status.
+each standard status except waiting and declined: no step has those statuses (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
 other types. A type is always selected, and both the list and board show only its tasks. The board
-uses that type's steps as columns. Your selection is remembered, shared links carry it, and new
+uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
+way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
+it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
+**Done**, closed ones under **Closed**. On a desktop, drag a card to another column or to a new place
+in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
+the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
+row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
+card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
+Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
-deleted types fall back to General. Finished work appears in the selected type's
-Done or Closed steps as well as under Done.
+deleted types fall back to General.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
@@ -20,6 +27,10 @@ existing scripts can keep setting `status`:
 - Otherwise Tico picks the first step with that status, in the type's step order.
 - If none matches, the step clears. The task keeps its status, and the UI shows that status until
   someone picks a step.
+- Waiting is not a step: a waiting task stays in its working step (or the type's first open or doing
+  step) and shows a **Waiting** tag on its card and row. A declined task goes to the type's closed
+  step. A step can't be given status waiting or declined; the Product roadmap keeps its public
+  Declined step.
 
 Changing a task's type preserves its status and finds a matching step in the new type. Use an
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
@@ -48,6 +59,24 @@ new title as its subject.
 
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
+
+## Automatic starts
+
+Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
+On Deck task (or an open general task), moves it to In Progress, and uses that task's own session.
+Snoozed work, unfinished prerequisites and pending milestone waits stay parked. Existing snooze-end,
+blocker-done and milestone events make the task eligible again; no manual nudge is needed.
+
+In **Settings → Bots → Edit**, **Keep N tasks going** is blank by default (no task cap). Set a positive
+number to cap active work, or **0** to turn automatic starts off. Waiting for a person, a check, a review
+child or a workspace frees a place. Delegated review children have no task cap; every review uses its
+own session as computer turns become free. Usage holds, computer readiness and computer capacity
+still apply. The Bots page shows how many tasks are going and how many eligible tasks wait to start.
+
+`hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
+Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
+the same permissions and revision check. **Settings → Routines** lists **Start assigned tasks** using
+WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
 ## Work that is waiting
 
@@ -858,6 +887,16 @@ On the board, a task with a picture shows the newest one as a cover, and a dot m
 question. **Pin** in the Tasks toolbar keeps the current view and filters under **Pipelines** in
 the left rail, for you only; ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
+
+The person picker beside **Filter** says whose tasks the first tab shows. **Me** is Needs you as
+always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
+fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
+that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
+they asked someone else to do. **Everyone** drops the person. The choice is in the address
+(`?who=human:sam&side=asked`), so a link opens the same plate; the Owner and Asked by filters still
+narrow it. On a plate, tasks blocked by an open task fold under **Blocked** at the end. A row's
+status opens its statuses (or a typed task's steps) to move it; a person's due date is amber
+within two days and red once passed.
 
 
 ## Company and private tasks

@@ -133,6 +133,10 @@ def _computers(c, runners_online, settings):
                                    and n in assigned.get(r["id"], {default})}
                                   for n, v in sorted(runtimes.items())
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())]})
+    from .start_places import summary, describe
+    for row in rows:
+        row["turn_counts"] = summary(c, row["id"], settings)
+        row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
 
@@ -457,8 +461,9 @@ def _waiting(c, online_ids, settings=None):
         running[r["runner_id"]] = running.get(r["runner_id"], 0) + 1
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
+    from .execution import turns_here
     full = {r["id"] for r in c.execute("SELECT id,capacity FROM runners WHERE revoked_at IS NULL")
-            if running.get(r["id"], 0) >= (r["capacity"] or 1)}
+            if sum(turns_here(c, r["id"]).values()) >= (r["capacity"] or 1)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
     # updates (runner-rs follow.rs blocks_claims): its queued work waits on that, not on a Tico bug.
     updating = {r["runner_id"]: r["update_target"] for r in c.execute(
@@ -589,6 +594,9 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
+    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
+    "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
+    "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
@@ -1145,7 +1153,7 @@ def _fallbacks(c):
 def _bot_computers(computers):
     """A bot checking the team's health sees which computers are up, their release and disk, never who operates
     them or their sign-in, container and browser errors."""
-    keep = ("id", "label", "online", "last_seen", "platform", "disk")
+    keep = ("id", "label", "online", "last_seen", "platform", "disk", "turn_counts", "turn_summary")
     return [{**{k: x.get(k) for k in keep}, "update": {k: x["update"].get(k) for k in ("release", "state", "label")}}
             for x in computers]
 
@@ -1450,6 +1458,9 @@ def view(c, who, settings, auth, github, config):
 
     from .performance import load_status
     for computer in computers:
+        if full or kind == "bot":
+            checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
+                                 [_fix("Open Computers", "#/settings", "devices")] if full else []))
         load = load_status(c, computer["id"])
         if load["overloaded"]:
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
@@ -1555,7 +1566,7 @@ def view(c, who, settings, auth, github, config):
                           if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth)
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
-        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off")
+        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_cap", "auto_start_off")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),

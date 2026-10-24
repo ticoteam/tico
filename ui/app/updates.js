@@ -360,7 +360,7 @@ function updEditor(u, n, state, kids = '') {
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      ${u?.drafted_by ? '<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by Assistant label)</label>' : ''}
+      ${u?.drafted_by ? `<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by ${esc(botDisplayName(u.drafted_by))} label)</label>` : ''}
       <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
