@@ -134,17 +134,23 @@ def stage(c, ticket, marks):
     if status in ('closed', 'declined'):
         return None
     if type_id not in marks:
-        steps = c.execute('SELECT position,name,status FROM task_steps WHERE type_id=? ORDER BY position',
-                          (type_id,)).fetchall()
-        first = steps[0][0] if steps else None
-        ready = next((s[0] for s in steps if s[2] == 'ready' or (s[1] or '').strip().lower() == READY_FROM), None)
-        marks[type_id] = (first, ready)
+        marks[type_id] = step_marks(c, type_id)
     first, ready = marks[type_id]
     if status == 'ready' or position is not None and ready is not None and position >= ready:
         return 'ready'
     if position is not None and first is not None and position > first or position is None and status in ('doing', 'review'):
         return 'started'
     return 'waiting'
+
+
+def step_marks(c, type_id):
+    """(first step position, ready step position) of a task type: ready is its Pending Release step, or its first
+    step with a ready status. Either is None when the type has no such step."""
+    steps = c.execute('SELECT position,name,status FROM task_steps WHERE type_id=? ORDER BY position',
+                      (type_id,)).fetchall()
+    first = steps[0][0] if steps else None
+    ready = next((s[0] for s in steps if s[2] == 'ready' or (s[1] or '').strip().lower() == READY_FROM), None)
+    return first, ready
 
 
 def wanted(stages):

@@ -15,6 +15,7 @@ from clients import git_repository
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
+from .roadmap_flow import step_marks
 from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed', 'declined')
@@ -182,18 +183,40 @@ def live_turn_cache(c, computer):
 
 def start_refusal(c, task):
     """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
-    started (On Deck, or any task still `open`) or one an open task blocks. A task being worked (`doing`), or one at a
-    review or waiting while its fix-forward or a review fix runs, gets one; so does reassigned work. No step names."""
+    started (On Deck, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
+    task being worked (`doing`), or one at a review or waiting while its fix-forward or a review fix runs, gets one; so
+    does reassigned work."""
     if task['status'] in CLOSED:
         return f"This task is {task['status']}: a finished task gets no new worktree."
     if task['status'] == 'open':
         return 'This task has not started: move it to In Progress first.'
-    blocker = TR.live_blocker(c, task['id'], H.ACTIVE_STATUSES)
-    if blocker:
-        row = H.task(c, blocker) or {}
-        name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or blocker)
-        return f'This task is blocked by {name}: it gets a worktree once that is done.'
+    for row in TR.live_blockers(c, task['id'], H.ACTIVE_STATUSES):
+        if why := unmerged(c, row):
+            name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or row['id'])
+            return f'This task is blocked by {name}, {why}: it gets a worktree once that code is merged.'
     return ''
+
+
+def unmerged(c, blocker):
+    """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
+    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
+    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned)."""
+    if blocker['status'] == 'ready':
+        return ''
+    step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()
+    ready = step_marks(c, blocker.get('type_id'))[1] if step else None
+    if ready is not None and step['position'] >= ready:
+        return ''
+    prs = c.execute("SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+                    "ORDER BY created,rowid", (blocker['id'],)).fetchall()
+    waiting = [pr for pr in prs if pr['state'] not in ('merged', 'closed')]
+    if not waiting and any(pr['state'] == 'merged' for pr in prs):
+        return ''
+    where = f"still at {step['name']}" if step else f"still {blocker['status']}"
+    if not waiting:
+        return f'{where} with no merged pull request'
+    names = ', '.join(f"#{pr['number']}" if pr['number'] else pr['url'] for pr in waiting)
+    return f"{where} with pull request {names} not merged yet"
 
 
 def released_event(c, row, detail):

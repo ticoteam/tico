@@ -926,6 +926,51 @@ def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
         assert post(api, path, {'repo': 'Acme/product'}, 'bot-test').status_code == 200
 
 
+def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
+    """A worktree builds from source: a blocker at Pending Release (or later) or with its pull request merged lets the
+    dependent start; one still before the merge holds it, and the refusal says what is missing."""
+    api, tid, other = prepared
+    path = f'tasks/{tid}/worktrees'
+    with api.app_state.store.transaction() as c:
+        dev = H.type_create(c, 'human:ana', 'Dev tickets', numbered=True, steps=[
+            {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
+            {'name': 'Review 1', 'status': 'review'}, {'name': 'Review 2', 'status': 'review'},
+            {'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'},
+            {'name': 'Done', 'status': 'done'}, {'name': 'Closed', 'status': 'closed'}])
+        steps = {s['name']: s['id'] for s in dev['steps']}
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)", (other, tid, H.now()))
+        pr = H.task_link(c, 'bot:cpo', other, 'https://github.com/Acme/product/pull/7')
+
+    def at(step, pr_state):
+        with api.app_state.store.transaction() as c:
+            c.execute('UPDATE tasks SET type_id=?,step_id=?,status=? WHERE id=?',
+                      (dev['id'], steps[step], 'review', other))
+            c.execute('UPDATE task_links SET state=? WHERE id=?', (pr_state, pr['id']))
+        return post(api, path, {'repo': 'Acme/product'}, 'bot-test')
+
+    refused = at('Review 2', 'open')
+    assert refused.status_code == 409 and refused.json()['error']['code'] == 'worktree_start', refused.text
+    assert refused.json()['error']['detail'] == ('This task is blocked by Other work, still at Review 2 with pull '
+                                                 'request #7 not merged yet: it gets a worktree once that code is merged.')
+    def starts(step, pr_state):
+        started = at(step, pr_state)
+        assert started.status_code == 200, (step, pr_state, started.text)
+        with api.app_state.store.transaction() as c:     # released, so the next check asks for a new tree
+            c.execute("UPDATE task_links SET state='removed' WHERE id=?", (started.json()['link_id'],))
+
+    starts('Pending Release', 'merged')
+    for step, pr_state in (('Pending Release', 'open'), ('Post Release QA', 'open'), ('Review 2', 'merged')):
+        starts(step, pr_state)              # the step alone, or the merged pull request alone, is enough
+    # A closed, unmerged pull request was abandoned: it neither counts as merged nor holds a merged one back.
+    with api.app_state.store.transaction() as c:
+        H.task_link(c, 'bot:cpo', other, 'https://github.com/Acme/product/pull/8')
+        c.execute("UPDATE task_links SET state='closed' WHERE kind='pr' AND number=8")
+    starts('Review 2', 'merged')
+    refused = at('Review 2', 'closed')
+    assert refused.status_code == 409
+    assert 'still at Review 2 with no merged pull request' in refused.json()['error']['detail']
+
+
 def test_an_obsolete_pending_reservation_is_cancelled_without_touching_a_checkout(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
