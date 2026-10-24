@@ -1240,23 +1240,36 @@ async fn check_for_update_once(app: &App) {
         Err(e) => { report_update(app, "failed", &format!("updater unavailable: {e}")); return; }
     };
     log::info!("update check: reading the {} feed", if company_policy.is_some() { "company" } else { "release" });
+    match install_update(&updater, company_policy.as_ref(), |version| report_update(app, "installing", version)).await {
+        Ok(false) => report_update(app, "current", ""),
+        Ok(true) => app.restart(),
+        Err(detail) => report_update(app, "failed", &detail),
+    }
+}
+
+/// Reads the feed, then downloads, verifies and installs a newer version: true when one was installed.
+/// Separate from the check so the updater test runs this same path against a local feed.
+async fn install_update(
+    updater: &tauri_plugin_updater::Updater,
+    company_policy: Option<&hub::CompanyUpdatePolicy>,
+    installing: impl FnOnce(&str),
+) -> Result<bool, String> {
     let update = match updater.check().await {
         Ok(Some(update)) => update,
-        Ok(None) => { report_update(app, "current", ""); return; }
-        Err(e) => { report_update(app, "failed", &format!("could not read the update feed: {e}")); return; }
+        Ok(None) => return Ok(false),
+        Err(e) => return Err(format!("could not read the update feed: {e}")),
     };
-    if let Some(policy) = company_policy.as_ref() {
-        if update.download_url.scheme() != "https" || !policy.allows_download(&update.download_url) {
-            report_update(app, "failed", "the update file is outside the allowed address");
-            return;
+    if let Some(policy) = company_policy {
+        // Tests serve the feed on loopback HTTP; a built app downloads over HTTPS only.
+        let secure = update.download_url.scheme() == "https"
+            || cfg!(test) && update.download_url.host_str() == Some("127.0.0.1");
+        if !secure || !policy.allows_download(&update.download_url) {
+            return Err("the update file is outside the allowed address".into());
         }
     }
-    report_update(app, "installing", &update.version);
-    if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
-        report_update(app, "failed", &format!("install failed: {e}"));
-        return;
-    }
-    app.restart();
+    installing(&update.version);
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("install failed: {e}"))?;
+    Ok(true)
 }
 
 // ----------------------------------------------------------------------------- polling
@@ -1391,78 +1404,103 @@ mod updater_integration_tests {
         socket.write_all(body).unwrap();
     }
 
-    fn signed_s3_location(address: SocketAddr) -> String {
-        format!(
-            "http://{address}/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test%2Fscope&X-Amz-Date=20261004T170000Z&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature={}",
-            "ab".repeat(32)
-        )
-    }
-
     fn new_hub_policy(address: SocketAddr) -> hub::CompanyUpdatePolicy {
         let hub = url(address, "/");
         let endpoint = hub.join("download/latest.json").unwrap();
         hub::CompanyUpdatePolicy::new(hub, endpoint, Some(COOKIE))
     }
 
+    /// A Linux company app updating from what a release publishes: app/tests/update_hub.py publishes a signed
+    /// candidate AppImage with scripts/app_release.py and serves it through the server's own download routes behind
+    /// an Access gate. The app finds the update only with the hub session, downloads it through the server's
+    /// presigned storage redirect and installs it over the running AppImage, and refuses it under another updater key.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     #[tokio::test]
-    async fn tauri_updater_checks_hub_manifest_downloads_signed_s3_artifact_and_verifies_signature() {
-        let expected = b"synthetic Tico updater artifact";
-        let tampered = b"tampered synthetic updater artifact";
-        let (public_key, signature) = key_and_signature(expected);
-        let (hub_listener, hub_address) = bind();
-        let (storage_listener, storage_address) = bind();
-        let artifact_url = url(hub_address, "/download/file/0.3.21/Tico.tar.gz");
-        let feed_manifest = manifest(&artifact_url, &signature);
-        let storage_url = signed_s3_location(storage_address);
-        let hub_server = thread::spawn(move || {
-            let (mut feed_socket, _) = hub_listener.accept().unwrap();
-            let feed_request = read_request(&mut feed_socket);
-            respond(&mut feed_socket, "200 OK", &[("Content-Type", "application/json")],
-                    feed_manifest.as_bytes());
-            let mut artifact_requests = Vec::new();
-            for _ in 0..2 {
-                let (mut artifact_socket, _) = hub_listener.accept().unwrap();
-                artifact_requests.push(read_request(&mut artifact_socket));
-                respond(&mut artifact_socket, "302 Found", &[("Location", &storage_url)], b"");
-            }
-            (feed_request, artifact_requests)
-        });
-        let storage_server = thread::spawn(move || {
-            let mut requests = Vec::new();
-            for body in [expected.as_slice(), tampered.as_slice()] {
-                let (mut socket, _) = storage_listener.accept().unwrap();
-                requests.push(read_request(&mut socket));
-                respond(&mut socket, "200 OK", &[("Content-Type", "application/octet-stream")], body);
-            }
-            requests
-        });
+    async fn company_app_finds_authenticates_downloads_verifies_and_installs_a_published_update() {
+        use std::io::BufRead;
+        use std::os::unix::fs::PermissionsExt;
+        const CANDIDATE: &str = "0.3.99";
+        let scratch = std::env::temp_dir().join(format!("tico-app-update-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let (bundles, installed_dir) = (scratch.join("bundles"), scratch.join("installed"));
+        std::fs::create_dir_all(&bundles).unwrap();
+        std::fs::create_dir_all(&installed_dir).unwrap();
+        let candidate = b"#!/bin/sh\necho Acme Tico 0.3.99\n";
+        let (public_key, signature) = key_and_signature(candidate);
+        let (other_key, _) = key_and_signature(candidate);
+        // The file names `cargo tauri build --bundles appimage` writes, which app_release.py classifies.
+        let appimage = bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage"));
+        std::fs::write(&appimage, candidate).unwrap();
+        std::fs::write(bundles.join(format!("Acme Tico_{CANDIDATE}_amd64.AppImage.sig")), &signature).unwrap();
+        let installed = installed_dir.join("Acme Tico.AppImage");
+        let previous = b"#!/bin/sh\necho Acme Tico 0.3.98\n";
+        std::fs::write(&installed, previous).unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let policy = new_hub_policy(hub_address);
-        let app = test_app();
-        let updater = test_updater(app.updater_builder(), &policy, public_key);
-        let update = updater.check().await.unwrap().expect("hub manifest update");
-        assert_eq!(update.version, VERSION);
-        assert!(policy.allows_download(&update.download_url));
-        let downloaded = update.download(|_, _| {}, || {}).await.unwrap();
-        assert_eq!(downloaded.as_slice(), expected.as_slice());
-        assert!(update.download(|_, _| {}, || {}).await.is_err(),
-                "a tampered artifact must fail the updater signature check");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let python = std::env::var("TICO_PYTHON").unwrap_or_else(|_| "python3".into());
+        let mut feed = std::process::Command::new(python)
+            .arg(root.join("app/tests/update_hub.py")).arg(&bundles).arg(CANDIDATE).arg(COOKIE)
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped())
+            .spawn().expect("start app/tests/update_hub.py");
+        let mut ready = String::new();
+        std::io::BufReader::new(feed.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        let ready: serde_json::Value = serde_json::from_str(&ready).expect("update_hub.py did not start");
+        let hub = Url::parse(ready["hub"].as_str().unwrap()).unwrap();
+        // A company build's configured endpoint: <url>/download/latest.json on the hub it connects to.
+        let configured = hub.join("download/latest.json").unwrap();
+        let endpoint = hub::company_update_endpoint(&hub, Some(configured.as_str())).unwrap();
 
-        let (feed_request, artifact_requests) = hub_server.join().unwrap();
-        let storage_requests = storage_server.join().unwrap();
-        assert!(feed_request.starts_with("GET /download/latest.json "));
-        assert!(feed_request.to_ascii_lowercase().contains(&format!("cookie: {COOKIE}").to_ascii_lowercase()));
-        assert_eq!(artifact_requests.len(), 2);
-        assert!(artifact_requests.iter().all(|request| {
-            request.starts_with("GET /download/file/0.3.21/Tico.tar.gz ")
-                && request.to_ascii_lowercase().contains(&format!("cookie: {COOKIE}").to_ascii_lowercase())
-        }));
-        assert_eq!(storage_requests.len(), 2);
-        assert!(storage_requests.iter().all(|request| {
-            request.starts_with("GET /object?X-Amz-Algorithm=AWS4-HMAC-SHA256")
-                && !request.to_ascii_lowercase().contains("cookie:")
-                && !request.to_ascii_lowercase().contains("authorization:")
-        }));
+        let updater = |key: &str, cookie: Option<&str>| {
+            let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+            context.config_mut().plugins.0.insert("updater".into(),
+                serde_json::json!({"pubkey": key, "endpoints": [configured.as_str()],
+                                   "dangerousInsecureTransportProtocol": true}));
+            context.package_info_mut().version = "0.3.98".parse().unwrap();
+            let app = tauri::test::mock_builder()
+                .plugin(tauri_plugin_updater::Builder::new().build())
+                .build(context).expect("build mock Tauri app");
+            let policy = hub::CompanyUpdatePolicy::new(hub.clone(), endpoint.clone(), cookie);
+            let updater = configure_company_updater(app.updater_builder(), &policy).unwrap()
+                .executable_path(&installed).build().expect("build updater");
+            (app, updater, policy)
+        };
+        async fn run(
+            (app, updater, policy): (tauri::App<tauri::test::MockRuntime>, tauri_plugin_updater::Updater,
+                                     hub::CompanyUpdatePolicy),
+        ) -> (Result<bool, String>, Option<String>) {
+            let mut offered = None;
+            let result = install_update(&updater, Some(&policy), |version| offered = Some(version.to_string())).await;
+            drop(app);
+            (result, offered)
+        }
+
+        let (signed_out, _) = run(updater(&public_key, None)).await;
+        assert!(signed_out.is_err(), "without the hub session the feed is Access's sign-in page: {signed_out:?}");
+        let (updated, offered) = run(updater(&public_key, Some(COOKIE))).await;
+        assert_eq!(offered.as_deref(), Some(CANDIDATE), "{updated:?}");
+        assert_eq!(updated, Ok(true), "the published update did not install");
+        assert_eq!(std::fs::read(&installed).unwrap(), candidate);
+        assert_eq!(std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777, 0o755);
+        // The same download under another updater key: only the signature check can refuse it now.
+        std::fs::write(&installed, previous).unwrap();
+        let (wrong_key, offered) = run(updater(&other_key, Some(COOKIE))).await;
+        assert_eq!(offered.as_deref(), Some(CANDIDATE), "{wrong_key:?}");
+        assert!(wrong_key.as_ref().is_err_and(|e| e.starts_with("install failed")),
+                "an update signed by another key must not install: {wrong_key:?}");
+        assert_eq!(std::fs::read(&installed).unwrap(), previous, "a refused update must leave the app in place");
+
+        drop(feed.stdin.take());
+        feed.wait().unwrap();
+        let requests: Vec<serde_json::Value> = std::fs::read_to_string(ready["log"].as_str().unwrap()).unwrap()
+            .lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        let downloads: Vec<_> = requests.iter()
+            .filter(|r| r["service"] == "bucket" && r["method"] == "GET"
+                && r["path"].as_str().unwrap().contains("X-Amz-Signature="))
+            .collect();
+        assert_eq!(downloads.len(), 2, "one download per installing attempt: {requests:?}");
+        assert!(downloads.iter().all(|r| r["cookie"] == false), "the hub session reached the bucket: {downloads:?}");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[tokio::test]
