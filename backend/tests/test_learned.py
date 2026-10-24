@@ -5,7 +5,9 @@ each turn there is handed both layers as they are when it starts, so an entry de
 
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_assistant import say
+from backend.tests.test_botops_parity import act
 from backend.tests.test_ceo_bot_chat import ceo, personal
+from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 def call(api, method, path, body=None, token="ana-test", expected=200):
@@ -83,6 +85,19 @@ def test_a_personal_layer_is_its_persons_alone(api):
     ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
     get(api, "assistant/learned", ops["token"], expected=403)
     learn(api, "Bots first", token=ops["token"], expected=403)
+
+
+def test_botops_working_for_a_person_never_reaches_their_layer(api, botops):
+    # BotOps doing what she asked borrows her rights, but it is not her chat: it neither reads her layer (asked as her
+    # by default or explicitly) nor adds to it.
+    learn(api, "Cara's secret ranking", token="cara-test")
+    attempt = turn(api, botops, person="cara-test", text="Fix the deploy")
+    for ref in (None, "turn"):
+        r = act(api, attempt, "GET", "assistant/learned", ref=ref)
+        assert r.status_code == 403 and "secret ranking" not in r.text, r.text
+    r = act(api, attempt, "POST", "assistant/learned", {"layer": "personal", "text": "Deploys first"})
+    assert r.status_code == 403, r.text
+    assert [e["text"] for e in get(api, "assistant/learned", "cara-test")["personal"]] == ["Cara's secret ranking"]
 
 
 def test_an_assistant_learns_in_its_persons_chat_and_reads_it_fresh_each_turn(api):

@@ -40,9 +40,13 @@ CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, perso
 """
 
 
-def _person(who):
-    """The person whose layers these are: a person, on their own or through their chat bot's turn. Never a bot."""
-    if who.role not in ("owner", "human") or not H.is_human(who.actor):
+def _person(who, settings):
+    """The person whose layers these are: a person, on their own or through a turn of their own chat bot (the
+    Assistant, or the CEO Bot in the owner's chat; backend/auth.py assistant_principal). Never a bot, nor a bot that
+    borrows the person's rights for other work: BotOps doing what they asked is not their chat."""
+    own_turn = (who.via == "assistant" and not who.confirmed and bool(who.attempt_id)
+                and who.task_actor in ("bot:" + settings.assistant_bot, "bot:" + ceo_bot.SLUG))
+    if who.role not in ("owner", "human") or not H.is_human(who.actor) or (who.via and not own_turn):
         raise Problem("forbidden", "What a chat bot has learned belongs to its person: only they, or their own chat's "
                       "turn, read or change it", 403)
     return who.actor
@@ -80,8 +84,8 @@ def company_layer(c):
             "entries": entries(c, "company")}
 
 
-def view(c, who):
-    person = _person(who)
+def view(c, who, settings):
+    person = _person(who, settings)
     return {"personal": entries(c, "personal", person),
             "company": company_layer(c) if company_reader(c, who) else None}
 
@@ -113,18 +117,18 @@ def _clean(text):
     return text
 
 
-def _may_write(c, who, layer):
-    person = _person(who)
+def _may_write(c, who, layer, settings):
+    person = _person(who, settings)
     if layer == "company" and not company_reader(c, who):
         raise Problem("forbidden", f"Only the owner teaches the {ceo_bot.name(c)} about the company, on their own "
                       "or in their chat with it; an admin, a member or an Assistant cannot", 403)
     return person if layer == "personal" else ""
 
 
-def add(c, who, layer, text):
+def add(c, who, layer, text, settings):
     if layer not in LAYERS:
         raise Problem("validation", "The layer is personal or company", 422)
-    person = _may_write(c, who, layer)
+    person = _may_write(c, who, layer, settings)
     text = _clean(text)
     H._writer(c, who.actor)
     same = c.execute("SELECT * FROM learned_entries WHERE layer=? AND person=? AND text=?",
@@ -142,12 +146,12 @@ def add(c, who, layer, text):
     return _view({**row, "updated": None})
 
 
-def _own_entry(c, who, eid):
+def _own_entry(c, who, eid, settings):
     """The entry, when it is this person's to change on their own click: their personal entry, or a company entry for
     the owner. Anyone else's is not found, so a refusal never says it is there."""
     if who.via:
         raise Problem("forbidden", "The person edits and deletes what it learned, on What it has learned", 403)
-    person = _person(who)
+    person = _person(who, settings)
     row = c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone()
     if not row or (row["layer"] == "personal" and row["person"] != person) \
             or (row["layer"] == "company" and not company_reader(c, who)):
@@ -155,8 +159,8 @@ def _own_entry(c, who, eid):
     return row
 
 
-def edit(c, who, eid, text):
-    row = _own_entry(c, who, eid)
+def edit(c, who, eid, text, settings):
+    row = _own_entry(c, who, eid, settings)
     text = _clean(text)
     H._writer(c, who.actor)
     c.execute("UPDATE learned_entries SET text=?, updated=?, updated_by=? WHERE id=?", (text, H.now(), who.actor, eid))
@@ -164,8 +168,8 @@ def edit(c, who, eid, text):
     return _view(c.execute("SELECT * FROM learned_entries WHERE id=?", (eid,)).fetchone())
 
 
-def delete(c, who, eid):
-    row = _own_entry(c, who, eid)
+def delete(c, who, eid, settings):
+    row = _own_entry(c, who, eid, settings)
     H._writer(c, who.actor)
     c.execute("DELETE FROM learned_entries WHERE id=?", (eid,))
     H.event(c, who.actor, "learned.deleted", eid, {"layer": row["layer"]})
@@ -179,7 +183,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return view(c, who)
+            return view(c, who, store.settings)
 
     @app.post("/api/v2/assistant/learned")
     def learned_add(request: Request, body: M.LearnedAdd):
@@ -187,7 +191,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            return {"entry": add(c, who, body.layer, body.text)}
+            return {"entry": add(c, who, body.layer, body.text, store.settings)}
         return mutate(request, body, work)
 
     @app.patch("/api/v2/assistant/learned/{eid}")
@@ -195,7 +199,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            return {"entry": edit(c, who, eid, body.text)}
+            return {"entry": edit(c, who, eid, body.text, store.settings)}
         return mutate(request, body, work)
 
     @app.delete("/api/v2/assistant/learned/{eid}")
@@ -203,5 +207,5 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         def work(c):
             auth.domain(who)
-            return delete(c, who, eid)
+            return delete(c, who, eid, store.settings)
         return mutate(request, M.Empty(), work)

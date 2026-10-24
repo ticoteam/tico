@@ -184,8 +184,8 @@ and Confirm and Cancel still require your own click in Tico.
 Tell it how you like things ranked and summarised ("launches matter more than hiring news", "numbers first") and it
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your chat
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
-asks once more). Only you see this layer: not the owner, not administrators, not SQL, and not another person's
-Assistant. The audit log names an entry by id, never by its words. It goes with you: if you become the owner, your
+asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
+Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: if you become the owner, your
 [CEO Bot](ceo-bot.md#what-it-has-learned) uses the same layer, and back again.
 
 Each turn in your chat is handed the layer as it is when the turn starts, so a line you delete is not used from the
