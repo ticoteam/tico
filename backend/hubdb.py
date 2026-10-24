@@ -5597,37 +5597,49 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
 
 
 def waiting_for(conn, row):
-    """What a task's owner is waiting for, in words, or None when there is nothing.
+    """What a task's owner is waiting for, in words, or None when there is nothing (`wait_detail`)."""
+    return (wait_detail(conn, row) or {}).get("why")
+
+
+def wait_detail(conn, row):
+    """What a task's owner is waiting for, or None when there is nothing: {"why": words, "on": the actor it waits on, or
+    None when no one actor holds it ("person" for an undecided approval, "external" for GitHub or a release)}.
 
     Something is: a question its owner asked about it that nobody has answered, an unfinished
     child, an unfinished blocker, an approval not yet decided, or a person it names (`waiting_on`).
     """
     live = "('done','closed','declined')"
-    asks = [r["id"] for r in _rows(conn.execute(
-        "SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=?",
-        (row["owner"], row["id"])))]
-    if asks and len(answers_to(conn, asks)) < len(asks):
-        return "an unanswered question"
-    if _one(conn, f"SELECT 1 FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} LIMIT 1", (row["id"],)):
-        return "an open child task"
-    if TR.live_blocker(conn, row["id"], ACTIVE_STATUSES):
-        return "an open blocker"
+    asks = _rows(conn.execute(
+        "SELECT m.id, m.to_actor FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? ORDER BY m.created",
+        (row["owner"], row["id"])))
+    if asks:
+        answered = answers_to(conn, [a["id"] for a in asks])
+        open_ask = next((a for a in asks if a["id"] not in answered), None)
+        if open_ask:
+            return {"why": "an unanswered question", "on": open_ask["to_actor"]}
+    child = _one(conn, f"SELECT owner FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
+                       "ORDER BY created, id LIMIT 1", (row["id"],))
+    if child:
+        return {"why": "an open child task", "on": child["owner"]}
+    blocker = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)
+    if blocker:
+        return {"why": "an open blocker", "on": (_one(conn, "SELECT owner FROM tasks WHERE id=?", (blocker,)) or {}).get("owner")}
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
-        return "an undecided approval"
+        return {"why": "an undecided approval", "on": "person"}
     if row.get("waiting_on"):
-        return f"{actor_id(row['waiting_on'])} to act"
+        return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
     from .milestone_waits import pending as milestone_pending
     milestone = milestone_pending(conn, row["id"])
     if milestone:
-        return milestone
+        return {"why": milestone, "on": "external"}
     # Only a PR GitHub reports on can wake it: one the App has sent an event for, or in a repository it reaches.
     armed = _one(conn, "SELECT l.title FROM task_links l WHERE l.task_id=? AND l.kind='pr' "
                        "AND l.state IN ('open','draft','merged') AND json_extract(l.detail_json,'$.wake_once') IS NOT NULL "
                        "AND (json_extract(l.detail_json,'$.tracked') OR EXISTS(SELECT 1 FROM repositories r "
                        "WHERE lower(r.full_name)=lower(l.repo) AND r.reachable=1)) LIMIT 1", (row["id"],))
     if armed:
-        return f"GitHub on {armed['title']}"
+        return {"why": f"GitHub on {armed['title']}", "on": "external"}
     return None
 
 
