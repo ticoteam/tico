@@ -13,6 +13,11 @@
 .task-status{flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-xs);font-weight:400}
 .tl-row > .task-status{width:65px;text-align:right}
 .tl-row > .tl-status-pad{flex:none;width:65px}
+/* a row's status chip: quiet until the row is hovered, then a thin outline; it opens the status (or step) menu */
+.tl-row > .tl-status{width:auto;min-width:65px;height:20px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;font:inherit;font-size:var(--t-xs);cursor:pointer}
+.tl-row:hover > .tl-status,.tl-status[aria-expanded=true]{border-color:var(--line)}
+.tl-status:hover{background:var(--surface2);color:var(--ink)}
+.tl-status:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 
 /* ---- toolbar: title, labelled tabs with counts, search, new task */
 .tl-head{display:flex;align-items:center;gap:12px;min-height:44px}
@@ -68,6 +73,22 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-groupchip{gap:6px;padding:0 8px;color:var(--muted)}
 .tl-groupchip .v{color:var(--ink)}
 .tl-groupchip:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-who-wrap{flex:none;display:inline-flex}
+.tl-who-wrap[hidden]{display:none}
+.tl-who{gap:6px;padding:0 8px}
+.tl-who .v{max-width:18ch}
+.tl-who svg:last-child{color:var(--muted)}
+.tl-who:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-seg{display:flex;gap:2px;margin:0 0 6px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.tl-seg button{flex:1;height:24px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/1 var(--sans);white-space:nowrap;cursor:pointer}
+.tl-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.tl-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-who-menu .tl-menu-h{padding-top:8px}
+.tl-who-team[hidden],.tl-who-more[hidden],.tl-menu-none[hidden]{display:none}
+.tl-who-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-mi-n{margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
+.tl-mi-n+.tl-mi-on{margin-left:6px}
+.tl-who-more{color:var(--muted)}
 .tl-selmode[aria-pressed=true]{color:var(--accent);border-color:var(--line)}
 @media (min-width:761px){#task-select-mode{display:none!important}}
 
@@ -139,6 +160,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-parent{flex:0 1 auto;min-width:0;max-width:28%;display:inline-flex;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden}
 .tl-parent-t{overflow:hidden;text-overflow:ellipsis}
 .tl-due.late{color:var(--fail)}
+.tl-due.soon{color:var(--wait-ink)}
 .tl-people{flex:none;display:inline-flex;align-items:center;justify-content:flex-end;min-width:20px}
 .tl-asker{display:inline-flex;margin-right:-3px;position:relative;z-index:1}
 .tl-asker .av{box-shadow:0 0 0 2px var(--bg)}
@@ -282,7 +304,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check{display:inline-block;width:18px;height:18px;opacity:1}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
-  .tl-filters{flex-wrap:nowrap}
+  .tl-filters{flex-wrap:nowrap;flex:none}
   .tl-groupchip .k{display:none}
   .tl-addf.tl-ic{width:32px;height:32px}
   .tl-parent{display:none}

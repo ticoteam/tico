@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 
+import anyio
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -327,3 +328,24 @@ def test_busy_bot_stays_out_of_claims_after_lease_expiry(api):
     # No durable fence: once the supervisor reports the process gone, work resumes.
     replacement = post(api, "jobs/claim", {"busy_bots": []}, token=r["token"])["attempt"]
     assert replacement and replacement["id"] != first["id"]
+
+
+def test_healthz_answers_while_slow_handlers_hold_every_shared_worker(api):
+    # A one-token shared pool, held: every ordinary sync handler would queue behind it.
+    held, size = object(), {}
+
+    async def hold_all():
+        shared = anyio.to_thread.current_default_thread_limiter()
+        size["tokens"], shared.total_tokens = shared.total_tokens, 1
+        await shared.acquire_on_behalf_of(held)
+
+    async def release_all():
+        shared = anyio.to_thread.current_default_thread_limiter()
+        shared.release_on_behalf_of(held)
+        shared.total_tokens = size["tokens"]
+
+    api.portal.call(hold_all)
+    try:
+        assert api.get("/healthz").json()["ok"] is True
+    finally:
+        api.portal.call(release_all)

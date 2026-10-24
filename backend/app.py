@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.datastructures import DefaultPlaceholder
@@ -1281,10 +1282,17 @@ def create_app(settings=None):
             message = {**message, "woke": False, "held": held}
         return message
 
-    @app.get("/healthz")
-    def health():
+    # Liveness reads the database on its own two threads: when slow handlers hold every worker in the shared
+    # pool, a probe queued behind them would time out and mark a working server unhealthy.
+    health_threads = anyio.CapacityLimiter(2)
+
+    def health_check():
         with store.read() as c:
             c.execute("SELECT 1 FROM cloud_migrations").fetchone()
+
+    @app.get("/healthz")
+    async def health():
+        await anyio.to_thread.run_sync(health_check, limiter=health_threads)
         return {"ok": True, "service": "tico", "protocol": 2, "release": settings.release_id,
                 "environment_id": settings.environment_id}
 
@@ -5618,6 +5626,8 @@ def create_app(settings=None):
 
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
+    from .bot_task_tabs import install as install_bot_task_tabs
+    install_bot_task_tabs(app, store, auth, mutate, settings)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

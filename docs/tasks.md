@@ -864,6 +864,16 @@ question. **Pin** in the Tasks toolbar keeps the current view and filters under 
 the left rail, for you only; ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
 
+The person picker beside **Filter** says whose tasks the first tab shows. **Me** is Needs you as
+always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
+fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
+that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
+they asked someone else to do. **Everyone** drops the person. The choice is in the address
+(`?who=human:sam&side=asked`), so a link opens the same plate; the Owner and Asked by filters still
+narrow it. On a plate, tasks blocked by an open task fold under **Blocked** at the end. A row's
+status opens its statuses (or a typed task's steps) to move it; a person's due date is amber
+within two days and red once passed.
+
 
 ## Company and private tasks
 

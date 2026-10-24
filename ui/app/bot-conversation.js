@@ -186,7 +186,7 @@ async function loadBotIssues(slug) {
     const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
     const closed = list.filter(i => i.state === 'CLOSED' && String(i.closedAt || '') >= since).sort((a,b) => b.closedAt.localeCompare(a.closedAt));
     if (!$('#t-open')) return;
-    $('#cnt-done').textContent = closed.length || '';
+    botTaskCount('cnt-done', closed.length);
     const row = (i, when, label) => `<details class="trow"><summary>
         <span class="mono muted">#${i.number}</span><span class="ttl">${esc(i.title)}</span>
         <span class="tags">${i.state === 'OPEN' ? statusPill(i) : ''}${i.priority && i.priority !== 'p2' ? ' ' + prioPill(i) : ''}</span>
