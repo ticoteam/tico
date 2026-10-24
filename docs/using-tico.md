@@ -19,32 +19,32 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 
 **What is on a bot's page?**
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
-and a rail down the right. The rail opens with one **Tasks** section with four default tabs, each with a count:
+and a rail down the right. By default the rail shows **Tasks**, **Updates**, **Files** and **Routines**, in that order.
+**Tasks** has four default tabs, each with a count:
 **Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (every open task the bot holds, of every type, newest first),
-**Blocked** (each task says who or what it waits on) and **Done Recently** (finished in the last 14 days). An empty tab says so.
-A bot with just one tab shows its list without a tab bar.
+**Blocked** (each task says who or what it waits on) and **Assigned to Others** (open tasks this bot asked someone else to do). An empty tab says so.
+A bot with just one tab shows its list without a tab bar. **Tasks** grows to 500 pixels at most and scrolls inside after that.
 
 The board icon beside **Tasks** opens the tasks board with this bot selected as owner. You can change the owner filter there.
-If you can only send this bot requests, you see neither the board icon nor the tab settings icon.
+If you can only send this bot requests, you see neither the board icon nor the edit icon.
 
-Below it come **Assigned to others**, the latest **Updates** (all of them behind the small icon), **Files** and **Routines** (a row opens the routine to read or edit);
+**Updates** shows the latest update (all of them behind the small icon), and a **Routines** row opens the routine to read or edit;
 a section with nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
 Tasks are one tab each.
 
-**How do I change a bot's task tabs?**
-If you manage the bot, you can change its tabs. The bot can also change its own layout.
+**How do I change a bot's sidebar?**
+If you manage the bot, you see a pencil at the top right of its rail. The bot can also change its own layout.
 
-1. Open the settings icon beside **Tasks** (**Tab settings**).
-2. Choose **Add a tab**, give it a name, and pick its **Task types**, **States** and **Waiting on** filter.
-   For example, name it "Product tasks", select **Product roadmap**, and keep **Open**, **Doing** and **Waiting** checked.
-   Leave task types unchecked to include every type. Pick at least one state.
-3. Choose **Save**. The tab appears with its count and matching tasks. If saving fails, the window shows the error for you to correct.
+1. Choose the pencil. The rail switches to edit mode with **Cancel** and **Done** at the top.
+2. Drag a section by its handle to move it, use its eye to hide or show it, and drag its bottom edge to set how tall it may grow (**Reset** goes back).
+3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and, for your own tabs, its conditions.
+   A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Waiting on**,
+   **Created**, **Updated** or **Done within** a number of days, **Due** (overdue or within days) and **Label**.
+   **Me** and **Others** mean whoever is looking, and a tab only lists tasks that person may read. **Delete** removes the tab.
+4. Choose **Done** to save it all at once, or **Cancel** to drop the changes.
 
-In the same window, edit a tab's name, use the arrows to reorder it, or remove it. Keep at least one tab.
-You can edit a custom tab's filters; built-in tabs keep their filters.
-**Reset to the four built-in tabs** restores the defaults immediately. **Cancel** discards unsaved edits.
-Everyone opening the bot sees its saved layout. Your **Assistant** is the exception: its tabs are personal to you.
-Tabs scroll sideways when they do not fit, with no limit on the number of tabs.
+Everyone opening the bot sees its saved layout. Your **Assistant** is the exception: its layout is personal to you.
+Tabs scroll sideways when they do not fit, with no limit on the number of tabs. A hidden section is not shown outside edit mode.
 
 **How do I ask a bot a question?**
 Open the bot's page and use its **Chat** tab; the reply comes back into the same conversation.

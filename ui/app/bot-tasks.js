@@ -111,26 +111,26 @@ async function loadBotChatTasks(slug) {
   botChatTasksRender(slug, [...unique.values()]);
 }
 // Needs you leads: what this bot needs from the person, the rows its number in the org tree counts (botNeeds),
-// whoever owns the task. Active is the bot's own work; "Assigned to others" is what it asked of people and other
-// bots. A task in Needs you is not listed again below it. Each has a count; Recurring comes later. A failed load is
-// retried, never shown as an empty list.
+// whoever owns the task. Doing, Blocked and Done Recently are views into the bot's own work; every other tab is a
+// filter the server counts for the person looking (botTaskFilterRead). A task in Needs you is not listed again
+// below it. A failed load is retried, never shown as an empty list.
 async function loadBotTasksV2(slug) {
   const pane = $('#t-open'); if (!pane) return;
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen) botTasksRender(slug, seen.owned, seen.asked);   // last time's list at once; the fresh one follows
-  let open = null, ended = null, asked = null;
+  if (seen) botTasksRender(slug, seen.owned);   // last time's list at once; the fresh one follows
+  let open = null, ended = null;
   // Done Recently needs only what changed since the window opened: the bot's whole history was read on every refresh,
   // and past the server's 500-row page it pushed open tasks out. The day is the cut, so an unchanged list stays a 304.
   const since = new Date(Date.now() - (BOT_DONE_RECENT_DAYS + 1) * 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
   const who = encodeURIComponent(slug);
+  const filtered = botTaskFilterRead(slug);
   for (const wait of [0, 600, 2000]) {
     if (wait) await new Promise(done => setTimeout(done, wait));
     if (!$('#t-open') || BOT?.slug !== slug) return;
-    [open, ended, asked] = await Promise.all([
+    [open, ended] = await Promise.all([
       open || v2Get(`/v2/tasks?owner=${who}&status=${V2_ACTIVE.join(',')}&snoozed=all&brief=true`),     // snoozed show with their chip
-      ended || v2Get(`/v2/tasks?owner=${who}&status=${V2_ENDED.join(',')}&snoozed=all&brief=true&updated_since=${since}`),
-      asked || v2Get(`/v2/tasks?requester=${who}&status=${V2_ACTIVE.join(',')}&brief=true`)]);
-    if (open && ended && asked) break;
+      ended || v2Get(`/v2/tasks?owner=${who}&status=${V2_ENDED.join(',')}&snoozed=all&brief=true&updated_since=${since}`)]);
+    if (open && ended) break;
   }
   if (!$('#t-open')) return;
   // A task that finished between the two reads is in both: the later copy wins.
@@ -140,30 +140,26 @@ async function loadBotTasksV2(slug) {
     if (!was || String(t.updated || '') >= String(was.updated || '')) byId.set(t.id, t);
   }
   const owned = open && ended ? {tasks: [...byId.values()]} : null;
-  if (!owned || !asked) {
+  if (!owned) {
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
   }
-  BOT_TASKS_CACHE.set(slug, {owned, asked});
-  botTasksRender(slug, owned, asked);
+  BOT_TASKS_CACHE.set(slug, {owned});
+  botTasksRender(slug, owned);
+  await filtered;
 }
-// One Tasks section, four views of the bot's work: what needs the viewer, everything open (the full list), what waits
-// on someone else, and what finished in the last two weeks. [key, label, count id]; the ids predate the tabs.
+// The built-in views of the bot's work: what needs the viewer, everything open (the full list), what waits on someone
+// else, and what finished in the last two weeks. [key, label, count id]; the ids predate the tabs. A bot that is not
+// on Tico's task list (Issues) shows these four.
 const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 'cnt-active'],
                        ['blocked', 'Blocked', 'cnt-blocked'], ['done', 'Done Recently', 'cnt-done']];
 const BOT_DONE_RECENT_DAYS = 14;
 // The tab a person picked on each bot's page, for this visit; until they pick, Needs You leads while it has rows.
 const BOT_TASK_TAB = new Map();
-// Each bot's own tabs (backend/bot_task_tabs.py): the built-in ones renamed, moved or left out, and tabs of its own that
-// filter by type, state and whom a task waits on. Everyone sees the same layout of a bot; the Assistant's is yours.
-// slug -> {tabs, can_edit, personal}; until it loads, the four built-in tabs.
-const BOT_TASK_LAYOUT = new Map();
-const BOT_TASK_STATES = [['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['review', 'In review'], ['ready', 'Ready'],
-                         ['done', 'Done'], ['closed', 'Closed'], ['declined', 'Declined']];
-const BOT_TASK_WAITING_ON = [['', 'Anyone or nothing'], ['me', 'The person looking'], ['person', 'A person'], ['bot', 'A bot']];
-// The bot's tabs in order, each with its key: a built-in's own, or c0, c1… for the bot's own tabs by place.
+// The bot's tabs in order, each with its key: a built-in's own, or c0, c1… for its filters by place. They come from
+// the bot's sidebar layout (ui/app/bot-sidebar.js); while it edits, from the draft.
 function botTaskTabList(slug) {
-  const tabs = BOT_TASK_LAYOUT.get(slug)?.tabs || BOT_TASK_TABS.map(([builtin, name]) => ({builtin, name}));
+  const tabs = (BOT_EDIT?.slug === slug ? BOT_EDIT.tabs : botSidebarLayout(slug)?.tabs) || BOT_TASK_TABS.map(([builtin, name]) => ({builtin, name}));
   return tabs.map((tab, at) => ({...tab, key: tab.builtin || 'c' + at}));
 }
 // [key, label, count id], as Part 1 and 3 read them.
@@ -177,24 +173,16 @@ function botTaskCount(id, n) {
 }
 // The board, filtered to this bot as owner; the owner chip there can be changed or removed.
 const botTaskBoardHref = slug => `${TASKS}?owner=bot:${encodeURIComponent(slug)}&view=board`;
+// A tab whose count is off keeps it in the page, unseen, so a redraw has one place to write it.
 function botTaskTabsBarHTML(slug) {
-  return botTaskTabs(slug).map(([key, label, count]) =>
-    `<button type="button" role="tab" id="bot-tab-t-${key}" data-bot-task-tab="${key}" aria-controls="bot-${key}" aria-selected="false">${esc(label)} <span class="cnt" id="${count}"></span></button>`).join('');
+  return botTaskTabList(slug).map(({key, name, show_count: count}) =>
+    `<button type="button" role="tab" id="bot-tab-t-${key}" data-bot-task-tab="${key}" aria-controls="bot-${key}" aria-selected="false"${count === false ? ' class="no-cnt"' : ''}>${esc(name)} <span class="cnt" id="cnt-${key}"></span></button>`).join('')
+    + (BOT_EDIT?.slug === slug ? '<button type="button" class="bot-tab-add" data-bot-tab-add data-sort-tail aria-label="Add a filter" title="Add a filter">+</button>' : '');
 }
-// The built-in panels stay on the page whether or not their tab is shown; the bot's own tabs get one each.
+// The built-in panels stay on the page whether or not their tab is shown; the bot's filters get one each.
 function botTaskCustomPanelsHTML(slug) {
   return botTaskTabList(slug).filter(tab => !tab.builtin).map(({key}) =>
     `<div class="bot-custom-tab" id="bot-${key}" role="tabpanel" aria-labelledby="bot-tab-t-${key}" hidden><div id="t-${key}" class="tpane"><div class="rail-empty">Loading…</div></div></div>`).join('');
-}
-// Read the bot's layout; when it differs from what the page shows, draw the tabs again from the tasks already read.
-async function botTaskTabsLoad(slug) {
-  const layout = await v2Get(`/v2/bots/${encodeURIComponent(slug)}/task-tabs`);
-  if (!layout || BOT?.slug !== slug) return;
-  const before = JSON.stringify(BOT_TASK_LAYOUT.get(slug)?.tabs || null);
-  BOT_TASK_LAYOUT.set(slug, layout);
-  const edit = $('#bot-tasks-settings');
-  if (edit) edit.hidden = !layout.can_edit;
-  if (before !== JSON.stringify(layout.tabs || null)) botTaskTabsPaint(slug);
 }
 function botTaskTabsPaint(slug) {
   const bar = $('#pane-tasks .bot-task-tabs'), host = $('#bot-task-custom');
@@ -202,7 +190,7 @@ function botTaskTabsPaint(slug) {
   bar.innerHTML = botTaskTabsBarHTML(slug);
   host.innerHTML = botTaskCustomPanelsHTML(slug);
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen) botTasksRender(slug, seen.owned, seen.asked);
+  if (seen) botTasksRender(slug, seen.owned);
   else botTaskTabShow(slug, botTaskTabFirst(slug, botNeeds(slug).length));
 }
 // Until a person picks: Needs You while it has rows, else Doing, else the first tab there is.
@@ -213,13 +201,13 @@ function botTaskTabFirst(slug, needed) {
 }
 // A redraw (the 30 s refresh, a live event) only re-applies the tab; a person's pick also brings the tab into view, sideways
 // within the tab bar, so neither moves the rail away from what someone is reading. A key the bot has no tab for shows
-// its first. One tab is one list: no tab bar over it.
+// its first. One tab is one list: no tab bar over it, except while editing.
 function botTaskTabShow(slug, key, picked = false) {
   const rail = $('#pane-tasks'), keys = botTaskTabs(slug).map(([k]) => k);
   if (!rail || BOT?.slug !== slug || !keys.length) return;
   if (!keys.includes(key)) key = keys[0];
   const bar = rail.querySelector('.bot-task-tabs');
-  if (bar) bar.hidden = keys.length < 2;
+  if (bar) bar.hidden = keys.length < 2 && BOT_EDIT?.slug !== slug;
   for (const k of new Set([...BOT_TASK_TABS.map(([k]) => k), ...keys])) {
     const button = $('#bot-tab-t-' + k), panel = $('#bot-' + k);
     if (panel) panel.hidden = k !== key;
@@ -238,6 +226,7 @@ function botTaskTabShow(slug, key, picked = false) {
 }
 // Arrow keys, Home and End move between the tabs, as in any tab list.
 function botTaskTabKey(slug, ev) {
+  if (BOT_EDIT) return;
   const keys = botTaskTabs(slug).map(([k]) => k), at = keys.indexOf(ev.target.closest('[data-bot-task-tab]')?.dataset.botTaskTab);
   if (at < 0) return;
   const to = {ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: keys.length - 1}[ev.key];
@@ -255,110 +244,26 @@ function botTaskTabWheel(ev) {
   ev.preventDefault();
   bar.scrollLeft += ev.deltaY;
 }
-// The tasks one of the bot's own tabs shows: its types (none picked is every type), its states, and whom they wait on.
-// Finished ones only for the last two weeks, as in Done Recently, and a routine's runs never.
-function botTaskTabRows(tab, mine) {
-  const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
-  const finished = t => !V2_ACTIVE.includes(String(t.status)) && !['review', 'ready'].includes(String(t.status));
-  const waits = t => t.status === 'waiting' ? String(t.waiting_on || '') : '';
-  // A value this page does not know (a newer server's) filters nothing rather than breaking the list.
-  const on = {me: t => !!waits(t) && waits(t) === myActor(), person: t => !!actorPerson(waits(t)), bot: t => !!actorSlug(waits(t))}[tab.waiting_on] || (() => true);
-  return mine.filter(t => (!tab.types?.length || tab.types.includes(pipelineTypeId(t))) && (tab.states || []).includes(String(t.status))
-      && on(t) && !(finished(t) && (isRecurringTask(t) || String(t.done_at || t.closed_at || t.updated || '') < since)))
-    .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+// What each filter tab shows the person looking, as the server counted it: slug -> {key: {count, ids}, tasks}.
+const BOT_TASK_FILTERED = new Map();
+async function botTaskFilterRead(slug) {
+  const got = await v2Get(`/v2/bots/${encodeURIComponent(slug)}/task-tabs/tasks`);
+  if (!got || BOT?.slug !== slug) return;
+  BOT_TASK_FILTERED.set(slug, {tabs: Object.fromEntries((got.tabs || []).map(tab => [tab.key, tab])),
+                               tasks: new Map((got.tasks || []).map(t => [String(t.id), t]))});
+  botTaskFilterPaint(slug);
 }
-// The tab settings: the bot's tabs in order, each a name and, for its own tabs, which types, states and whom they wait
-// on. Add, rename, move, change or remove; Save writes the whole list. Reset goes back to the four built-in tabs.
-async function botTaskSettingsOpen(slug) {
-  const layout = BOT_TASK_LAYOUT.get(slug);
-  if (!layout?.can_edit) return;
-  await taskTypesLoad().catch(() => TASK_TYPES);
-  let draft = botTaskTabList(slug).map(({key, ...tab}) => ({...tab}));
-  let dialog = $('#bot-task-tabs-dialog');
-  if (!dialog) {
-    dialog = document.createElement('dialog');
-    dialog.className = 'owner-picker bot-task-tabs-dialog'; dialog.id = 'bot-task-tabs-dialog';
-    dialog.setAttribute('aria-labelledby', 'bot-task-tabs-title');
-    document.body.append(dialog);
+// Each filter's list and count. A filter the server has not counted yet (just added) keeps its Loading line.
+function botTaskFilterPaint(slug) {
+  const got = BOT_TASK_FILTERED.get(slug);
+  if (!got || BOT?.slug !== slug) return;
+  for (const tab of botTaskTabList(slug).filter(tab => !tab.builtin)) {
+    const counted = got.tabs[tab.key], list = $('#t-' + tab.key);
+    if (!counted || counted.name !== tab.name) continue;
+    botTaskCount('cnt-' + tab.key, counted.count);
+    const rows = counted.ids.map(id => got.tasks.get(String(id))).filter(Boolean);
+    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>');
   }
-  const types = (TASK_TYPES || []).length ? TASK_TYPES : [{id: 'general', name: 'General'}];
-  const builtinWords = {needs: 'What needs the person looking', active: 'Every open task', blocked: 'Tasks waiting on someone or something',
-                        done: 'Finished in the last 14 days'};
-  const filterHTML = (tab, at) => tab.builtin ? `<p class="muted bot-tab-fixed">${esc(builtinWords[tab.builtin])}</p>` : `
-      <fieldset><legend>Task types</legend><div class="bot-tab-opts">${types.map(type =>
-        `<label><input type="checkbox" data-tab-type="${at}" value="${esc(type.id)}" ${tab.types?.includes(type.id) ? 'checked' : ''}>${esc(type.name)}</label>`).join('')}</div>
-        <p class="muted bot-tab-hint">None picked shows every type.</p></fieldset>
-      <fieldset><legend>States</legend><div class="bot-tab-opts">${BOT_TASK_STATES.map(([state, word]) =>
-        `<label><input type="checkbox" data-tab-state="${at}" value="${state}" ${tab.states?.includes(state) ? 'checked' : ''}>${word}</label>`).join('')}</div></fieldset>
-      <label class="bot-tab-wait">Waiting on <select data-tab-wait="${at}">${BOT_TASK_WAITING_ON.map(([value, word]) =>
-        `<option value="${value}" ${(tab.waiting_on || '') === value ? 'selected' : ''}>${word}</option>`).join('')}</select></label>`;
-  const paint = () => {
-    dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-task-tabs-title">${esc(empName(slug))}'s tabs</h2><span class="spacer"></span><button class="ghost" type="button" data-tabs-close aria-label="Close">✕</button></div>
-      <div class="owner-picker-body">
-        <p class="muted">${layout.personal ? 'These tabs are yours: nobody else sees them.' : `Everyone who opens ${esc(empName(slug))} sees these tabs.`}</p>
-        <ol class="bot-tab-list">${draft.map((tab, at) => `<li class="bot-tab-item" data-tab-at="${at}">
-          <div class="bot-tab-line"><input type="text" data-tab-name="${at}" value="${esc(tab.name)}" maxlength="40" aria-label="Tab name" required>
-            <button class="ghost" type="button" data-tab-move="${at}:-1" aria-label="Move ${esc(tab.name)} up" title="Move up (further left)" ${at ? '' : 'disabled'}>↑</button>
-            <button class="ghost" type="button" data-tab-move="${at}:1" aria-label="Move ${esc(tab.name)} down" title="Move down (further right)" ${at < draft.length - 1 ? '' : 'disabled'}>↓</button>
-            <button class="ghost" type="button" data-tab-remove="${at}" aria-label="Remove ${esc(tab.name)}" title="Remove" ${draft.length > 1 ? '' : 'disabled'}>✕</button></div>
-          ${filterHTML(tab, at)}</li>`).join('')}</ol>
-        <div class="row"><button class="ghost" type="button" data-tab-add>Add a tab</button>${draft.filter(tab => tab.builtin).length < BOT_TASK_TABS.length ? '<button class="ghost" type="button" data-tab-builtins>Add the missing built-in tabs</button>' : ''}</div>
-        <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-tabs-close>Cancel</button>
-          <button class="ghost" type="button" data-tabs-reset>Reset to the four built-in tabs</button><span class="muted" data-tabs-status role="status"></span></div>
-      </div></form>`;
-    dialog.querySelectorAll('[data-tabs-close]').forEach(button => button.onclick = () => dialog.close());
-    dialog.querySelector('form').onsubmit = event => { event.preventDefault(); void save(draftRead()); };
-    dialog.querySelector('[data-tabs-reset]').onclick = () => void save(null);
-    dialog.querySelector('[data-tab-add]').onclick = () => {
-      draft = draftRead();
-      draft.push({name: 'New tab', types: [], states: ['open', 'doing', 'waiting'], waiting_on: ''});
-      paint();
-      dialog.querySelector(`[data-tab-name="${draft.length - 1}"]`)?.select();
-    };
-    dialog.querySelector('[data-tab-builtins]')?.addEventListener('click', () => {
-      draft = draftRead();
-      const have = new Set(draft.map(tab => tab.builtin).filter(Boolean));
-      draft.push(...BOT_TASK_TABS.filter(([key]) => !have.has(key)).map(([builtin, name]) => ({builtin, name})));
-      paint();
-    });
-    dialog.querySelectorAll('[data-tab-move]').forEach(button => button.onclick = () => {
-      const [at, by] = button.dataset.tabMove.split(':').map(Number);
-      draft = draftRead();
-      [draft[at], draft[at + by]] = [draft[at + by], draft[at]];
-      paint();
-      dialog.querySelector(`[data-tab-move="${at + by}:${by}"]:not(:disabled)`)?.focus();
-    });
-    dialog.querySelectorAll('[data-tab-remove]').forEach(button => button.onclick = () => {
-      draft = draftRead();
-      draft.splice(Number(button.dataset.tabRemove), 1);
-      paint();
-    });
-  };
-  const draftRead = () => draft.map((tab, at) => {
-    const name = dialog.querySelector(`[data-tab-name="${at}"]`)?.value.trim() || tab.name;
-    if (tab.builtin) return {builtin: tab.builtin, name};
-    const picked = attr => [...dialog.querySelectorAll(`[${attr}="${at}"]:checked`)].map(input => input.value);
-    return {name, types: picked('data-tab-type'), states: picked('data-tab-state'), waiting_on: dialog.querySelector(`[data-tab-wait="${at}"]`)?.value || ''};
-  });
-  const save = async tabs => {
-    const status = dialog.querySelector('[data-tabs-status]');
-    const empty = (tabs || []).find(tab => !tab.builtin && !tab.states.length);
-    if (empty) { status.innerHTML = `<span class="err">Pick at least one state for ${esc(empty.name)}.</span>`; return; }
-    dialog.querySelectorAll('button,input,select').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
-    try {
-      const saved = await put(`/v2/bots/${encodeURIComponent(slug)}/task-tabs`, {tabs});
-      BOT_TASK_LAYOUT.set(slug, saved);
-      dialog.close();
-      botTaskTabsPaint(slug);
-    } catch (error) {
-      draft = tabs || draft;
-      paint();
-      dialog.querySelector('[data-tabs-status]').innerHTML = `<span class="err">${esc(error.message)}</span>`;
-    }
-  };
-  dialog.onclose = () => { dialog.innerHTML = ''; };
-  paint();
-  dialog.showModal();
 }
 // What a blocked task waits on: the person or bot it names, else the first line of its note.
 function botTaskWaitsOn(t) {
@@ -388,13 +293,12 @@ function botNeedsPaint(slug) {
 // Needs you moved: redraw the rail from the tasks it last read, without reading them again.
 function botNeedsChanged(slug) {
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen && BOT?.loaded?.has('tasks')) botTasksRender(slug, seen.owned, seen.asked);
+  if (seen && BOT?.loaded?.has('tasks')) botTasksRender(slug, seen.owned);
 }
-function botTasksRender(slug, owned, asked) {
+function botTasksRender(slug, owned) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
   const needed = botNeedsPaint(slug);
-  const mine = owned.tasks || [], theirs = (asked.tasks || []).filter(t => actorSlug(t.owner) !== slug && !needed.has(String(t.id)));
-  const latest = (a, b) => String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || ''));
+  const mine = owned.tasks || [];
   const newest = (a, b) => String(b.created || '').localeCompare(String(a.created || ''));
   // Doing is the full list: every open task the bot holds, of every type, newest first. The other tabs are views into it.
   const active = mine.filter(t => V2_ACTIVE.includes(String(t.status))).sort(newest);
@@ -405,30 +309,14 @@ function botTasksRender(slug, owned, asked) {
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
   const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)
     .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
-  // What it asked of others: whatever waits on a person first, then by the latest change.
-  const needsPerson = t => actorPerson(t.owner) ? 0 : 1;
-  const outward = theirs.filter(t => V2_ACTIVE.includes(String(t.status))).sort((a, b) => needsPerson(a) - needsPerson(b) || latest(a, b));
   botTaskCount('cnt-active', active.length);
   botTaskCount('cnt-blocked', blocked.length);
   botTaskCount('cnt-done', finished.length);
   botTaskList($('#t-open'), active.map(t => v2TaskRow(t, slug)), '<div class="rail-empty">None</div>');
   botTaskList($('#t-blocked'), blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))), '<div class="rail-empty">Nothing is blocked.</div>');
-  // Folded at the foot of the rail; it opens by itself while something in it waits on a person.
-  const assigned = $('#bot-assigned');
-  if (assigned) {
-    assigned.hidden = !outward.length;
-    $('#cnt-assigned').textContent = outward.length || '';
-    botTaskList($('#t-assigned'), outward.map(t => v2TaskRow(t, slug)), '');
-    if (!assigned.dataset.seen && outward.length) { assigned.dataset.seen = '1'; assigned.open = outward.some(t => actorPerson(t.owner)); }
-  }
   const done = BOT_DONE.get(slug);
   BOT_DONE.set(slug, {rows: finished, shown: done?.shown || BOT_DONE_PAGE});
-  // The bot's own tabs, each with its count.
-  for (const tab of botTaskTabList(slug).filter(tab => !tab.builtin)) {
-    const rows = botTaskTabRows(tab, mine), list = $('#t-' + tab.key);
-    botTaskCount('cnt-' + tab.key, rows.length);
-    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>');
-  }
+  botTaskFilterPaint(slug);
   botTaskTabShow(slug, botTaskTabFirst(slug, needed.size));
 }
 // A pane's list, patched row by row (patchHTML on the list itself): a poll that moved one task redraws that row, not the

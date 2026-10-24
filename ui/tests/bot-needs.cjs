@@ -1,9 +1,10 @@
 // A bot's task rail is one Tasks section with four tabs, each with its count: Needs You (what this bot needs from the
 // person: its own tasks for them, a question it asked on another bot's task, even a finished one, a task of its own
 // waiting on them, a question outside any task), Doing (every open task it holds, newest first), Blocked (each saying
-// what it waits on) and Done Recently (the last 14 days). Assigned to others follows. The org tree's number is the
-// Needs you rows, and stays so when the list moves. The Tasks header's board icon opens the board filtered to the bot as
-// owner; a bot with one tab shows that list with no tab bar. Fixtures only, no network.
+// what it waits on) and Done Recently (the last 14 days), and Assigned to Others, a filter tab the server counts for
+// the person looking. The org tree's number is the Needs you rows, and stays so when the list moves. The Tasks header's
+// board icon opens the board filtered to the bot as owner; a bot with one tab shows that list with no tab bar. Fixtures
+// only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -33,6 +34,11 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   ask: {id: 'm-loose', from_actor: 'bot:lead', to_actor: 'human:ana', body: 'Is Friday fine for the summary?', created: ago(20)}};
 const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...T.waits, kind: 'waiting'}, LOOSE,
   {...task('t-qa-ana', 'Approve the test plan', {owner: 'human:ana', requester: 'bot:qa', status: 'open'}), kind: 'task'}];
+
+// Head of Engineering keeps Done Recently beside the new defaults (a layout saved before them).
+const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'}, {builtin: 'blocked', name: 'Blocked'},
+  {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
+    {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]}];
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -69,9 +75,15 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
-      // The four built-in tabs, which Ana may change on Head of Engineering only.
+      // The built-in tabs and Assigned to Others, which Ana may change on Head of Engineering only.
       const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
-      if (tabs) return json({bot: tabs[1], tabs: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
+      if (tabs) return json({bot: tabs[1], tabs: LAYOUT, widgets: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
+      // What the server counts for Ana: what Head of Engineering asked of anyone but her and itself, still open.
+      if (p === '/api/v2/bots/lead/task-tabs/tasks') {
+        const others = Object.values(T).filter(t => t.requester === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner)
+          && ['open', 'doing', 'waiting'].includes(t.status));
+        return json({bot: 'lead', tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
+      }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -82,12 +94,14 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     const tab = key => rail.locator(`#bot-tab-t-${key}`);
     await rail.locator('#t-needs .trow').first().waitFor();
 
-    // One Tasks section with the four tabs and their counts, then Assigned to others, before Updates, Files and Routines.
-    const order = await rail.evaluate(el => [...el.children].map(c => c.id || c.className.split(' ').find(k => k.startsWith('bot-'))));
-    assert.deepEqual(order.slice(0, 2), ['bot-tasks', 'bot-assigned'], JSON.stringify(order));
+    // One Tasks section with its tabs and their counts, before Updates, Files and Routines; no folded section after it.
+    const order = await rail.evaluate(el => [...el.querySelectorAll(':scope>.bot-w>.rail-sec')].map(c => c.id));
+    assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files', 'bot-recurring'], JSON.stringify(order));
+    assert.equal(await rail.locator('#bot-assigned').count(), 0);
     assert.equal(await rail.locator('#bot-tasks .rail-h').innerText().then(s => s.trim().toLowerCase()), 'tasks');
+    await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1');
     const tabs = (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-    assert.deepEqual(tabs, ['Needs You 4', 'Doing 5', 'Blocked 3', 'Done Recently 1'], JSON.stringify(tabs));
+    assert.deepEqual(tabs, ['Needs You 4', 'Doing 5', 'Blocked 3', 'Done Recently 1', 'Assigned to Others 1'], JSON.stringify(tabs));
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs You leads while it has rows');
 
     // Needs You: exactly what the org tree counts for this bot: its task for Ana, its question on Senior's finished task,
@@ -118,9 +132,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
-    // Assigned to others keeps what it asked of another bot.
-    assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()), ['Run the release check']);
-    assert.equal((await rail.locator('#cnt-assigned').innerText()).trim(), '1');
+    // Assigned to Others keeps what it asked of another bot; its task for Ana is in Needs You, not here.
+    await tab('c4').click();
+    assert.deepEqual(await titles('#t-c4'), ['Run the release check']);
 
     // A redraw keeps the picked tab while Needs You has rows, and leaves the rail scrolled where it was.
     await tab('done').click();
@@ -157,7 +171,7 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '');
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
-    assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()).sort(), ['Pick the release day', 'Run the release check']);
+    assert.deepEqual((await rail.locator('#t-c4 .trow .ttl').allTextContents()).map(s => s.trim()), ['Run the release check']);
 
     // Done Recently pages 50 rows at a time.
     await tab('done').click();
@@ -169,8 +183,8 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.equal(await rail.locator('#t-done .trow').count(), 120);
     assert.equal(await rail.locator('.bot-done-more').count(), 0);
 
-    // The Tasks header: "Tasks", then a board icon, then the tab settings (Task-list tabs 2/3) for whoever may change
-    // this bot's tabs; Ana manages Head of Engineering here. It opens the settings for this bot.
+    // The Tasks header: "Tasks", then a board icon; the sidebar's one edit icon is for whoever may change this bot's
+    // layout, and Ana manages Head of Engineering here. The old tab settings gear is gone.
     const boardIcon = rail.locator('#bot-tasks .rail-head #bot-tasks-board');
     assert.equal(await boardIcon.getAttribute('href'), '#/tasks?owner=bot:lead&view=board');
     assert.equal(await boardIcon.getAttribute('aria-label'), "Open Head of Engineering's tasks on the board");
@@ -180,11 +194,8 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       await page.evaluate(() => { location.hash = '#/bot/lead/tasks'; });
       await rail.locator('#t-open .trow').first().waitFor({state: 'attached'});
     };
-    await rail.locator('#bot-tasks .rail-head #bot-tasks-settings:not([hidden])').click();
-    await page.locator('#bot-task-tabs-dialog').waitFor();
-    assert.equal((await page.locator('#bot-task-tabs-title').innerText()).trim(), "Head of Engineering's tabs");
-    await page.locator('#bot-task-tabs-dialog [data-tabs-close]').first().click();
-    await page.locator('#bot-task-tabs-dialog').waitFor({state: 'hidden'});
+    await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
+    assert.equal(await rail.locator('#bot-tasks-settings').count(), 0);
 
     // Spec test 11: a bot with one tab shows that one list, with no tab bar over it.
     await page.evaluate(() => { window.fourTabs = botTaskTabs; window.botTaskTabs = () => [['active', 'Doing', 'cnt-active']]; });
@@ -196,7 +207,7 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     await page.evaluate(() => { window.botTaskTabs = window.fourTabs; });
     await reopen();
     assert.equal(await rail.locator('.bot-task-tabs').isVisible(), true);
-    assert.equal(await rail.locator('[data-bot-task-tab]').count(), 4);
+    assert.equal(await rail.locator('[data-bot-task-tab]').count(), 5);
 
     // Spec test 10: the board icon opens the board with the owner pre-selected to this bot, and the owner can be changed.
     await rail.locator('#bot-tasks-board').click();

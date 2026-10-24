@@ -188,7 +188,7 @@ async function access(browser) {
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
-  assert.equal(await page.locator('#bot-tasks-board, #bot-tasks-settings').count(), 0, 'no board or tab settings without read access');
+  assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
   assert.equal(await page.locator('#bot-files, #bot-recurring, #bot-history, #bot-routines, #sess-card, #bot-updates-card').count(), 0);
   assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);

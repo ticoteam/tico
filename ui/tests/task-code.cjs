@@ -87,7 +87,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   if (rich) {
     Object.assign(data.tasks[0], {body: 'Keep the old checkout behind a flag.\n\nVerify receipts in both flows.',
       note: 'The draft is checked; the rollout still needs a decision.', labels: ['checkout'], acceptance_criteria: ['Both flows send a receipt.']});
-    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ana', requester: 'bot:eng', status: 'open'}),
+    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ben', requester: 'bot:eng', status: 'open'}),
       task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester: 'bot:eng', done_at: now, closed_at: now}),
       ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner: 'bot:eng', direction: 'out'}]}})));
     data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created: now, refs: {task: 't-checkout', note: true}},
@@ -132,6 +132,13 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const rows = (owner ? data.tasks.filter(t => t.owner === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester === 'bot:' + requester) : data.tasks)
         .map(t => ({...t, links: (t.links || []).map(({detail_json, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
+    }
+    // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
+      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
+      const others = data.tasks.filter(t => t.requester === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner) && ['open', 'doing', 'waiting'].includes(t.status));
+      return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
@@ -499,7 +506,7 @@ async function botDetail(browser) {
       assert.equal(new URL(page.url()).hash, '#/bot/eng/tasks', how + ' returns to the bot');
     }
     for (const id of ['t-outward', 't-finished']) {
-      if (id === 't-finished') await page.locator('#bot-tab-t-done').click();
+      await page.locator(id === 't-finished' ? '#bot-tab-t-done' : '#bot-tab-t-c4').click();
       await page.locator(`[data-task-detail="${id}"] [data-task-detail-open]`).click();
       await d.locator(`[data-task-props]`).waitFor();
       await page.waitForFunction(id => document.querySelector('#task-modal')?.dataset.task === id, id);
