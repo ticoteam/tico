@@ -248,7 +248,18 @@ function botTaskTabWheel(ev) {
 // tasks}. A tab with more than one page has `next`, read on Show more.
 const BOT_TASK_FILTERED = new Map();
 const botTaskFilterPath = slug => `/v2/bots/${encodeURIComponent(slug)}/task-tabs/tasks`;
-async function botTaskFilterRead(slug) {
+// A refresh replaces a bot's filter lists and Show more adds to them, so they take turns: a page read beside a refresh
+// would land on the lists the refresh threw away, and a refresh read beside a page would not know to keep it.
+const BOT_TASK_FILTER_TURN = new Map();
+function botTaskFilterTurn(slug, job) {
+  const run = (BOT_TASK_FILTER_TURN.get(slug) || Promise.resolve()).then(job);
+  const next = run.catch(() => {});
+  BOT_TASK_FILTER_TURN.set(slug, next);
+  next.then(() => { if (BOT_TASK_FILTER_TURN.get(slug) === next) BOT_TASK_FILTER_TURN.delete(slug); });
+  return run;
+}
+const botTaskFilterRead = slug => botTaskFilterTurn(slug, () => botTaskFilterReadNow(slug));
+async function botTaskFilterReadNow(slug) {
   const got = await v2Get(botTaskFilterPath(slug));
   if (!got || BOT?.slug !== slug) return;
   const was = BOT_TASK_FILTERED.get(slug)?.tabs || {};
@@ -290,11 +301,14 @@ function botTaskFilterPaint(slug) {
   }
 }
 document.addEventListener('click', async ev => {
-  const button = ev.target.closest('[data-bot-filter-more]'), slug = BOT?.slug;
-  const got = slug && BOT_TASK_FILTERED.get(slug), tab = got?.tabs[button?.dataset.botFilterMore];
-  if (!button || !tab?.next || button.disabled) return;
+  const button = ev.target.closest('[data-bot-filter-more]'), slug = BOT?.slug, key = button?.dataset.botFilterMore;
+  if (!button || !slug || button.disabled || !BOT_TASK_FILTERED.get(slug)?.tabs[key]?.next) return;
   button.disabled = true;
-  const read = await botTaskFilterPage(slug, tab, got.tasks);
+  // The lists as they are when its turn comes, not as they were at the click.
+  const read = await botTaskFilterTurn(slug, async () => {
+    const got = BOT_TASK_FILTERED.get(slug), tab = got?.tabs[key];
+    return BOT?.slug !== slug || !tab?.next || await botTaskFilterPage(slug, tab, got.tasks);
+  }).catch(() => false);
   button.disabled = false;
   if (read) botTaskFilterPaint(slug);
   else toast('Could not load more. Try again.', true);

@@ -9,8 +9,11 @@ const BOT_WIDGET_DEFAULT = BOT_WIDGETS.map(([id]) => ({id, hidden: false, height
 const BOT_WIDGET_MIN = 80, BOT_WIDGET_MAX = 2000;
 // slug -> {tabs, widgets, can_edit, personal}: what the server last said, or what this browser kept from last time.
 const BOT_TASK_LAYOUT = new Map();
-// {slug, tabs, widgets} while a person edits a bot's sidebar; Done saves it in one write, Cancel drops it.
+// {slug, tabs, widgets, saving} while a person edits a bot's sidebar; Done saves it in one write, Cancel drops it.
 let BOT_EDIT = null;
+// The draft may change: editing this bot's sidebar and not saving it. A change made while Done's write is on its way
+// would be dropped when the write's answer ends edit mode, so nothing changes until the write succeeds or fails.
+const botDrafting = slug => BOT_EDIT?.slug === slug && !BOT_EDIT.saving;
 const BOT_SVG = {
   grip: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><g fill="currentColor"><circle cx="5.5" cy="3.5" r="1.3"/><circle cx="10.5" cy="3.5" r="1.3"/><circle cx="5.5" cy="8" r="1.3"/><circle cx="10.5" cy="8" r="1.3"/><circle cx="5.5" cy="12.5" r="1.3"/><circle cx="10.5" cy="12.5" r="1.3"/></g></svg>',
   eye: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
@@ -122,7 +125,12 @@ function botSidebarStop(slug) {
 }
 async function botSidebarDone(slug) {
   if (BOT_EDIT?.slug !== slug) return;
-  const status = $('#bot-sidebar-status'), buttons = [...document.querySelectorAll('.bot-rail-editbar button')];
+  if (BOT_EDIT.saving) return;
+  const rail = $('#pane-tasks'), status = $('#bot-sidebar-status');
+  const buttons = [...rail.querySelectorAll('.bot-rail-editbar button, [data-w-grip], [data-w-eye], [data-w-reset], [data-bot-task-tab], [data-bot-tab-add]')]
+    .filter(button => !button.disabled);
+  BOT_EDIT.saving = true;
+  rail.toggleAttribute('data-saving', true);
   buttons.forEach(button => { button.disabled = true; });
   status.textContent = 'Saving…';
   try {
@@ -133,7 +141,11 @@ async function botSidebarDone(slug) {
     void botTaskFilterRead(slug);
   } catch (error) {
     status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
-  } finally { buttons.forEach(button => { button.disabled = false; }); }
+  } finally {
+    if (BOT_EDIT?.slug === slug) BOT_EDIT.saving = false;
+    rail.removeAttribute('data-saving');
+    buttons.forEach(button => { button.disabled = false; });
+  }
 }
 // The draft's order from the page after a drag: [data attribute holding each item's place before it].
 function botDraftOrder(items, attr, list) {
@@ -144,7 +156,7 @@ function botDraftOrder(items, attr, list) {
 function botSortable(container, itemSel, handleSel, axis, done) {
   container.addEventListener('pointerdown', ev => {
     const handle = ev.target.closest(handleSel);
-    if (!handle || ev.button || !BOT_EDIT || !container.contains(handle)) return;
+    if (!handle || ev.button || !BOT_EDIT || BOT_EDIT.saving || !container.contains(handle)) return;
     const item = handle.closest(itemSel);
     if (!item || item.parentElement !== container) return;
     const start = axis === 'x' ? ev.clientX : ev.clientY;
@@ -178,14 +190,14 @@ function botSortable(container, itemSel, handleSel, axis, done) {
   });
 }
 function botWidgetsReordered(slug, items) {
-  if (BOT_EDIT?.slug !== slug) return;
+  if (!botDrafting(slug)) return botSidebarApply(slug);
   const byId = new Map(BOT_EDIT.widgets.map(w => [w.id, w]));
   BOT_EDIT.widgets = [...items.map(el => byId.get(el.dataset.widget)).filter(Boolean),
                       ...BOT_EDIT.widgets.filter(w => !items.some(el => el.dataset.widget === w.id))];
   botSidebarApply(slug);
 }
 function botTabsReordered(slug, items) {
-  if (BOT_EDIT?.slug !== slug) return;
+  if (!botDrafting(slug)) return botTaskTabsPaint(slug);
   const keys = botTaskTabList(slug).map(tab => tab.key);
   BOT_EDIT.tabs = items.map(el => BOT_EDIT.tabs[keys.indexOf(el.dataset.botTaskTab)]).filter(Boolean);
   botTaskTabsPaint(slug);
@@ -194,12 +206,13 @@ function botTabsReordered(slug, items) {
 function botWidgetResize(slug, rail) {
   rail.addEventListener('pointerdown', ev => {
     const grip = ev.target.closest('[data-w-size]');
-    if (!grip || ev.button || BOT_EDIT?.slug !== slug) return;
+    if (!grip || ev.button || !botDrafting(slug)) return;
     ev.preventDefault();
     const el = grip.closest('.bot-w'), w = BOT_EDIT.widgets.find(x => x.id === el.dataset.widget);
     const body = el.querySelector(':scope > .rail-sec');
     const from = ev.clientY, was = Math.round(body && !body.hidden ? body.getBoundingClientRect().height : 160);
     const move = e => {
+      if (!botDrafting(slug)) return;
       w.height = Math.max(BOT_WIDGET_MIN, Math.min(BOT_WIDGET_MAX, Math.round(was + e.clientY - from)));
       botWidgetHeight(el, w.height);
     };
@@ -209,7 +222,7 @@ function botWidgetResize(slug, rail) {
   });
   rail.addEventListener('keydown', ev => {
     const grip = ev.target.closest('[data-w-size]'), by = {ArrowDown: 20, ArrowUp: -20}[ev.key];
-    if (!grip || !by || BOT_EDIT?.slug !== slug) return;
+    if (!grip || !by || !botDrafting(slug)) return;
     ev.preventDefault();
     const el = grip.closest('.bot-w'), w = BOT_EDIT.widgets.find(x => x.id === el.dataset.widget);
     const body = el.querySelector(':scope > .rail-sec');
@@ -230,7 +243,7 @@ function botSidebarBind(slug) {
   botWidgetResize(slug, rail);
   rail.addEventListener('click', ev => {
     if (ev.target.closest('#bot-sidebar-edit')) return botSidebarEdit(slug);
-    if (BOT_EDIT?.slug !== slug) return;
+    if (!botDrafting(slug)) return;
     if (ev.target.closest('#bot-sidebar-done')) return void botSidebarDone(slug);
     if (ev.target.closest('#bot-sidebar-cancel')) return botSidebarStop(slug);
     const el = ev.target.closest('.bot-w'), w = el && BOT_EDIT.widgets.find(x => x.id === el.dataset.widget);
@@ -244,7 +257,7 @@ function botSidebarBind(slug) {
     }
   }, true);
   rail.addEventListener('keydown', ev => {
-    if (BOT_EDIT?.slug !== slug) return;
+    if (!botDrafting(slug)) return;
     if (ev.key === 'Escape' && !document.querySelector('dialog[open]')) { botSidebarStop(slug); return; }
     const grip = ev.target.closest('[data-w-grip]'), pill = ev.target.closest('[data-bot-task-tab]');
     const by = grip ? {ArrowUp: -1, ArrowDown: 1}[ev.key] : pill ? {ArrowLeft: -1, ArrowRight: 1}[ev.key] : undefined;
@@ -302,8 +315,9 @@ function botFilterValueHTML(slug, row, at) {
   }
 }
 async function botFilterOpen(slug, at) {
-  if (BOT_EDIT?.slug !== slug) return;
+  if (!botDrafting(slug)) return;
   await taskTypesLoad().catch(() => TASK_TYPES);
+  if (!botDrafting(slug)) return;
   const adding = at < 0, was = adding ? {name: '', show_count: true, conditions: [{field: 'status', value: BOT_FILTER_START.status}]} : BOT_EDIT.tabs[at];
   if (!was) return;
   const draft = botLayoutCopy({show_count: true, ...was});

@@ -71,6 +71,8 @@ async function open(browser, viewport, colorScheme, server) {
       if (request.method() === 'PUT') {
         const body = JSON.parse(request.postData());
         server.puts.push({bot, body});
+        if (server.putHold) await server.putHold;
+        if (server.putFail && server.putFail--) return route.fulfill({status: 500, contentType: 'application/json', body: '{"detail":"Could not save."}'});
         server.layouts[bot] = {tabs: body.tabs, widgets: body.widgets};
       } else if (server.hold) await server.hold;
       const kept = server.layouts[bot] || {tabs: DEFAULT, widgets: WIDGETS};
@@ -80,6 +82,7 @@ async function open(browser, viewport, colorScheme, server) {
     if (filtered) {
       const bot = filtered[1], tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab, key: 'c' + at})).filter(({tab}) => !tab.builtin);
       // A page of server.page rows; `before` here is the index the next page starts at.
+      if (q.get('tab') && server.moreHold) await server.moreHold;
       const from = Number(q.get('before') || 0), wanted = tabs.filter(({key}) => !q.get('tab') || key === q.get('tab'));
       const counted = wanted.map(({tab, key}) => {
         const all = TASKS.filter(t => matches(bot, tab, t)).map(t => t.id), ids = all.slice(from, from + server.page);
@@ -242,11 +245,37 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.locator('[data-filter-delete]').click();
       await dialog.waitFor({state: 'hidden'});
 
-      // Done: one PUT with everything.
+      // Done: one PUT with everything. A failed write keeps the draft and edit mode, and the draft still changes.
+      const files = widget('files').locator('[data-w-eye]'), filesHidden = () => files.getAttribute('aria-pressed');
+      server.putFail = 1;
       await rail.locator('#bot-sidebar-done').click();
+      await rail.locator('#bot-sidebar-status .err').waitFor();
+      assert.equal(await rail.evaluate(el => el.classList.contains('editing')), true);
+      await files.click();
+      assert.equal(await filesHidden(), 'false');
+      await files.click();
+      assert.equal(await filesHidden(), 'true');
+      // While the retry is on its way nothing in the draft changes: eye, Escape, a pill.
+      let putDone;
+      server.putHold = new Promise(resolve => { putDone = resolve; });
+      await rail.locator('#bot-sidebar-done').click();
+      await page.waitForFunction(() => document.querySelector('#bot-sidebar-status').textContent === 'Saving…');
+      await files.dispatchEvent('click');
+      assert.equal(await filesHidden(), 'true', 'no change while saving');
+      assert.equal(await files.isDisabled(), true);
+      await widget('tasks').locator('[data-w-size]').focus();
+      await page.keyboard.press('ArrowDown');
+      assert.equal(await widget('tasks').getAttribute('data-h'), null);
+      await page.keyboard.press('Escape');
+      await pill('Doing').dispatchEvent('click');
+      assert.equal(await dialog.isVisible(), false);
+      assert.equal(await rail.evaluate(el => el.classList.contains('editing')), true);
+      putDone();
+      server.putHold = null;
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
-      assert.equal(server.puts.length, 1);
-      assert.deepEqual(server.puts[0], {bot: 'lead', body: {
+      assert.equal(server.puts.length, 2);
+      assert.deepEqual(server.puts[1], server.puts[0]);
+      assert.deepEqual(server.puts[1], {bot: 'lead', body: {
         tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
                {builtin: 'needs', name: 'Needs You', show_count: true}, {builtin: 'active', name: 'Doing', show_count: false},
                {builtin: 'blocked', name: 'Blocked', show_count: true}],
@@ -256,9 +285,17 @@ async function open(browser, viewport, colorScheme, server) {
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
       assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs You', 'Doing', 'Blocked 1']);
       await pill('product tasks').click();
-      // A page at a time: Show more reads the next, and a refresh keeps as many as were read.
+      // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
+      // starts while Show more is on its way.
       assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page']);
+      let moreDone;
+      server.moreHold = new Promise(resolve => { moreDone = resolve; });
       await rail.locator('#t-c0 [data-bot-filter-more]').click();
+      await page.evaluate(() => { window.refreshing = botTaskFilterRead('lead'); });
+      await page.waitForTimeout(300);
+      moreDone();
+      server.moreHold = null;
+      await page.evaluate(() => window.refreshing);
       await rail.locator('#t-c0 [data-bot-filter-more]').waitFor({state: 'detached'});
       assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
       await page.evaluate(() => botTaskFilterRead('lead'));

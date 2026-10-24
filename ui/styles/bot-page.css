@@ -149,6 +149,8 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-w-size::after{content:"";position:absolute;left:calc(50% - 16px);width:32px;top:5px;height:2px;border-radius:1px;background:var(--muted);opacity:.5}
 .bot-w-size:hover::after,.bot-w-size:focus-visible::after{opacity:1}
 .bot-w-size:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* While Done saves, nothing in the draft moves (bot-sidebar.js botDrafting). */
+#pane-tasks[data-saving] :is(.bot-w-size,.bot-w-bar,.bot-task-tabs){pointer-events:none;opacity:.6}
 .bot-w-reset{flex:none;padding:0 6px;font-size:var(--t-sm)}
 .bot-w-reset[hidden]{display:none}
 .editing .bot-task-tabs [data-bot-task-tab]{cursor:grab;touch-action:none;outline:1px dashed var(--line);outline-offset:-1px}
