@@ -268,10 +268,12 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     await online();
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'popup control keeps focus across polling');
-    const detailClosed = dialog.evaluate(node => new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true})));
+    await dialog.evaluate(node => {
+      window.computerClosed = new Promise(resolve => node.addEventListener('close', () => resolve(), {once: true}));
+    });
     await page.keyboard.press('Escape');
     await page.clock.runFor(100);
-    await detailClosed;
+    await page.evaluate(() => window.computerClosed);
     assert.equal(await rowButton.evaluate(node => node === document.activeElement), true, 'Escape returns to the refreshed detail opener');
     // Add can open from either the list or the detail; polling replaces both openers.
     const listAdd = row('box').locator('[data-add-connection=box]');
