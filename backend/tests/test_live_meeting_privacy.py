@@ -155,6 +155,24 @@ def test_private_derived_conversation_message_sql_and_run_hide_from_nonmember_ow
     assert get(live, f"messages/{msg['id']}", token="ops-live")["id"] == msg["id"]
 
 
+def test_sql_plain_message_gate_keeps_meeting_access_without_outer_room_filter(live, derived):
+    from backend.privacy_index import ReadIndex
+
+    mid, attempt = derived
+    cid = attempt["message"]["conversation_id"]
+    # Call the gate directly so SQL's separate conversation filter cannot mask
+    # a missing meeting check in the cached plain-message path.
+    with live.app.state.store.read() as c:
+        member = ReadIndex(c, Identity("bot:ops", "bot"))
+        outsider = ReadIndex(c, Identity("human:ana", "human"))
+        assert member.message("synthetic-plain", cid, "{}", None)
+        assert not outsider.message("synthetic-plain", cid, "{}", None)
+    removed = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={}, headers=headers("ben-test"))
+    assert removed.status_code == 200, removed.text
+    with live.app.state.store.read() as c:
+        assert not ReadIndex(c, Identity("bot:ops", "bot")).message("synthetic-plain", cid, "{}", None)
+
+
 def test_removed_bot_loses_retained_derived_history_and_run(live, derived):
     mid, attempt = derived
     msg, aid = attempt["message"], attempt["id"]
