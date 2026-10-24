@@ -4,6 +4,7 @@
 
 // ---- tasks on a keeper bot's page: hub.db instead of Issues ----
 const V2_ACTIVE = ['open', 'doing', 'waiting'];
+const V2_ENDED = ['review', 'ready', 'done', 'closed', 'declined'];   // the rest of backend/hubdb.py TASK_STATUSES
 const V2_GROUPS = [['doing', 'Doing'], ['waiting', 'Waiting'],
                    ['done', 'Done'], ['declined', 'Declined'], ['closed', 'Closed']];
 // Keep titles compact, with status text only when the section does not already name the state.
@@ -117,16 +118,28 @@ async function loadBotTasksV2(slug) {
   const pane = $('#t-open'); if (!pane) return;
   const seen = BOT_TASKS_CACHE.get(slug);
   if (seen) botTasksRender(slug, seen.owned, seen.asked);   // last time's list at once; the fresh one follows
-  let owned = null, asked = null;
+  let open = null, ended = null, asked = null;
+  // Done Recently needs only what changed since the window opened: the bot's whole history was read on every refresh,
+  // and past the server's 500-row page it pushed open tasks out. The day is the cut, so an unchanged list stays a 304.
+  const since = new Date(Date.now() - (BOT_DONE_RECENT_DAYS + 1) * 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
+  const who = encodeURIComponent(slug);
   for (const wait of [0, 600, 2000]) {
     if (wait) await new Promise(done => setTimeout(done, wait));
     if (!$('#t-open') || BOT?.slug !== slug) return;
-    [owned, asked] = await Promise.all([
-      owned || v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=all&snoozed=all&brief=true`),     // Done needs the finished ones; snoozed show with their chip
-      asked || v2Get(`/v2/tasks?requester=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`)]);
-    if (owned && asked) break;
+    [open, ended, asked] = await Promise.all([
+      open || v2Get(`/v2/tasks?owner=${who}&status=${V2_ACTIVE.join(',')}&snoozed=all&brief=true`),     // snoozed show with their chip
+      ended || v2Get(`/v2/tasks?owner=${who}&status=${V2_ENDED.join(',')}&snoozed=all&brief=true&updated_since=${since}`),
+      asked || v2Get(`/v2/tasks?requester=${who}&status=${V2_ACTIVE.join(',')}&brief=true`)]);
+    if (open && ended && asked) break;
   }
   if (!$('#t-open')) return;
+  // A task that finished between the two reads is in both: the later copy wins.
+  const byId = new Map();
+  for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
+    const was = byId.get(t.id);
+    if (!was || String(t.updated || '') >= String(was.updated || '')) byId.set(t.id, t);
+  }
+  const owned = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned || !asked) {
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
@@ -215,6 +228,7 @@ function botTaskTabShow(slug, key, picked = false) {
     button.setAttribute('aria-selected', String(k === key));
     button.tabIndex = k === key ? 0 : -1;
   }
+  if (key === 'done') botDonePaint(slug);
   const tab = $('#bot-tab-t-' + key);
   if (!picked || !bar || bar.hidden || !tab) return;
   // By what is on screen: the bar is not the tabs' offset parent, so their offsetLeft counts from further out.
@@ -397,30 +411,57 @@ function botTasksRender(slug, owned, asked) {
   botTaskCount('cnt-active', active.length);
   botTaskCount('cnt-blocked', blocked.length);
   botTaskCount('cnt-done', finished.length);
-  $('#t-open').innerHTML = active.length ? `<div class="bot-task-list">${active.map(t => v2TaskRow(t, slug)).join('')}</div>`
-    : '<div class="rail-empty">None</div>';
-  $('#t-blocked').innerHTML = blocked.length ? `<div class="bot-task-list">${blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))).join('')}</div>`
-    : '<div class="rail-empty">Nothing is blocked.</div>';
+  botTaskList($('#t-open'), active.map(t => v2TaskRow(t, slug)), '<div class="rail-empty">None</div>');
+  botTaskList($('#t-blocked'), blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))), '<div class="rail-empty">Nothing is blocked.</div>');
   // Folded at the foot of the rail; it opens by itself while something in it waits on a person.
   const assigned = $('#bot-assigned');
   if (assigned) {
     assigned.hidden = !outward.length;
     $('#cnt-assigned').textContent = outward.length || '';
-    $('#t-assigned').innerHTML = `<div class="bot-task-list">${outward.map(t => v2TaskRow(t, slug)).join('')}</div>`;
+    botTaskList($('#t-assigned'), outward.map(t => v2TaskRow(t, slug)), '');
     if (!assigned.dataset.seen && outward.length) { assigned.dataset.seen = '1'; assigned.open = outward.some(t => actorPerson(t.owner)); }
   }
-  $('#t-done').innerHTML = finished.length
-    ? `<div class="bot-task-list">${finished.map(t => v2TaskRow(t, slug, false)).join('')}</div>`
-    : '<div class="rail-empty">Nothing done in the last two weeks.</div>';
+  const done = BOT_DONE.get(slug);
+  BOT_DONE.set(slug, {rows: finished, shown: done?.shown || BOT_DONE_PAGE});
   // The bot's own tabs, each with its count.
   for (const tab of botTaskTabList(slug).filter(tab => !tab.builtin)) {
     const rows = botTaskTabRows(tab, mine), list = $('#t-' + tab.key);
     botTaskCount('cnt-' + tab.key, rows.length);
-    if (list) list.innerHTML = rows.length ? `<div class="bot-task-list">${rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')).join('')}</div>`
-      : '<div class="rail-empty">None</div>';
+    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>');
   }
   botTaskTabShow(slug, botTaskTabFirst(slug, needed.size));
 }
+// A pane's list, patched row by row (patchHTML on the list itself): a poll that moved one task redraws that row, not the
+// pane. `empty` stands in for no rows; `tail` follows the list (Done's Show more).
+function botTaskList(host, rows, empty, tail = '') {
+  if (!rows.length) return void patchHTML(host, empty);
+  let list = host.querySelector(':scope > .bot-task-list');
+  if (!list) { patchHTML(host, '<div class="bot-task-list"></div>'); list = host.firstElementChild; }
+  patchHTML(list, rows.join(''));
+  const end = host.querySelector(':scope > .bot-task-tail');
+  if ((end?.dataset.src || '') === tail) return;
+  end?.remove();
+  if (!tail) return;
+  list.insertAdjacentHTML('afterend', `<div class="bot-task-tail">${tail}</div>`);
+  host.querySelector(':scope > .bot-task-tail').dataset.src = tail;
+}
+// Done Recently is drawn only while its tab is open, a page at a time: a busy bot finishes hundreds of tasks in two
+// weeks, and every row (an avatar each) was built on every refresh behind a folded tab.
+const BOT_DONE = new Map(), BOT_DONE_PAGE = 50;
+function botDonePaint(slug) {
+  const host = $('#t-done'), done = BOT_DONE.get(slug);
+  if (!host || !done || BOT?.slug !== slug || $('#bot-done')?.hidden) return;
+  const rows = done.rows.slice(0, done.shown), more = done.rows.length - rows.length;
+  botTaskList(host, rows.map(t => v2TaskRow(t, slug, false)), '<div class="rail-empty">Nothing done in the last two weeks.</div>',
+    more > 0 ? `<button type="button" class="ghost bot-done-more" data-bot-done-more>Show ${Math.min(more, BOT_DONE_PAGE)} more</button>` : '');
+}
+document.addEventListener('click', ev => {
+  if (!ev.target.closest('[data-bot-done-more]') || !BOT) return;
+  const done = BOT_DONE.get(BOT.slug);
+  if (!done) return;
+  done.shown += BOT_DONE_PAGE;
+  botDonePaint(BOT.slug);
+});
 
 // the pill's "Send as task" on a keeper bot: a hub task, not an Issue
 async function v2PillTask(P, text) {

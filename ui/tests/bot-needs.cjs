@@ -62,7 +62,10 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') {
         const all = Object.values(T);
-        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead')});
+        // The rail reads open and finished tasks apart, finished ones since a day; the server filters both.
+        const st = q.get('status'), since = q.get('updated_since');
+        const fits = t => (!st || st === 'all' || st.split(',').includes(t.status)) && (!since || t.updated >= since);
+        if (q.get('owner') === 'lead') return json({tasks: all.filter(t => t.owner === 'bot:lead' && fits(t))});
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
@@ -109,7 +112,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.deepEqual((await rail.locator('#t-blocked .trow-waits').allInnerTexts()).map(s => s.trim()),
       ["Waiting for the vendor's invoice.", 'Waits on QA Engineer', 'Waits on you']);
 
-    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed.
+    // Done Recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
+    // tab opens, 50 rows at a time (paging, at the end).
+    assert.equal(await rail.locator('#t-done .trow').count(), 0, 'Done is drawn when its tab opens');
     await tab('done').click();
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
@@ -153,6 +158,16 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
     assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()).sort(), ['Pick the release day', 'Run the release check']);
+
+    // Done Recently pages 50 rows at a time.
+    await tab('done').click();
+    await page.evaluate(() => { const d = BOT_DONE.get('lead'), row = d.rows[0]; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
+    assert.equal(await rail.locator('#t-done .trow').count(), 50);
+    await rail.getByRole('button', {name: 'Show 50 more'}).click();
+    assert.equal(await rail.locator('#t-done .trow').count(), 100);
+    await rail.getByRole('button', {name: 'Show 20 more'}).click();
+    assert.equal(await rail.locator('#t-done .trow').count(), 120);
+    assert.equal(await rail.locator('.bot-done-more').count(), 0);
 
     // The Tasks header: "Tasks", then a board icon, then the tab settings (Task-list tabs 2/3) for whoever may change
     // this bot's tabs; Ana manages Head of Engineering here. It opens the settings for this bot.

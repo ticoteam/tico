@@ -7,6 +7,9 @@ Run it from a checkout of the OLD release, so that release's own `backend.store`
     cd /tmp/tico-v0.2.1 && PYTHONPATH=. python /path/to/scripts/make_upgrade_fixture.py OUT.sqlite.gz
 
 The result is gzipped (an initialized database is about 1.2 MB, the gzip about 100 KB).
+
+`--into DB` adds the same rows to a database a running install made instead (scripts/journey-test.sh seeds the
+previous release with them before it upgrades), so it needs nothing but the standard library.
 """
 import gzip
 import shutil
@@ -15,19 +18,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from backend.config import Settings
-from backend.store import Store
-
 TS = "2026-01-01T00:00:00Z"
 
 
-def build(out):
-    work = Path(tempfile.mkdtemp())
-    db = work / "hub.sqlite"
-    Store(Settings(db_path=db, registry_dir=Path("registry"))).initialize(seed_market=False)
-    c = sqlite3.connect(db)
+def seed(c, bots="INSERT"):
+    """Bots, a conversation with messages and tasks, written as an older release wrote them: the rows an upgrade
+    must keep."""
     for slug in ("coo", "cmo", "seo"):
-        c.execute("INSERT INTO bots(slug,display_name,runtime,state,created) VALUES(?,?,?,?,?)",
+        c.execute(f"{bots} INTO bots(slug,display_name,runtime,state,created) VALUES(?,?,?,?,?)",
                   (slug, slug.upper(), "codex", "active", TS))
     c.execute("INSERT INTO conversations(id,kind,subject,participants_json,created,last_message_at) "
               "VALUES('c1','direct','Launch plan','[\"bot:coo\",\"human:ana\"]',?,?)", (TS, TS))
@@ -37,6 +35,16 @@ def build(out):
     for n in (1, 2, 3):
         c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,updated) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (f"t{n}", f"Task {n}", "", "human:ana", "bot:coo", "open", "c1", TS, TS))
+
+
+def build(out):
+    from backend.config import Settings
+    from backend.store import Store
+    work = Path(tempfile.mkdtemp())
+    db = work / "hub.sqlite"
+    Store(Settings(db_path=db, registry_dir=Path("registry"))).initialize(seed_market=False)
+    c = sqlite3.connect(db)
+    seed(c)
     c.commit()
     c.execute("VACUUM")
     c.close()
@@ -44,5 +52,15 @@ def build(out):
         shutil.copyfileobj(source, target)
 
 
+def seed_into(db):
+    c = sqlite3.connect(db, timeout=30)   # the install's server is running and writes too
+    with c:
+        seed(c, bots="INSERT OR IGNORE")   # a fresh install already has the starter bots coo, cmo and seo
+    c.close()
+
+
 if __name__ == "__main__":
-    build(sys.argv[1])
+    if sys.argv[1:2] == ["--into"]:
+        seed_into(sys.argv[2])
+    else:
+        build(sys.argv[1])
