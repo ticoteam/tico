@@ -133,7 +133,13 @@ async function loadBotTasksV2(slug) {
     if (open && ended && asked) break;
   }
   if (!$('#t-open')) return;
-  const owned = open && ended ? {tasks: [...(open.tasks || []), ...(ended.tasks || [])]} : null;
+  // A task that finished between the two reads is in both: the later copy wins.
+  const byId = new Map();
+  for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
+    const was = byId.get(t.id);
+    if (!was || String(t.updated || '') >= String(was.updated || '')) byId.set(t.id, t);
+  }
+  const owned = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned || !asked) {
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
