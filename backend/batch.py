@@ -417,7 +417,8 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
                     and task["status"] not in ("done", "declined")):
                 raise Problem("decision", "Tell the requesting bot what you decided or completed", 422)
         settles = decision in ("approve", "decline", "done", "close")
-        if settles and item["key"].startswith("task:") and item["kind"] != "waiting":
+        # A person's close takes any task off its board; the other verdicts need a step move there.
+        if settles and decision != "close" and item["key"].startswith("task:") and item["kind"] != "waiting":
             task = H.task(c, item["key"].split(":", 1)[1])
             if task and H.steps_only(c, task):
                 raise Problem("decision", f"{item['title']} is finished only by moving it to a step on its board; "

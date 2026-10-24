@@ -3039,6 +3039,9 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
             effective = chosen["status"]
     elif current and current["status"] == effective:
         chosen = current
+    elif typ.get("steps_only") and effective == "closed" and _closes_by_hand(actor):
+        # A person's close on a steps-only type lands on its last closed step (Closed, Done), or none.
+        chosen = next((s for s in reversed(typ["steps"]) if s["status"] == "closed"), None)
     else:
         chosen = next((s for s in typ["steps"] if s["status"] == effective), None)
         if not chosen and effective == "waiting":
@@ -3052,9 +3055,11 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
     # On a steps-only type a task is finished or brought back only by a step move: a bare close, decline,
     # done or reopen would land it in whichever step shares that status. Working statuses (an ask's
     # waiting, a turn's doing) still change, as do filing onto the type and the keeper's own automation.
+    # A person can always close one: closing takes it off the board, whatever its type.
     if (typ.get("steps_only") and step is None and actor != KEEPER and row.get("status")
             and typ["id"] == (row.get("type_id") or GENERAL_TYPE) and effective != row["status"]
-            and not (effective in ACTIVE_STATUSES and row["status"] in ACTIVE_STATUSES)):
+            and not (effective in ACTIVE_STATUSES and row["status"] in ACTIVE_STATUSES)
+            and not (effective == "closed" and _closes_by_hand(actor))):
         # Naming the task keeps a bot's refusals on different tickets distinct, so working a board is not
         # counted as retrying one refused write (rule 8); a retry on the same task still is.
         which = f"#{row['number']}" if row.get("number") else f'"{_clip(row.get("title") or "", 80)}"'
@@ -3063,6 +3068,10 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
                                     f"({steps}), not by closing, declining, reopening or finishing it; move it, or delete it",
                context={"what": f"task {row.get('id')}"})
     return typ["id"], chosen["id"] if chosen else None, effective
+
+
+def _closes_by_hand(actor):
+    return (actor or "").startswith("human:")
 
 
 def retire_held_steps(conn):
@@ -3152,7 +3161,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
     from .roadmap_flow import changed as roadmap_changed
-    roadmap_changed(conn, row["id"])
+    # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
+    roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
     if row.get("status") != effective:
         from .ticket_notices import moved as ticket_moved
         ticket_moved(conn, actor, row["id"], row.get("status"), effective)
