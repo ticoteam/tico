@@ -566,3 +566,19 @@ def test_a_reader_acting_for_someone_else_gets_a_working_address(api):
         [item] = message["refs"]["attachments"]
         assert not item["removed"] and item["src"], who
         assert api.get(item["src"]).status_code == 200, who
+
+
+def test_first_requests_at_once_share_one_whole_secret(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    monkeypatch.delenv("TICO_VISUAL_SECRET", raising=False)
+    settings, start = SimpleNamespace(db_path=tmp_path / "hub.db"), threading.Barrier(16)
+
+    def first():
+        start.wait()
+        return V.secret(settings)
+    with ThreadPoolExecutor(16) as pool:
+        keys = set(pool.map(lambda _: first(), range(16)))
+    assert len(keys) == 1 and len(keys.pop()) == 64
+    assert [p.name for p in tmp_path.iterdir()] == [V.SECRET_FILE]
