@@ -10,19 +10,21 @@ let HL_MONITOR = null;   // the owner: the Health Monitor's switch and what it f
 async function hlRefresh() {
   if (!S.me?.cloud) return null;
   const seq = ++HL_LOAD;
-  const data = await v2Get('/v2/health');
+  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
+  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
+  // all three are read together; the first time, the other two follow the checks.
+  const page = !!$('#hl-page');
+  const extras = hl => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
+    page && hl?.audience === 'owner' ? v2Get('/v2/health-monitor') : null]);
+  const checks = data => data && Array.isArray(data.checks) ? data : null;
+  const [data, [metrics, monitor]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
   if (seq !== HL_LOAD) return HL;
-  HL = data && Array.isArray(data.checks) ? data : null;
-  if (HL && HL.audience !== 'human') {
-    const metrics = await v2Get('/v2/system/metrics?minutes=60');
-    if (seq !== HL_LOAD) return HL;
-    HL_METRICS = metrics && metrics.requests ? metrics : null;
-  } else HL_METRICS = null;
-  if (HL?.audience === 'owner') {
-    const monitor = await v2Get('/v2/health-monitor');
-    if (seq !== HL_LOAD) return HL;
-    HL_MONITOR = monitor && 'on' in monitor ? monitor : null;
-  } else HL_MONITOR = null;
+  HL = checks(data);
+  if (page) {
+    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
+    HL_MONITOR = HL?.audience === 'owner' && monitor && 'on' in monitor ? monitor : null;
+  }
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
   hlNav();

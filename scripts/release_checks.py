@@ -19,14 +19,15 @@ side by side; two release checks must not run at once, since the journey's candi
 `--part product|python|browser|desktop` runs one slice of the same gate so the hosted Release validation workflow can
 spread it over several VMs: `product` is the journey, image builds, smoke, side-jobs and Docker isolation; `python`
 is the Python tests (with `--shard K/N`, the Kth of N file groups balanced by recorded time); `browser` is every browser
-test; `desktop` is the Linux desktop app's tests, its update from a company feed among them. Without `--part` the whole gate
+test (with `--shard K/N`, the Kth of N script groups); `desktop` is the Linux desktop app's tests, its update from a company feed among them. Without `--part` the whole gate
 runs on this machine, as before, with the desktop part only where the Linux app builds.
 
 `--shard K/N` without `--release` runs the Kth of N file groups of the default Python suite (plain `pytest`, what PR
 checks run), balanced the same way, so the PR-check Python job can spread over several VMs. The N groups together run
 every file the single default run collects, each once. Groups balance by each file's recorded seconds in
 scripts/test-timings.json (a file with no record by its test count); refresh it with `--record-timings DEFAULT_XML
-SLOW_XML` from junit reports of a full run.
+SLOW_XML` from junit reports of a full run. Browser shards balance by the 'browser' seconds there; refresh those with
+`--record-browser-timings LOG...` from the browser logs of a release validation, every shard's.
 
 Use the test environment's Python to invoke this script. The release gate defaults to half the CPU count in
 Python workers (at least one); the browser runner selects free-core concurrency and load-scaled timeouts.
@@ -249,6 +250,23 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION):
     return sorted(mine)
 
 
+def browser_shard(index, total):
+    """The browser scripts of shard `index` of `total` of `ui-tests.cjs --all`, grouped like the Python files: by
+    recorded seconds ('browser' in TIMINGS) where there are any, otherwise one script weighs as much as another."""
+    scripts = subprocess.run(['node', 'scripts/ui-tests.cjs', '--list', '--all'], cwd=ROOT, capture_output=True,
+                             text=True, check=True).stdout.split()
+    if len(scripts) < total:
+        raise RuntimeError(f'{len(scripts)} browser scripts cannot fill {total} shards')
+    weights, _ = file_weights(dict.fromkeys(scripts, 1), recorded_timings('browser'))
+    loads, groups = [0.0] * total, [[] for _ in range(total)]
+    for name in sorted(scripts, key=lambda name: (-weights[name], name)):
+        lightest = min(range(total), key=lambda i: (loads[i], i))
+        loads[lightest] += weights[name]
+        groups[lightest].append(name)
+    print(f'Browser shard {index}/{total}: {len(groups[index - 1])} of {len(scripts)} scripts', flush=True)
+    return sorted(groups[index - 1])
+
+
 def recorded_timings(kind):
     """{test file: seconds} recorded for `kind`; empty when the file or kind is missing (shards then balance by
     test count)."""
@@ -290,9 +308,30 @@ def record_timings(default_report, slow_report):
         release[name] = release.get(name, 0.0) + seconds
     timings = {kind: {name: round(seconds, 2) for name, seconds in sorted(table.items())}
                for kind, table in (('default', default), ('release', release))}
-    TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
+    browser = recorded_timings('browser')
+    TIMINGS.write_text(json.dumps({**timings, **({'browser': browser} if browser else {})}, indent=1) + '\n')
     print(f'Recorded {len(default)} default and {len(release)} release test files in {TIMINGS.name}: '
           f'{sum(default.values()):.0f}s and {sum(release.values()):.0f}s', flush=True)
+    return 0
+
+
+def record_browser_timings(*logs):
+    """Rewrite the 'browser' seconds in TIMINGS, by script name as `--list` prints it, from `ui-tests.cjs` logs
+    (`ok    name.cjs (12.3s)` lines). A failed script's time is how long it took to fail, not to pass, so it is left
+    out and weighs like an unrecorded one."""
+    seconds = {}
+    for log in logs:
+        for name, value in re.findall(r'^ok +(\S+)\.cjs \(([\d.]+)s\)$', Path(log).read_text(), re.M):
+            seconds[name] = float(value)
+    if not seconds:
+        raise RuntimeError('no passed browser scripts in ' + ', '.join(logs))
+    try:
+        timings = json.loads(TIMINGS.read_text())
+    except FileNotFoundError:
+        timings = {}
+    timings['browser'] = dict(sorted(seconds.items()))
+    TIMINGS.write_text(json.dumps(timings, indent=1) + '\n')
+    print(f'Recorded {len(seconds)} browser scripts in {TIMINGS.name}: {sum(seconds.values()):.0f}s', flush=True)
     return 0
 
 
@@ -383,7 +422,11 @@ def release(args):
             name = f'python-{shard[0]}-of-{shard[1]}'
         checks.append(Check(name, python_cmd, logs, test_env, tests=True))
     if runs('browser'):
-        checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cjs', '--all'], logs, test_env))
+        if shard:
+            checks.append(Check(f'browser-{shard[0]}-of-{shard[1]}',
+                                ['node', 'scripts/ui-tests.cjs', *browser_shard(shard[0], shard[1])], logs, test_env))
+        else:
+            checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cjs', '--all'], logs, test_env))
     # Its own VM in the hosted gate; a whole local gate runs it where the app can build and says when it cannot.
     if part == 'desktop' or part is None and desktop_buildable():
         checks.append(Check('desktop-update', DESKTOP_TEST, logs, test_env, tests=True))
@@ -425,16 +468,20 @@ def main(argv=None):
     parser.add_argument('--part', choices=PARTS, help='with --release: run only this slice of the gate')
     parser.add_argument('--record-timings', nargs=2, metavar=('DEFAULT_XML', 'SLOW_XML'),
                         help='rewrite scripts/test-timings.json from junit reports of the default suite and the slow tests')
+    parser.add_argument('--record-browser-timings', nargs='+', metavar='LOG',
+                        help="rewrite the 'browser' seconds in scripts/test-timings.json from browser-test logs")
     parser.add_argument('--shard', type=parse_shard,
                         help='run file group K of N (K/N) of the Python tests: alone, of the default suite (PR checks); '
-                             'with --release --part python, of the release set')
+                             'with --release --part python, of the release set; with --part browser, of every script')
     args = parser.parse_args(argv)
     if args.part and not args.release:
         parser.error('--part needs --release')
-    if args.shard and args.release and args.part != 'python':
-        parser.error('--shard with --release needs --part python')
+    if args.shard and args.release and args.part not in ('python', 'browser'):
+        parser.error('--shard with --release needs --part python or browser')
     if args.record_timings:
         return record_timings(*args.record_timings)
+    if args.record_browser_timings:
+        return record_browser_timings(*args.record_browser_timings)
     if args.release:
         return release(args)
     return python_shard(*args.shard) if args.shard else full()
@@ -446,7 +493,7 @@ def in_slot(env=os.environ):
 
 
 if __name__ == '__main__':
-    if not in_slot() and '--record-timings' not in sys.argv:
+    if not in_slot() and not {'--record-timings', '--record-browser-timings'} & set(sys.argv):
         # A local run first takes one of the box's heavy-job slots, at low priority (scripts/heavy.sh).
         os.execvp('bash', ['bash', str(ROOT / 'scripts/heavy.sh'), sys.executable, __file__, *sys.argv[1:]])
     raise SystemExit(main())

@@ -95,6 +95,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
     monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env: [f'group{index}of{total}.py'])
+    monkeypatch.setattr(release_checks, 'browser_shard', lambda index, total: [f'page{index}of{total}'])
     calls, edge_checks = {}, []
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: edge_checks.append(len(calls)) or (True, 'ok'))
 
@@ -111,6 +112,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     product = {'journey', 'build-server', 'build-runner', 'build-updater', 'smoke', 'side-jobs', 'isolation'}
     monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
     for part, shard, expected in (('product', None, product), ('browser', None, {'all-browser'}),
+                                  ('browser', (1, 2), {'browser-1-of-2'}),
                                   ('python', None, {'all-python'}), ('python', (2, 4), {'python-2-of-4'}),
                                   ('desktop', None, {'desktop-update'})):
         calls.clear()
@@ -123,6 +125,8 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
             command = calls[next(iter(expected))]
             assert command[command.index('-n') + 1] == '4'
             assert ('group2of4.py' in command) == bool(shard)
+        if shard and part == 'browser':   # only its own scripts, not --all
+            assert calls['browser-1-of-2'][2:] == ['page1of2']
     calls.clear()
     monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
     assert release_checks.release(SimpleNamespace(previous=None)) == 0
@@ -236,6 +240,11 @@ def test_record_timings_writes_each_files_seconds_from_junit_reports(tmp_path, m
         'default': {'a.py': 3.5, 'b.py': 0.25}, 'release': {'a.py': 13.5, 'b.py': 0.25, 's.py': 4.0}}
     with pytest.raises(RuntimeError, match='xunit1'):
         release_checks.record_timings(report('xunit2.xml', [(None, 1)]), slow)
+    log = tmp_path / 'browser.log'
+    log.write_text('UI tests: jobs=3\nok    a.cjs (2.5s)\nFAIL  b.cjs (60.0s)\n      TimeoutError\nok    c.cjs (0.4s)\n')
+    assert release_checks.main(['--record-browser-timings', str(log)]) == 0
+    release_checks.record_timings(default, slow)   # the junit refresh keeps the browser record
+    assert json.loads(release_checks.TIMINGS.read_text())['browser'] == {'a': 2.5, 'c': 0.4}
 
 
 def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys):
@@ -262,7 +271,7 @@ def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkey
     assert runs == {1: ['a.py'], 2: ['b.py'], 3: ['c.py', 'd.py']}   # 4, 2 and 2 of the 8 tests
 
     for argv, message in ((['--part', 'python'], '--part needs --release'),
-                          (['--release', '--shard', '1/3'], '--shard with --release needs --part python'),
+                          (['--release', '--shard', '1/3'], '--shard with --release needs --part python or browser'),
                           (['--shard', '4/3'], 'K/N')):
         with pytest.raises(SystemExit):
             release_checks.main(argv)

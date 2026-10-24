@@ -116,10 +116,11 @@ def gate_command(root, previous, part, shard):
     """The candidate's own gate command for this VM's slice, or None when another VM covers it.
 
     A candidate frozen before `--part` existed runs its whole unchanged gate on the product VM; the other VMs then
-    have nothing of their own to check. A candidate frozen before the desktop part has no desktop test to run."""
+    have nothing of their own to check. A candidate frozen before the desktop part has no desktop test to run, and one
+    frozen before browser shards runs every browser script on the first browser VM."""
     require(part in PARTS or part is None, "unknown gate part")
-    require(shard is None or (part == "python" and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
-            "a shard must be K/N and only for the python part")
+    require(shard is None or (part in ("python", "browser") and re.fullmatch(r"[1-9][0-9]*/[1-9][0-9]*", shard)),
+            "a shard must be K/N and only for the python or browser part")
     command = [sys.executable, "scripts/release_checks.py", "--release", "--previous", previous]
     if part is None:
         return command
@@ -128,6 +129,8 @@ def gate_command(root, previous, part, shard):
         return command if part == "product" else None
     if part == "desktop" and "'desktop'" not in gate:
         return None
+    if part == "browser" and shard and "def browser_shard" not in gate:
+        return command + ["--part", "browser"] if shard.startswith("1/") else None
     return command + ["--part", part] + (["--shard", shard] if shard else [])
 
 
@@ -162,7 +165,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("prepare", "run", "collect"))
     parser.add_argument("--part", choices=PARTS, help="run: this VM's slice of the candidate's gate")
-    parser.add_argument("--shard", help="run --part python: file group K/N")
+    parser.add_argument("--shard", help="run --part python or browser: group K/N")
     args = parser.parse_args()
     hosted(os.environ)
     sha, previous = inputs(os.environ)
@@ -197,6 +200,7 @@ def main():
         command = gate_command(root, previous, args.part, args.shard)
         if command is None:
             note = ("candidate predates the desktop part; it has no desktop test" if args.part == "desktop"
+                    else "candidate predates browser shards; the first browser VM runs them all" if args.part == "browser"
                     else "candidate predates split gates; the product VM runs its whole gate")
             receipt.update({"gate_state": "covered elsewhere", "success": True, "note": note})
             print(f"Nothing to run on this VM: {note}.", flush=True)
