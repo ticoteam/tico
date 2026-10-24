@@ -32,7 +32,7 @@ async function loadConversation(slug, keep) {
 }
 function convSchedule(state) {
   clearInterval(state.tail); clearInterval(state.poll);
-  if (state.active) state.tail = setInterval(() => convTail(state), 3000);
+  if (state.active) state.tail = setInterval(() => { if (!document.hidden) convTail(state); }, 3000);
   else state.poll = setInterval(() => loadConversation(state.slug, state), 30000);
 }
 async function convTail(state) {

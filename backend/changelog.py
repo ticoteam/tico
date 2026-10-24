@@ -41,13 +41,21 @@ def parse_notes(text):
 
 
 def release_entries():
+    path = releases.ROOT / "CHANGELOG.md"
     try:
-        rows = parse_notes((releases.ROOT / "CHANGELOG.md").read_text())
+        stat = path.stat()
+        rows = _notes(str(path), stat.st_mtime_ns, stat.st_size)
     except OSError:
         rows = []
     current = releases.parse(releases.version())
     # A rollback or pinned installation never announces features from a later release.
     return [dict(row) for row in rows if current is None or releases.parse(row["version"]) <= current]
+
+
+@lru_cache(maxsize=2)
+def _notes(path, mtime_ns, size):
+    with open(path) as handle:
+        return parse_notes(handle.read())
 
 
 def stored_products(c):
@@ -56,11 +64,22 @@ def stored_products(c):
 
 
 def packaged_products(settings):
+    # Parsed once per version of the file: /api/v2/config reads it for every tab and computer.
     path = settings.registry_dir / "product-updates.yaml"
     try:
-        rows = yaml.safe_load(path.read_text()) or []
-    except (OSError, yaml.YAMLError):
+        stat = path.stat()
+    except OSError:
         return []
+    return [dict(row) for row in _packaged(str(path), stat.st_mtime_ns, stat.st_size)]
+
+
+@lru_cache(maxsize=4)
+def _packaged(path, mtime_ns, size):
+    try:
+        with open(path) as handle:
+            rows = yaml.safe_load(handle.read()) or []
+    except (OSError, yaml.YAMLError):
+        return ()
     out = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or not str(row.get("title") or "").strip():
@@ -73,7 +92,7 @@ def packaged_products(settings):
         # Reordering the packaged announcements must not change which ones a person has read.
         value["id"] = "packaged-" + hashlib.sha256(encode(value).encode()).hexdigest()[:20]
         out.append(value)
-    return out
+    return tuple(out)
 
 
 def products(c, settings):

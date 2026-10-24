@@ -732,7 +732,14 @@
   });
   window.supportPoll = refresh;
   // Replies are checked when the app comes back into view or focus, and on the poll above; there is no Refresh button.
-  const wake = () => { if (state.enabled) { void refresh(); schedule(); } };
+  // Only with a ticket still open (as the poll above), and once for a focus and a visibilitychange that come together.
+  let wokeAt = 0;
+  const wake = () => {
+    if (!state.enabled || Date.now() - wokeAt < 30000) return;
+    wokeAt = Date.now();
+    if (state.tickets.some(t => !ended(t))) void refresh();
+    schedule();
+  };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { wake(); void pollAccess(); } });
   window.addEventListener('focus', wake);
   window.addEventListener('load', () => setTimeout(async () => {

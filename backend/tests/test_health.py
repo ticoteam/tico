@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend import onboarding, releases
+from backend import releases, replication
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -23,8 +23,8 @@ def health_of(api, headers=None):
 
 
 def with_backup(monkeypatch, backup):
-    real = onboarding.config_view
-    monkeypatch.setattr(onboarding, "config_view", lambda *a, **k: {**real(*a, **k), **({"backup": backup} if backup else {})})
+    if backup:
+        monkeypatch.setattr(replication, "status", lambda: backup)
 
 
 def test_all_good(environment, monkeypatch):

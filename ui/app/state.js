@@ -169,9 +169,6 @@ function stateOf(slug) {
   const live = S.v2?.status?.[slug];
   if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
-  if (S.issues.some(i => i.owner === slug && i.state === 'OPEN' && (i.needs_human || i.status === 'blocked'))) return 'needs';
-  const last = (S.status?.recent_runs || []).find(r => r.employee === slug);
-  if (last && last.exit !== 0) return 'failed';
   return 'idle';
 }
 const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;

@@ -87,8 +87,8 @@ async function pageNotes() {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!state.editing && !state.open) meetLoad(state, false); }, 30000);
-  state.sourcesPoll = setInterval(() => meetSources(state), 60000);
+  state.poll = setInterval(() => { if (!document.hidden && !state.editing && !state.open) meetLoad(state, false); }, 30000);
+  state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
 // Review stays personal until approval; counts are quiet and never enter Needs you.

@@ -137,7 +137,7 @@ function approvalAgesTick() {
     if (node.textContent !== text) node.textContent = text;
   }
 }
-setInterval(approvalAgesTick, 30000);
+setInterval(() => { if (!document.hidden) approvalAgesTick(); }, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) approvalAgesTick(); });
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its

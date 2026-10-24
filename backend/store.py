@@ -8,6 +8,7 @@ import threading
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
+import orjson
 import yaml
 
 from . import goals as G
@@ -509,9 +510,9 @@ def readiness_document(value):
     """Return the canonical runner-readiness shape, including legacy heartbeats."""
     if hasattr(value, "model_dump"):
         value = value.model_dump()
-    if isinstance(value, str):
+    if isinstance(value, (str, bytes)):
         try:
-            value = json.loads(value)
+            value = orjson.loads(value)
         except (TypeError, ValueError):
             value = {}
     value = value if isinstance(value, dict) else {}
@@ -1364,6 +1365,8 @@ class Store:
                                    ("attempts_runner_finished", "attempts(runner_id, finished)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
                                    ("attempts_bot_lane", "attempts(bot, lane)"),
+                                   # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
+                                   ("attempts_state_finished", "attempts(state, finished)"),
                                    ("events_action_target", "events(action, target, ts)"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),

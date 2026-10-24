@@ -300,7 +300,12 @@ window.hlMount = function hlMount() {
 
 window.hlBoot = function () {
   void hlRefresh();
-  setInterval(() => { if (!document.hidden && S.me?.cloud) void hlRefresh(); }, 60000);
+  // Every minute, or every 2 while live events flow (the tab is in use and nothing is broken).
+  let at = 0;
+  setInterval(() => {
+    if (document.hidden || !S.me?.cloud || (typeof liveConnected === 'function' && liveConnected() && Date.now() - at < 119000)) return;
+    at = Date.now(); void hlRefresh();
+  }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
 };
 

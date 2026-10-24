@@ -9,15 +9,11 @@ async function refresh(force) {
   const v2 = v2Refresh(), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
-    const [st, issues, emps, people, seats] = await Promise.allSettled([get('/status'), get('/issues'), get('/employees'), get('/humans'),
+    // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
+    const [st, emps, people, seats] = await Promise.allSettled([get('/status'), get('/employees'), get('/humans'),
       get('/v2/seats')]);
     S.status = st.status === 'fulfilled' ? st.value : null;
     S.statusPending = false;
-    if (issues.status === 'fulfilled') S.issues = issues.value.map(i => {
-      if (!pendingClosedIssues.has(i.number)) return i;
-      if (i.state === 'CLOSED') pendingClosedIssues.delete(i.number);
-      return {...i, state: 'CLOSED', needs_human: false};
-    });
     if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
       S.emps = namedRoster(emps.value);
       setPeople(people.value);

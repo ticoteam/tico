@@ -252,7 +252,13 @@ const refreshConfig = async () => {
   try { await applyAuthenticatedConfig(await get('/v2/config'), version); }
   catch { if (version === nativeVisualVersion()) await clearNativeVisualOrigin(); }
 };
-setInterval(refreshConfig, 30000);  // with the app's poll: a release the server just learned of shows within a poll, not an hour
+// With the app's poll (every 2 minutes while live events flow, 30 s without): a release the server just learned of
+// shows within a poll, not an hour.
+let configAt = 0;
+setInterval(() => {
+  if (typeof liveConnected === 'function' && liveConnected() && Date.now() - configAt < 119000) return;
+  configAt = Date.now(); void refreshConfig();
+}, 30000);
 document.addEventListener('visibilitychange', refreshConfig);   // a tab that was in the background asks the moment it is shown again
 // The main assistant is shown under the environment's assistant name, never its slug.
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).

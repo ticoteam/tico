@@ -61,7 +61,7 @@ async function onbLoad(state) {
     if (state.record.completed) { state.step = state.steps.length; await onbRevisions(state); }
     if (ONB !== state) return;
     onbRender(state);
-    state.poll = setInterval(() => void onbPoll(state), state.record.completed ? 4000 : 10000);
+    state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, state.record.completed ? 4000 : 10000);
   } catch (error) {
     if (ONB !== state) return;
     const host = $('#onb');
@@ -578,7 +578,7 @@ async function onbCompleted(state, record) {
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;
-  clearInterval(state.poll); state.poll = setInterval(() => void onbPoll(state), 4000);   // repositories appear within seconds
+  clearInterval(state.poll); state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, 4000);   // repositories appear within seconds
   await refresh(true);                      // the new bots on the chart first: the screen lists them in its groups
   if (ONB !== state) return;
   onbRender(state);

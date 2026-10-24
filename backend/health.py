@@ -1763,7 +1763,7 @@ def install(app, store, auth, settings):
     from fastapi import Request
 
     from . import models as M
-    from . import onboarding
+    from . import replication
 
     @app.post("/api/v2/health/bot-access/dismiss")
     def dismiss_bot_access(request: Request, body: M.Empty):
@@ -1784,4 +1784,5 @@ def install(app, store, auth, settings):
             _person(who)
         github = getattr(request.app.state, "github_app", None)
         with store.read() as c:
-            return view(c, who, settings, auth, github, onboarding.config_view(c, settings, who))
+            # Health reads only these two parts of the config; building all of it cost a changelog parse per poll.
+            return view(c, who, settings, auth, github, {"update": releases.notice(), "backup": replication.status()})

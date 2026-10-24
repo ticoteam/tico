@@ -39,7 +39,7 @@ async function pageLiveMeetings() {
   await liveCandidates(state);
   await liveLoad(state);
   if (LIVE_MEETINGS !== state) return;
-  state.poll = setInterval(() => liveLoad(state), 5000);
+  state.poll = setInterval(() => { if (!document.hidden) liveLoad(state); }, 5000);
 }
 
 async function liveCandidates(state) {

@@ -95,7 +95,8 @@ window.pageChangelog = async function () {
       }
     }
   };
-  search.oninput = () => { if (data) render(); void load(); };
+  let typing = 0;     // the server's search runs once typing pauses, not per keystroke
+  search.oninput = () => { if (data) render(); clearTimeout(typing); typing = setTimeout(() => void load(), 200); };
   filter.onchange = () => { if (data) render(); void load(); };
   // Opening the page is reading it: the product entries it shows are acknowledged without a click.
   let saved = Promise.resolve();
