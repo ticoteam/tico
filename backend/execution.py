@@ -2484,8 +2484,6 @@ class Execution:
                 continue
             if event.seq != seq + 1:
                 raise Problem("event_gap", f"Expected event {seq + 1}", 409)
-            if event.kind == "status" and isinstance(clean, dict) and clean.get("waiting") and row["lease_until"] > now:
-                start_places.waiting(c, aid, "shared login" if clean.get("login") else "pre-start requirements")
             if row["state"] in ("completed", "failed", "interrupted"):
                 raise Problem("terminal", "Cannot append new output to a completed attempt", 409)
             existing_events[event.seq] = (event.kind, payload)
@@ -2495,6 +2493,15 @@ class Execution:
                 goals.append(event.payload)
             seq = event.seq
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)", inserts)
+        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
+        # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
+        if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
+            from .login_waits import wait
+            pending = wait(c, aid)
+            if pending:
+                start_places.waiting(c, aid, "shared login" if pending.get("login") else "pre-start requirements")
+            else:
+                c.execute("UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,))
         if last_event is not None:
             from . import run_diagnostics
             run_diagnostics.touch(c, aid, *last_event)

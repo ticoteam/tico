@@ -20,6 +20,7 @@ def waiters(api, n=37, running=3):
             from backend import start_places
             start_places.claim(c, f'attempt-{i}')
     for i in range(n):
+        post(api, f'attempts/attempt-{i}/start-place', {'waiting': 'shared login'}, computer['token'])
         post(api, f'attempts/attempt-{i}/events', {'events': [
             {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'Waiting for the shared ChatGPT login', 'login': 'ChatGPT'}}
         ]}, computer['token'])
@@ -136,8 +137,9 @@ def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
         assert c.execute("SELECT state FROM jobs WHERE attempt_id='attempt-0'").fetchone()[0] == 'cancelled'
 
 
-def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api):
-    from backend import start_places
+def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, monkeypatch):
+    from backend import login_waits, start_places
+    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=2, running=1)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM start_places")
@@ -264,3 +266,67 @@ def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api
     assert row['turn_counts']['waits'][0]['reason'] == 'shared login'
     for secret in ('ops', 'ChatGPT', 'task-', 'room-', 'ana'):
         assert secret not in str(row['turn_counts']) + row['turn_summary']
+
+
+def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, monkeypatch):
+    from backend import login_waits, start_places
+    from backend.tests.test_task_lanes import task_bot, new_task
+    caps = {'one_turn_per_login': True}
+    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: caps)
+    computer = task_bot(api, lanes=True)
+    task = new_task(api, 'Work finished during legacy preparation')
+    attempt = post(api, 'jobs/claim', {}, computer['token'])['attempt']
+    aid = attempt['id']
+
+    def status(seq, waiting):
+        post(api, f'attempts/{aid}/events', {'events': [
+            {'seq': seq, 'kind': 'status', 'payload': {'waiting': waiting, 'login': 'ChatGPT'}}
+        ]}, computer['token'])
+
+    status(1, 'shared login')
+    with api.app.state.store.read() as c:
+        assert start_places.is_waiting(c, aid)
+    status(2, '')
+    with api.app.state.store.transaction() as c:
+        assert not start_places.is_waiting(c, aid)
+        assert c.execute('SELECT waiting_since FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
+        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+    assert not post(api, f'attempts/{aid}/renew', {}, computer['token']).get('stop')
+    # An obsolete login-queue report cannot reintroduce a wait after this capability opts out.
+    caps['one_turn_per_login'] = False
+    status(3, 'obsolete shared login')
+    with api.app.state.store.transaction() as c:
+        assert not start_places.is_waiting(c, aid)
+        counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
+        assert counts['starting'] == 1 and counts['waiting'] == 0
+        c.execute('DELETE FROM start_places WHERE attempt_id=?', (aid,))
+        start_places.restore_waits(c)
+        assert not start_places.is_waiting(c, aid)
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'])['started']
+
+
+def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api):
+    computer = waiters(api, n=1, running=0)
+    aid = 'attempt-0'
+    grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
+    assert grant['reserved']
+    post(api, f'attempts/{aid}/events', {'events': [
+        {'seq': 2, 'kind': 'status', 'payload': {'waiting': 'late login wait', 'login': 'ChatGPT'}},
+        {'seq': 3, 'kind': 'status', 'payload': {'waiting': ''}}
+    ]}, computer['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT start_until,wait_reason,waiting_since FROM start_places WHERE attempt_id=?',
+                         (aid,)).fetchone()[:] == (grant['start_until'], '', None)
+    assert post(api, f'attempts/{aid}/started', {'thread_id': 'managed-grant'}, computer['token'])['started']
+
+
+def test_overload_rechecks_even_a_previously_granted_start(api):
+    import time
+    computer = waiters(api, n=1, running=0)
+    grant = post(api, 'attempts/attempt-0/start-place', {}, computer['token'])
+    assert grant['reserved']
+    now = int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(now - 300 + i * 60, cpu=95) for i in range(6)]}, computer['token'])
+    post(api, 'attempts/attempt-0/started', {'thread_id': 'braked'}, computer['token'], expected=409)
+    assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
+        'reserved': False, 'waiting': 'computer busy'}
