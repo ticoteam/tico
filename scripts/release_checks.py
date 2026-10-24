@@ -361,7 +361,10 @@ def release(args):
         checks.append(Check('isolation', [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
                                          ISOLATION_FILE], logs,
                             {**test_env,
-                             'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}"},
+                             'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}",
+                             # The session handoff starts from the release the journey upgrades from (newest tag by default).
+                             **({'TICO_RUNNER_PREVIOUS_IMAGE': f'ghcr.io/ticoteam/tico-runner:{args.previous}'}
+                                if args.previous else {})},
                             tests=True))
     elif runs('product'):
         print('  isolation: not run (candidate image builds failed)', flush=True)

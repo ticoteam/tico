@@ -913,6 +913,35 @@ async function views(browser) {
   await page.close();
 }
 
+async function plates(browser) {
+  // The people picker: a teammate's plate with a count each, kept in the address through a reload; a task blocked by
+  // an open one folds under Blocked; an unknown person is Me again; a row's status chip moves the task.
+  const held = {...fixtures().find(x => x.id === 't-demo'), id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due: undefined};
+  const {page, errors, posts} = await open(browser, {hash: '#/tasks', extraTasks: [held]});
+  await page.click('#task-who');
+  const sam = page.locator('#task-filter-pop [data-who="human:sam"]');
+  assert.equal(await sam.locator('.tl-mi-n').innerText(), '2');
+  await page.fill('#task-filter-pop .tl-menu-q', 'sa');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => location.hash.includes('who=human:sam'));
+  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), 'Needs Sam, 2');
+  assert.equal(await page.locator('[data-task-key="tt-demo"]').count(), 1);
+  assert.equal(await page.locator('.tl-group[data-group="blocked"] [data-task-key="tt-cut"]').count(), 1);
+  assert.equal(await page.locator('.tl-group[data-group="blocked"] .tl-rows').isHidden(), true, 'blocked folds away');
+  await page.reload();
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('[data-task-key="tt-demo"]'));
+  assert.equal(await page.locator('#task-who .v').innerText(), 'Sam');
+  await page.click('[data-task-key="tt-demo"] [data-row-status]');
+  await page.click('.prop-pop [data-prop-pick="doing"]');
+  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
+  assert.equal(posts.find(x => x.p.endsWith('/t-demo'))?.body.status, 'doing');
+  await page.evaluate(() => { location.hash = '#/tasks?who=human:zed'; });
+  await page.waitForFunction(() => document.querySelector('#task-view [data-view="foryou"]')?.firstChild.textContent === 'Needs you');
+  assert.deepEqual(errors, []);
+  console.log('plates: ok');
+  await page.close();
+}
+
 async function waitingOnYou(browser) {
   // A bot's task set waiting on you (`--on`) is in Needs you under that bot, whoever filed it, with a short "Waiting" chip
   // and no buttons other rows lack.
@@ -932,7 +961,8 @@ async function waitingOnYou(browser) {
   assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
   assert.equal(await row.locator('.task-status').count(), 0, 'the chip is its status: "Waiting" once');
   assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
-  const buttons = r => page.locator(`[data-task-key="${r}"] button`).evaluateAll(b => b.map(x => x.className));
+  // (the status chip aside: this row's "Waiting" chip stands in for it)
+  const buttons = r => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
   assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
   console.log('Waiting on you: ok');
@@ -1288,7 +1318,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

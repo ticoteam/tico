@@ -66,6 +66,9 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
         if (q.get('requester') === 'lead') return json({tasks: all.filter(t => t.requester === 'bot:lead' && t.status !== 'done')});
         return json({tasks: []});
       }
+      // The four built-in tabs, which Ana may change on Head of Engineering only.
+      const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
+      if (tabs) return json({bot: tabs[1], tabs: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -151,22 +154,22 @@ const NEEDS = [{...T.asked, kind: 'question'}, {...T.forAna, kind: 'task'}, {...
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
     assert.deepEqual((await rail.locator('#t-assigned .trow .ttl').allTextContents()).map(s => s.trim()).sort(), ['Pick the release day', 'Run the release check']);
 
-    // The Tasks header: "Tasks", then a board icon. No settings icon until the tab settings modal (Task-list tabs 2/3) is
-    // there to open; then it opens it for this bot.
+    // The Tasks header: "Tasks", then a board icon, then the tab settings (Task-list tabs 2/3) for whoever may change
+    // this bot's tabs; Ana manages Head of Engineering here. It opens the settings for this bot.
     const boardIcon = rail.locator('#bot-tasks .rail-head #bot-tasks-board');
     assert.equal(await boardIcon.getAttribute('href'), '#/tasks?owner=bot:lead&view=board');
     assert.equal(await boardIcon.getAttribute('aria-label'), "Open Head of Engineering's tasks on the board");
-    assert.equal(await rail.locator('#bot-tasks-settings').count(), 0);
     const reopen = async () => {
       await page.evaluate(() => { location.hash = '#/bot/qa'; });
       await page.waitForFunction(() => BOT?.slug === 'qa');
       await page.evaluate(() => { location.hash = '#/bot/lead/tasks'; });
       await rail.locator('#t-open .trow').first().waitFor({state: 'attached'});
     };
-    await page.evaluate(() => { window.botTaskSettingsOpen = slug => { window.settingsFor = slug; }; });
-    await reopen();
-    await rail.locator('#bot-tasks .rail-head #bot-tasks-settings').click();
-    assert.equal(await page.evaluate(() => window.settingsFor), 'lead');
+    await rail.locator('#bot-tasks .rail-head #bot-tasks-settings:not([hidden])').click();
+    await page.locator('#bot-task-tabs-dialog').waitFor();
+    assert.equal((await page.locator('#bot-task-tabs-title').innerText()).trim(), "Head of Engineering's tabs");
+    await page.locator('#bot-task-tabs-dialog [data-tabs-close]').first().click();
+    await page.locator('#bot-task-tabs-dialog').waitFor({state: 'hidden'});
 
     // Spec test 11: a bot with one tab shows that one list, with no tab bar over it.
     await page.evaluate(() => { window.fourTabs = botTaskTabs; window.botTaskTabs = () => [['active', 'Doing', 'cnt-active']]; });

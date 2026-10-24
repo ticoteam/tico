@@ -251,7 +251,7 @@ impl GeminiHost {
 
     fn prepare_home(&self, model: &str, effort: Option<&str>, servers: &[Value]) -> std::io::Result<()> {
         use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::create_dir_all(&self.0.home)?;
         if !std::fs::symlink_metadata(&self.0.home)?.is_dir() {
             return Err(std::io::Error::other("Gemini home must be a directory, not a symbolic link"));
@@ -264,9 +264,15 @@ impl GeminiHost {
                 }
                 std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o711))?;
             }
+            // The mode is set while the home is still the supervisor's, or from a turn before, already the bot user's
+            // with it: the supervisor has no CAP_FOWNER, so it cannot change the mode of a folder the bot user owns.
+            if std::fs::symlink_metadata(&self.0.home)?.mode() & 0o777 != 0o700 {
+                std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
+            }
             crate::isolation::adopt(&[self.0.home.clone()]);
+        } else {
+            std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
         }
-        std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
         set_aside_memory(&self.0.home)?;
         let tmp = self.0.home.join(format!("settings-{}.json", uuid::Uuid::new_v4().simple()));
         let written = (|| {
