@@ -4,6 +4,7 @@ ones included unless asked, closed ones never; and a queued job that can never b
 import uuid
 
 from backend import hubdb as H
+from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
 from backend.tests.test_api import api, assign, claim, get, post, ready, restrict, runner  # noqa: F401  (api is a fixture)
 
@@ -108,6 +109,31 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     assert "ops" not in hidden["queues"] and hidden["failures"]["total"] == 0
     assert get(api, "pipeline?bot=ops", "cara-test", expected=404)["error"]["code"] == "not_found"
     assert stats(api, query="bot=ops")["queues"]["ops"]["dead"] == 1
+
+
+def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypatch):
+    board(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    failed = {}
+    for name, private, age in (("open", False, 3), ("private", True, 1)):
+        post(api, "tasks", {"owner": "ops", "title": f"Fix {name}", "body": "Please fix it.", "private": private})
+        attempt = claim(api, r)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET state='failed', finished=? WHERE id=?", (H.shift(H.now(), hours=-age), attempt["id"]))
+            c.execute("UPDATE jobs SET state='failed' WHERE id=?", (attempt["job_id"],))
+        failed[name] = attempt["id"]
+    monkeypatch.setattr(pipeline_stats, "ATTEMPT_PAGE", 1)     # the newest page holds only the private run
+    hers = stats(api, "cara-test")["failures"]
+    assert hers["total"] == 1 and hers["truncated"] is False and hers["complete_after"] is None
+    assert stats(api)["failures"]["total"] == 2
+
+    monkeypatch.setattr(pipeline_stats, "ATTEMPT_CAP", 1)      # a stop at the cap says from when counts are whole
+    capped = stats(api)["failures"]
+    assert capped["total"] == 1 and capped["truncated"] is True
+    with api.app.state.store.read() as c:
+        assert capped["complete_after"] == c.execute("SELECT finished FROM attempts WHERE id=?", (failed["open"],)).fetchone()[0]
 
 
 def test_failure_causes():

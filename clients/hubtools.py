@@ -3296,7 +3296,8 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
-      "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.",
+      "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
+      "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).",
       {"type": _s("Task type id or name; default the engineering board"),
        "owner": _s("Only tickets this person or bot owns"),
        "label": _s("Only tickets with this label"),

@@ -25,7 +25,9 @@ from .store import H, Problem
 TASK_CAP = 5000            # tickets read for one report; `truncated` says when a type holds more live ones
 IDS_PER_STEP = 50          # ticket ids listed per step; the count is always whole
 DEAD_IDS = 20              # dead job ids listed per bot
-ATTEMPT_CAP = 5000         # failed attempts read for one window
+ATTEMPT_CAP = 5000         # readable failed attempts counted for one window; past it `complete_after` says how far back counts are whole
+ATTEMPT_SCAN = 50000       # failed attempts read for one window, readable or not
+ATTEMPT_PAGE = 1000
 WINDOW_MAX_DAYS = 7
 CAUSES = ("quota", "capacity", "restart", "timeout", "crash", "stopped")
 QUOTA = re.compile(r"(?i)quota|usage limit|rate.?limit|\b429\b|billing|credit balance|insufficient_quota")
@@ -168,27 +170,42 @@ def cause_of(row):
 
 
 def failures_report(c, who, bots, since):
+    # Pages walk back from the newest and skip unreadable rows before counting, so unreadable newer runs never push
+    # readable older ones out of the window; a stop at a cap says from when the counts are whole.
     actor = privacy.actor(who)
     memo = {}
-    causes, per_bot, total = {}, {}, 0
+    causes, per_bot, total, scanned, complete_after = {}, {}, 0, 0, None
+    at = "coalesce(a.finished, a.created)"
     for part in H.chunks(list(bots)):
         marks = ",".join("?" * len(part))
-        for row in c.execute(
-                "SELECT a.id, a.bot, a.state, a.result_json, a.stop_requested, coalesce(a.finished, a.created) AS at, "
-                "d.end_reason FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) "
-                "AND coalesce(a.finished, a.created)>=? ORDER BY coalesce(a.finished, a.created) DESC LIMIT ?",
-                (*part, since, ATTEMPT_CAP)):
-            if not privacy.attempt_readable(c, actor, row["id"], memo):
-                continue
-            total += 1
-            cause = cause_of(row)
-            seen = causes.setdefault(cause, {"n": 0, "first": row["at"], "last": row["at"]})
-            seen["n"] += 1
-            seen["first"], seen["last"] = min(seen["first"], row["at"]), max(seen["last"], row["at"])
-            per_bot.setdefault(row["bot"], {}).setdefault(cause, 0)
-            per_bot[row["bot"]][cause] += 1
-    return {"since": since, "total": total,
+        before = None
+        while True:
+            page = c.execute(
+                f"SELECT a.id, a.bot, a.state, a.result_json, a.stop_requested, {at} AS at, d.end_reason "
+                "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
+                f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) AND {at}>=? "
+                + (f"AND ({at}<? OR ({at}=? AND a.id<?)) " if before else "")
+                + f"ORDER BY {at} DESC, a.id DESC LIMIT ?",
+                (*part, since, *((before[0], before[0], before[1]) if before else ()), ATTEMPT_PAGE)).fetchall()
+            stop = False
+            for row in page:
+                if total >= ATTEMPT_CAP or scanned >= ATTEMPT_SCAN:
+                    complete_after, stop = max(complete_after or row["at"], row["at"]), True
+                    break
+                scanned += 1
+                before = (row["at"], row["id"])
+                if not privacy.attempt_readable(c, actor, row["id"], memo):
+                    continue
+                total += 1
+                cause = cause_of(row)
+                seen = causes.setdefault(cause, {"n": 0, "first": row["at"], "last": row["at"]})
+                seen["n"] += 1
+                seen["first"], seen["last"] = min(seen["first"], row["at"]), max(seen["last"], row["at"])
+                per_bot.setdefault(row["bot"], {}).setdefault(cause, 0)
+                per_bot[row["bot"]][cause] += 1
+            if stop or len(page) < ATTEMPT_PAGE:
+                break
+    return {"since": since, "total": total, "truncated": complete_after is not None, "complete_after": complete_after,
             "by_cause": {k: causes[k] for k in CAUSES if k in causes},
             "by_bot": dict(sorted(per_bot.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])))}
 
