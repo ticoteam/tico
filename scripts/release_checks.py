@@ -10,8 +10,9 @@ runs the journey's previous-release install while it builds the candidate images
 it runs Python tests except Docker isolation (`pytest -m "slow or not slow"`) and every browser test
 (`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
 and whole-product checks against the successfully built images: docker/smoke.sh,
-docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install the previous release, upgrade to the
-candidate, roll back a migrating update). The journey starts installing the previous release while the images build. Each check gets its own Docker names, smoke a free host port, and each compose stack its own edge network range
+docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
+to the candidate, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
+hop). The journey starts installing the previous release while the images build. Each check gets its own Docker names, smoke a free host port, and each compose stack its own edge network range
 (EDGE, checked to be creatable side by side before any stack starts), so they run
 side by side; two release checks must not run at once, since the journey's candidate tags are fixed.
 
@@ -361,7 +362,10 @@ def release(args):
         checks.append(Check('isolation', [sys.executable, '-m', 'pytest', '-q', '-n', workers, '-m', 'slow or not slow',
                                          ISOLATION_FILE], logs,
                             {**test_env,
-                             'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}"},
+                             'TICO_RUNNER_TEST_IMAGE': f"{local_env['TICO_RUNNER_IMAGE']}:{local_env['TICO_TAG']}",
+                             # The session handoff starts from the release the journey upgrades from (newest tag by default).
+                             **({'TICO_RUNNER_PREVIOUS_IMAGE': f'ghcr.io/ticoteam/tico-runner:{args.previous}'}
+                                if args.previous else {})},
                             tests=True))
     elif runs('product'):
         print('  isolation: not run (candidate image builds failed)', flush=True)

@@ -161,6 +161,7 @@ function pageTasks(forced, openId = '') {
     tasksBodyClick(state, ev);
   });
   state.layoutAbort = new AbortController();
+  taskBoardBind(state, body);
   document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
@@ -533,6 +534,7 @@ function tasksPatch(el, html) {
 function tasksRender(state) {
   const el = $('#task-body');
   if (!el || TASKS_ST !== state) return;
+  if (taskBoardHolding(state)) return;      // a card is being dragged: the board redraws once it is let go
   state.memo = new Map();
   const active = document.activeElement, inBody = el.contains(active);
   const focusKey = inBody ? active.closest('[data-task-key]')?.dataset.taskKey || '' : '';
