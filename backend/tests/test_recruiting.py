@@ -70,6 +70,34 @@ def test_the_owner_opening_a_seat_gets_the_ceo_bots_draft_and_a_person_s_words_a
     assert sorted(t["status"] for t in draft_tasks(api)) == ["declined", "done"]
 
 
+def test_an_upgrade_keeps_job_descriptions_people_wrote_before_authorship_was_recorded(api):
+    from backend import lifecycle
+    ceo = ceo_bot(api)
+    with api.app.state.store.transaction() as c:
+        # The seats table as the release before recruiting left it, with a person's text, an edited one and an empty one.
+        c.execute("DROP TABLE seats")
+        c.execute(lifecycle.SCHEMA)
+        for sid, text in (("s-old", "Keeps the books."), ("s-edited", "Runs payroll; edited."), ("s-empty", "")):
+            c.execute("INSERT INTO seats(id,title,description,reports_to,created,created_by,updated,updated_by) "
+                      "VALUES(?,?,?,'coo',?,'human:ana',?,'human:ben')", (sid, "Role " + sid, text, H.now(), H.now()))
+        lifecycle.ensure(c)
+        lifecycle.ensure(c)
+        owner = Identity("human:ana", "owner")
+        chart = lifecycle.create_seat(api.app.state.auth, c, owner, "Analyst", "From the chart model.", "coo",
+                                      description_by=recruiting.CHART)
+    for sid in ("s-old", "s-edited"):
+        opened = post(api, f"seats/{sid}/open", {})
+        assert opened["draft"]["state"] == "none" and opened["description_by"] == "person"
+        assert get(api, f"seats/{sid}")["description"] in ("Keeps the books.", "Runs payroll; edited.")
+    assert post(api, "seats/s-empty/open", {})["draft"]["state"] == "drafting"
+    assert post(api, f"seats/{chart['id']}/open", {})["draft"]["state"] == "drafting"
+    assert len(draft_tasks(api)) == 2
+    with api.app.state.store.transaction() as c:      # even with a stray draft task, the old words stay
+        c.execute("UPDATE seats SET draft_task=(SELECT draft_task FROM seats WHERE id='s-empty') WHERE id='s-old'")
+    refused = api.post("/api/v2/seats/s-old/draft", headers=ceo, json={"text": "A bookkeeper who closes every month on time."})
+    assert refused.status_code == 409 and get(api, "seats/s-old")["description"] == "Keeps the books."
+
+
 def test_recruit_answers_at_once_with_one_recommended_candidate_each_with_a_reason_and_a_model(api):
     providers(api, "anthropic", "openai")
     seat = post(api, "seats", {"title": "Customer support lead", "reports_to": "coo",

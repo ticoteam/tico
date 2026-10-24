@@ -31,7 +31,8 @@ CHART = "chart"                         # `description_by` for a chart model's t
 
 # ------------------------------------------------------------------ the seat as the recruiting page shows it
 def _person_wrote(row):
-    return str(row["description_by"] or "").startswith("human:")
+    by = str(row["description_by"] or "")
+    return by.startswith("human:") or by == lifecycle.EARLIER
 
 
 def _live_task(c, task_id):

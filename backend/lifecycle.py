@@ -35,6 +35,9 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
 # the bot that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
            ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
+# `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
+# wrote seats then, so it is kept like a person's words and the CEO Bot never drafts over it.
+EARLIER = "earlier"
 
 
 def ensure(c):
@@ -45,6 +48,8 @@ def ensure(c):
     for name, kind in COLUMNS:
         if name not in have:
             c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")
+    if "description_by" not in have:
+        c.execute("UPDATE seats SET description_by=? WHERE TRIM(description)<>''", (EARLIER,))
 
 
 # ------------------------------------------------------------------ stages

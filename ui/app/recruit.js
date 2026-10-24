@@ -137,7 +137,9 @@ async function recruitSeat(id) {
   let seat;
   try { seat = await post(`/v2/seats/${encodeURIComponent(id)}/open`, {}); }
   catch (e) { toast(e.message, true); return; }
-  let dirty = false, picking = false;
+  // `saved` is the text the server last acknowledged; one save runs at a time and keeps going until it matches the
+  // textarea, so a reply never marks newer typing as saved and the bot is never hired from older words.
+  let dirty = false, picking = false, saving = null, saved = seat.description;
   dialog.innerHTML = `<div class="recruit-seat"><div class="tmodal-head"><h2 id="recruit-title">${esc(seat.title)}</h2><span class="pill recruiting">Recruiting</span><span class="spacer"></span><button class="ghost" type="button" data-recruit-close aria-label="Close">✕</button></div>
     <div class="bot-editor-body"><p class="muted">Reports to ${esc(recruitPlaceName(seat.reports_to))}. No bot, repository or computer until you pick a candidate.</p>
     <label>Job description<textarea name="description" rows="7" maxlength="8000"${seat.can_edit ? '' : ' readonly'}>${esc(seat.description)}</textarea></label>
@@ -148,12 +150,18 @@ async function recruitSeat(id) {
   const text = dialog.querySelector('textarea'), line = dialog.querySelector('[data-recruit-draft]');
   const status = dialog.querySelector('[data-recruit-status]'), results = dialog.querySelector('[data-recruit-candidates]');
   const save = dialog.querySelector('[data-recruit-save]'), go = dialog.querySelector('[data-recruit-go]');
-  text.oninput = () => { dirty = text.value !== seat.description; if (save) save.hidden = !dirty; };
-  const saveText = async () => {
-    seat = {...seat, ...await patch(`/v2/seats/${encodeURIComponent(id)}`, {description: text.value}), description_by: 'person',
-      draft: {...seat.draft, state: seat.draft?.state === 'drafting' ? 'none' : seat.draft?.state}};
-    dirty = false; if (save) save.hidden = true; line.innerHTML = recruitDraftLine(seat);
-  };
+  const showDirty = () => { dirty = text.value !== saved; if (save) save.hidden = !dirty; };
+  text.oninput = showDirty;
+  const saveText = () => saving || (text.value === saved ? Promise.resolve() : saving = (async () => {
+    try {
+      while (text.value !== saved) {
+        const sent = text.value;
+        seat = {...seat, ...await patch(`/v2/seats/${encodeURIComponent(id)}`, {description: sent}), description_by: 'person',
+          draft: {...seat.draft, state: seat.draft?.state === 'drafting' ? 'none' : seat.draft?.state}};
+        saved = sent; line.innerHTML = recruitDraftLine(seat);
+      }
+    } finally { saving = null; showDirty(); }
+  })());
   if (save) save.onclick = async () => { try { await saveText(); toast('Job description saved.'); } catch (e) { status.textContent = e.message; } };
   // The CEO Bot's draft arrives in a minute or so; a description being typed is never replaced.
   if (seat.draft?.state === 'drafting') RECRUIT_POLL = setInterval(async () => {
@@ -162,7 +170,7 @@ async function recruitSeat(id) {
       const now = await get(`/v2/seats/${encodeURIComponent(id)}`, {fresh: true});
       if (now.draft?.state === 'drafting') return;
       clearInterval(RECRUIT_POLL); RECRUIT_POLL = null;
-      if (!dirty) { seat = now; text.value = now.description; }
+      if (!dirty && !saving) { seat = now; text.value = saved = now.description; }
       line.innerHTML = recruitDraftLine(now);
     } catch { /* the next tick tries again */ }
   }, 4000);
@@ -170,7 +178,7 @@ async function recruitSeat(id) {
     if (picking) return;
     go.disabled = true; status.textContent = 'Finding candidates…';
     try {
-      if (dirty) await saveText();
+      await saveText();
       const found = await post(`/v2/seats/${encodeURIComponent(id)}/recruit`, {});
       status.textContent = found.candidates.length ? 'Tico templates for this role, from this Tico. Nothing leaves your team.' : 'No template fits yet.';
       const options = c => [`<option value="">Suggested: ${esc(c.model_name)}</option>`,
@@ -188,15 +196,20 @@ async function recruitSeat(id) {
     if (picking || !S.me?.id || !settingsCanCreateBots()) return;
     const card = button.closest('[data-recruit-candidate]');
     picking = true; host.querySelectorAll('[data-recruit-pick]').forEach(b => { b.disabled = true; });
-    status.textContent = 'Creating the bot…';
+    // The bot is made from the stored job description: save what is on screen first, and hold it still until the hire
+    // answers. A failed save hires nobody and keeps the text.
+    text.readOnly = true;
+    status.textContent = 'Saving the job description…';
     try {
+      await saveText();
+      status.textContent = 'Creating the bot…';
       const hired = await post(`/v2/seats/${encodeURIComponent(seatId)}/hire`,
         {template: card.dataset.recruitCandidate, model: card.querySelector('[data-recruit-model]').value});
       host.close(); await refresh(true);
       toast(`${current.title} is onboarding: it learns in chat until someone above it marks onboarding complete.`);
       location.hash = '#/bot/' + encodeURIComponent(hired.slug);
     } catch (e) {
-      status.textContent = e.message; picking = false;
+      status.textContent = e.message; picking = false; text.readOnly = !seat.can_edit;
       host.querySelectorAll('[data-recruit-pick]').forEach(b => { b.disabled = false; });
     }
   };

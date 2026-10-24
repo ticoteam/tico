@@ -23,7 +23,7 @@ async function shot(page, name) {
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], calls = [], failures = new Set();
-  const deletion = {status: 0, hold: null};
+  const deletion = {status: 0, hold: null}, seatSave = {status: 0, hold: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
     {id: 'ben', name: 'Ben Cole', org_parent: 'p:ana', team: 'marketing', reports_to: 'ana'},
@@ -104,6 +104,14 @@ async function open(browser, me, branches = false) {
       const seat = seats.find(row => row.id === s[1]), body = method === 'GET' ? null : request.postDataJSON();
       if (s[2]) calls.push(['POST', s[2], s[1], body]);
       if (s[2] === 'open') { if (!seat.description) seat.drafting = true; return json(seatView(seat)); }
+      if (!s[2] && method === 'PATCH') {
+        calls.push(['PATCH', s[1], body]);
+        if (seatSave.hold) await seatSave.hold;
+        if (seatSave.status) return route.fulfill({status: seatSave.status, contentType: 'application/json',
+          body: JSON.stringify({error: {detail: 'Saving failed'}})});
+        Object.assign(seat, {description: body.description, drafting: false, drafted: false});
+        return json(seatView(seat));
+      }
       if (!s[2]) {                                   // the CEO Bot's draft lands by the first poll
         if (seat.drafting) Object.assign(seat, {drafting: false, drafted: true, description: 'Keeps the books and closes each month.'});
         return json(seatView(seat));
@@ -113,9 +121,11 @@ async function open(browser, me, branches = false) {
           {template: 'bookkeeping', name: 'Bookkeeper', reason: 'Matches “closes each month” in the job description', recommended: true, model: 'fixture-model', model_name: 'Fixture model', summary: 'Keeps the ledger.'},
           {template: 'controller', name: 'Controller', reason: 'Controller fits the role “Ledger” in Finance', recommended: false, model: 'fixture-model', model_name: 'Fixture model', summary: ''}]});
       seat.filled = true;
-      bots.push(bot('ledger', seat.title, '', seat.reports_to.startsWith('human:') ? 'p:' + seat.reports_to.slice(6) : 'b:' + seat.reports_to,
+      const slug = seat.title.toLowerCase();
+      calls.push(['hired with', seat.description]);
+      bots.push(bot(slug, seat.title, '', seat.reports_to.startsWith('human:') ? 'p:' + seat.reports_to.slice(6) : 'b:' + seat.reports_to,
         {reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
-      return json({slug: 'ledger', seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
+      return json({slug, seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
     }
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
@@ -159,7 +169,7 @@ async function open(browser, me, branches = false) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
   await page.locator('#tree a.node').first().waitFor();
-  return {page, errors, calls, people, groups, bots, failures, deletion};
+  return {page, errors, calls, people, groups, bots, failures, deletion, seatSave};
 }
 
 // The chart as nested text: a group is {name: [...]}, a human or a bot is its name.
@@ -423,7 +433,7 @@ async function member(browser) {
 }
 
 async function teamAdd(browser) {
-  const {page, errors, calls, failures, bots} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
+  const {page, errors, calls, failures, bots, seatSave} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
   const choose = async name => {
     await page.locator('#org-add-group').click();
     await page.getByRole('menuitem', {name, exact: true}).click();
@@ -467,6 +477,7 @@ async function teamAdd(browser) {
   await node(page, 'b:ledger').waitFor({state: 'attached'});
   assert.deepEqual(calls.filter(c => c[1] === 'recruit' || c[1] === 'hire'),
     [['POST', 'recruit', 'seat1', {}], ['POST', 'hire', 'seat1', {template: 'bookkeeping', model: 'other-model'}]]);
+  assert.deepEqual(calls.find(c => c[0] === 'hired with'), ['hired with', 'Keeps the books and closes each month.']);
   calls.length = 0;
   await page.waitForFunction(() => location.hash === '#/bot/ledger');
   assert.equal(await page.locator('#tree a.node.seat').count(), 0, 'the filled seat leaves the chart');
@@ -482,6 +493,46 @@ async function teamAdd(browser) {
   assert.equal(new URL(page.url()).hash, '#/updates');
   await page.evaluate(() => { S.me.role = 'owner'; delete S.me.can_create_bots; });
   await page.keyboard.press('Escape');
+
+  // The bot is hired from the words on screen. A reply to an earlier save never marks newer typing saved: one save runs
+  // at a time, a second click joins it, and it carries on until the stored text matches.
+  await choose('Add bot');
+  await page.locator('[data-recruit-new] [name=title]').fill('Payroll');
+  await page.locator('[data-recruit-new] [name=description]').fill('Runs payroll.');
+  await page.locator('[data-recruit-new] [type=submit]').click();
+  const text = page.locator('#recruit-picker textarea'), saveButton = page.locator('[data-recruit-save]');
+  await text.waitFor();
+  calls.length = 0;
+  let release;
+  seatSave.hold = new Promise(resolve => { release = resolve; });
+  await text.fill('Runs payroll every two weeks.');
+  await saveButton.click();
+  await text.fill('Runs payroll every two weeks and files the quarterly taxes.');
+  await saveButton.dispatchEvent('click');
+  assert.deepEqual(calls.filter(c => c[0] === 'PATCH').length, 1, 'a second Save waits for the first');
+  seatSave.hold = null; release();
+  await page.locator('[data-recruit-save][hidden]').waitFor({state: 'attached'});
+  assert.deepEqual(calls.filter(c => c[0] === 'PATCH').map(c => c[2].description),
+    ['Runs payroll every two weeks.', 'Runs payroll every two weeks and files the quarterly taxes.']);
+  // Editing after Recruit: Pick saves the edit first; a failed save hires nobody and keeps the text.
+  await page.getByRole('button', {name: 'Recruit', exact: true}).click();
+  await page.locator('[data-recruit-candidate]').first().waitFor();
+  await text.fill('Runs payroll and answers pay questions.');
+  seatSave.status = 403;
+  await page.getByRole('button', {name: 'Pick Bookkeeper'}).click();
+  await page.locator('[data-recruit-status]', {hasText: 'Saving failed'}).waitFor();
+  assert.equal(calls.some(c => c[1] === 'hire'), false);
+  assert.equal(await text.inputValue(), 'Runs payroll and answers pay questions.');
+  assert.equal(await text.evaluate(el => el.readOnly), false);
+  seatSave.status = 0;
+  await page.getByRole('button', {name: 'Pick Bookkeeper'}).click();
+  await node(page, 'b:payroll').waitFor({state: 'attached'});
+  const hire = calls.findIndex(c => c[1] === 'hire');
+  assert.deepEqual(calls[hire - 1], ['PATCH', 'seat2', {description: 'Runs payroll and answers pay questions.'}]);
+  assert.deepEqual(calls[hire + 1], ['hired with', 'Runs payroll and answers pay questions.']);
+  calls.length = 0;
+  await page.goBack();
+  await page.waitForFunction(() => location.hash === '#/updates');
 
   // A failed add keeps the entered human available for correction and retry.
   await choose('Add human');
