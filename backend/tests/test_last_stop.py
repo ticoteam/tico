@@ -48,6 +48,23 @@ def test_the_line_clears_when_the_run_that_did_not_start_is_no_longer_waiting(ap
     assert line["state"] == "idle" and line["last_stop"] is None
 
 
+def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(api):
+    import json
+    machine, message, lapsed = setup_attempt(api)
+    lapse(api, lapsed)
+    task = post(api, "tasks", {"owner": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+        c.execute("UPDATE messages SET from_actor=?,kind='notice',refs_json=? WHERE id=?",
+                  (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]))
+        cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
+    assert claim(api, machine) is None
+    line = status(api)
+    assert line["last_stop"] is None and line["focus"] == ""
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM changes WHERE seq>? AND topic='bots' AND bot='ops'", (cursor,)).fetchone()
+
+
 def test_a_computer_hands_back_a_run_it_could_not_start_at_once(api):
     from backend.execution import HAND_BACK_WAIT, HANDED_BACK
     machine, _, attempt = setup_attempt(api)
@@ -132,3 +149,20 @@ def test_a_run_its_computer_never_started_after_every_try_names_the_computer(api
     stop = line["last_stop"]
     assert (stop["kind"], stop["tone"], stop["needs_person"], stop["action"]) == ("never_started", "alert", True, None)
     assert stop["text"] == "Your ops couldn't start on Test Mac; check that Computer."
+
+
+def test_the_latest_failed_start_is_not_hidden_by_an_older_held_run(api):
+    from backend.execution import settle_status
+    machine, message, old = interrupted(api)
+    newer = post(api, "chat/ops", {"text": "Another request."})
+    with api.app.state.store.transaction() as c:
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (newer["id"],)).fetchone()[0]
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
+                  "finished,final_text) SELECT 'new-start',?,bot,runner_id,generation,'new-hash','failed',lease_until,"
+                  "created,?,? FROM attempts WHERE id=?",
+                  (job, H.now(), "Check the newer Computer", old["id"]))
+        c.execute("UPDATE jobs SET state='failed',attempt_id='new-start' WHERE id=?", (job,))
+        settle_status(c, "ops", "crashed", "Check the newer Computer", stop="new-start")
+    stop = status(api)["last_stop"]
+    assert stop["attempt_id"] == "new-start" and stop["kind"] == "never_started"
+    assert stop["action"] is None and "newer Computer" in stop["text"]

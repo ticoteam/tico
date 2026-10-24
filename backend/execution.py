@@ -327,19 +327,31 @@ def last_stop(c, bot, status):
     attempt = (c.execute("SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?",
                          (mark["attempt_id"],)).fetchone() if mark.get("attempt_id") else None)
     at = (attempt["finished"] if attempt else None) or status.get("since")
-    held = (c.execute("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' ORDER BY created DESC LIMIT 1",
-                      (bot,)).fetchone() if state == "crashed" else None)
+    # An older held task must not replace the run that produced the current status.
+    held = (c.execute("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' "
+                      + ("AND attempt_id=? " if mark.get("attempt_id") else "")
+                      + "ORDER BY created DESC LIMIT 1",
+                      (bot, mark["attempt_id"]) if mark.get("attempt_id") else (bot,)).fetchone()
+            if state == "crashed" else None)
     if held:
-        run = (c.execute("SELECT state,started FROM attempts WHERE id=?", (held["attempt_id"],)).fetchone()
+        run = (c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (held["attempt_id"],)).fetchone()
                if held["attempt_id"] else None)
-        reason = ("Its computer stopped answering while the run was going, so the run's lease ran out."
+        unstarted = run is not None and not run["started"]
+        focus = (status.get("focus") or "").rstrip(".")
+        reason = ("Its computer refused the run before it started." if unstarted else
+                  "Its computer stopped answering while the run was going, so the run's lease ran out."
                   if run and run["state"] == "expired" else
                   "The run ended with an error before it finished." if run and run["state"] == "failed" else
-                  "The run was interrupted before it finished.") + (" Tico kept it rather than run it again, in "
-                                                                     "case it had already changed something.")
-        return {"kind": "stopped", "tone": "alert", "needs_person": True, "action": "review", "at": at,
+                  "The run was interrupted before it finished.")
+        if focus:
+            reason += " " + focus + "."
+        reason += (" Nothing ran. Review the saved run after fixing the cause." if unstarted else
+                   " Tico kept it rather than run it again, in case it had already changed something.")
+        return {"kind": "never_started" if unstarted else "stopped", "tone": "alert", "needs_person": True,
+                "action": "review", "at": (run["finished"] if run else None) or at,
                 "attempt_id": held["attempt_id"], "reason": reason,
-                "text": "Last run stopped partway. Retry it or dismiss it."}
+                "text": ("Last run never started. Check the reason, then retry it or dismiss it." if unstarted else
+                         "Last run stopped partway. Retry it or dismiss it.")}
     if attempt and not attempt["started"] and attempt["state"] == "failed":
         # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
         return {"kind": "never_started", "tone": "alert", "needs_person": True, "action": None, "at": at,
@@ -353,8 +365,7 @@ def last_stop(c, bot, status):
         if attempt["stop_requested"]:
             return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
                     "attempt_id": attempt["id"], "text": "Last run was stopped before it started. Nothing ran.",
-                    "reason": "It was stopped before its computer started it, so nothing ran. The request is back "
-                              "in the queue and runs again shortly."}
+                    "reason": "It was stopped before its computer started it, so nothing ran."}
         return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
                 "attempt_id": attempt["id"], "text": NOT_STARTED,
                 "reason": (f"{attempt['final_text']} " if returned else
@@ -364,7 +375,8 @@ def last_stop(c, bot, status):
         focus = (status.get("focus") or "").rstrip(".")
         return {"kind": "stopped", "tone": "alert", "needs_person": True, "action": None, "at": at,
                 "attempt_id": attempt["id"] if attempt else None, "reason": (focus + ".") if focus else "",
-                "text": "Last run stopped" + (f": {focus}." if focus else ". It runs again on its next message.")}
+                "text": "Last run stopped" + (f": {focus}." if focus else ".")
+                + " Ask a person who manages this bot to check its Computer before sending a new message."}
     return None
 
 
@@ -1867,7 +1879,7 @@ class Execution:
         # wakes of every kind, while preserving people's messages and explicitly resumed jobs.
         # A keeper notice of a person's own act still owes that person its answer (H._write_message).
         # A self-filed task left parked when its filing turn ended waits for its actual trigger instead.
-        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "
+        obsolete = c.execute("SELECT j.id,j.bot,j.attempt_id,j.message_id,t.id AS task_id FROM assignments x "
             "CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
@@ -1885,6 +1897,11 @@ class Execution:
             selected = None
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (old['id'],))
             c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
+            from .repositories import metadata
+            if (old["attempt_id"] and metadata(c, LAST_STOP + old["bot"]).get("attempt_id") == old["attempt_id"]
+                    and (H.status(c, old["bot"]) or {}).get("state") == "idle"):
+                # Clearing the status also publishes the new header to already-open pages.
+                settle_status(c, old["bot"], "idle", "")
             H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished before keeper notice delivery','task_id':old['task_id']})
         why = runner_versions.paused(c, who.runner_id)
         if why:
@@ -3158,16 +3175,16 @@ class Execution:
                      **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif busy_acted:
             settle_status(c, row["bot"], "crashed", f"{runtime} {login_holds.CAPACITY_KIND} at {H.now()[11:16]} "
-                          "after the run had acted; this run is saved for review", claimed=row["created"])
+                          "after the run had acted; this run is saved for review", claimed=row["created"], stop=aid)
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not requeue else None)
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
                           ("sign in on this computer to continue" if requeue else "this run is saved for review"),
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:
             from .repositories import save_metadata
             hit = H.now()
@@ -3208,7 +3225,7 @@ class Execution:
             settle_status(c, row["bot"], "idle" if healthy else "crashed",
                           "" if healthy else f"{refused}. This run is saved for later" if refused
                           else "One run stopped; saved for later",
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not healthy else None)
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 
     def retry(self, c, who, job_id, body):
