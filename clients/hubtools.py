@@ -571,6 +571,9 @@ def tag_update(api, args):
                   "description": "Movers: keep an imported ticket's number (unique across the team)"},
        "labels": {"type": "array", "items": {"type": "string"},
                   "description": "Labels: a project name, a kind (bug, front-end). Lower-case words."},
+       "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
+       "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
+       "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -591,6 +594,9 @@ def task_create(api, args):
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
+            body[field] = args[field]
+    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+        if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]
@@ -3333,6 +3339,25 @@ def assistant_propose(api, args):
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
 
 
+@tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
+      "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
+      "what you saved. It is theirs alone and shows on What it has learned, where they edit or delete it. The CEO Bot "
+      "in the owner's chat saves what the owner teaches it about the company with layer company.",
+      {"text": _s("One short line, in their words"),
+       "layer": {"enum": ["personal", "company"], "default": "personal",
+                 "description": "personal (theirs), or company (the CEO Bot in the owner's chat only)"}},
+      required=("text",), writes=True)
+def assistant_learn(api, args):
+    return api.post("assistant/learned", {"layer": args.get("layer") or "personal", "text": args["text"]},
+                    key=_key(args))
+
+
+@tool("hub_assistant_learned", "What a person's chat bot has learned: their own layer, and for the owner the "
+      "company layer (vision, priorities, what they taught the CEO Bot about the company).", {})
+def assistant_learned(api, args):
+    return api.get("assistant/learned")
+
+
 # ----------------------------------------------------------------------------- sql, integrations
 @tool("hub_sql", "Read-only SQL over what you may see (docs/hub-sql.md). One SELECT, WITH or "
       "EXPLAIN QUERY PLAN; bind `:key` with `params`.",
@@ -3435,6 +3460,20 @@ def github_create_bot_repo(api, args):
     body = {"slug": args["slug"], "empty": True} if args.get("empty") else \
         {"slug": args["slug"], "template": args.get("template") or "ticoteam/botops"}
     return api.post("github/repos", body, key=_key(args))
+
+
+@tool("hub_repo_review", "Submit this bot's GitHub PR review at an explicit current head. The configured reviewer App "
+      "uses APPROVE or REQUEST_CHANGES; the shared App uses COMMENT. Requires an existing repository "
+      "grant (write for the shared App). VERDICT is appended automatically. A moved head is refused; a lost response is never blindly resubmitted.",
+      {"repository": _s("GitHub owner/repository"), "number": {"type": "integer", "minimum": 1},
+       "head": _s("Reviewed full commit SHA", pattern="^[0-9a-f]{40}$"),
+       "verdict": _s("Review verdict", enum=["approve", "changes"]),
+       "body": _s("Review findings, excluding the automatically appended VERDICT line", maxLength=60000)},
+      required=("repository", "number", "head", "verdict", "body"), writes=True)
+def repo_review(api, args):
+    body = {key: args[key] for key in ("repository", "number", "head", "verdict", "body")}
+    key = args.get("operation_id") or "review-" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    return api.post("github/reviews", body, key=key)
 
 
 @tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
@@ -3932,7 +3971,7 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
-                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose"}
+                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn"}
 AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
@@ -3940,6 +3979,7 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
     **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_keep_tasks_going", "hub_bot_pause",
@@ -3956,9 +3996,11 @@ AUDIENCE = {
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
+    # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
+    "hub_assistant_learn": HUMANS_AND_ASSISTANT, "hub_assistant_learned": HUMANS_AND_ASSISTANT,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "hub_brief": HUMANS_AND_ASSISTANT, "hub_bot_recent": HUMANS_AND_ASSISTANT,
-    "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTOPS,
+    "hub_mcp_stats": PEOPLE + BOTS,   # a bot the owner granted outcome stats; the server refuses the rest
     "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": PEOPLE,

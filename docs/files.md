@@ -30,7 +30,8 @@ its conversation, or bot-wide) and a canonical identity:
    and `/api/v2/files/{id}/versions/{n}` for an older one, in the same safe viewer or download as
    any attachment. Adopted legacy attachment IDs keep their original bytes without a version;
    current file lists include an explicit version in their links to those IDs. Tico streams
-   authorized bytes; storage addresses are never shown.
+   authorized bytes or opens a short-lived link on the company's files address when it uses
+   [Tico file hosting](#tico-file-hosting).
 2. **Cloud documents.** A Google Doc, Sheet or Slides, a Notion page, a Figma file or any https
    document. `hub file link <url> --title "..."` registers the address (http, `javascript:`,
    credentials in the URL and private-network hosts are refused). Open goes to the provider, which
@@ -133,8 +134,8 @@ It never substitutes the bot's description for its Instructions.
 
 ## Retention
 
-Every version is kept: versions are immutable and nothing prunes them. The owner or a bot administrator
-removes a file from the bot's page (`PATCH /api/v2/files/{id}` with `archived: true`). That hides the row
+Versions are immutable and kept unless you stop [Tico file hosting](#tico-file-hosting) and its retention period ends.
+The owner or a bot administrator removes a file from the bot's page (`PATCH /api/v2/files/{id}` with `archived: true`). That hides the row
 and keeps the bytes; the file returns when the bot publishes a changed version. A bot cannot remove a file.
 
 ## Storage
@@ -223,9 +224,10 @@ AWS references: [event and cookie structure](https://docs.aws.amazon.com/AmazonC
 
 ### Server storage
 
-Local disk is the default. The owner can put the company's files in its own bucket from Settings › General
-([A company's own bucket](#a-companys-own-bucket)); the server's operator can set one with the steps below.
-To use S3:
+Local disk is the default. The owner can use [Tico file hosting](#tico-file-hosting) or
+[the company's own bucket](#a-companys-own-bucket). The server's operator can also configure a bucket.
+
+To use S3 for the server's storage:
 
 1. Create a dedicated bucket in the AWS console, or preview
    `deploy/aws/attachments-s3.sh --bucket acme-files --region us-east-1 --role acme-server`
@@ -264,6 +266,40 @@ Read retries never change the selected write source.
 
 Keys are passed directly to S3 clients, never exported into the server's environment or logged.
 
+### Tico file hosting
+
+A self-hosted company with Gateway credits can keep its files in storage Tico runs, served from its own
+`ticofiles.com` address. It covers task files, chat attachments, visuals, reports and recordings.
+The owner turns it on in **Settings** through the Gateway page. Tico HQ supplies the storage access and files
+address; you do not enter AWS keys. For example, Acme at `acme.example` can use `acme-files.ticofiles.com` for its files.
+
+New files go to Tico storage from then on, without a restart. Existing files stay readable where they are
+until the owner chooses to move them. **Settings › General › Storage** shows **Tico file hosting**, its files
+address and the controls below.
+
+**Move existing files** shows the file count and GB estimate before you confirm. It copies every file and every
+version into Tico storage and checks each copy before switching reads to it. The completed move reports the GB
+moved, matching the estimate. The move never deletes the originals. Tico's own copy checks do not incur delivery
+charges. If the estimate changes before you confirm, Tico asks you to check the new one. An interrupted move can
+be started again to copy what remains.
+
+Files in Tico storage are reachable only through short-lived signed links. Tico checks access on every request,
+private-task files stay private, and there is no public listing. Pictures, video and audio open inline from the
+company's files address. For self-hosted companies using file hosting, web pages and SVG files show as **Open**
+cards that open the file viewer. Full inline pages and SVG are a separate change.
+
+When the owner stops file hosting on the Gateway page, new files go back to the company's own storage: its bucket,
+or the server's storage if it has no bucket. **Download all files** offers a ZIP export of every file and version
+the owner may open. Files private to someone else are left out, with a count in the export's manifest.
+Tico HQ keeps the hosted files for 30 days, emails the owner before deleting them, then deletes them.
+The app shows the keep-until date HQ supplies. **Move files back** copies every file and version to the company's
+own storage while HQ still keeps them. Download or move the files before that date.
+
+If Gateway credits run out, existing files stay readable. New uploads go to the company's own storage until
+credits are added. If that storage is unavailable, Tico refuses the upload with a plain reason.
+File hosting does not change the visual upload caps: 25 MB for bots and 10 MB for people
+([Visuals in replies](visuals.md#types-and-limits)).
+
 ### A company's own bucket
 
 In **Settings › General › Storage** the owner enters a bucket, its region, an optional folder in it, and an access key ID
@@ -274,12 +310,16 @@ got. The keys need `s3:PutObject`, `s3:GetObject`
 and `s3:AbortMultipartUpload` on the bucket's objects (step 2 above, without the IAM role), and `s3:DeleteObject` to
 replace the team icon (docs/desktop.md).
 
-From the moment it is saved, without a restart, every new file goes to that bucket, ahead of `TICO_BLOB_BUCKET` and the
-server's disk. Files already stored keep opening: a file is read from the bucket in use, then from each bucket used
-before it (newest first), then from the server's own storage. Files on the server's disk are copied into the new bucket
-in the background (Settings › Health shows progress); files in another bucket stay where they are. **Use the server's
-storage** sends new files back to the server's own storage; the bucket stays on the list of places files are read from.
-Backups (docs/install.md) read each file from wherever it is stored, so they use the company's keys for its bucket.
+Unless Tico file hosting is taking new files, saving this setting sends new files to that bucket without a restart.
+It takes priority over `TICO_BLOB_BUCKET` and the server's disk. While file hosting is on, this bucket remains the company's own
+storage for when file hosting stops or Gateway credits run out.
+
+Files already stored keep opening: Tico tries the bucket taking new files, earlier buckets (newest first), then
+the server's storage. When the company's own bucket takes new files, Tico also copies files from the server's disk
+into it in the background (**Settings › Health** shows progress). Files in another bucket stay where they are.
+**Use the server's storage** selects the server's storage instead of the company's own bucket; it does not stop
+Tico file hosting. The bucket stays on the list of places files are read from. Backups (docs/install.md) read each
+file from wherever it is stored, so they use the company's keys for its bucket.
 
 The secret access key is sealed with the credential key (`credential.key`, or `TICO_CREDENTIAL_KMS_KEY`) and is
 never shown again, logged or returned by the API. Leave it empty to keep the saved one when changing the bucket's folder

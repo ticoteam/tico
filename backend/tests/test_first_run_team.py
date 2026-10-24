@@ -158,3 +158,65 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 
+
+
+def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(environment):
+    """Stored selected keys are alphabetical; groups still follow the chart, including on repeated Create."""
+    api = environment(seed={}, catalog_dir=CATALOG)
+    who = signed_in()
+    departments = ["sales", "marketing", "support", "finance", "operations"]
+    templates = ["sales-lead", "marketing-lead", "support-lead", "finance-lead", "ops-manager"]
+    selected = {slug: {"template": slug, "display_name": slug, "instructions": ""} for slug in templates}
+    body = {"names": {"company_name": "Fresh Synthetic Co"},
+            "answers": {"departments": departments}, "selected": selected}
+    assert api.put("/api/v2/setup", json=body, headers=who).status_code == 200
+    # This fresh read exercises encode(sort_keys=True), the source of the original mismatch.
+    saved = api.get("/api/v2/setup", headers=who).json()
+    assert list(saved["selected"]) == sorted(templates)
+    for _ in range(2):
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+        groups = api.get("/api/v2/groups", headers=who).json()
+        assert [group["id"] for group in groups] == departments
+
+    # A manual group added after setup appends, even though stored keys sort it between wizard groups.
+    added = api.post("/api/v2/groups", json={"name": "Legal"}, headers=signed_in())
+    assert added.status_code == 200
+    expected = departments + ["legal"]
+    groups = api.get("/api/v2/groups", headers=who).json()
+    chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
+    assert [group["id"] for group in groups] == expected
+    assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
+    with api.app.state.store.read() as c:
+        saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    assert list(saved["org_groups"]) == sorted(expected)
+    assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(6)))
+
+
+def test_created_groups_append_after_legacy_positions_across_reload_and_repeated_create(environment):
+    """Adding a group preserves legacy positions and the chart/list agree after sorted JSON reloads."""
+    api = environment(seed={}, catalog_dir=CATALOG)
+    who = signed_in()
+    for name in ["Marketing", "Operations"]:
+        assert api.post("/api/v2/groups", json={"name": name}, headers=signed_in()).status_code == 200
+    # Model a roster stored before group creation persisted positions.
+    with api.app.state.store.transaction() as c:
+        legacy = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for group in legacy["org_groups"].values():
+            group.pop("order", None)
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
+    assert all("order" not in group for group in legacy["org_groups"].values())
+    selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
+    assert api.put("/api/v2/setup", json={"answers": {"departments": ["finance"]},
+                                         "selected": selected}, headers=who).status_code == 200
+    expected = ["marketing", "operations", "finance"]
+    for _ in range(2):
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+        # Separate requests reload the persisted roster, whose object keys are alphabetically sorted.
+        groups = api.get("/api/v2/groups", headers=who).json()
+        chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
+        assert [group["id"] for group in groups] == expected
+        assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
+        with api.app.state.store.read() as c:
+            saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        assert list(saved["org_groups"]) == sorted(expected)
+        assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(3)))

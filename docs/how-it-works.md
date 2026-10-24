@@ -238,7 +238,8 @@ and a run whose host reports its tool calls, that only read (files, searches, we
 that only read) and consumed no approval, is resumed once, each with a note in the job's recovery
 record (`job.auto_reconcile` in the event log). When the runner itself reported the run interrupted
 (it restarted), such a run resumes at once; when the same computer picks it up again it continues
-the same provider session. Any other run stays *owner review needed*, because Tico cannot see what a
+the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
 BotOps resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
@@ -286,9 +287,11 @@ billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
 *claude login held (usage limit) until 02:40 UTC; running this turn on codex*); only a bot with no such fallback
-waits. A fallback that turns out not to be ready, or fails before it starts, ends the run unstarted: the run goes back
-to the queue, the bot waits out the hold instead of being sent there again, and that fallback is not held, since it
-never ran. Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
+waits. **Unreleased:** if the primary hits its limit and the fallback fails before doing anything, Tico queues the run again.
+It does not hold that safe run for review.
+The bot waits for the reset rather than retrying that failed fallback; a different configured fallback can take over when ready.
+The fallback's failed start does not hold its login, since it never ran.
+Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
 turn; a subscription profile that shares the computer's own sign-in counts as that one login; and only a run claimed
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is
@@ -325,6 +328,19 @@ quota never holds or extends the bot's own login, nor the reverse. Every turn tr
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Computers → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Overview lists how many bots are on a fallback and
 since when, and how many are limited.
+
+**Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.
+Tico puts them back in the queue, oldest first, after the provider's reset, a model change, or a configured fallback becoming ready.
+The usual queue priorities still apply when the bot takes work.
+Tico dismisses a held run with a reason if its task is already done or closed.
+It also dismisses a safe usage-limit run if a later completed run of the same bot on the same task covered its work.
+A later answer in a separate chat does not count as covering that task.
+The bot's activity describes automatic recovery in plain words, without naming private tasks: for example, *Tico resumed 2 runs held by a usage limit*.
+It also reports when a later run already covered dismissed work.
+
+A run that used an approval, or may have taken an action, still needs review before resuming.
+The bot's operator or BotOps checks what happened before choosing to resume or dismiss it.
+For example, a failed fallback that did nothing can retry after the reset; a stopped payment run that used an approval needs review.
 
 <a id="one-turn-per-chatgpt-login"></a>**Codex bots share a ChatGPT login.** Bots on the same computer using
 one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the

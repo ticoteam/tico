@@ -17,10 +17,14 @@ const pipelineStepName = id => TASK_TYPES.flatMap(type => type.steps).find(step 
 // The Product roadmap and Dev tickets types go by their role (backend/roadmap_flow.py), never by who manages them.
 const pipelineRoleType = role => TASK_TYPES.find(type => type.role === role);
 const pipelineProductType = () => pipelineRoleType('product-roadmap');
-async function taskTypesLoad() {
+let TASK_TYPES_READ = false;
+// `cached`: the types already read do (a task opened); the Tasks page's loads read them again, so an edit elsewhere shows.
+async function taskTypesLoad({cached = false} = {}) {
   if (!S.me?.cloud) return TASK_TYPES;
+  if (cached && TASK_TYPES_READ) return TASK_TYPES;
   if (!TASK_TYPES_LOADING) TASK_TYPES_LOADING = get('/v2/task-types').then(data => {
     TASK_TYPES = data.types || [];
+    TASK_TYPES_READ = true;
     return TASK_TYPES;
   }).finally(() => { TASK_TYPES_LOADING = null; });
   return TASK_TYPES_LOADING;

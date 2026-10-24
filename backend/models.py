@@ -179,6 +179,9 @@ class TaskCreate(Contract):
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
+    change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
+    qa: StrictBool | None = None
+    qa_not_checkable_live: StrictBool = False
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).
@@ -560,6 +563,16 @@ class GoalProposalDecision(Contract):
 class CompanyUpdate(Contract):
     vision: str | None = Field(default=None, max_length=4000)
     description: str | None = Field(default=None, max_length=10_000)
+
+
+# What a person's chat bot learned (backend/learned.py): one short line, in their own layer or the company's.
+class LearnedAdd(Contract):
+    layer: Literal["personal", "company"] = "personal"
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class LearnedEdit(Contract):
+    text: str = Field(min_length=1, max_length=2000)
 
 
 class GoalWhy(Contract):

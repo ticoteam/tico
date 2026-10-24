@@ -106,6 +106,11 @@ def run(args, who=None):
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
+        if args.fn == "repo review":
+            body = Path(args.body_file).read_text() if args.body_file else args.body
+            return hubtools.repo_review(client, {"repository": args.repository, "number": args.number,
+                                                 "head": args.head, "verdict": args.verdict, "body": body,
+                                                 **({"operation_id": args.operation_id} if args.operation_id else {})})
         if args.fn == "repo product-create":
             return product_repo_create(client, args.name, confirm=args.confirm)
         if args.sub == "list":
@@ -385,9 +390,9 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
-            for field in ("type", "step", "number"):
+            for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
                 if getattr(args, field, None) is not None:
-                    payload[field] = getattr(args, field)
+                    payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
             if args.label:
                 payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
             if args.top:

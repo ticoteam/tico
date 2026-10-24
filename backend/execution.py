@@ -9,7 +9,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import auto_tasks, start_places, app_delivery, check_models, rooms, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
+from . import auto_tasks, start_places, app_delivery, check_models, learned, rooms, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -280,13 +280,14 @@ def stopper(c, person):
     return (H.human(c, H.actor_id(person)) or {}).get("name") or H.actor_id(person)
 
 
-def settle_status(c, bot, state, focus, claimed=None, task_id=None):
+def settle_status(c, bot, state, focus, claimed=None, task_id=None, stop=None):
     """The status a finished or lapsed turn leaves its bot in. While another of its turns is still out,
     the bot is still at work, so an idle or crashed turn does not mark the whole bot idle or crashed;
     the held run keeps its own item in Health. A usage limit is the subscription's, so one lane's limit
     holds for the whole bot until its cooldown passes, even when a previously claimed turn starts or
     restores its lease afterwards. A turn claimed after it (a person's message, Try now) that settles
-    shows the limit has lifted. `claimed` is when the turn was leased, None when unknown."""
+    shows the limit has lifted. `claimed` is when the turn was leased, None when unknown. `stop` is the run that
+    ended without finishing, which the status line then explains (`last_stop`); any other settled status forgets it."""
     if state in ("idle", "crashed", "running"):
         status = H.status(c, bot) or {}
         if (status.get("state") == "limited" and status.get("since")
@@ -299,8 +300,87 @@ def settle_status(c, bot, state, focus, claimed=None, task_id=None):
             # No count and no task: the other turns may be on private tasks this status's readers cannot see.
             H.status_set(c, H.KEEPER, bot, state="running", focus="Working on other tasks", task_id="")
             return
+    if stop:
+        from .repositories import save_metadata
+        save_metadata(c, LAST_STOP + bot, {"attempt_id": stop, "at": H.now()})
+    else:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (LAST_STOP + bot,))
     H.status_set(c, H.KEEPER, bot, state=state, focus=focus,
                  **({"task_id": task_id} if task_id is not None else {}))
+
+
+# The run a bot's status line explains (last_stop) until the bot's next run settles.
+LAST_STOP = "last-stop:"
+NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed."
+
+
+def last_stop(c, bot, status):
+    """Why a bot's last run ended without finishing, for its page header: one plain line, whether a person must act
+    (`needs_person`, shown red) or not (`soft`, shown grey), the one action that exists (`review`: retry or dismiss a
+    run that stopped partway) and the reason in plain words. None when its last run finished, or when the run that
+    did not start is no longer waiting (its work was covered elsewhere, or it was withdrawn): nothing to say."""
+    state = (status or {}).get("state")
+    if state not in ("idle", "crashed"):
+        return None
+    from .repositories import metadata
+    mark = metadata(c, LAST_STOP + bot)
+    attempt = (c.execute("SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?",
+                         (mark["attempt_id"],)).fetchone() if mark.get("attempt_id") else None)
+    at = (attempt["finished"] if attempt else None) or status.get("since")
+    # An older held task must not replace the run that produced the current status.
+    held = (c.execute("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' "
+                      + ("AND attempt_id=? " if mark.get("attempt_id") else "")
+                      + "ORDER BY created DESC LIMIT 1",
+                      (bot, mark["attempt_id"]) if mark.get("attempt_id") else (bot,)).fetchone()
+            if state == "crashed" else None)
+    if held:
+        run = (c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (held["attempt_id"],)).fetchone()
+               if held["attempt_id"] else None)
+        unstarted = run is not None and not run["started"]
+        focus = (status.get("focus") or "").rstrip(".")
+        reason = ("Its computer refused the run before it started." if unstarted else
+                  "Its computer stopped answering while the run was going, so the run's lease ran out."
+                  if run and run["state"] == "expired" else
+                  "The run ended with an error before it finished." if run and run["state"] == "failed" else
+                  "The run was interrupted before it finished.")
+        if focus:
+            reason += " " + focus + "."
+        reason += (" Nothing ran. Review the saved run after fixing the cause." if unstarted else
+                   " Tico kept it rather than run it again, in case it had already changed something.")
+        return {"kind": "never_started" if unstarted else "stopped", "tone": "alert", "needs_person": True,
+                "action": "review", "at": (run["finished"] if run else None) or at,
+                "attempt_id": held["attempt_id"], "reason": reason,
+                "text": ("Last run never started. Check the reason, then retry it or dismiss it." if unstarted else
+                         "Last run stopped partway. Retry it or dismiss it.")}
+    if attempt and not attempt["started"] and attempt["state"] == "failed":
+        # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
+        return {"kind": "never_started", "tone": "alert", "needs_person": True, "action": None, "at": at,
+                "attempt_id": attempt["id"], "reason": f"Its computer took this run {PRE_START_TRIES} times and never "
+                "started it.", "text": (attempt["final_text"] or "Last run couldn't start on its computer").rstrip(".") + "."}
+    if attempt and not attempt["started"] and attempt["state"] == "expired":
+        job = c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()
+        if not job or job["state"] != "queued":        # taken again, or no longer waiting: nothing to explain
+            return None
+        returned = (attempt["final_text"] or "").startswith(HANDED_BACK)
+        if attempt["stop_requested"]:
+            return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
+                    "attempt_id": attempt["id"], "text": "Last run was stopped before it started. Nothing ran.",
+                    "reason": "It was stopped before its computer started it, so nothing ran."}
+        return {"kind": "not_started", "tone": "soft", "needs_person": False, "action": None, "at": at,
+                "attempt_id": attempt["id"], "text": NOT_STARTED,
+                "reason": (f"{attempt['final_text']} " if returned else
+                           "Its computer took the run but didn't start it before its lease ran out. ")
+                + "It is back in the queue and runs again shortly."}
+    if state == "crashed":
+        focus = (status.get("focus") or "").rstrip(".")
+        return {"kind": "stopped", "tone": "alert", "needs_person": True, "action": None, "at": at,
+                "attempt_id": attempt["id"] if attempt else None, "reason": (focus + ".") if focus else "",
+                "text": "Last run stopped" + (f": {focus}." if focus else ".")
+                + " Ask a person who manages this bot to check its Computer before sending a new message."}
+    return None
+
+
+HANDED_BACK = "Its computer handed the run back before starting it"
 
 
 def queued_task_sql():
@@ -921,11 +1001,17 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the turn is its one probe, so with another job's probe out on it the bot waits rather than the runner picking it
     anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
-    from .harnesses import runtime_of
+    from .harnesses import harness_caps, runtime_of
     named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if named.get("off"):
         return None
     _, own, primary = login_key(c, settings, runner_id, bot, config, ctx)
+    # The runner ignores a named model on this same spent login and continues through the company list.
+    # Match it here, so the claim admits that next provider, or holds the job when there is none.
+    if (named.get("harness") and named.get("model") and runtime_of(named["harness"]) == primary
+            and harness_caps(config.get("harness"), primary).get("api_keys") != "bot"
+            and harness_caps(named["harness"]).get("api_keys") != "bot"):
+        named = {}
     hold = login_holds.get(c, runner_id, own, primary)
     if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
         return None
@@ -1009,7 +1095,27 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if ((job["bot"], job_lane(c, job["bot"], config, message, conversation, lanes, roots)) in busy
             or (job["bot"], task_id) in live or filer_live(c, message)):
         return "lane_held"
+    if (until := handed_back_until(c, job)) and until > H.now():
+        return "handed_back"
     return None
+
+
+HAND_BACK_WAIT = 15          # seconds before a handed-back job is handed out again, doubled for each hand-back
+HAND_BACK_MAX = 300
+
+
+def handed_back_until(c, job):
+    """When a job its computer last handed back before starting (Execution.hand_back) may be claimed again, or None.
+    A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
+    all PRE_START_TRIES in seconds and fail a run over a short hiccup; with it, ten hand-backs take about half an
+    hour, as ten lapsed leases used to take about fifteen minutes."""
+    last = (c.execute("SELECT state,started,finished,final_text FROM attempts WHERE id=?", (job["attempt_id"],)).fetchone()
+            if job["attempt_id"] else None)
+    if not last or last["started"] or last["state"] != "expired" or not (last["final_text"] or "").startswith(HANDED_BACK):
+        return None
+    count = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL AND state='expired' "
+                      "AND substr(final_text,1,?)=?", (job["id"], len(HANDED_BACK), HANDED_BACK)).fetchone()[0]
+    return H.shift(last["finished"], seconds=min(HAND_BACK_WAIT * 2 ** max(count - 1, 0), HAND_BACK_MAX))
 
 
 def quiet_recheck(c, aid, body, task, msg):
@@ -1522,11 +1628,67 @@ class Execution:
                         self.stopped(c, row, job["conversation_id"])
                 elif state == "cancelled":
                     settle_status(c, row["bot"], "idle", "", claimed=row["created"])
+                elif row["state"] == "leased" and state == "queued":
+                    settle_status(c, row["bot"], "idle", "Last run didn't start; it is back in the queue",
+                                  claimed=row["created"], stop=row["id"])
                 elif H.bot(c, row["bot"]):
                     settle_status(c, row["bot"], "crashed",
                                   reason if state == "failed" else "One run stopped; saved for later",
-                                  claimed=row["created"])
+                                  claimed=row["created"], stop=row["id"])
                 H.event(c, H.KEEPER, "attempt.expired", row["id"], {"job_state": state})
+
+    def settle_unstarted(self, c, row, summary, event="attempt.expired"):
+        """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
+        computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
+        the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
+        such runs since this server started the job fails instead, with a reason that names the computer, told to
+        the person who asked: a broken computer must not take it forever."""
+        state, reason = "queued", ""
+        tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL "
+                          "AND state='expired' AND finished>=?", (row["job_id"], self.booted)).fetchone()[0]
+        bot = H.bot(c, row["bot"])
+        if tries >= PRE_START_TRIES:
+            computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
+            label = (computer["label"] if computer else None) or "its Computer"
+            name = (self.store.settings.assistant_name if row["bot"] == self.store.settings.assistant_bot
+                    else (bot["display_name"] if bot else None)) or row["bot"]
+            version = c.execute("SELECT release FROM runner_versions WHERE runner_id=?",
+                                (row["runner_id"],)).fetchone()
+            remedy = ("update its Tico" if version and runner_versions.incompatible(version["release"])
+                      else "check that Computer")
+            reason = f"Your {name} couldn't start on {label}; {remedy}"
+            state = "failed"
+            c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
+            job = c.execute("SELECT message_id FROM jobs WHERE id=? AND attempt_id=? "
+                            "AND state='leased'", (row["job_id"], row["id"])).fetchone()
+            if job:
+                msg = H.message(c, job["message_id"])
+                if H.is_human(msg["from_actor"]):
+                    H.say(c, "bot:" + row["bot"] if bot else H.KEEPER, msg["from_actor"], reason, kind="notice",
+                          conversation_id=msg["conversation_id"], in_reply_to=msg["id"],
+                          refs={"turn_id": row["id"]})
+        c.execute("UPDATE jobs SET state=? WHERE attempt_id=? AND state IN ('leased','running','input')", (state, row["id"]))
+        H.turn_finish(c, H.KEEPER, row["id"], exit_code="failed" if state == "failed" else "interrupted",
+                      summary=reason if state == "failed" else summary)
+        if bot:
+            settle_status(c, row["bot"], "crashed" if state == "failed" else "idle",
+                          reason if state == "failed" else "Last run didn't start; it is back in the queue",
+                          claimed=row["created"], stop=row["id"])
+        H.event(c, H.KEEPER, event, row["id"], {"bot": row["bot"], "job_id": row["job_id"], "job_state": state})
+        return state
+
+    def hand_back(self, c, row, body):
+        """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
+        stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 BotOps's runner lost
+        Tico for half a minute before a start, its report was refused as not started, and the lapse showed BotOps as
+        crashed though nothing had run."""
+        self.release_undelivered(c, row["id"], body.undelivered)
+        now = H.now()
+        c.execute("UPDATE attempts SET state='expired',finished=?,lease_until=?,final_text=? WHERE id=?",
+                  (now, now, HANDED_BACK + ".", row["id"]))
+        gateway_connection.forget(c, row["id"])
+        state = self.settle_unstarted(c, row, HANDED_BACK, event="attempt.returned")
+        return {"attempt_id": row["id"], "outcome": body.outcome, "job_state": state, "message": None}
 
     @staticmethod
     def mark_rejected(c, runner_id, runtime, reason, profile=None):
@@ -1725,7 +1887,7 @@ class Execution:
         # wakes of every kind, while preserving people's messages and explicitly resumed jobs.
         # A keeper notice of a person's own act still owes that person its answer (H._write_message).
         # A self-filed task left parked when its filing turn ended waits for its actual trigger instead.
-        obsolete = c.execute("SELECT j.id,j.message_id,t.id AS task_id FROM assignments x "
+        obsolete = c.execute("SELECT j.id,j.bot,j.attempt_id,j.message_id,t.id AS task_id FROM assignments x "
             "CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
@@ -1743,6 +1905,11 @@ class Execution:
             selected = None
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (old['id'],))
             c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(),old['message_id']))
+            from .repositories import metadata
+            if (old["attempt_id"] and metadata(c, LAST_STOP + old["bot"]).get("attempt_id") == old["attempt_id"]
+                    and (H.status(c, old["bot"]) or {}).get("state") == "idle"):
+                # Clearing the status also publishes the new header to already-open pages.
+                settle_status(c, old["bot"], "idle", "")
             H.event(c,H.KEEPER,'job.suppress',old['id'],{'reason':'Task finished before keeper notice delivery','task_id':old['task_id']})
         why = runner_versions.paused(c, who.runner_id)
         if why:
@@ -1993,6 +2160,9 @@ class Execution:
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
                             "history": history, "principal": principal,
+                            # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
+                            # (backend/learned.py; rendered by runner-rs/src/prompt.rs). None outside their own chat.
+                            "learned": learned.for_turn(c, self.store.settings, conv, row["bot"]),
                             # The owner's CEO Bot chat is a session of its own (backend/rooms.py).
                             "config": rooms.session_config(conv, row["bot"], config),
                             # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
@@ -2583,10 +2753,16 @@ class Execution:
                           or body.primary_held and body.limited and not body.fallback)
                      or row["state"] == "leased" and body.outcome in ("failed", "interrupted") and bool(row["stop_requested"])
                      or row["state"] == "leased" and skipped)
-        if not late and row["state"] != "running" and not unstarted:
+        # The runner reports a pre-start bailout as interrupted. A failed completion still requires
+        # a start or one of the explicit exceptions above; it is not an unused lease being returned.
+        returned = (row["state"] == "leased" and not unstarted and body.outcome == "interrupted"
+                    and not row["stop_requested"] and not skipped)
+        if not late and row["state"] != "running" and not unstarted and not returned:
             raise Problem("not_started", "Acknowledge start before completing work", 409)
         if row["last_seq"] != body.last_seq:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
+        if returned:
+            return self.hand_back(c, row, body)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
             filed = self.file_result(c, row, body)
             if row["stop_requested"] and self.holds(c, who, row):
@@ -3010,16 +3186,16 @@ class Execution:
                      **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif busy_acted:
             settle_status(c, row["bot"], "crashed", f"{runtime} {login_holds.CAPACITY_KIND} at {H.now()[11:16]} "
-                          "after the run had acted; this run is saved for review", claimed=row["created"])
+                          "after the run had acted; this run is saved for review", claimed=row["created"], stop=aid)
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not requeue else None)
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
                           ("sign in on this computer to continue" if requeue else "this run is saved for review"),
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:
             from .repositories import save_metadata
             hit = H.now()
@@ -3060,7 +3236,7 @@ class Execution:
             settle_status(c, row["bot"], "idle" if healthy else "crashed",
                           "" if healthy else f"{refused}. This run is saved for later" if refused
                           else "One run stopped; saved for later",
-                          claimed=row["created"])
+                          claimed=row["created"], stop=aid if not healthy else None)
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 
     def retry(self, c, who, job_id, body):

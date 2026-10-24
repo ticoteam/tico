@@ -37,6 +37,10 @@ def test_unstopped_failed_completion_still_requires_start(api):
     machine, task, attempt = task_attempt(api)
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 0},
          machine["token"], expected=409)
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT state,finished FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert row["state"] == "leased" and row["finished"] is None
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == "leased"
 
 
 @pytest.mark.parametrize("started", [False, True])
