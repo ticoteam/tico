@@ -594,6 +594,9 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
 RUNS, COMPUTERS, BOT_SETTINGS = ("Open Runs", "#/settings", "runs"), ("Open Computers", "#/settings", "devices"), \
     ("Open bot settings", "#/settings", "bots")
 HELD = {
+    "task_wait": ("Its assigned task waits for a snooze, prerequisite, person or check", RUNS),
+    "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
+    "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
@@ -1563,7 +1566,7 @@ def view(c, who, settings, auth, github, config):
                           if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth)
     if blocking:
         items = _queue_items(blocking + busy_rows, full, kind == "bot") if full or kind == "bot" else []
-        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off")
+        bad = any(s["reason"] not in ("slow", "updating", "restarting", "draining", "maintaining", "lane_held", "cooling_off", "task_wait", "task_cap", "auto_start_off")
                   for s in blocking)
         checks.append(_check("queue", "Stuck bots", "bad" if bad else "warn",
                              _diagnostic_summary(f"{_plural(len(blocking), 'bot')} with work that is not starting.", items),
