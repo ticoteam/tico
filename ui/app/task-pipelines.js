@@ -9,7 +9,7 @@ const STEP_STATUSES = ['open', 'doing', 'review', 'ready', 'done', 'closed'];
 const BOARD_HIDDEN = new Set(['done', 'closed', 'declined']);
 const pipelineTypeId = task => task.type_id || task.type?.id || 'general';
 const pipelineType = task => TASK_TYPES.find(type => type.id === pipelineTypeId(task));
-// A steps-only type's tasks change status only by a step move: no Done, Close or Reopen of their own.
+// A steps-only type's tasks change status only by a step move: no Done or Reopen of their own. A person can still close one.
 const pipelineStepsOnly = task => !!pipelineType(task)?.steps_only;
 const pipelineSelectedType = state => TASK_TYPES.find(type => type.id === state?.type);
 const pipelineActionStatus = (task, body) => body.status || pipelineType(task)?.steps.find(step => step.id === body.step)?.status;
