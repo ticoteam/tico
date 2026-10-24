@@ -34,24 +34,43 @@ def git(*args):
     return subprocess.run(['git', *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
 
 
+def in_checkout(arg):
+    """A path inside this checkout, alone or as a flag's value (--out=PATH), relative to it; any other word as it is."""
+    flag, value = arg.split('=', 1) if arg.startswith('-') and '=' in arg else ('', arg)
+    if not os.path.isabs(value):
+        return arg
+    for path in (os.path.normpath(value), os.path.realpath(value)):
+        if Path(path).is_relative_to(ROOT):
+            relative = str(Path(path).relative_to(ROOT))
+            return f'{flag}={relative}' if flag else relative
+    return arg
+
+
 def portable(command):
-    """A local interpreter path (a venv's python, a node install) becomes the VM's own interpreter of that name."""
-    if command and '/' in command[0]:
-        name = Path(command[0]).name
-        if name.startswith('python'):
-            return ['python', *command[1:]]
-        if name == 'node':
-            return ['node', *command[1:]]
-    return list(command)
+    """A local interpreter path (a venv's python, a node install) becomes the VM's own interpreter of that name, and a
+    path inside this checkout becomes relative to it: the VM runs the command from its own checkout, somewhere else.
+    ui-tests.cjs and release_checks.py re-run themselves through heavy.sh by their absolute path."""
+    if not command:
+        return []
+    first = command[0]
+    if '/' in first and Path(first).name.startswith('python'):
+        first = 'python'
+    elif '/' in first and Path(first).name == 'node':
+        first = 'node'
+    return [in_checkout(first), *map(in_checkout, command[1:])]
 
 
 def setup_for(command):
-    """The least setup that runs this command: browsers for the UI scripts, Rust for cargo, both for a release check."""
+    """The least setup that runs this command: browsers for the UI scripts, Rust for cargo, both for a release check
+    (the default release check is pytest and then the UI scripts; --release adds cargo)."""
     text = ' '.join(command)
     browser = any(word in text for word in ('ui-tests', 'playwright', 'npm ', 'npx ', '.cjs'))
     rust = 'cargo' in text
-    if 'release_checks.py' in text and '--release' in text:
-        browser = rust = True
+    if 'release_checks.py' in text:
+        if '--release' in text:
+            browser = rust = True
+        elif '--shard' not in text and '--record-timings' not in text:
+            browser = True
     return 'all' if browser and rust else 'browser' if browser else 'rust' if rust else 'python'
 
 
