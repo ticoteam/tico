@@ -1968,7 +1968,7 @@ class Execution:
         else:
             row = selected if selected is not None else self.candidate(c, who, body, runner)
         # Backfill a free turn after queued conversations and awaited results keep their place.
-        if row is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
+        if row is None and selected is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
             auto_tasks.enqueue(c, pending)
             row = self.candidate(c, who, body, runner)
         if not row:
