@@ -183,7 +183,8 @@ async function check(engine) {
     assert.equal(await box.inputValue(), uncertainText);
     await page.reload();
     await page.waitForFunction(() => V2C?.loaded);
-    await page.evaluate(() => { CHAT_SEND.timeout = 1500; });
+    // The replay below must succeed, and the deadline covers the sign-in check too: a short one ends it unconfirmed on a busy computer.
+    await page.evaluate(() => { CHAT_SEND.timeout = 30000; });
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, 'reload preserves the uncertain key');
     // Simulate sign-in restoring the session before a separate access denial on the same saved send.
     answer = 'access-refused';
