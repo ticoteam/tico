@@ -213,6 +213,8 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-new');
     await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'task-who');
+    await page.keyboard.press('Tab');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'task-filter');
     await page.locator('#task-q').focus();
     await page.keyboard.press('Shift+Tab');
