@@ -10,7 +10,7 @@ from datetime import timezone
 
 from clients import gateway, sessions
 
-from . import app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
+from . import start_places, app_delivery, check_models, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
 from .auth import Identity
 from .batch_work import isolated
@@ -75,30 +75,9 @@ ROOTS = "session_roots_v1"
 TASK_GOALS = "task_goals_v1"
 
 
-def bot_turns(capacity):
-    """How many of a computer's turns one bot may hold at once: half of them, at least one. A bot with many
-    task sessions would otherwise fill every turn and leave other bots' work (a review, a release) queued."""
-    return max(1, int(capacity or 1) // 2)
-
-
-def turn_share(c, runner_id, capacity):
-    """The turns one bot may hold on this computer: its share (bot_turns) when another active bot is assigned there,
-    every turn when it is alone, since then no one else's work can be waiting for them."""
-    bots = c.execute("SELECT count(*) FROM assignments a JOIN bots b ON b.slug=a.bot "
-                     "WHERE a.runner_id=? AND b.state='active'", (runner_id,)).fetchone()[0]
-    return bot_turns(capacity) if bots > 1 else int(capacity or 1)
-
-
-def turn_limit(share, capacity, others_waiting):
-    """The turns one bot may hold now: its share while another bot's work waits for this computer; otherwise every
-    turn but one, kept free so new work from another bot starts at once. Turns left idle help no one."""
-    return share if others_waiting else max(share, int(capacity or 1) - 1)
-
-
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
-    return {r[0]: r[1] for r in c.execute("SELECT bot,count(*) FROM attempts WHERE runner_id=? "
-                                          "AND state IN ('leased','running') GROUP BY bot", (runner_id,))}
+    return start_places.held(c, runner_id)
 
 
 # The busy lists each runner sent with its latest claim: {runner id: (bots, lanes, monotonic time)}. Only the runner
@@ -1100,10 +1079,6 @@ def bot_claimable(c, settings, runner_id, bot):
     lanes, roots = lanes_on(runner), roots_on(runner)
     busy = {(r["bot"], r["lane"]) for r in c.execute(
         "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")} | held_lanes
-    # A lapsed lease whose worker still runs counts against the bot's turns here, as in the claim; only a person's
-    # message is never held behind them.
-    mine = sum(1 for b, _ in held_lanes if b == bot)
-    at_share = mine and mine >= turn_limit(turn_share(c, runner_id, runner["capacity"]), runner["capacity"], False)
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
     for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
@@ -1112,8 +1087,6 @@ def bot_claimable(c, settings, runner_id, bot):
         person = str(job["from_actor"]).startswith("human:")
         if not job["free"]:
             why = "uncertain"
-        elif at_share and not person:
-            why = "lane_held"
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
@@ -1359,7 +1332,7 @@ class Execution:
         restart = c.execute("SELECT restart_requested,performance FROM runners WHERE id=?", (who.runner_id,)).fetchone()
         if restart and restart["restart_requested"]:
             c.execute("UPDATE runners SET restart_requested=NULL WHERE id=?", (who.runner_id,))
-        return {"server_time": H.now(), "assignments": self.assigned(c, who), "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+        return {"server_time": H.now(), "assignments": self.assigned(c, who), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
@@ -1500,17 +1473,19 @@ class Execution:
 
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
-        rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND lease_until<=?" +
+        overdue = set(start_places.overdue(c))
+        rows = c.execute("SELECT * FROM attempts WHERE state IN ('leased','running') AND (lease_until<=?" +
+                         (" OR id IN (" + ','.join('?' * len(overdue)) + ")" if overdue else "") + ")" +
                          (" AND id IN (" + ','.join('?' * len(attempt_ids)) + ")" if attempt_ids else "") +
                          " ORDER BY lease_until,id" + (" LIMIT ?" if limit is not None else ""),
-                         (now, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
+                         (now, *overdue, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
         # Contact alone does not enroll future work in a grace cohort: expiration must
         # first observe overdue leases, as it did before maintenance was chunked.
-        graces = self.stall_recovery(now) if rows else ()
+        graces = self.stall_recovery(now) if any(row["id"] not in overdue for row in rows) else ()
         for row in rows:
             with isolated(c, "expire", row["id"]):
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
-                if grace:
+                if grace and row["id"] not in overdue:
                     served_at, _, until = grace
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
@@ -1612,13 +1587,9 @@ class Execution:
         busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
-        # This computer's turns each bot holds: the server's leases, or the runner's own live workers when it
-        # counts more (a lapsed lease whose worker still runs). A bot at its share waits for one of them to
-        # finish, except for a person's own message, which is never held behind the bot's other work.
+        # Prefer the bot holding the fewest real places; waiting workers still fence their lanes,
+        # but neither occupy a place nor impose a per-bot cap.
         held = turns_here(c, runner["id"])
-        for bot in {bot for bot, _ in mine}:
-            held[bot] = max(held.get(bot, 0), sum(1 for b, _ in mine if b == bot))
-        share = turn_share(c, runner["id"], runner["capacity"])
         followed = {}
         ready = readiness_document(runner["readiness_json"])
         # Unconfirmed effects hold the interrupted conversation and task until review. Other
@@ -1646,8 +1617,6 @@ class Execution:
             return None
         marks = ",".join("?" for _ in bots)
         live = live_tasks(c)
-        limit = turn_limit(share, runner["capacity"], any(held.get(bot, 0) < share for bot in bots))
-        full = [bot for bot in bots if held.get(bot, 0) >= limit]
         # Readiness, spend and cooldown are checked once per bot, never once per queued job.
         # Keep human chat priority and interrupted-task/conversation fencing in the query.
         candidates = c.execute(
@@ -1655,7 +1624,6 @@ class Execution:
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot IN ({marks}) AND a.runner_id=? "
-            f"AND (m.from_actor LIKE 'human:%' OR j.bot NOT IN ({','.join('?' for _ in full)})) "
             "AND (m.from_actor LIKE 'human:%' OR NOT EXISTS(SELECT 1 FROM bot_config pc "
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + ")) "
             f"AND {unfenced_sql()} " + ("AND j.id=? " if job_id is not None else "") +
@@ -1664,7 +1632,7 @@ class Execution:
             # then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
             f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,j.created,j.id",
-            (*bots, who.runner_id, *full, *((job_id,) if job_id is not None else ()),
+            (*bots, who.runner_id, *((job_id,) if job_id is not None else ()),
              *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         for row in candidates:
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
@@ -1695,6 +1663,8 @@ class Execution:
         if not runner:
             return None
         now = H.now()
+        if start_places.overdue(c):
+            return None
         if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND lease_until<=? LIMIT 1",
                      (now,)).fetchone():
             return None
@@ -1715,8 +1685,12 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        count = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
-                          (who.runner_id,)).fetchone()[0]
+        from .performance import load_status
+        if load_status(c, who.runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        if start_places.ready_waiting(c, who.runner_id):
+            return {"attempt": None}
+        count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner)
@@ -1794,8 +1768,12 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        count = c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running')",
-                          (who.runner_id,)).fetchone()[0]
+        from .performance import load_status
+        if load_status(c, who.runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        if start_places.ready_waiting(c, who.runner_id):
+            return {"attempt": None}
+        count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"]:
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.
@@ -1857,6 +1835,8 @@ class Execution:
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,lane) "
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
+        if body.start_places:
+            start_places.claim(c, aid)
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")
         c.execute("UPDATE jobs SET state='leased',attempt_id=? WHERE id=?", (aid, row["id"]))
@@ -2026,6 +2006,7 @@ class Execution:
                             # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                             "gateway": gateway_connection.wanted(config),
                             "generation": row["generation"], "lease_until": until,
+                            **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
@@ -2054,6 +2035,9 @@ class Execution:
             row = self.restore(c, row) or row
         if final and row["state"] == "expired":
             return row
+        place = c.execute("SELECT start_until FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+        if active and row["state"] == "leased" and place and place[0] and place[0] <= H.now():
+            raise Problem("stale_lease", "Start reservation expired; this work returns to the queue", 409)
         if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= H.now() or not current):
             raise Problem("stale_lease", "Execution ownership expired; stop this attempt", 409)
         return row
@@ -2246,10 +2230,11 @@ class Execution:
             until = H.shift(now, seconds=seconds)
             c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, aid))
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
-        # task ended meanwhile is stopped only while it waits for its login; one preparing or under way runs on.
+        # task ended meanwhile is stopped while it waits before starting; one preparing or under way runs on.
         from .login_waits import wait
         return {"lease_until": until, "lease_seconds": seconds,
-                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and wait(c, aid) else {})}
+                **({"stop": True} if row["stop_requested"] or finished_before_start(c, row) and
+                   (wait(c, aid) or start_places.is_waiting(c, aid)) else {})}
 
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
@@ -2302,10 +2287,29 @@ class Execution:
             H.event(c, who.actor, "attempt.stop", row["id"], {"bot": bot, **({"redirect": redirect} if redirect else {})})
         return {"attempt_id": row["id"], "stopping": True, **({"redirect": redirect} if redirect else {})}
 
+    def start_place(self, c, who, aid, body):
+        row = self.attempt(c, who, aid)
+        if row["state"] != "leased":
+            raise Problem("already_started", "This attempt was already started", 409)
+        if body.waiting:
+            start_places.waiting(c, aid, body.waiting)
+        # Check before reserve clears the wait, including when the last renewal preceded task completion.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            return {"reserved": False, "stop": True}
+        if body.waiting:
+            return {"reserved": False, **({"stop": True} if row["stop_requested"] else {})}
+        return start_places.reserve(c, row)
+
     def started(self, c, who, aid, body):
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+            raise Problem("start_wait", "Task finished while this turn was waiting", 409)
+        reserved = start_places.reserve(c, row) if start_places.managed(c, aid) else {"reserved": not row["stop_requested"]}
+        if not reserved["reserved"]:
+            raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started=? WHERE id=?", (H.now(), aid))
         from .performance import stamp_attempt
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
@@ -2528,6 +2532,15 @@ class Execution:
                 goals.append(event.payload)
             seq = event.seq
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)", inserts)
+        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
+        # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
+        if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
+            from .login_waits import wait
+            pending = wait(c, aid)
+            if pending:
+                start_places.waiting(c, aid, "shared login" if pending.get("login") else "pre-start requirements")
+            else:
+                c.execute("UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,))
         if last_event is not None:
             from . import run_diagnostics
             run_diagnostics.touch(c, aid, *last_event)

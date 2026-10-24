@@ -316,6 +316,9 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .settings-machines td:first-child{width:1%;white-space:nowrap;padding-right:24px}
+@media (max-width:760px){
+  .settings-machines td:first-child{width:100%;white-space:normal;padding-right:0}
+}
 .machine-head{display:flex;align-items:center;gap:10px}
 .machine-head .machine-status{font-size:var(--t-sm);color:var(--muted)}
 .machine-facts{display:block}

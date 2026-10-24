@@ -119,7 +119,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
     assert "operator" not in detail
     raw = next(x for x in get(api, "computers", token=tokens["stranger"])["computers"] if x["id"] == rid)
-    assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded"}
+    assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded", "turn_counts", "turn_summary"}
     for section in ("repositories", "recent_errors"):
         failed, page = call(api, "hub_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
         assert not failed and page["items"] == []

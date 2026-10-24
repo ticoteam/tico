@@ -172,3 +172,38 @@ def test_stall_grace_survives_bounded_expiry_and_contact_between_chunks(api, mon
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE state='expired'").fetchone()[0] == 10
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 10
+
+
+@pytest.mark.parametrize("sweep", ["bounded", "scheduler"])
+def test_hard_start_deadlines_survive_chunked_stall_recovery(api, monkeypatch, sweep):
+    from backend.scheduler import Scheduler
+    from backend.tests.test_attempt_contention import fleet
+
+    fleet(api, attempts=12, trees=0)
+    store, execution = api.app.state.store, api.app.state.execution
+    now = H.now()
+    monkeypatch.setattr(H, "now", lambda: now)
+    with store.transaction() as c:
+        for i in range(10):
+            aid = f"attempt-{i}"
+            c.execute("UPDATE attempts SET state='leased',lease_until=? WHERE id=?",
+                      (H.shift(now, seconds=-1 if i < 5 else 600), aid))
+            c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (aid,))
+            c.execute("INSERT INTO start_places(attempt_id,start_until,managed) VALUES(?,?,1)",
+                      (aid, H.shift(now, seconds=-1)))
+        for i in (10, 11):
+            c.execute("UPDATE attempts SET lease_until=? WHERE id=?",
+                      (H.shift(now, seconds=-1), f"attempt-{i}"))
+    execution.served_at = H.shift(now, seconds=-store.settings.lease_seconds)
+    if sweep == "scheduler":
+        assert not Scheduler(store, execution).tick()["failures"]
+    else:
+        for _ in range(2):
+            with store.transaction() as c:
+                execution.expire(c, limit=8)
+            execution.record_contact(now)
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM attempts WHERE state='expired'").fetchone()[0] == 10
+        assert c.execute("SELECT count(*) FROM attempts WHERE state='running' AND lease_until=?",
+                         (H.shift(now, seconds=store.settings.lease_seconds),)).fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.lease-grace'").fetchone()[0] == 2

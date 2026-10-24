@@ -203,9 +203,11 @@ class Scheduler:
         def placement_sweep(c):
             placement.sweep(c, self.execution)
         with self.store.read() as c:
+            from . import start_places
             expired = [row[0] for row in c.execute(
                 "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id",
                 (H.now(),))]
+            expired = list(dict.fromkeys([*expired, *start_places.overdue(c)]))
         for aid in expired:
             with locked("expire:" + aid) as c:
                 self.execution.expire(c, attempt_ids=[aid])
