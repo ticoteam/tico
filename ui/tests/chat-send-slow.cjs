@@ -55,10 +55,13 @@ async function check(engine) {
         const key = route.request().headers()['idempotency-key']; keys.push(key);
         // Current access is checked before replay, and this denial does not overwrite the stored result.
         if (answer === 'access-refused') return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
+        if (answer === 'stored-drop-refuse' && delivered.has(key))
+          return json({error: {code: 'forbidden', detail: 'Chat access refused'}}, 403);
         if (delivered.has(key)) return json(delivered.get(key));
-        if (answer === 'stored-stall') {
+        if (answer === 'stored-stall' || answer === 'stored-drop-refuse') {
           sends.push(text);
           delivered.set(key, {conversation: {id: 'c1'}, message: {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()}});
+          if (answer === 'stored-drop-refuse') return route.abort('failed');
           return;                                  // saved, but the response never reaches the page
         }
         if (answer === 'refused') refusals.add(key);
@@ -166,6 +169,24 @@ async function check(engine) {
     assert.equal(keys.at(-1), uncertainKey, 'restored access replays the same key for an unchanged draft');
     assert.equal(sends.length, beforeUncertain + 1, 'same-key replay leaves exactly one message server-side');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'acknowledged replay ends pending delivery');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // An automatic retry inside the first Send can also lose access after its earlier attempt was stored.
+    await page.evaluate(() => { CHAT_SEND.timeout = 3000; });
+    answer = 'stored-drop-refuse';
+    const autoText = 'Stored before an automatic retry lost access', beforeAuto = sends.length, beforeAutoKeys = keys.length;
+    await box.fill(autoText); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !BOT_PILL.sending && document.querySelector('.toast.err'));
+    const autoKey = keys.at(-1);
+    assert.equal(keys.length, beforeAutoKeys + 2, 'one Send loses its answer then automatically retries into 403');
+    assert.equal(keys.at(-2), autoKey, 'the automatic retry uses the first attempt key');
+    assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), autoKey, 'automatic retry 403 cannot resolve the earlier uncertain attempt');
+    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*access.*refused.*Check the chat before resending/);
+    answer = 'ok';
+    await send.click();
+    await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
+    assert.equal(keys.at(-1), autoKey, 'restored access replays the original automatic-attempt identity');
+    assert.equal(sends.length, beforeAuto + 1, 'automatic retry plus restored access leave exactly one stored message');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // Adding a file intentionally changes an uncertain text submission. A successful upload must not leave its

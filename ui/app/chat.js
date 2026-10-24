@@ -743,8 +743,8 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     toast(CHAT_REPLAY_EXPIRED, true);
     return false;
   }
-  // A retained identity means an earlier send may have landed, including one interrupted by a reload.
-  const uncertainRetry = !!P.unconfirmed;
+  // A retained identity or an automatic retry means an earlier attempt may have landed without its answer.
+  let uncertainRetry = !!P.unconfirmed;
   // Keep uncertain intent separately from the request cache; a redraw cannot silently rotate its identity.
   if (!P.files.length && !P.unconfirmed) {
     const path = `/v2/chat/${encodeURIComponent(slug)}`, body = {text: text || 'Attached files.', refs: {...extraRefs}, ...extra};
@@ -766,7 +766,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
-        onRetry: watch.retry, operationId: P.unconfirmed?.key});
+        onRetry: (attempt, status) => { uncertainRetry = true; watch.retry(attempt, status); }, operationId: P.unconfirmed?.key});
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
