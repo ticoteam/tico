@@ -206,6 +206,8 @@ const {unrouted} = require('./support/routes.cjs');
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.locator('[data-status]', {hasText: 'cancelled'}).waitFor();
       await dialog.getByRole('button', {name: 'Try again'}).click();
+      // The retry is a new sign-in: change it only once the computer has answered its start.
+      await dialog.locator('[data-status]', {hasText: 'Starting the sign-in'}).waitFor();
       Object.assign(last(), {state: 'waiting', url: 'https://auth.openai.com/codex/device'});
       await dialog.locator('[data-link]').waitFor();
       Object.assign(last(), {state: 'signed_in', updated: new Date().toISOString()});

@@ -85,6 +85,25 @@ def _typesafe_key():
     return _secret("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "/etc/tico/typesafe-api-key")
 
 
+def _company_file_data():
+    """The installer's packed starter plan: TICO_COMPANY_FILE_B64, or else the file TICO_COMPANY_FILE names (a plan too
+    big for the env, which setup copied to the server). A named file that is missing or too big stops startup, so a
+    failed copy never starts as some other team."""
+    data = os.environ.get("TICO_COMPANY_FILE_B64", "").strip()
+    path = os.environ.get("TICO_COMPANY_FILE", "").strip()
+    if data or not path:
+        return data
+    from .company_file.starter import MAX_PACKED
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(MAX_PACKED + 1)
+    except OSError as exc:
+        raise RuntimeError(f"TICO_COMPANY_FILE {path} cannot be read ({exc.strerror}); setup copies it at first boot") from None
+    if len(raw) > MAX_PACKED:
+        raise RuntimeError(f"TICO_COMPANY_FILE {path} is larger than a starter plan can be ({MAX_PACKED} bytes)")
+    return raw.decode("ascii", "replace").strip()
+
+
 def _gateway_key():
     """The Tico AI Gateway key behind `POST /api/v2/decisions` and the Slack gateway: the default decision provider."""
     return _secret("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "/etc/tico/gateway-key")
@@ -251,12 +270,19 @@ class Settings:
     # The task role a GitHub review request puts its reviewer in (backend/github.py), matched by the
     # person's `github` login on the roster. Unset: review requests change no roles.
     github_review_role: str = ""
+    # Owner-operated reviewer identity; bot runs cannot select or alter it.
+    github_reviewer_bots: tuple[str, ...] = ()
+    github_reviewer_app_id: str = ""
+    github_reviewer_installation_id: str = ""
+    github_reviewer_private_key_file: str = field(default="", repr=False)
     observability_environment: str = ""
     observability_id_secret: str = field(default="", repr=False)
     posthog_key: str = field(default="", repr=False)
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
+    # Which install a server error report comes from (backend/observability.py); unset: the company name.
+    instance_name: str = ""
     # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
     # key (never set by default), then the team's own LLM; with none of them Decide is off.
     gateway_key: str = field(default="", repr=False)
@@ -500,12 +526,17 @@ class Settings:
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),
             github_review_role=os.environ.get("TICO_GITHUB_REVIEW_ROLE", "").strip().lower(),
+            github_reviewer_bots=tuple(b.strip() for b in os.environ.get("TICO_GITHUB_REVIEWER_BOTS", "").split(",") if b.strip()),
+            github_reviewer_app_id=os.environ.get("TICO_GITHUB_REVIEWER_APP_ID", "").strip(),
+            github_reviewer_installation_id=os.environ.get("TICO_GITHUB_REVIEWER_INSTALLATION_ID", "").strip(),
+            github_reviewer_private_key_file=os.environ.get("TICO_GITHUB_REVIEWER_PRIVATE_KEY_FILE", "").strip(),
             observability_environment=os.environ.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
             observability_id_secret=os.environ.get("TICO_OBSERVABILITY_ID_SECRET", ""),
             posthog_key=quiet(os.environ.get("TICO_POSTHOG_KEY", "")),
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
+            instance_name=os.environ.get("TICO_INSTANCE_NAME", "").strip(),
             gateway_key="" if rehearsal else _gateway_key(),
             gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
@@ -517,7 +548,7 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
-            company_file_data="" if rehearsal else os.environ.get("TICO_COMPANY_FILE_B64", "").strip(),
+            company_file_data="" if rehearsal else _company_file_data(),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

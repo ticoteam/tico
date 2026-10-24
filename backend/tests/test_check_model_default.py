@@ -105,7 +105,7 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
         run = claim(api, machine)
     assert run["task"]["id"] == review["id"] and (run["config"]["runtime"], run["config"]["model"]) == ("grok", "grok-4.6")
     finish(api, machine, run, GROK, during=lambda: post(
-        api, "tasks/" + review["id"], {"status": "done", "note": "Verdict: ok to merge.", "version": review["version"]},
+        api, "tasks/" + review["id"], {"status": "done", "note": "Verdict: ok to merge.", "version": run["task"]["version"]},
         run["token"]))
     shown = get(api, "tasks/" + review["id"])
     assert shown["check_model"]["model"] == "grok-4.6" and shown["runs"][0]["ran_on"]["family"] == "xai"

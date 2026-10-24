@@ -8,6 +8,11 @@ import os
 
 # scripts/install.sh --dir sets this so the wizard and the installer agree on where the stack lives.
 REMOTE_DIR = os.environ.get("TICO_INSTALL_DIR") or "/opt/tico"
+# A starter plan too big for the env (hosted, --plan-bucket): the server copies it here at first boot, and compose.yaml
+# mounts this folder read-only at COMPANY_FILE_MOUNT, where TICO_COMPANY_FILE names the file.
+COMPANY_FILE_DIR = "company-file"
+COMPANY_FILE_MOUNT = "/run/tico/company-file"
+COMPANY_FILE_NAME = "plan.b64"
 COMPOSE_RAW_URL = "https://raw.githubusercontent.com/ticoteam/tico/{ref}/compose.yaml"
 SERVER_PORT = 8765
 SERVICE_SERVER = "server"

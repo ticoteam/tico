@@ -551,3 +551,34 @@ def test_a_bot_is_never_handed_a_visual_address_the_visual_route_refuses(api):
     assert listed.status_code == 200, listed.text
     [item] = next(m for m in listed.json()["comments"] if m["id"] == comment["id"])["refs"]["attachments"]
     assert item["file_id"] == task_fid and api.get(item["src"]).status_code == 200
+
+
+def test_a_reader_acting_for_someone_else_gets_a_working_address(api):
+    """A bot acting for its requester, or a person through BotOps, reads as two actors (task_privacy.actor). Their
+    visual address names one reader: the tuple once crashed the task page with a 500 and could not be signed."""
+    from backend.auth import Identity
+    from backend.store import H
+    tid, fid, comment = visual_on_task(api, private=False)
+    settings = api.app.state.store.settings
+    for who in (Identity("bot:ops", "bot", task_actor="human:ben"), Identity("human:ben", "human", task_actor="bot:ops")):
+        with api.app.state.store.read() as c:
+            [message] = V.for_reader(api.app, settings, c, who, [H.message(c, comment["id"])])
+        [item] = message["refs"]["attachments"]
+        assert not item["removed"] and item["src"], who
+        assert api.get(item["src"]).status_code == 200, who
+
+
+def test_first_requests_at_once_share_one_whole_secret(tmp_path, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    monkeypatch.delenv("TICO_VISUAL_SECRET", raising=False)
+    settings, start = SimpleNamespace(db_path=tmp_path / "hub.db"), threading.Barrier(16)
+
+    def first():
+        start.wait()
+        return V.secret(settings)
+    with ThreadPoolExecutor(16) as pool:
+        keys = set(pool.map(lambda _: first(), range(16)))
+    assert len(keys) == 1 and len(keys.pop()) == 64
+    assert [p.name for p in tmp_path.iterdir()] == [V.SECRET_FILE]

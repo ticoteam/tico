@@ -5,7 +5,6 @@
 //! exits. Claude stays up for its background tasks either way; open stdin lets a follow-up in meanwhile.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek, SeekFrom};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -25,7 +24,6 @@ pub const STREAM_ARGS: &[&str] = &[
 ];
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const STDERR_TAIL: usize = 2000;
 /// How long a turn waits, after a `result`, with a steer unread and nothing at all on stdout.
 pub const STEER_READ_TIMEOUT_S: u64 = 120;
 /// How long a turn waits for Claude's `result` after Claude reported a usage limit and did no further model work.
@@ -127,7 +125,8 @@ struct Pipe {
     first: String,
     unread: HashSet<String>,
     order: Vec<String>,
-    steered: bool,
+    /// The follow-ups written after the prompt, in order: a restart of a missing session writes them again.
+    followups: Vec<String>,
     cost: f64,
     awaiting: Option<Instant>,
     timed_out: bool,
@@ -157,6 +156,16 @@ struct Pipe {
 }
 
 impl Pipe {
+    /// Writes a follow-up message after the prompt; Claude has not read it until it replays it.
+    fn follow_up(&mut self, text: &str) {
+        let mid = uuid::Uuid::new_v4().to_string();
+        self.unread.insert(mid.clone());
+        self.order.push(mid.clone());
+        self.followups.push(text.to_string());
+        self.answered = false;
+        let _ = self.lines.send(Some(user_line(&mid, text)));
+    }
+
     fn close(&mut self) {
         if self.open {
             self.open = false;
@@ -360,6 +369,9 @@ struct Inner {
     goal_offsets: HashMap<String, u64>,
     /// This turn's tool calls by `tool_use` id, the bot's own and its subagents'.
     tools: HashMap<String, ToolCall>,
+    /// Called each time a turn's pipe has just been published (ordering tests).
+    #[cfg(test)]
+    pipe_opened: Option<Arc<dyn Fn(&ClaudeHost) + Send + Sync>>,
 }
 
 /// A tool call reported as started, kept until its end is reported once.
@@ -515,6 +527,11 @@ impl ClaudeHost {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone()).unwrap_or_else(|| thread_id.to_string())
     }
 
+    /// The session Claude said it runs `thread_id` as (its system init), once it has.
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone())
+    }
+
     pub fn argv(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
         let mut argv = self.0.cmd.clone();
         argv.push("-p".into());
@@ -565,13 +582,10 @@ impl ClaudeHost {
         argv
     }
 
-    /// Starts Claude for one turn: the process, its stderr file, and its reaping parent's status file if it has one.
-    fn launch(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> std::io::Result<(Child, std::fs::File, Option<std::path::PathBuf>)> {
+    /// Starts Claude for one turn: the process, its stderr tail, and its reaping parent's status file if it has one.
+    fn launch(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> std::io::Result<(Child, crate::run_diagnostics::Stderr, Option<std::path::PathBuf>)> {
         let argv = self.argv(thread_id, t, effort);
-        // Claude's stderr goes to an unlinked file: read back for the error text, never a pipe that could fill.
-        let path = std::env::temp_dir().join(format!("tico-claude-stderr-{}", uuid::Uuid::new_v4().simple()));
-        let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-        let _ = std::fs::remove_file(&path);
+        // Drain stderr independently; only the bounded, scrubbed tail is kept.
         // A turn that may end on its background wait runs under a reaping parent, which learns its shells' exit codes.
         let reaping = (cfg!(target_os = "linux") && t.settings.background_wait.is_some())
             .then(|| std::env::temp_dir().join(format!("tico-claude-reap-{}", uuid::Uuid::new_v4().simple())));
@@ -596,7 +610,7 @@ impl ClaudeHost {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::from(stderr.try_clone()?))
+            .stderr(Stdio::piped())
             .current_dir(&t.settings.cwd);
         command.env_clear().envs(turn_env(&t.settings));
         #[cfg(test)]
@@ -605,7 +619,9 @@ impl ClaudeHost {
             args.extend(argv.iter().map(|a| json!(a)));
             command.env(crate::reap::tests::ARGS, Value::Array(args).to_string());
         }
-        Ok((command.spawn()?, stderr, reaping))
+        let mut child = command.spawn()?;
+        let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &turn_env(&t.settings));
+        Ok((child, stderr, reaping))
     }
 
     pub fn start_turn(&self, thread_id: &str, text: &str, effort: Option<&str>) -> Result<String, HostError> {
@@ -639,7 +655,9 @@ impl ClaudeHost {
         Ok(turn)
     }
 
-    fn open_pipe(&self, stdin: Option<tokio::process::ChildStdin>, stopper: super::Stopper, text: &str) {
+    /// Publishes the turn's pipe with the prompt and any carried follow-ups already queued, under one lock: a
+    /// steer is let in only once the pipe is open, so it always lands after them.
+    fn open_pipe(&self, tid: &str, stdin: Option<tokio::process::ChildStdin>, stopper: super::Stopper, pid: Option<u32>, text: &str, carried: Vec<String>) {
         let (tx, mut rx) = mpsc::unbounded_channel::<Option<String>>();
         let first = uuid::Uuid::new_v4().to_string();
         let _ = tx.send(Some(user_line(&first, text)));
@@ -658,13 +676,16 @@ impl ClaudeHost {
             }
             drop(stdin.take());
         });
-        self.inner().pipe = Some(Pipe {
+        let mut inner = self.inner();
+        let wait = inner.threads.get(tid).and_then(|t| t.settings.background_wait);
+        let reaping = inner.reaping.take();
+        let mut pipe = Pipe {
             lines: tx,
             open: true,
             first: first.clone(),
             unread: HashSet::from([first.clone()]),
             order: vec![first],
-            steered: false,
+            followups: vec![],
             cost: 0.0,
             awaiting: None,
             timed_out: false,
@@ -676,30 +697,32 @@ impl ClaudeHost {
             held: vec![],
             task_calls: HashMap::new(),
             idle_since: None,
-            wait: None,
-            pid: None,
+            wait,
+            pid,
             kept: None,
-            reaping: None,
-        });
+            reaping,
+        };
+        for text in carried {
+            pipe.follow_up(&text);
+        }
+        inner.pipe = Some(pipe);
     }
 
-    async fn read_loop(&self, mut child: Child, mut stderr: std::fs::File, tid: String, turn: String, text: String, effort: Option<String>) {
+    async fn read_loop(&self, mut child: Child, mut stderr: crate::run_diagnostics::Stderr, tid: String, turn: String, text: String, effort: Option<String>) {
         let mut recovered = false;
+        // What a restarted session is told after its prompt: the follow-ups the missing one never read.
+        let mut requeued: Vec<String> = vec![];
         loop {
             let stdout = child.stdout.take();
             let stdin = child.stdin.take();
             let pid = child.id();
             let (stopper, exited) = super::own(child);
-            self.open_pipe(stdin, stopper, &text);
-            {
-                let mut inner = self.inner();
-                let wait = inner.threads.get(&tid).and_then(|t| t.settings.background_wait);
-                let reaping = inner.reaping.take();
-                if let Some(p) = inner.pipe.as_mut() {
-                    p.wait = wait;
-                    p.pid = pid;
-                    p.reaping = reaping;
-                }
+            self.open_pipe(&tid, stdin, stopper, pid, &text, std::mem::take(&mut requeued));
+            #[cfg(test)]
+            let opened = self.inner().pipe_opened.clone();
+            #[cfg(test)]
+            if let Some(opened) = opened {
+                opened(self);
             }
             let mut result: Option<Value> = None;
             let mut saw_event = false;
@@ -774,16 +797,16 @@ impl ClaudeHost {
                     self.track_wait(&msg);
                 }
             }
-            let (unread, steered, timed_out, limit_text) = {
+            let (unread, followups, timed_out, limit_text) = {
                 let mut inner = self.inner();
                 match inner.pipe.as_mut() {
                     Some(p) => {
                         p.close();
                         p.awaiting = None;
                         p.limit_at = None;
-                        (p.unread.iter().any(|m| *m != p.first), p.steered, p.timed_out, p.limit_text.take())
+                        (p.unread.iter().any(|m| *m != p.first), std::mem::take(&mut p.followups), p.timed_out, p.limit_text.take())
                     }
-                    None => (false, false, false, None),
+                    None => (false, vec![], false, None),
                 }
             };
             let (kept, reaping) = self.inner().pipe.as_ref().map_or((false, false), |p| (p.kept.is_some(), p.reaping.is_some()));
@@ -802,6 +825,9 @@ impl ClaudeHost {
             // Killed on its wait, after its answer: the turn completed.
             let rc = if kept && rc == -libc::SIGKILL { 0 } else { rc };
             let clean = result.as_ref().is_some_and(|r| !crate::util::truthy(r.get("is_error"))) && rc == 0;
+            if timed_out {
+                self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"end_reason": format!("Timeout: follow-up read limit ({STEER_READ_TIMEOUT_S} seconds)")})));
+            }
             let failure = if timed_out {
                 Some(format!("Claude did not read a follow-up message within {STEER_READ_TIMEOUT_S} s; it was not applied"))
             } else if let Some(text) = limit_text.filter(|_| result.is_none()) {
@@ -811,11 +837,13 @@ impl ClaudeHost {
             } else {
                 None
             };
+            stderr.drained().await;
             let tail = stderr_tail(&mut stderr);
             // Claude answers only with an error result when the session file is not on this computer: restart once
-            // as a new session under the same id. Never after an event, and never once a steer went in.
+            // as a new session under the same id. Never after an event. A follow-up that went in meanwhile did nothing
+            // there either, so the new session is given it again after its prompt.
             let missing = result.as_ref().is_some_and(|r| error_text(Some(r), rc, &tail).starts_with("No conversation found with session ID"));
-            if missing && !recovered && !saw_event && !steered && rc != 0 {
+            if missing && !recovered && !saw_event && rc != 0 {
                 let retry = {
                     let mut inner = self.inner();
                     let up = inner.up && !inner.interrupted.contains(&turn);
@@ -837,6 +865,7 @@ impl ClaudeHost {
                     child = c;
                     stderr = s;
                     recovered = true;
+                    requeued = followups;
                     self.emit(event("diagnostic", Some(&tid), Some(&turn), json!({"text": RESTORING})));
                     continue;
                 }
@@ -1090,13 +1119,15 @@ impl ClaudeHost {
                 }
             }
             "system" if msg["subtype"] == "init" => {
-                let mut inner = self.inner();
-                if let Some(t) = inner.threads.get_mut(tid) {
+                let session = msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string();
+                if let Some(t) = self.inner().threads.get_mut(tid) {
                     // Claude owns the id now: resume from here on.
                     t.started = true;
                     t.fork_from = None;
-                    t.session_id = Some(msg["session_id"].as_str().filter(|s| !s.is_empty()).unwrap_or(tid).to_string());
+                    t.session_id = Some(session.clone());
                 }
+                // The session is up: a new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                self.emit(event("thread_confirmed", Some(tid), Some(turn), json!({"session_id": session})));
             }
             "rate_limit_event" => {
                 let info = &msg["rate_limit_info"];
@@ -1270,13 +1301,16 @@ impl ClaudeHost {
             let stop = result.as_ref().and_then(|r| r.get("stop_reason")).cloned().unwrap_or(Value::Null);
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed", "stop_reason": stop})));
         } else {
+            let process_exit = failure.is_none() && (rc < 0 || result.is_none() && rc != 0);
             let error = failure.unwrap_or_else(|| error_text(result.as_ref(), rc, stderr));
-            self.emit(event(
+            let mut failure = event(
                 "turn_failed",
                 Some(tid),
                 Some(turn),
                 json!({"error": error, "limit": limited || is_limit(&error), "auth_retry": is_auth_retryable(&error)}),
-            ));
+            );
+            if process_exit { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -1329,12 +1363,7 @@ impl ClaudeHost {
         match inner.pipe.as_mut() {
             // Not once Claude reported a limit: the turn is ending, so the input goes to the next one.
             Some(p) if running && p.open && p.limit_at.is_none() => {
-                let mid = uuid::Uuid::new_v4().to_string();
-                p.unread.insert(mid.clone());
-                p.order.push(mid.clone());
-                p.steered = true;
-                p.answered = false;
-                let _ = p.lines.send(Some(user_line(&mid, text)));
+                p.follow_up(text);
                 Ok(())
             }
             _ => Err(HostError::SteerRefused(format!("claude turn {turn_id} is over or ending"))),
@@ -1414,17 +1443,7 @@ fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> 
     std::fs::read_dir(dir.join("projects")).ok()?.flatten().map(|e| e.path().join(&name)).find(|p| p.is_file())
 }
 
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut text = String::new();
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let mut bytes = vec![];
-        let _ = file.read_to_end(&mut bytes);
-        text = String::from_utf8_lossy(&bytes).to_string();
-    }
-    let t = text.trim();
-    let skip = t.chars().count().saturating_sub(STDERR_TAIL);
-    t.chars().skip(skip).collect()
-}
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     if let Some(r) = result {
@@ -1439,7 +1458,7 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
         }
     }
     if !stderr.is_empty() {
-        return stderr.into();
+        return crate::run_diagnostics::process_reason(rc, stderr);
     }
     format!("claude exited {rc}")
 }
@@ -1467,6 +1486,32 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_crashed_turn_keeps_stderr_out_of_failure_events() {
+        let dir = std::env::temp_dir().join(format!("claude-stderr-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        crate::util::write_script(&path, "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\nIFS= read -r line\nprintf '%3000s\\nprivate-stderr-marker\\n' x >&2\nkill -TERM $$\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut events = Vec::new();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            events.push(ev);
+            if idle { break; }
+        }
+        assert!(events.iter().any(|e| e["stderr_tail"].as_str().is_some_and(|t| t.contains("private-stderr-marker"))));
+        let failure = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failure["error"], "Process exited (signal 15)");
+        assert!(!failure.to_string().contains("private-stderr-marker"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// A `claude` that writes a fixture once the prompt arrives and exits when stdin closes, as Claude does.
     fn fake_claude(dir: &std::path::Path) -> String {
@@ -1897,6 +1942,59 @@ mod tests {
         let got = error_first_turn(&format!("{refused}\n"), "", false).await;
         let failed = got.iter().find(|e| e["kind"] == "turn_failed").expect("a failed turn");
         assert!(text_of(&failed["error"]).contains("Invalid API key"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn a_missing_session_restores_with_its_follow_ups_in_order() {
+        // Oct 23: a follow-up went in before Claude answered "No conversation found"; the turn failed outright.
+        let missing = r#"{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 0, "errors": ["No conversation found with session ID: 5b1"], "usage": {"input_tokens": 0, "output_tokens": 0}}"#;
+        let replay = |text: &str| format!(r#"{{"type": "user", "isReplay": true, "message": {{"role": "user", "content": "{text}"}}}}"#);
+        let then = format!("{}\n{}\n{}\n{}\n{}\n", replay("hello"), replay("Also the QA result."), replay("Then this."), assistant_line("m1", "All read."), result_line("All read."));
+        let dir = std::env::temp_dir().join(format!("claude-missing-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("first.jsonl"), format!("{missing}\n")).unwrap();
+        std::fs::write(dir.join("then.jsonl"), then).unwrap();
+        let path = dir.join("claude");
+        // The first process answers only after the follow-up is on its stdin; the second records the three lines it reads.
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) echo '  --autocompact <tokens>'; exit 0;; esac\nIFS= read -r line\nIFS= read -r steer\nif [ -f ran ]; then IFS= read -r later; printf '%s\\n%s\\n%s\\n' \"$line\" \"$steer\" \"$later\" > read.jsonl; cat then.jsonl; cat >/dev/null; exit 0; fi\ntouch ran\ncat first.jsonl\nexit 1\n",
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        // A steer the moment each pipe is published: the first into the missing session, the second into the
+        // restored one, where it must land after the carried follow-up.
+        let steered = Arc::new(Mutex::new(vec![]));
+        let record = steered.clone();
+        host.inner().pipe_opened = Some(Arc::new(move |h: &ClaudeHost| {
+            let (thread, turn) = h.inner().turn.clone().unwrap();
+            let mut record = record.lock().unwrap();
+            let text = ["Also the QA result.", "Then this."][record.len().min(1)];
+            record.push(h.steer(&thread, &turn, text).is_ok());
+        }));
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.resume_thread(&uuid::Uuid::new_v4().to_string(), &settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let mut got = vec![];
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            let idle = ev["kind"] == "status" && ev["state"] == "idle";
+            got.push(ev);
+            if idle {
+                break;
+            }
+        }
+        let read = std::fs::read_to_string(dir.join("read.jsonl")).unwrap_or_default();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(*steered.lock().unwrap(), [true, true]);
+        assert!(got.iter().any(|e| e["kind"] == "diagnostic" && e["text"] == RESTORING), "{got:?}");
+        assert!(!got.iter().any(|e| e["kind"] == "turn_failed"), "{got:?}");
+        assert!(got.iter().any(|e| e["kind"] == "turn_completed"), "{got:?}");
+        // The restored session read the prompt, the carried follow-up, then the newer one.
+        let lines: Vec<Value> = read.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let texts: Vec<&Value> = lines.iter().map(|l| &l["message"]["content"][0]["text"]).collect();
+        assert_eq!(texts, [&json!("hello"), &json!("Also the QA result."), &json!("Then this.")], "{read}");
     }
 
     #[tokio::test]

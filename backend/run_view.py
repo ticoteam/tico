@@ -12,7 +12,7 @@ import json
 from fastapi import Request
 
 from .store import H, Problem
-from . import login_waits, task_privacy as privacy
+from . import login_holds, login_waits, run_diagnostics, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -26,14 +26,15 @@ RECOVERY_SQL = ("action IN ('job.reconcile','job.auto_reconcile','job.retry','at
                 "'attempt.lease-restored')")
 
 
-def failure_reason(state, result_json):
+def failure_reason(state, result_json, end_reason=None):
+    """A limit the attempt ended on is told as such (login_holds.failure_line), else the end reason, else its error."""
     if state not in ("failed", "expired"):
-        return None
+        return end_reason
     try:
         result = json.loads(result_json or "{}") or {}
     except (ValueError, TypeError):
         result = {}
-    reason = result.get("error") or result.get("reason") or result.get("message")
+    reason = login_holds.failure_line(result) or end_reason or result.get("error") or result.get("reason") or result.get("message")
     return clip(reason, 280) if reason else (
         "Lease expired before completion" if state == "expired" else "Attempt failed before completion")
 
@@ -195,11 +196,12 @@ def run_view(c, auth, who, tid):
         subagents, background = work(events[r["id"]], live)
         out.append({
             "run": r["id"], "bot": r["bot"], "job": r["job_id"],
+            **run_diagnostics.metadata(c, r["id"]),
             "try": next((n for n, t in enumerate(job_tries, 1) if t["id"] == r["id"]), 1), "tries": len(job_tries),
             "state": r["state"], "outcome": r["exit"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "took_s": seconds(r["started"], r["finished"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
-            "reason": failure_reason(r["state"], r["result_json"]),
+            "reason": failure_reason(r["state"], r["result_json"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
             # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
             "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),

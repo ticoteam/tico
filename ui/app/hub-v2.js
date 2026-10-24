@@ -74,7 +74,7 @@ const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue
 const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = body => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
-async function v2Get(path) { try { return await get(path); } catch { return null; } }
+async function v2Get(path, opts) { try { return await get(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
   const [st, needs] = await Promise.all([v2Get('/v2/status'), v2NeedsRead()]);
@@ -86,11 +86,16 @@ async function v2Refresh() {
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
 }
 // Needs you as the page holds it: the list and its version. A read names the version held; an unchanged list comes
-// back without its items.
+// back without its items. Each read is its own request: one already on its way may have been answered before the
+// change this read was asked for (an answer sent, a live event), and sharing it would keep the old list. An older
+// read that lands after a newer one is not kept.
+let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {
-  const held = S.v2.needsVersion;
-  const needs = await v2Get('/v2/needs-you' + (held ? `?version=${encodeURIComponent(held)}` : ''));
+  const held = S.v2.needsVersion, seq = ++NEEDS_READ;
+  const needs = await v2Get('/v2/needs-you' + (held ? `?version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
+  if (seq < NEEDS_KEPT) return needs;
+  NEEDS_KEPT = seq;
   if (!needs.unchanged) { S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null; }
   S.v2.wentAway = needs.went_away || null;
   return needs;
@@ -164,7 +169,8 @@ function pausedNotice(slug) {
   let why = PAUSED_WHY[s.state], since = s.since;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
-    return `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
+    return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`
+      : `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
   if (!why) {
     const off = (S.status?.health_issues || []).find(i => i.kind === 'machine' && (i.bots || [i.bot]).includes(slug) && i.since);
     if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }

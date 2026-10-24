@@ -327,7 +327,8 @@ class Scheduler:
                         try:
                             H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
-                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule"))
+                                  refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
+                                                           purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
                         c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
@@ -431,7 +432,15 @@ class Scheduler:
                         c, self.store.settings)
                 if due:
                     gateway_connection.check_soon(self.store, Vault(self.store), self.store.settings)
+                    # And whether this company uses Tico file hosting, with this server's total for HQ's estimate
+                    # (backend/tico_storage.py).
+                    from . import tico_storage
+                    tico_storage.sync_later(self.store, report=True)
                 run.did("Checked" if due else "No Gateway key set")
+        # Tico file hosting's keys last an hour: HQ is asked again every 5 minutes while the company has it, and
+        # before they end (backend/tico_storage.py `_plan`). On its own thread; nothing at all without it.
+        from . import tico_storage
+        tico_storage.sync_later(self.store, due_only=True)
         if self.billing_checked is None or at - self.billing_checked >= timedelta(hours=1):
             # Every hour, while this server holds HQ's read-only staff key (the Tico team's own install only): HQ's
             # nightly billing check for the owner's Health page (backend/billing_check.py). On its own thread.
@@ -465,6 +474,8 @@ class Scheduler:
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
                 with self.store.transaction() as c:
+                    from . import run_diagnostics
+                    run_diagnostics.sweep(c, stamp(at))
                     woke = H.wake_stalled(c, stamp(at))
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}

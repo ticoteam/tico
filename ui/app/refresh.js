@@ -4,6 +4,9 @@
 
 // ----------------------------------------------------------------- refresh loop + router
 async function refresh(force) {
+  // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
+  // is open) do not wait for the roster.
+  const v2 = v2Refresh(), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     const [st, issues, emps, people] = await Promise.allSettled([get('/status'), get('/issues'), get('/employees'), get('/humans')]);
@@ -20,8 +23,7 @@ async function refresh(force) {
       S.overviewRosterFresh = true;
     } else S.overviewRosterFresh = false;
   } catch (e) { S.overviewRosterFresh = false; }
-  await v2Refresh();                    // hub.db status and needs-you (docs/history/hub-v2.md)
-  await overviewLoadComputers();        // Only while the campus is open; share this refresh clock.
+  await Promise.all([v2, computers]);
   overviewRefresh();
   if (S.me?.cloud) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
@@ -44,11 +46,23 @@ async function refresh(force) {
 // board, the bot's columns and ticker, a person's tasks, the open task), a bot's status line (the tree, the
 // heartbeat, the paused notice, the Overview's desks), and Needs you (the tree's counts). Each surface redraws once
 // per burst.
+// The same JSON value, whatever order its keys come in (a live event's copy of a task is built apart from the list's).
+function sameData(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  if (ka.length !== Object.keys(b).length) return false;
+  return ka.every(k => Object.hasOwn(b, k) && sameData(a[k], b[k]));
+}
+// What a list shows of a task: a link's own write time is not on any row, and a computer's heartbeat on a worktree
+// changes only that, once a minute per tree.
+const taskListCopy = t => Array.isArray(t?.links) ? {...t, links: t.links.map(({updated, ...link}) => link)} : t;
 function liveTasksApply(events) {
   const state = TASKS_ST;
   // One change to many tasks (a type or tag edit) comes as one `bulk` event: the open list reads in full once (its
   // cursor resets), and the other lists below reload as for any change.
   const bulk = events.some(d => d.bulk);
+  const unchanged = new Set();
   if (bulk && state && isTasksRoute(S.route)) liveThrottle('tasks-bulk', () => { if (TASKS_ST === state) void tasksLoad(state); }, 5000);
   if (state && isTasksRoute(S.route) && state.tasks) {
     const known = new Map(state.tasks.map((t, i) => [String(t.id), i]));
@@ -58,6 +72,13 @@ function liveTasksApply(events) {
       if (d.gone) { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
       if (!d.task) continue;
       if ((d.task.lane || 'company') !== 'company') { if (i != null) { state.tasks = state.tasks.filter(t => String(t.id) !== String(d.id)); known.clear(); state.tasks.forEach((t, j) => known.set(String(t.id), j)); changed = true; } continue; }
+      // A write that shows nothing new on the list: no redraw. The open task follows any change (a worktree's
+      // progress shows there), so only an identical copy is left out of that.
+      if (i != null && sameData(taskListCopy(state.tasks[i]), taskListCopy(d.task))) {
+        if (sameData(state.tasks[i], d.task)) unchanged.add(String(d.id));
+        else state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
+        continue;
+      }
       if (i != null) state.tasks = state.tasks.map((t, j) => j === i ? d.task : t);
       else { state.tasks = [...state.tasks, d.task]; known.set(String(d.id), state.tasks.length - 1); }   // a new task arrives whole
       changed = true;
@@ -79,7 +100,7 @@ function liveTasksApply(events) {
     const me = 'human:' + PERSON_TASKS;
     if (events.some(d => d.bulk || d.gone || d.task?.owner === me)) liveThrottle('person-tasks', personTasksReload);
   }
-  if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id))) taskChatLive(TASK_CHAT);
+  if (TASK_CHAT && events.some(d => d.bulk || String(d.id) === String(TASK_CHAT.id) && !unchanged.has(String(d.id)))) taskChatLive(TASK_CHAT);
 }
 function liveWire() {
   if (!S.me?.cloud || !liveAvailable()) return;

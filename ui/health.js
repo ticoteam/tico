@@ -1,6 +1,6 @@
 /* Settings > Health: what needs attention right now (backend/health.py). Everything shown is what
-   GET /api/v2/health computed; the only local state is which page is open. The attention dot sits on
-   the way into Settings, never in the main navigation. */
+   GET /api/v2/health computed; the only local state is which page is open. What needs looking at also shows as
+   lines under the account button's one status dot (ui/app/heartbeat.js), never in the main navigation. */
 'use strict';
 let HL = null;
 let HL_LOAD = 0;
@@ -10,19 +10,21 @@ let HL_MONITOR = null;   // the owner: the Health Monitor's switch and what it f
 async function hlRefresh() {
   if (!S.me?.cloud) return null;
   const seq = ++HL_LOAD;
-  const data = await v2Get('/v2/health');
+  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
+  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
+  // all three are read together; the first time, the other two follow the checks.
+  const page = !!$('#hl-page');
+  const extras = hl => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
+    page && hl?.audience === 'owner' ? v2Get('/v2/health-monitor') : null]);
+  const checks = data => data && Array.isArray(data.checks) ? data : null;
+  const [data, [metrics, monitor]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
   if (seq !== HL_LOAD) return HL;
-  HL = data && Array.isArray(data.checks) ? data : null;
-  if (HL && HL.audience !== 'human') {
-    const metrics = await v2Get('/v2/system/metrics?minutes=60');
-    if (seq !== HL_LOAD) return HL;
-    HL_METRICS = metrics && metrics.requests ? metrics : null;
-  } else HL_METRICS = null;
-  if (HL?.audience === 'owner') {
-    const monitor = await v2Get('/v2/health-monitor');
-    if (seq !== HL_LOAD) return HL;
-    HL_MONITOR = monitor && 'on' in monitor ? monitor : null;
-  } else HL_MONITOR = null;
+  HL = checks(data);
+  if (page) {
+    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
+    HL_MONITOR = HL?.audience === 'owner' && monitor && 'on' in monitor ? monitor : null;
+  }
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
   hlNav();
@@ -31,21 +33,24 @@ async function hlRefresh() {
   return HL;
 }
 
-// The dot follows the way in: the account button, the Settings entry and the Health tab.
+// What Health says needs looking at, for the account button's one status dot and its lines (ui/app/heartbeat.js).
+// Inside Settings, the Health tab keeps its own dot.
+window.hlAttention = () => (HL?.checks || []).filter(check => check.status === 'warn' || check.status === 'bad');
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none.
+window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
   document.querySelectorAll('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
-  const label = attention ? `Settings, ${attention} to look at in Health` : '';
-  const setting = document.querySelector('#account-menu [data-nav="settings"]');
-  if (setting) { if (label) setting.setAttribute('aria-label', label); else setting.removeAttribute('aria-label'); }
   const tab = document.querySelector('[data-settings-tab="health"]');
   if (tab) { if (attention) tab.setAttribute('aria-label', `Health, ${attention} to look at`); else tab.removeAttribute('aria-label'); }
+  window.renderAccountStatus?.();
 };
 
 const HL_ICONS = {ok: 'check_circle', warn: 'warning', bad: 'error', info: 'radio_button_unchecked', unknown: 'help'};
 let HL_CHECKING = false;
 let HL_CHECK_MSG = null;   // {text, error}: what the last "Check for updates" said, kept across redraws
 
+window.hlFixHtml = hlFixHtml;
 function hlFixHtml(fix) {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;

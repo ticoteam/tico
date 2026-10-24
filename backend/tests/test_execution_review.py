@@ -624,6 +624,26 @@ def test_rejected_signin_cannot_replay_a_run_that_acted(api, activity):
     assert claim(api, machine) is None
 
 
+def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, monkeypatch):
+    # An older runner still reports the refusal as a limit; the run's own events say it acted, and they decide.
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: '2026-10-23T05:00:00.000000Z')
+    machine, message, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'capacity-acted'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'name': 'send_email', 'text': 'Sent'}},
+        {'seq': 2, 'kind': 'error', 'payload': {'error': 'Selected model is at capacity. Please try a different model.',
+                                                'limit': True}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'last_seq': 2, 'limited': True, 'text': ''},
+         machine['token'])
+    monkeypatch.setattr(H, 'now', lambda: '2026-10-23T05:02:01.000000Z')
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+
+
 def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(api):
     from backend.store import H
     machine, message, attempt = setup_attempt(api)
@@ -714,7 +734,8 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
     if stopped:
         post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
-    assert claim(api, machine) is None and job_state(api, attempt['job_id']) == 'uncertain'
+    assert claim(api, machine) is None
+    assert job_state(api, attempt['job_id']) == ('cancelled' if stopped else 'uncertain')
     return machine, message, attempt
 
 
@@ -742,7 +763,7 @@ def test_a_finished_turn_dismissed_because_its_task_closed_still_ends_completed_
     machine, message, attempt = finished_then_lapsed(api, task=True)
     task = message['task']
     assert task['conversation_id'] == message['conversation_id']             # the task's own room, not the chat
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'close': True, 'quiet': True})
+    post(api, 'tasks/' + task['id'], {'version': attempt['task']['version'], 'close': True, 'quiet': True})
     aged(api, attempt['id'])
     assert [d['state'] for d in sweep(api)] == ['cancelled']
     done = hand_in(api, machine, attempt)
@@ -853,9 +874,10 @@ def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_
     machine = runner(api, 'ana')
     for bot, dismissed in (('ops', False), ('finance', True)):
         assign(api, machine, bot)
-        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=True)
+        machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=not dismissed)
         aged(api, attempt['id'])
         if dismissed:
+            post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})
             post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
                  'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
         filed = hand_in(api, machine, attempt)

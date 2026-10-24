@@ -23,6 +23,39 @@ use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{log, text_of, truthy};
 
+/// Grok has no status subcommand. Its scoped auth store is the local sign-in; an empty store after logout is not.
+/// Paths and entry fields follow xai-org/grok-build's xai-grok-login storage.rs and model.rs.
+pub fn sign_in_detail(env: &Env) -> Option<&'static str> {
+    let path = env.get("GROK_AUTH_PATH").filter(|v| !v.is_empty()).map(std::path::PathBuf::from).or_else(|| {
+        env.get("GROK_HOME").filter(|v| !v.is_empty()).map(std::path::PathBuf::from)
+            .or_else(|| env.get("HOME").map(|h| std::path::Path::new(h).join(".grok")))
+            .map(|h| h.join("auth.json"))
+    })?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(""),
+        Err(_) => return None,
+    };
+    if text.trim().is_empty() {
+        return Some("");
+    }
+    let store = serde_json::from_str::<Value>(&text).ok()?;
+    let entries = store.as_object()?;
+    let modes = || entries.values().filter(|entry| entry["key"].as_str().is_some_and(|k| !k.trim().is_empty()))
+        .filter_map(|entry| entry["auth_mode"].as_str());
+    if modes().any(|mode| matches!(mode, "oidc" | "external")) {
+        Some("Signed in with a Grok account")
+    } else if modes().any(|mode| mode == "api_key") {
+        Some("Signed in with an API key")
+    } else {
+        Some("")
+    }
+}
+
+pub fn signed_in(env: &Env) -> Option<bool> {
+    sign_in_detail(env).map(|detail| !detail.is_empty())
+}
+
 const PROTOCOL_VERSION: i64 = 1;
 const REQUEST_TIMEOUT: u64 = 120;
 pub const DEFAULT_MODEL: &str = "grok-4.6";
@@ -81,6 +114,8 @@ struct Shared {
     turns: Mutex<HashMap<String, String>>,
     reply: Mutex<HashMap<String, String>>,
     boundary: Mutex<HashSet<String>>,
+    /// The `messageId` of each turn's last text chunk.
+    message: Mutex<HashMap<String, String>>,
     done_turns: Mutex<HashSet<String>>,
 }
 
@@ -100,6 +135,7 @@ impl GrokHost {
             turns: Mutex::new(HashMap::new()),
             reply: Mutex::new(HashMap::new()),
             boundary: Mutex::new(HashSet::new()),
+            message: Mutex::new(HashMap::new()),
             done_turns: Mutex::new(HashSet::new()),
         }))
     }
@@ -117,16 +153,21 @@ impl GrokHost {
         let mut command = crate::isolation::command(&cmd[0]);
         let mut full = env.clone();
         full.extend(NO_OPERATOR_MCP.iter().map(|(k, v)| (k.to_string(), v.to_string())));
-        command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).env_clear().envs(&full);
+        command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
+        let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
         let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;
         *self.0.stdin.lock().await = child.stdin.take();
         log(&format!("grok[{}]: agent started pid {}", self.0.bot, child.id().map_or("?".into(), |p| p.to_string())));
         let (stopper, exited) = super::own(child);
         let gone = Arc::new(AtomicBool::new(false));
         let flag = gone.clone();
+        let diagnostics = self.0.tx.clone();
         tokio::spawn(async move {
-            let _ = exited.await;
+            let status = exited.await.unwrap_or_else(|_| Err(std::io::Error::other("grok reaper ended")));
+            _stderr.drained().await;
+            let code = super::return_code(&status);
+            let _ = diagnostics.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
             flag.store(true, Ordering::SeqCst);
         });
         *self.0.child.lock().unwrap() = Some((cmd, env, stopper, gone.clone()));
@@ -268,15 +309,18 @@ impl GrokHost {
         let (s, t) = (Some(sid.as_str()), Some(turn.as_str()));
         match (u["sessionUpdate"].as_str().unwrap_or_default(), text) {
             ("agent_message_chunk", Some(text)) => {
-                {
+                let piece = {
                     let mut reply = self.0.reply.lock().unwrap();
                     let r = reply.entry(turn.clone()).or_default();
                     if self.0.boundary.lock().unwrap().remove(&turn) {
                         r.clear();
                     }
-                    r.push_str(&text_of(&text));
-                }
-                self.emit(event("delta", s, t, json!({"text": text, "delta_kind": "text"})));
+                    // A chunk names its message: one of another message than the chunk before it starts a new one.
+                    let id = u["messageId"].as_str().filter(|i| !i.is_empty());
+                    let new_message = id.is_some_and(|id| self.0.message.lock().unwrap().insert(turn.clone(), id.into()).is_some_and(|last| last != id));
+                    super::add_piece(r, new_message, &text_of(&text))
+                };
+                self.emit(event("delta", s, t, json!({"text": piece, "delta_kind": "text"})));
             }
             ("tool_call", _) => {
                 // A new tool call separates progress from the answer that follows; the call is reported by its
@@ -299,6 +343,7 @@ impl GrokHost {
         self.0.turns.lock().unwrap().remove(sid);
         let text = self.0.reply.lock().unwrap().remove(turn).unwrap_or_default();
         self.0.boundary.lock().unwrap().remove(turn);
+        self.0.message.lock().unwrap().remove(turn);
         let (s, t) = (Some(sid), Some(turn));
         let result = match reply {
             Err(err) => {

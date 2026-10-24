@@ -27,7 +27,7 @@
 .lr-subject{overflow-wrap:anywhere}
 .lr-meta,.lr-source,.lr-files,.lr-diff summary{font-size:var(--t-sm);color:var(--muted)}
 .lr-meta code{font-size:var(--t-xs)}
-.lr-local{color:var(--wait)}
+.lr-local{color:var(--wait-ink)}
 .lr-source a{color:var(--accent-quiet)}
 .lr-source a:hover{color:var(--accent)}
 .lr-diff summary{cursor:pointer;overflow-wrap:anywhere}

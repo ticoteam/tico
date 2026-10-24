@@ -40,6 +40,8 @@
      it follows the theme without a value of its own. */
   --accent-quiet:color-mix(in srgb,var(--accent) 68%,var(--muted));
   --run:#7fb3f0;--wait:#e2b25a;--fail:#f08080;--idle:#6f7d8b;--ok:#6cc48f;
+  /* Waiting labels need a separate ink: the amber also fills badges with dark text. */
+  --wait-ink:var(--wait);
   --run-bg:#1b2a3d;--wait-bg:#3a2f18;--fail-bg:#3d1f1f;--ok-bg:#1d3327;--idle-bg:var(--g2);
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   /* The conversation: one centred column this wide at most, in slightly larger type with roomier lines. */
@@ -51,6 +53,7 @@
   --bubble:#e5e8ec;--raised:var(--g0);
   --accent:#0f6e56;--accent-ink:#ffffff;
   --run:#2b6cb0;--wait:#b7791f;--fail:#c53030;--idle:#9aa5b1;--ok:#2f855a;
+  --wait-ink:#87540e;
   --run-bg:#e6f0fb;--wait-bg:#fbf1dc;--fail-bg:#fde8e8;--ok-bg:#e3f4ea;
   color-scheme:light}
 @media (prefers-color-scheme:light){:root[data-theme="system"]{
@@ -58,5 +61,6 @@
   --bubble:#e5e8ec;--raised:var(--g0);
   --accent:#0f6e56;--accent-ink:#ffffff;
   --run:#2b6cb0;--wait:#b7791f;--fail:#c53030;--idle:#9aa5b1;--ok:#2f855a;
+  --wait-ink:#87540e;
   --run-bg:#e6f0fb;--wait-bg:#fbf1dc;--fail-bg:#fde8e8;--ok-bg:#e3f4ea;
   color-scheme:light}}

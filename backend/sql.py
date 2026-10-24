@@ -24,6 +24,7 @@ from fastapi import Request
 from pydantic import Field
 
 from . import listening as L
+from . import outcome_stats
 from . import rooms
 from . import task_privacy as privacy
 from .privacy_index import ReadIndex
@@ -50,7 +51,7 @@ DENIED_FUNCTIONS = {"load_extension"}
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
 # `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
-    # Runs per week (Monday, UTC), bot and what woke them, with their tokens and outcome (backend/run_triggers.py).
+    # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment) first, and the runner's older one-number `tokens_in` only
     # when there is none: a resumed thread may report its whole running total there. An attempt that never got a
@@ -58,6 +59,7 @@ DERIVED = {
     # one whose turn the caller may not read is not turnless, and is not counted.
     "run_weekly": (("turns", "attempts"), """
         SELECT date(started, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
+               coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
                sum(CASE WHEN input_tokens IS NOT NULL OR cached_tokens IS NOT NULL
                         THEN coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)
@@ -69,18 +71,49 @@ DERIVED = {
                sum(coalesce(outcome, '') = 'nothing_to_do') AS nothing_to_do,
                sum(outcome IS NULL) AS unknown,
                sum(coalesce(did_nothing, 0) = 1) AS did_nothing,
+               sum(rotated IS NOT NULL) AS rotated,
                round(100.0 * sum(coalesce(outcome, '') = 'acted') / count(*), 1) AS acted_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'no_change') / count(*), 1) AS no_change_pct,
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
-        FROM (SELECT started, bot, trigger_kind, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
-                     outcome, did_nothing
+        FROM (SELECT started, bot, trigger_kind, purpose, input_tokens, cached_tokens, tokens_in, output_tokens, tokens_out,
+                     outcome, did_nothing, rotated
               FROM {turns} WHERE started IS NOT NULL
               UNION ALL
-              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+              SELECT coalesce(a.started, a.created), a.bot, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
               FROM {attempts} a WHERE NOT EXISTS (SELECT 1 FROM {all_turns} t WHERE t.id = a.id))
+        GROUP BY 1, 2, 3, 4"""),
+}
+# Totals over rows the reader may not read one by one, built only for the owner and a bot the owner granted them
+# (backend/outcome_stats.py). Each groups by week and fixed names (status, proposer, bot, tool) and carries no text, no
+# id and no person: a proposal's owner, a call's person and its token label never leave the base row.
+GRANTED = {
+    # Assistant and BotOps proposals per week, proposer and status (pending, running, done, failed, cancelled,
+    # expired); `share_pct` is that status's share of its week and proposer.
+    "assistant_action_weekly": (("assistant_actions",), """
+        SELECT week, proposer, status, actions,
+               round(100.0 * actions / sum(actions) OVER (PARTITION BY week, proposer), 1) AS share_pct
+        FROM (SELECT date(created, '-6 days', 'weekday 1') AS week,
+                     coalesce(proposer, proposed_via, 'assistant') AS proposer,
+                     status, count(status) AS actions
+              FROM {all_assistant_actions} GROUP BY 1, 2, 3)"""),
+    # Bot tool calls through MCP per week, by tool and by bot when the reader may read that bot; hidden bots count
+    # with no `bot`. People's calls are excluded. A name that is not a hub tool's counts as `other`.
+    "mcp_call_weekly": (("events", "bots"), """
+        SELECT week, bot, tool, count(*) AS calls, sum(error) AS errors,
+               round(100.0 * sum(error) / count(*), 1) AS error_pct,
+               CAST(round(avg(ms)) AS INTEGER) AS avg_ms, max(ms) AS max_ms
+        FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
+                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
+                          THEN substr(actor, 5) END AS bot,
+                     CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
+                     coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
+                     coalesce(json_extract(detail_json, '$.ms'), 0) AS ms
+              FROM {all_events} WHERE action = 'mcp.call' AND actor LIKE 'bot:%')
         GROUP BY 1, 2, 3"""),
 }
+# Base tables only a GRANTED view reads, and the columns it may see of them.
+GRANTED_SOURCES = {"assistant_actions": ("created", "proposer", "proposed_via", "status")}
 # FTS5 reads these as main.<virtual>_* with no view context; they are not a public API.
 FTS_SHADOWS = ("_data", "_idx", "_content", "_docsize", "_config")
 STATEMENT = re.compile(r"^\s*(?:(?:--[^\n]*\n?|/\*.*?\*/)\s*)*(select|with|explain\s+query\s+plan)\b", re.I | re.S)
@@ -191,6 +224,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
                          # A task's own room is read by whoever may read the task (auth.conversation).
                          "OR (kind='task' AND task_id IS NOT NULL)")
+        conversations = f"({conversations}) OR " + function("meeting_room") + "(id)"
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
@@ -209,12 +243,15 @@ def guarded(c, auth, who, inner, function, columns=None):
                  function("attempt") + "(v.attempt_id))))")
 
     # Even an attempt's retained conversation grant must pass the current task gate.
-    conversations = f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks))"
+    conversations = (f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks)) AND "
+                     + function("conversation") + "(id)")
     by_task = "task_id IN (SELECT id FROM tasks)"
-    by_message = "message_id IN (SELECT id FROM messages)"
+    # Correlate large history tables by primary key. An IN subquery materializes
+    # every readable message/job/attempt before even a LIMIT 1 can return.
+    by_message = "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)"
     by_schedule = "schedule_id IN (SELECT id FROM schedules)"
-    by_attempt = "attempt_id IN (SELECT id FROM attempts)"
-    by_job = "job_id IN (SELECT id FROM jobs)"
+    by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
+    by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
     by_meeting = "meeting_id IN (SELECT id FROM meetings)"
     mine = f"actor={me}" if bot else "1"
     person = H.actor_id(who.actor)
@@ -249,7 +286,8 @@ def guarded(c, auth, who, inner, function, columns=None):
               "WHERE review_state<>'live')")
     rules = {
         "conversations": conversations,
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
+        "messages": "EXISTS (SELECT 1 FROM conversations readable WHERE readable.id=source.conversation_id) "
+                    "AND deleted_at IS NULL AND " + msg_gate,
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
@@ -371,7 +409,8 @@ def connect(path, c, auth, who, trace=None):
         conn.execute(f'CREATE TEMP TABLE "{visible}"(id TEXT PRIMARY KEY) WITHOUT ROWID')
         conn.execute(f'INSERT INTO "{visible}" SELECT id FROM main.tasks WHERE ' + tables["tasks"][0])
         tables["tasks"] = (f'id IN (SELECT id FROM "{visible}")', tables["tasks"][1])
-        source_tables = set(tables) | {"blob_media"}
+        source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
+                                       "live_meeting_turns"}
         class Source:
             def execute(self, statement, args=()):
                 statement = re.sub(r'\b(FROM|JOIN)\s+(\w+)', lambda m:
@@ -384,6 +423,7 @@ def connect(path, c, auth, who, trace=None):
                     trusted[0] = False
         index = ReadIndex(Source(), who)
         functions = {"message": (4, index.message), "attempt": (1, index.attempt),
+                     "conversation": (1, index.conversation), "meeting_room": (1, index.meeting_room),
                      "event": (4, index.event), "tag": (2, index.tag), "blob": (1, index.blob),
                      "task": (1, lambda tid: tid not in index.denied),
                      "content": (-1, lambda *parts: index.content(list(parts)))}
@@ -401,10 +441,19 @@ def connect(path, c, auth, who, trace=None):
             conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
         for table, (predicate, _) in tables.items():
             projection = "*"
-            conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} WHERE {predicate}')
-        for name, (bases, select) in DERIVED.items():
+            conn.execute(f'CREATE TEMP VIEW "{table}" AS SELECT {projection} FROM {inner(table)} AS source WHERE {predicate}')
+        # The Assistant creates its table on first use: a view over a table or column not there yet is left out.
+        granted = {name: view for name, view in GRANTED.items() if outcome_stats.may_read(c, who)
+                   and all(set(GRANTED_SOURCES.get(base, ())) <= set(columns.get(base, ())) for base in view[0])}
+        views = {**DERIVED, **granted}
+        sources = {table for bases, _ in views.values() for table in bases} & set(GRANTED_SOURCES)
+        for table in sources:
+            names = ",".join(f'"{column}"' for column in GRANTED_SOURCES[table])
+            conn.execute(f'CREATE TEMP VIEW {inner(table)} AS SELECT {names} FROM main."{table}"')
+        for name, (bases, select) in views.items():
             conn.execute(f'CREATE TEMP VIEW "{name}" AS ' + select.format(
-                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases}))
+                **{base: f'"{base}"' for base in bases}, **{"all_" + base: inner(base) for base in bases},
+                tool_names=qlist(sorted(outcome_stats.TOOL_NAMES))))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -416,7 +465,7 @@ def connect(path, c, auth, who, trace=None):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in tables}
+    inner_names = {prefix + table for table in set(tables) | sources}
 
     def fts_parent(name):
         for suffix in FTS_SHADOWS:
@@ -451,7 +500,7 @@ def connect(path, c, auth, who, trace=None):
                          "market_insights", "market_events", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
-            if table in tables and context == prefix + table:
+            if (table in tables or table in sources) and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
             # context. Allow that only for the owner: mail_fts is owner-only.
@@ -464,10 +513,10 @@ def connect(path, c, auth, who, trace=None):
         if schema == "temp":
             if table == visible:
                 return sqlite3.SQLITE_OK if context == "tasks" else sqlite3.SQLITE_DENY
-            if table in tables or table in DERIVED:
+            if table in tables or table in views:
                 return sqlite3.SQLITE_OK
-            if table in inner_names and context in DERIVED:
-                return sqlite3.SQLITE_OK if table[len(prefix):] in DERIVED[context][0] else sqlite3.SQLITE_DENY
+            if table in inner_names and context in views:
+                return sqlite3.SQLITE_OK if table[len(prefix):] in views[context][0] else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 
@@ -484,17 +533,28 @@ def json_value(value):
 def run(conn, sql, params, cap, seconds):
     """Execute one read statement; returns the response body or raises a Problem with SQLite's words."""
     deadline = time.monotonic() + seconds
-    conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 2000)
+    interrupted = False
+
+    def progress():
+        nonlocal interrupted
+        interrupted = interrupted or time.monotonic() > deadline
+        return int(interrupted)
+
+    conn.set_progress_handler(progress, 2000)
     started = time.monotonic()
     try:
         cursor = conn.execute(sql, params)
         rows = cursor.fetchmany(cap + 1)
     except sqlite3.OperationalError as exc:
-        if "interrupted" in str(exc):
+        # SQLite wraps an interrupt from a nested SELECT inside a Python UDF
+        # as "user-defined function raised exception". Preserve its cause.
+        if interrupted or "interrupted" in str(exc):
             raise Problem("timeout", f"Query stopped after {seconds:g} s; narrow it or add a LIMIT", 422) from exc
         raise Problem("sql", str(exc), 422) from exc
     except (sqlite3.Error, sqlite3.Warning) as exc:
         raise Problem("sql", str(exc), 422) from exc
+    finally:
+        conn.set_progress_handler(None, 0)
     ms = round((time.monotonic() - started) * 1000)
     blobs = any(isinstance(value, bytes) for row in rows for value in row)
     kind = STATEMENT.match(sql)

@@ -1,6 +1,7 @@
 """The answers, and where each comes from: flag, environment (secrets), the last run, then a prompt."""
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import os
 import re
@@ -92,6 +93,8 @@ class Settings:
     aws_instance_id: str = ""
     aws_name: str = ""             # --name: the resources are tico-<name>; blank derives it from the domain
     aws_permissions_boundary: str = ""
+    plan_bucket: str = ""          # --plan-bucket: the starter plan goes to the server by this S3 bucket, not in the env
+    plan_bucket_region: str = ""
     cloud_location: str = ""
     cloud_size: str = ""
     cloud_ssh_key: str = ""
@@ -130,6 +133,13 @@ class Settings:
     caddy_address: str = ""
     cloudflared_address: str = ""
 
+    def private_env(self, env_text: str) -> str:
+        """The .env this computer keeps. With --plan-bucket the server's env names only the plan's key, so the copy here
+        keeps the plan itself too, for a re-run without --company-file."""
+        if self.company_file_data and self.plan_bucket:
+            return env_text + envfile.render({"TICO_COMPANY_FILE_B64": self.company_file_data}).split("\n", 1)[1]
+        return env_text
+
     def public(self) -> dict:
         validate_runtime(self)
         return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
@@ -151,6 +161,14 @@ class Settings:
     def dns(self) -> str:
         return self.dns_name or self.domain
 
+    def plan_sha256(self) -> str:
+        return hashlib.sha256(self.company_file_data.encode()).hexdigest()
+
+    def plan_key(self) -> str:
+        """plans/<name>/<sha256>: the server's role may read only plans/<its own name>/*."""
+        from .aws import slug
+        return f"plans/{self.aws_name or slug(self.domain)}/{self.plan_sha256()}"
+
     def to_env(self) -> dict[str, str]:
         validate_runtime(self)
         # Keep the alias too: a pinned older server can use the generated settings.
@@ -160,6 +178,9 @@ class Settings:
              "TICO_TAG": self.tag if self.tag != "latest" else "", "TICO_UPDATER_URL": contract.UPDATER_URL if self.updater else ""}
         if self.front_door == "cloudflared":
             e["CLOUDFLARE_TUNNEL_TOKEN"] = self.tunnel_token
+        if self.target == "aws":
+            # Absolute, for compose.yaml's starter plan mount: the updater's Compose resolves ./ against its own /project.
+            e["TICO_COMPANY_FILE_DIR"] = f"{contract.REMOTE_DIR}/{contract.COMPANY_FILE_DIR}"
         e.update({key: getattr(self, name) for name, key in RUNTIME_ENV.items() if getattr(self, name)})
         if self.effective_runner_url():
             e["TICO_RUNNER_URL"] = self.effective_runner_url()
@@ -184,7 +205,13 @@ class Settings:
             # The same choices as scripts/install.sh --recommended, read on the server's first start.
             e.update(TICO_INSTALL_PRESET="recommended", TICO_SAMPLE_COMPANY="on", TICO_MODELS_PRESET="subscriptions-gateway",
                      TICO_SUPPORT=self.support or "on", TICO_GATEWAY_INVITE=self.gateway_invite)
-        if self.company_file_data:
+        if self.company_file_data and self.plan_bucket:
+            # Only where it is and its sha256: the server copies the plan to a file at first boot (remote.py pull-env.sh).
+            e.update(TICO_COMPANY_FILE_S3=f"s3://{self.plan_bucket}/{self.plan_key()}",
+                     TICO_COMPANY_FILE_S3_REGION=self.plan_bucket_region or self.aws_region,
+                     TICO_COMPANY_FILE_SHA256=self.plan_sha256(),
+                     TICO_COMPANY_FILE=f"{contract.COMPANY_FILE_MOUNT}/{contract.COMPANY_FILE_NAME}", TICO_SAMPLE_COMPANY="off")
+        elif self.company_file_data:
             e.update(TICO_COMPANY_FILE_B64=self.company_file_data, TICO_SAMPLE_COMPANY="off")
         if self.inbound_key:
             e["TICO_INBOUND_KEY"] = self.inbound_key

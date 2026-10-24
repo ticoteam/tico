@@ -33,15 +33,22 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
 
 def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     r, _, a = setup_attempt(api)
-    assert get(api, "runners/desired", token=r["token"])["features"]["load_snapshot"] is True
+    features = get(api, "runners/desired", token=r["token"])["features"]
+    assert all(features[name] is True for name in ("load_snapshot", "run_rotation", "run_diagnostics", "attempt_thread"))
     now = time.time()
     start = {"at": now, "cpu_pct": 125.0, "mem_pct": 55.0, "running_turns": 2}
     end = {"at": now + 1, "cpu_pct": 25.0, "mem_pct": 45.0, "running_turns": 1}
     post(api, f"attempts/{a['id']}/started", {"thread_id": "load-test", "load_snapshot": start}, token=r["token"])
-    body = {"outcome": "completed", "text": "Finished", "last_seq": 0, "load_snapshot": end}
+    body = {"outcome": "completed", "text": "Finished", "last_seq": 0, "load_snapshot": end,
+            "usage": {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 20,
+                      "model": "gpt-6-sol", "runtime": "codex", "billing": "api"}}
     post(api, f"attempts/{a['id']}/complete", body, token=r["token"])
     run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
     assert run["load_start"] == start and run["load_end"] == end
+    summary = next(x for x in api.get("/api/runs", headers=headers()).json() if x["run"] == a["id"])
+    assert summary["load_start"] == start and summary["load_end"] == end
+    assert summary["output_tokens"] == 20 and summary["cost_usd"] == run["est_cost_usd"] > 0
+    assert run["end_reason"] == "Finished" and run["ended_at"]
     # Snapshots outlive the rolling 48h samples, and Delete history removes both.
     P.sweep(api.app.state.store, int(now + 49 * 3600))
     assert next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])["load_start"] == start
@@ -112,7 +119,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
     assert "operator" not in detail
     raw = next(x for x in get(api, "computers", token=tokens["stranger"])["computers"] if x["id"] == rid)
-    assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded"}
+    assert set(raw) == {"id", "label", "online", "platform", "accepts_member_bots", "latest_sample", "overloaded", "turn_counts", "turn_summary"}
     for section in ("repositories", "recent_errors"):
         failed, page = call(api, "hub_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
         assert not failed and page["items"] == []

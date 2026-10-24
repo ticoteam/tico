@@ -13,8 +13,12 @@ from . import draft as D
 from .keys import scrub_all
 from .yamlfile import from_yaml, to_yaml
 
-MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 180 KB at 300 bots)
-MAX_PACKED = 7168
+MAX_BYTES = 524288          # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 325 goals, every text at full length)
+# A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES is about 700 KB.
+MAX_PACKED = 1048576
+# A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB
+# with the install settings, and far below Linux's 128 KB limit on one environment string.
+ENV_PACKED = 7168
 # The in-app path for a plan setup cannot carry: ui/app/welcome.js onbCompanyFileHTML (keep the labels in step).
 IMPORT_IN_APP = ("Run setup again without --company-file; then, on the first Welcome step in Tico, under \"Already chose "
                  "your team?\", choose the file in \"Company YAML file\" and click \"Use this team\".")
@@ -71,10 +75,13 @@ def file_text(source):
     return text
 
 
-def pack(source):
+TOO_LARGE = f"This company file is too large for automatic setup. {IMPORT_IN_APP}"
+
+
+def pack(source, limit=ENV_PACKED):
     data = base64.b64encode(gzip.compress(canonical(load(source)).encode(), mtime=0)).decode("ascii")
-    if len(data) > MAX_PACKED:
-        raise D.DraftError(f"This company file is too large for automatic setup. {IMPORT_IN_APP}")
+    if len(data) > limit:
+        raise D.DraftError(TOO_LARGE)
     return data
 
 

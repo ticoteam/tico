@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "org", "health",
+               "proposal", "market", "listening", "tool", "routine", "trigger", "approval", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "roadmap", "service-key"]
 
@@ -36,6 +36,29 @@ def run_hub(*args, env=None):
         return done.returncode, json.loads(done.stdout)
     except ValueError:
         return done.returncode, {"_stdout": done.stdout, "_stderr": done.stderr}
+
+
+def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, monkeypatch):
+    from clients import remotecli, hubtools
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            pass
+        def post(self, path, body, key=None):
+            calls.append((path, body, key))
+            return {"event": "APPROVE"}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    text = tmp_path / "review.txt"
+    text.write_text("Checked the credential boundary.\nSecond paragraph.\n")
+    args = hubcli.parser().parse_args(["repo", "review", "Acme/product", "7", "--head", "a" * 40,
+                                      "--verdict", "approve", "--body-file", str(text)])
+    assert remotecli.run(args) == {"event": "APPROVE"}
+    expected = {"repository": "Acme/product", "number": 7, "head": "a" * 40,
+                "verdict": "approve", "body": text.read_text()}
+    assert calls[0][:2] == ("github/reviews", expected)
+    hubtools.repo_review(Api(), expected)
+    assert calls[1] == calls[0]  # CLI and MCP retries identify the same exact review.
 
 
 def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation(monkeypatch):
@@ -472,3 +495,38 @@ class BotSetup(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@pytest.mark.parametrize('choice', ['yes', 'no'])
+def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice):
+    from clients import remotecli, hubtools
+    sent = []
+    class Api:
+        def get(self, path, **kw):
+            return {'actor': 'human:ana'}
+        def post(self, path, body, **kw):
+            sent.append(body)
+            return {'task': {'id': 'synthetic'}}
+    api = Api()
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: api)
+    args = hubcli.parser().parse_args(['task', 'create', '--owner', 'cpo', '--title', 'UI change',
+        '--body', 'x', '--qa', choice, '--change-path', 'ui/page.js', '--qa-not-checkable-live'])
+    remotecli.run(args)
+    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner': 'cpo', 'title': 'UI change', 'body': 'x',
+        'qa': choice == 'yes', 'change_paths': ['ui/page.js'], 'qa_not_checkable_live': True})
+    assert len(sent) == 2
+    assert all(p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js']
+               and p['qa_not_checkable_live'] is True for p in sent)
+
+
+def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'keep-tasks-going', 'ops'], ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
+                 ['bot', 'keep-tasks-going', 'ops', 'off'], ['bot', 'keep-tasks-going', 'ops', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert 'limit' not in sent[0]
+    assert [row['limit'] for row in sent[1:]] == [None, 0, 3]

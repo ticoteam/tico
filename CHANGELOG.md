@@ -7,15 +7,78 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-23
+
 ### Added
-- **Task model in Settings.** The bot editor has a Task model row (harness, model and effort; "Same as bot" until set),
-  and Settings > Bots shows a small Tasks mark beside each bot's model, marked when its tasks run on another model.
-  The mark opens a row under the bot with the same three pickers. Saving changes only what its tasks run on; the bot
-  keeps its own model.
-- **A plain-words warning for a cheap task model on a high-stakes bot.** Picking a cheaper model than the bot's own,
-  in the same family, for a bot that sends, spends or publishes through approvals, or can write through a tool grant,
-  shows a warning that names the risk ("This bot sends messages for you. … may word things badly."). It still saves
-  and its tasks still run on it, and each such run's note says it ran below the minimum for that bot.
+- **Sign in to Grok Build and Cursor from Computers.** Settings > Computers supports sign-in, sign-out and account switching for the computer's shared login. Grok reports its saved sign-in state. Cursor keeps Tico sign-ins in files; an existing macOS Keychain login needs a new sign-in from Tico.
+- **Sign out of Muse Code and switch accounts.** Cancelling a switch preserves the previous login. Tico uses Muse's file credential backend on Mac as well as Docker. A login saved only in the macOS Keychain asks for a new sign-in from Tico; Tico does not read or copy that Keychain item. Update the server and runner to use these controls.
+- **Health names blocked bots and stalled work.** The checks show queue counts, oldest ages, blocking reasons and actions for blocked bots, stalled tasks and bot pull requests.
+- **Finished runs record tokens and estimated cost.** Usage includes cached tokens and records why usage is missing or a model is unpriced. Existing legacy usage history is retained.
+- **Hosted setup carries company charts up to 300 seats.** A private plan bucket and verified file carry larger charts, and a retry can finish a failed first boot.
+- **Live meetings can be private.** The person connecting a meeting can share it with selected people and attached bots. Unauthorized people cannot list or open it. Existing clients retain the default team visibility.
+
+### Changed
+- **First-run provider choices follow the selected plan.** Provider details appear for the applicable choice, phone layouts put the main choice first, and computer sign-in help follows the selected provider preset.
+- **Held runs recover after a usage limit.** Eligible runs resume or dismiss when the limit resets. A ready fallback can run while the primary is limited, and a fallback startup failure waits for the reset.
+- **The server gets CPU priority on shared Docker hosts.** The server, HTTPS front door and tunnel get a higher CPU weight than the runner. Under severe memory pressure, the runner is preferred for termination.
+
+### Fixed
+- **An explicitly cleared login stays cleared.** A stale Settings page cannot switch to a subscription after Clear key or Sign out. An unconfirmed sign-out keeps automatic key login blocked.
+- **Renewed worktrees survive retired pull-request cleanup.** Reused worktrees and new trees for Doing tasks are kept when older work is removed or merged.
+- **Separate model messages keep their paragraphs.** Muse, Grok, Cursor, Gemini and Antigravity replies preserve boundaries between messages instead of joining their words together.
+- **Company-file import accepts all the goals setup suggests.** The goal limit rises from 20 to 325; the 300-seat limit is unchanged.
+- First-run and sign-in documentation follows the current wizard.
+- Prerelease candidates use their matching release notes. Product pull requests reject ordinary changelog edits, and nightly gate failures use a tasks-only service key.
+- The runner state test compares table names with the declared schema instead of a stale count.
+
+## [0.4.1] - 2026-10-23
+
+### Changed
+- **Each bot can keep up to 100 worktrees.** The per-bot worktree limit rises from 50 to 100. Adding or restoring a worktree still needs 5 GB free on the computer, and cleanup still waits until the bot is idle. The limit is separate from how many turns a computer runs at once ([Worktrees](docs/worktrees.md)).
+
+### Fixed
+- **The docs say when an automatic check skips an idle task.** An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check. Wake behavior is unchanged: human messages still wake the bot, and running sessions keep their recovery checks ([Sessions](docs/sessions.md)).
+
+## [0.4.0] - 2026-10-23
+
+### Changed
+- **Bots share their computer's sign-in.** Each AI tool has one login per computer. Per-bot named subscriptions are removed. Before upgrading, sign in the computer's login for each tool your bots use, and update its runner. To use another account, add another computer; it can run on the same machine. API clients must stop setting per-bot subscriptions and named-profile sign-ins ([Computers](docs/computers.md)).
+- **Large sessions restart from a checkpoint.** By default, when a bot's last completed turn reads at least 400,000 input tokens, the next turn starts a fresh session. It uses the task's checkpoint and subsequent conversation instead of the old transcript. Update the runner to use this behavior ([Checkpoints and resume](docs/sessions.md#checkpoints-and-resume)).
+- **The key scrubber catches more key-shaped text.** Setup chat, the company file and setup support tickets also remove 32 or more letters and digits in a row, however regular and whether alone or inside a longer token, as Tico HQ's copy does.
+
+### Added
+- **Choose a task model in Settings.** In **Settings > Bots**, click **Tasks** beside a bot's model to choose a harness, model and effort for its tasks. The bot editor also has a **Task model** row. Choose **Same as bot** to clear it. Chat keeps the bot's own model ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Cheaper task models show a warning for sensitive work.** A bot with send, spend or publish approval history, or write access beyond its own repository, warns when its task model costs less than its own model from the same provider. You can still save and run it; the run note records the warning ([Warning rules](docs/harnesses.md#a-warning-about-a-cheaper-task-model)).
+- **See your company's billing in Settings.** Owners and admins can open **Settings > More > Billing** to see balance, credits, daily and hourly usage, and monthly statements with CSV downloads. **Talk to us to add credit** opens the booking page. Billing needs a working Tico HQ connection; this page adds no card form.
+- **Start a stopped hosted computer from Settings.** Owners and admins see their company's hosted computers in **Settings > Computers** and can start a stopped one. When Tico HQ refuses because the company is out of credit, the card keeps the refusal and links to the account page to add credit. This needs a working Tico HQ connection.
+- **See computer load alongside bot runs.** Computer lists include recent CPU and memory readings, running turns and an overload flag. Run records keep start and end load snapshots, helping you investigate a slow turn ([Computer performance](docs/permissions.md#a-computers-performance)).
+- **See why a run stopped or stalled.** `hub run list` shows each run's end reason, end time, last event and last heartbeat. An attempt with no heartbeat or event for five minutes shows as stalled in the run list and Health; it is not stopped. The runner keeps up to 64 KiB of scrubbed stderr per attempt for seven days, under the existing export rules ([Why a run stopped or stalled](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Every run names its purpose.** The SQL `turns` table and weekly run view carry a short purpose label, such as `review PR`, so you can group runs and tokens by what they were for ([What woke each run](docs/hub-sql.md#what-woke-each-run-and-what-it-did)).
+- **Opt-in error reports for one install.** With a Sentry DSN and environment set, the server reports unexpected errors, scheduler failures and runner panics, tagged with the release and instance. Each report holds only the error class, Tico's own stack frames and the route template, never message, task or request text. `python -m backend.observability test` sends a harmless test error ([Server and runner errors](docs/observability.md#server-and-runner-errors)).
+
+### Fixed
+- **Stopped waiting turns stay stopped.** A turn stopped before it starts now settles. An expired lease or an old system notice no longer queues stopped or finished work again. Human follow-ups and explicit resumes still work ([Tasks](docs/tasks.md)).
+- **Muse Code failures release the busy turn.** A terminal run result now settles the attempt even when the process stays open. Quota failures keep their usage hold and do not retry automatically ([Harnesses](docs/harnesses.md)).
+- **SQL history reads avoid repeated full scans.** Scoped history lookups and recent-attempt counts use indexed reads while keeping the existing visibility rules and query limits ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Runner requests wait less behind database writes.** Server writers queue in order, and a lease renewal with most of its lease left no longer writes. Attempt input, renewals and events spend less time waiting on SQLite writer contention. Health warns when those requests exceed one second at p95 ([Health monitor](docs/health-monitor.md)).
+- **Gateway models return sooner after fallback.** When another model finishes a rate-limited Tico-model turn, the bot tries Tico models again after a minute. Update the server and its computers to use the shorter wait ([Gateway status and retries](docs/ai-gateway.md#when-the-gateway-refuses-a-bots-run)).
+- **Try now sends one queued run first.** After **Try now** on a usage limit, one queued run on the shared login goes first. A success resumes the bots waiting on it; another limit puts the hold back with its original end. A limit reported late by a turn started before the hold no longer blocks that run's success ([What happens when](docs/how-it-works.md#what-happens-when)).
+- **Task updates point to the closing command.** The CLI no longer offers `closed` on `hub task update --status`. Trying it tells you to use `hub task close <id>`. MCP also directs requesters to `hub_task_close`; filtering a task list by `closed` still works ([Tasks](docs/tasks.md)).
+- **Unchanged idle tasks skip redundant checks.** A status or stall check starts no turn when an idle task still matches its owner's checkpoint. Human messages, questions, approvals, dependency results and active-session recovery checks keep their existing paths ([Wake audit](docs/hub-sql.md)).
+- **Self-filed tasks wait for their filing turn.** When a bot creates work for itself, the new task waits for that turn to finish, up to five minutes. Work the filing turn already finished or parked does not start again ([Task sessions](docs/how-it-works.md)).
+- **Finished-task rechecks avoid repeated no-change replies.** A system-triggered recheck of a task already done or closed posts no reply when it made no changes. Human messages and required answers still get replies; withheld text stays on the run ([Reply audit](docs/hub-sql.md)).
+- **Temporary model capacity keeps a short hold.** A provider's capacity refusal holds the login for two minutes without increasing the quota backoff. Real quota and billing limits keep their normal holds. Work that may have acted is kept for review rather than replayed ([Usage limits](docs/how-it-works.md)).
+
+## [0.3.75] - 2026-10-23
+
+### Fixed
+- **A Docker runner at high capacity starts its turns and signs in.** The runner container allowed 2048 processes
+  and threads, about 70 turns' worth, so a runner set above that failed to start new turns ("Resource temporarily
+  unavailable"), kept claiming and dropping the same requests, and a Claude Code or Codex sign-in on that computer
+  stopped without signing in. The limit is now 12288, enough for the 256 turns a runner honours.
+- **A question's Needs you card shows when you open its task right after answering another.** A refresh that started
+  while an earlier read was still on its way reused that read and kept the old list, so the task page opened without
+  its card until the task was drawn again.
 
 ## [0.3.74] - 2026-10-22
 
@@ -4284,7 +4347,11 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.3.74...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
+[0.3.75]: https://github.com/ticoteam/tico/compare/v0.3.74...v0.3.75
 [0.3.74]: https://github.com/ticoteam/tico/compare/v0.3.73...v0.3.74
 [0.3.73]: https://github.com/ticoteam/tico/compare/v0.3.71...v0.3.73
 [0.3.71]: https://github.com/ticoteam/tico/compare/v0.3.70...v0.3.71

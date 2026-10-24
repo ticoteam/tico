@@ -238,6 +238,9 @@ async function owner(browser) {
   await page.waitForFunction(() => document.querySelector('#bot-editor input[type=radio][value=all]')?.checked);
   // The radio moves at once; its save reaches the mock a moment later, so wait for the save itself.
   await until(() => lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode === 'all', 'the All ticked repos save');
+  // Then for its answer: that redraws the section, and a redraw between Space's keydown and keyup drops the tick.
+  // The change redrew the section blank, so 'Saved' now is this save's.
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
   // Creation is a separate explicit grant; keyboard changes save and preserve focus.
   const creation = box.locator('[data-brepo-create]');
   assert.equal(await creation.isChecked(), false);

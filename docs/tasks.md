@@ -3,15 +3,22 @@
 Every task starts on **General**, with the same statuses and behavior as before. To give work a
 pipeline such as Marketing, a mover makes a type in **Settings → Tasks**, adds named steps, and
 chooses the status each step means. Types belong to the whole team. General keeps one step for
-each standard status.
+each standard status except waiting and declined: no step has those statuses (below).
 
 Choose **Type** when creating a task, or change it in the task modal. A custom type shows a **Step**
 dropdown; General shows **Status**. Beside task search, **General** and **Dev tickets** select the task type; the arrow menu lists
 other types. A type is always selected, and both the list and board show only its tasks. The board
-uses that type's steps as columns. Your selection is remembered, shared links carry it, and new
+uses that type's steps as columns. Leading backlog steps (open, before the first step with work under
+way) fold into one strip, as do the trailing done, closed and declined steps; click a strip to unfold
+it. A task that finishes leaves the board unless its finished steps are unfolded. Done tasks are under
+**Done**, closed ones under **Closed**. On a desktop, drag a card to another column or to a new place
+in its column: it saves the step and `step_rank` at once, and a card dropped on a folded strip goes to
+the last backlog step or the first finished one. On a phone, change the step in the task's **Step**
+row. A card with an open blocker says **Blocked by** it across its top; click that to show only the
+card and its blockers. The faces over the board filter by owner; **Q** shows only yours, **X** clears.
+Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
-deleted types fall back to General. Finished work appears in the selected type's
-Done or Closed steps as well as under Done.
+deleted types fall back to General.
 
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
@@ -20,6 +27,10 @@ existing scripts can keep setting `status`:
 - Otherwise Tico picks the first step with that status, in the type's step order.
 - If none matches, the step clears. The task keeps its status, and the UI shows that status until
   someone picks a step.
+- Waiting is not a step: a waiting task stays in its working step (or the type's first open or doing
+  step) and shows a **Waiting** tag on its card and row. A declined task goes to the type's closed
+  step. A step can't be given status waiting or declined; the Product roadmap keeps its public
+  Declined step.
 
 Changing a task's type preserves its status and finds a matching step in the new type. Use an
 empty step to clear just the step. Status permissions, completion notes, closing and reopening
@@ -48,6 +59,43 @@ new title as its subject.
 
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
+
+## Software review handoffs and QA defaults
+
+On the engineering board, moving a ticket with a linked open PR into **Review 1** or **Review 2** checks CI first, then the test receipt. Creating a **Review 1:** or **Review 2:** child task makes the same checks before queuing its reviewer. A review child also needs a linked PR. Other boards keep their usual flow.
+
+A failing check refuses the move and names the check. Pending checks are allowed. A missing, stale, failed or unrecognised test receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
+
+Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. The reader evaluates the sentence containing the head, so separate sentences about corrected historical failures or other checks still pending do not override that result. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. It accepts `356 pass / 0 fail`, distinguishes an unrecognised receipt from no receipt, and rejects failures such as `40 passed, 2 failing/errored`. A recorded failure at a head cannot be cleared by a passing rerun at that same head.
+
+At engineering-ticket creation, `change_paths` supplies the known paths for the QA rule. The CLI accepts repeated `--change-path` flags. An explicit `qa` boolean (`--qa yes` or `--qa no`) overrides the rule; an author-supplied `qa` tag is retained.
+
+| Changed paths | Default |
+| --- | --- |
+| `ui/`, `desktop/`, `app/` | `qa`, with a not-checkable-live note for the rendered result |
+| Bot or chat behaviour (`bots/`, `chat/`, backend chat/message/wake/execution modules) | `qa` |
+| Docs, CI, scripts, nested tests, backend-only code outside the behaviour classes | No `qa` |
+| Mixed paths | `qa` if any path needs it |
+
+On a PR's first registration, the server reads its complete changed-file list and applies the same default to its linked engineering tickets, including tickets whose paths were unknown at creation. The initial read retries in the background if GitHub is unavailable. Later pushes do not reclassify the ticket. Explicit ticket choices and the PR author's `qa`, `no-qa` or `qa:no` labels override defaults. This sets the Tico ticket's tag; it does not edit GitHub labels or expand bots' label permissions. `qa_not_checkable_live` (`--qa-not-checkable-live`) also requests the candidate-only QA note.
+
+## Automatic starts
+
+Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
+On Deck task (or an open general task), moves it to In Progress, and uses that task's own session.
+Snoozed work, unfinished prerequisites and pending milestone waits stay parked. Existing snooze-end,
+blocker-done and milestone events make the task eligible again; no manual nudge is needed.
+
+In **Settings → Bots → Edit**, **Keep N tasks going** is blank by default (no task cap). Set a positive
+number to cap active work, or **0** to turn automatic starts off. Waiting for a person, a check, a review
+child or a workspace frees a place. Delegated review children have no task cap; every review uses its
+own session as computer turns become free. Usage holds, computer readiness and computer capacity
+still apply. The Bots page shows how many tasks are going and how many eligible tasks wait to start.
+
+`hub bot keep-tasks-going <bot> 3` sets a cap; `off` turns it off and `unlimited` restores the default.
+Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
+the same permissions and revision check. **Settings → Routines** lists **Start assigned tasks** using
+WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
 ## Work that is waiting
 
@@ -163,11 +211,11 @@ minutes and waiting on nothing of its own (no blocker, no unanswered question, n
 snooze, stored resume or milestone wait), the task counts as stalled even while `waiting`: its bot
 is woken with the way out, under the same limits, and BotOps's stuck list shows it with `own_blockers`.
 
-Task worktrees have a separate lifecycle. The 50-worktree limit stays in effect, and cleanup
+Task worktrees have a separate lifecycle. The 100-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
-request continues to occupy its slot until the runner removes it. For merged work that is still
-awaiting release, request cleanup of the worktree link rather than marking the task Done or Closed
-just to free space.
+request continues to occupy its slot until the runner removes it. When all linked pull requests
+finish, clean worktrees are released even while the task awaits release or post-release QA.
+Trees with unpushed work stay and show the reason. Keep the task at its real step; do not mark it Done or Closed just to free space.
 
 ## Picking work back up
 
@@ -243,13 +291,32 @@ arrived since stays on the card.
 
 ### The question card
 
-A bot's question to a person shows as one card, the same in Decide and in the task's Needs you box. The header
-names who asked (the bot, or Tico for a check Tico runs itself, never "Assistant"), "asked 3 days ago", and what it
-holds up: the roadmap item it is under, or its parent task. Below are the question, a "why it matters" line, and the
-picks. One pick is a button; several picks that go together (`--multi`) are checkboxes, the recommended ones ticked
-and labelled, with **Yes to all** and **Send ticked (n)**. Every button says what happens. The bot hears "Not this
-one" for each pick left unticked, with any note the person adds. The fallback ("If you don't answer by ...") sits
-small at the foot, and ids, file paths and error text only in the collapsed Details.
+Decide and the task's **Needs you** box show the same question card: the same text, picks, and buttons.
+The header names the real asker, or **Tico** for a system check. It shows the question's age, such as
+"asked 3 days ago", and **holds up:** with the parent task or roadmap item's title.
+The question comes next, followed by **Why it matters:**.
+
+To answer a question with several picks:
+
+1. Review the checkboxes. Recommended picks start ticked and labelled **(recommended)**.
+2. Tick the picks you want and untick any you do not want.
+3. Optionally write in **Add a note** to explain what you want instead.
+4. Click **Send ticked (n)** to send the ticked picks as yes. The number is how many picks you have ticked.
+
+The bot receives each unticked pick as "not this one", along with your note.
+For example, with four picks, tick 1, 2, and 4, then click **Send ticked (3)**.
+The bot receives yes for those three and "not this one" for pick 3.
+To say yes to every pick, click **Yes to all** instead. **Send ticked (n)** is disabled when no picks are ticked.
+
+A single-choice question has one button per option. Click the option you want to send that answer.
+Each pick and answer button has a short line saying what happens when you choose it.
+
+If the question has a fallback, its **If you don't answer by…** line appears in small text at the bottom.
+It describes what happens without your answer; it is not a recommended pick.
+Open the collapsed **Details** for the full message and technical text, including ids, file paths, and error output.
+In Decide, **Details** also includes a link to the task.
+See [When nobody answers a bot's ask](#when-nobody-answers-a-bots-ask) for when questions close.
+Approvals for spending or publishing keep their own card.
 
 Tico refuses a bot's question to a person, saying why and with an example, when:
 
@@ -261,9 +328,14 @@ Tico refuses a bot's question to a person, saying why and with an example, when:
 
 A yes-or-no question needs no options; its Yes and No buttons say the bot hears that answer. The refusal is a writing refusal: it never counts toward a quarantine.
 
-Decide puts first a card that is, or holds up work, due or going ahead on its own within 2 working days (the nearest
-date of anything it holds up, not only the item the header names); then one holding up a roadmap item
-at Approved or Building; then the rest, newest first. Waiting longer never moves a card up.
+Decide orders cards by what they block:
+
+1. Cards with a due or fallback date within two business days, including dates on work they hold up.
+2. Cards holding up a roadmap item at **Approved** or **Building**.
+3. The remaining cards.
+
+Within each group, newest cards come first. Age never moves a card up.
+This ordering applies to Decide; it does not change the order of Needs you elsewhere.
 
 ### When nobody answers a bot's ask
 
@@ -659,6 +731,11 @@ later with still no progress its bot is retried once; thirty minutes after that,
 stuck in the main chat and BotOps gets a task to find out why. A stuck check never goes to a person as a question. These
 share the stall watcher's spacing and its cap of three a day, after which BotOps gets a task to find out why.
 
+An idle task unchanged since its owner's last settled checkpoint skips a plain automatic stall or status check.
+Changed state or a missing checkpoint leaves the check eligible under the usual wake rules. Human messages still
+wake the bot as before, and leased or running sessions keep their recovery checks
+([details](hub-sql.md#what-woke-each-run-and-what-it-did)).
+
 `task_goal: on` on a bot (`hub bot update <slug> --task-goal on`, `hub_bot_update`, or the bot definition API; off by
 default) works each task it owns as a goal: the turn carries `task.goal` (the title and its acceptance criteria), and
 the bot is told to keep at it until that holds, then mark the task done with a summary, or file a subtask for the
@@ -853,6 +930,16 @@ On the board, a task with a picture shows the newest one as a cover, and a dot m
 question. **Pin** in the Tasks toolbar keeps the current view and filters under **Pipelines** in
 the left rail, for you only; ✕ on a pin removes it. Pins are links: nothing moves a task's step
 on its own.
+
+The person picker beside **Filter** says whose tasks the first tab shows. **Me** is Needs you as
+always, with its approvals and questions. Pick a teammate (people by team, each with a count; bots
+fold behind one line) to see what is on their plate: an open task whose `waiting_on` is them, or
+that they own when it waits on nobody, or a question asked of them. **Asked by them** shows what
+they asked someone else to do. **Everyone** drops the person. The choice is in the address
+(`?who=human:sam&side=asked`), so a link opens the same plate; the Owner and Asked by filters still
+narrow it. On a plate, tasks blocked by an open task fold under **Blocked** at the end. A row's
+status opens its statuses (or a typed task's steps) to move it; a person's due date is amber
+within two days and red once passed.
 
 
 ## Company and private tasks

@@ -683,9 +683,10 @@ def default_runtime(record):
 
 
 def runtimes_run_on(c, settings):
-    """{runner id: runtimes} the bots on each computer run on, each bot's own and its fallback's: what that computer
+    """{runner id: runtimes} the bots on each computer run on, including task models and fallbacks: what that computer
     installs for them (runner-rs/src/commands.rs harness_runtimes), so the owner cannot turn one off there."""
     from .shared_bots import follow
+    from .task_models import of as task_model_of
     record, found = load(c, settings), {}
     for row in c.execute("SELECT a.runner_id, a.bot, bc.config_json FROM assignments a "
                          "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
@@ -698,7 +699,9 @@ def runtimes_run_on(c, settings):
         except ProviderError:
             runtime = ""
         fallback = normalize_fallback(config.get("fallback")) or {}
-        found.setdefault(row["runner_id"], set()).update({runtime, fallback.get("runtime")} - {None, ""})
+        task_model = task_model_of(config) or {}
+        found.setdefault(row["runner_id"], set()).update(
+            {runtime, fallback.get("runtime"), task_model.get("runtime")} - {None, ""})
     return found
 
 

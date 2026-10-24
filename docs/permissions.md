@@ -206,7 +206,7 @@ created by a member has Instructions the Team has not reviewed, so it does not g
 A computer still hosts its owner's bots and the team owner's; taking members' bots adds members' bots, it does not move anyone else's.
 
 Every person sees every working computer in Settings > Computers (`GET /api/v2/operations`): its connections and their
-sign-in state, its named subscriptions' usage, and the bots on it that they may see. Only an admin or the computer's
+sign-in state, and the bots on it that they may see. Only an admin or the computer's
 operator also sees the signed-in accounts and the usage of the computer's own login, sees revoked computers, and changes
 anything on it (sign in, rename, usage readings, screen, tools, performance, inbox-only, revoke); the API refuses anyone else.
 
@@ -278,7 +278,11 @@ repositories or recent logs. Full detail, placement and change controls keep the
 CPU here is the one-minute load divided by available cores, times 100; it may exceed 100%. These minute
 samples are retained for 48 hours. Six consecutive readings spanning five minutes above 90% CPU or memory
 set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
-turning diagnostics off clears it and hides `latest_sample`. No automatic action or notification follows.
+turning diagnostics off clears it and hides `latest_sample`.
+
+**Unreleased:** this sustained-load flag holds new starts on that computer, including reservations that have not
+started yet. Running turns continue, and new starts resume when the flag clears
+([Turn counts](computers.md#turn-counts)).
 
 Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
 `hub run list`. Current computers take a reading at start and completion; older computers use a recent
@@ -289,7 +293,7 @@ also removes saved snapshots for that computer.
 Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%) or under 5%
 disk free record an overload: when, why, which bots' turns were running and the busiest processes. Health shows it as a
 warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
-diagnostic swapping rule because its swap total grows with use. An overload changes nothing on its own; it is there to explain a slow day.
+diagnostic swapping rule because its swap total grows with use. This ten-minute diagnostic record explains past load; the separate five-minute flag above controls new starts.
 
 ## BotOps uses the requester’s rights
 
@@ -374,8 +378,8 @@ it as one sentence and the link.
 
 **Checking the result.** A model change answers with `readiness` (`backend/readiness.py` `can_run`, the one check
 behind a prepared change, `POST bots/<slug>/model` and Health): whether **this bot** can run the new runtime on its
-computer, judged by its own subscription profile's sign-in, its own API-key Credential for the runtimes that take one
-per bot (Gemini CLI, Pi), and otherwise the computer's shared sign-in. Another bot's missing key never blocks it.
+computer, judged by its computer's login for that runtime, its own API-key Credential for the runtimes that take one
+per bot (Gemini CLI, Pi). Another bot's missing key never blocks it.
 `can_run` is true, false (with `fix` and `link`), or null when nothing says (offline, an older computer). A bot an
 external agent runs (Hermes, OpenClaw, Grok Bot) answers `applicable: false`: no computer check applies. A change is
 refused only on false. `reported` turns true once the bot's own readiness row reflects the new runtime, after the

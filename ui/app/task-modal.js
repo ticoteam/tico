@@ -17,8 +17,8 @@ function taskDialogWire(d) {
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
-    // The close event is queued: when the task was reopened before it fired, it belongs to the closed one.
-    if (d.open) return;
+    // The close event is queued: a newer opening may still be awaiting its first draw.
+    if (d.open || d.taskOpening?.pending) return;
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
@@ -33,7 +33,7 @@ function taskModal() {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   taskDialogWire(d);
   d.addEventListener('close', () => {
-    if (d.open) return;
+    if (d.open || d.taskOpening?.pending) return;
     TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
     const back = d.returnContext; d.returnContext = null;
@@ -83,6 +83,12 @@ async function taskModalOpen(key, d) {
   }
   taskModalShow(it.task, d);
 }
+// The runs section drawn for the open task, held across a redraw of that task (taskModalShow).
+const taskModalRuns = new WeakMap();
+function taskModalRunsKeep(d, keep) {
+  const runs = keep && $('[data-task-runs]', d);
+  if (runs) { runs.dataset.task = String(d.dataset.task); taskModalRuns.set(d, runs); } else taskModalRuns.delete(d);
+}
 // The one way a hub task opens in full: from the board, from a link, from a chat card. In the peek it opens beside the list.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
 async function taskModalShow(task, d = taskModal(), opts = {}) {
@@ -91,11 +97,20 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const peek = !!d.dataset.peek;
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
-    d.taskOpening = {}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
+    d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
   const opening = d.taskOpening;
-  taskChatStop();
+  // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
+  // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
+  // instead of "Loading the conversation…" and a fresh read every time something on the task is saved.
+  const kept = d.open && String(d.dataset.task) === String(task.id) && TASK_CHAT?.dialog === d && d.contains(TASK_CHAT.host) ? TASK_CHAT : null;
+  const adopt = () => {
+    const host = kept && TASK_CHAT === kept ? kept.host : null, runs = taskModalRuns.get(d);
+    if (host && !d.contains(host)) $('.task-chat', d)?.replaceWith(host);
+    if (runs && runs.dataset.task === String(task.id) && !d.contains(runs)) $('[data-task-runs]', d)?.replaceWith(runs);
+  };
+  if (!kept) taskChatStop();
   // A menu open on this task (a property picked while a save was still on its way) is never pulled away: the redraw
   // waits for it to close, then draws the newest copy.
   if (d.open && String(d.dataset.task) === String(task.id) && $('.prop-pop', d)?.matches(':popover-open')) {
@@ -114,10 +129,17 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
   const onProp = d.contains(document.activeElement) ? document.activeElement.dataset.prop : '';
   if (onProp) d.focusProp = onProp;
-  // Session copy commands need the CLI's manifest even when Tasks is the first page opened.
+  // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
+  // even when Tasks is the first page opened), read once.
+  const reading = Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
+  // A previous close's Back navigation must settle before a new dialog takes its place in history.
+  if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
+  opening.pending = false;
+  taskModalRunsKeep(d, kept);
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
+  adopt();
   taskModalBind(d, task);
   taskPropFocus(d);
   if (!d.open) {
@@ -137,7 +159,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   if (!peek) document.body.classList.add('task-modal-open');
   d.scrollTop = 0;
   // the list knows the task; the detail adds its parts, its parent and the comments
-  const [detail] = await Promise.all([v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad().catch(() => TASK_TYPES)]);
+  const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (!detail?.task) { d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id)); return; }
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
@@ -150,12 +172,15 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a.matches('.tthread-title') ? '.tthread-title'
     : a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
   askDraftCapture(d);
+  taskModalRunsKeep(d, kept);
   d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
+  adopt();
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
   taskPropFocus(d); d.focusProp = '';
   void taskRailLoad(d, full, detail);
-  void taskChatLoad(task.id, d, detail);
+  if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
+  else void taskChatLoad(task.id, d, detail);
   void tfLoad(d, task.id);
   void taskRunsLoad(d, task.id);
   if (typing) { const box = $('.task-chat textarea', d); box?.focus(); box?.setSelectionRange(box.value.length, box.value.length); }
@@ -369,6 +394,11 @@ async function taskSave(d, id, body, then, field) {
     // task reached from inside the peek (a parent's subtask): its row's neighbour is some other task, and edits made
     // after the save would land on it, so the peek stays on the task that was saved.
     if (state && state.peekVia !== 'link') state.pendingFinish = {key, at, after: state.loadSeq};
+    // The list shows the saved task at once (a card moves to its new step); the load that follows brings the rest.
+    if (TASKS_ST && data.task && TASKS_ST.tasks?.some(x => String(x.id) === String(data.task.id))) {
+      TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [data.task]);
+      tasksRender(TASKS_ST);
+    }
     if (TASKS_ST) void tasksLoad(TASKS_ST);
     roadmapRankingRefresh();
     return true;
@@ -512,8 +542,8 @@ function taskLiveHTML(x, stopping = '', sent = '') {
   const label = `<span class="typing ${t.mode}" aria-hidden="true"><i></i><i></i><i></i></span><span class="thinking-word">${esc(word)}${
     working ? '…' : ''}</span>${step ? `<span class="task-live-step">${esc(step)}</span>` : ''}`;
   const stop = working && x.attempt_id && settingsCanManageBot(S.emps.find(e => e.name === x.bot))
-    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" title="Stop this run"${
-      stopping === x.attempt_id ? ' disabled>Stopping…' : '>Stop'}</button>` : '';
+    ? `<button type="button" class="ghost task-live-stop" data-task-stop="${esc(x.attempt_id)}" data-bot="${esc(x.bot)}" ${
+      stopping === x.attempt_id ? 'title="Stopping…" disabled>Stopping…' : 'title="Stop this run">Stop'}</button>` : '';
   return `<div class="thinking task-live" role="status" aria-label="${esc(t.tip)}${step ? ': ' + esc(step) : ''}">${
     working && x.attempt_id ? taskStepsFold(x.attempt_id, label, true) : label}${pendingHintHTML(run)}${stop}</div>`;
 }
@@ -533,13 +563,13 @@ function taskComposerToPaint(state) {
   if (hint) hint.textContent = taskComposerTo(state.data?.comment_to, box?.value);
 }
 async function taskRunStop(state, button) {
-  button.disabled = true;
+  button.disabled = true; button.title = 'Stopping…';
   try {
     await post(`/v2/bots/${encodeURIComponent(button.dataset.bot)}/stop`, {attempt_id: button.dataset.taskStop});
     state.stopping = button.dataset.taskStop;      // the redraws keep "Stopping…" until the run has ended
     button.textContent = 'Stopping…';
     taskChatLive(state);
-  } catch (e) { button.disabled = false; toast(`Not stopped: ${e.message}`, true); }
+  } catch (e) { button.disabled = false; button.title = 'Stop this run'; toast(`Not stopped: ${e.message}`, true); }
 }
 function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
@@ -672,7 +702,8 @@ async function taskCommentSend(state) {
   if (!text) { box.focus(); return; }
   state.sending = true;
   const button = $('button[type=submit]', form), status = $('[data-task-chat-status]', form);
-  button.disabled = box.disabled = true; status.textContent = '';
+  // A disabled Send says why on hover; with an aria-label, the title is its screen-reader description too.
+  button.disabled = box.disabled = true; button.title = 'Sending…'; status.textContent = '';
   try {
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, {text, public: !!$('[data-comment-public]', form)?.checked});
     if (!taskChatCurrent(state)) return;
@@ -683,12 +714,12 @@ async function taskCommentSend(state) {
     if (data.comments && state.data) taskCommentsRender(state, {...state.data, comments: data.comments}, data.woke ? data.comment?.id : '');
     await taskChatRead(state);
     // The composer said so before sending when no bot would get it; the server has the last word.
-    status.textContent = data.woke || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
+    status.textContent = data.woke || data.delivered || taskComposerTo(state.data?.comment_to, text) ? '' : 'Saved. The bot reads it on its next run on this task.';
   } catch (e) {
     if (taskChatCurrent(state)) status.textContent = `Not saved: ${e.message}`;
   } finally {
     state.sending = false;
-    if (taskChatCurrent(state)) { button.disabled = box.disabled = false; box.focus(); }
+    if (taskChatCurrent(state)) { button.disabled = box.disabled = false; button.title = 'Send'; box.focus(); }
   }
 }
 async function taskChatSend(state) { return taskCommentSend(state); }
@@ -748,7 +779,7 @@ function hubModalHTML(t, it, opts = {}) {
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-      <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${blockers.length && !finished
+      <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}<span class="pill tstatus">${esc(statusWord)}</span>${statusWord === 'Waiting' || finished ? '' : taskWaitTag(t)}${blockers.length && !finished
       ? `<span class="tchip-blocked" title="Blocked by ${esc(blockers.map(b => b.title).join(', '))}">blocked</span>` : ''}${taskSnoozed(t)
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(t.snoozed_until))} by ${esc(actorLabel(t.snoozed_by))}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}</button>` : ''}
       ${finished ? '' : taskScreenLinkHTML(t.owner)}

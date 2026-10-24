@@ -56,6 +56,7 @@ pub struct Drive<'a> {
     pub thread: &'a str,
     pub effort: Option<&'a str>,
     pub limit: Instant,
+    pub limit_name: &'a str,
     pub flags: &'a Flags,
     pub wake: &'a Notify,
     pub redactor: Option<&'a Arc<Redactor>>,
@@ -67,6 +68,8 @@ pub struct Drive<'a> {
     /// The shared login this stretch holds, when its server can take a turn back that gave it up at the cap
     /// (crate::login_turns::HOLD_CAP).
     pub login: Option<crate::login_turns::Cap>,
+    /// A new thread this stretch started, kept only once its host says the session is up (`thread_confirmed`).
+    pub fresh: Option<&'a crate::execute::Fresh>,
 }
 
 /// What a turn holding a shared login is told when another turn has waited out the cap for it.
@@ -93,7 +96,7 @@ impl Runner {
         let redact = |v: &Value| d.redactor.map(|r| r.scrub_json(v)).unwrap_or_else(|| v.clone());
         let scrub = |t: &str| d.redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
         let (mut reply, mut tokens, mut outcome) = (String::new(), json!({}), "interrupted".to_string());
-        let (mut limited, mut retryable, mut acted, mut complete) = (false, false, false, false);
+        let (mut limited, mut capacity, mut retryable, mut acted, mut complete) = (false, false, false, false, false);
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -149,12 +152,12 @@ impl Runner {
             if d.flags.stopped.load(Ordering::SeqCst) {
                 goal.failure = Some("Stopped by a person".into());
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: false });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: false });
             }
             if yielding.is_some_and(|by| Instant::now() >= by) {
                 // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: true });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -168,7 +171,11 @@ impl Runner {
             if self.stopping() || salvaged || late {
                 goal.failure = Some(if late { "Run time limit reached" } else if self.stopping() { "The computer stopped" } else { "The execution lease expired" }.into());
                 let _ = host.interrupt(thread, &turn).await;
-                return Err(Fail::runtime("Execution interrupted after stop, run-time limit, or loss of ownership"));
+                let why = if late { format!("Timeout: {}", d.limit_name) }
+                    else if self.stopping() { "Runner stopped during execution".into() }
+                    else { "Computer lost or heartbeat stopped (execution lease expired)".into() };
+                let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                return Err(Fail::runtime(why));
             }
             while let Ok(ev) = rx.try_recv() {
                 queue.push(ev);
@@ -180,6 +187,14 @@ impl Runner {
                     continue;
                 }
                 let kind = text_of(&event["kind"]);
+                if kind == "thread_confirmed" {
+                    // Its `session_id` where the harness names the session apart from the thread (Claude), else the thread.
+                    if let Some(f) = d.fresh {
+                        let session = Some(text_of(&event["session_id"])).filter(|s| !s.is_empty()).unwrap_or_else(|| thread.to_string());
+                        self.confirm_thread(f, &session).await?;
+                    }
+                    continue;
+                }
                 let event_turn = text_of(&event["turn_id"]);
                 if goal_running && kind == "status" && !event_turn.is_empty() {
                     let fresh = event_turn != turn;
@@ -286,6 +301,12 @@ impl Runner {
                     let error = text_of(&event["error"]);
                     goal.failure = Some(if error.is_empty() { "The harness stopped".into() } else { scrub(&error) });
                     limited = truthy(event.get("limit"));
+                    capacity = limited && hosts::is_capacity(&error);
+                    if capacity && acted {
+                        // A busy model after the bot acted is not a turn that never ran: no fallback or replay may
+                        // repeat what it did, so it ends as a failed run saved for review.
+                        (limited, capacity) = (false, false);
+                    }
                     // A sign-in the runtime could not renew refuses the turn before it starts, so the job can go
                     // back in the queue; `acted` guards a token that died after the bot had done something.
                     let rejected = hosts::is_auth_rejected(&error);
@@ -410,7 +431,7 @@ impl Runner {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
         let yielded = yielding.is_some() && outcome != "failed";
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, retryable, turn, yielded })
+        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, capacity, retryable, turn, yielded })
     }
 }
 
@@ -505,8 +526,8 @@ mod tests {
                         mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
-        let d = Drive { aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
-                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None };
+        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
+                        flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
         let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
@@ -514,6 +535,36 @@ mod tests {
             .await
             .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[tokio::test]
+    async fn run_diagnostics_timeout_names_the_limit_and_tail_uses_a_separate_capped_row() {
+        let (runner, dir) = runner_at("http://127.0.0.1:9");
+        runner.state.record(&json!({"id": "diagnostics"})).unwrap();
+        let secret = "synthetic-granted-secret".to_string();
+        let redactor = Arc::new(Redactor::new(&[secret.clone()]));
+        let (tx, mut rx) = runner.attempt_events("diagnostics", Some(redactor));
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("failure {secret}")})).unwrap();
+        tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("last failure {secret}")})).unwrap();
+        tx.send(json!({"kind": "_diagnostics_drained"})).unwrap();
+        assert_eq!(rx.recv().await.unwrap()["kind"], "_diagnostics_drained");
+        let tails = runner.state.pending_stderr(Some("diagnostics")).unwrap();
+        assert_eq!(tails.len(), 1);
+        assert!(tails[0].1.starts_with("last failure"));
+        assert!(!tails[0].1.contains(&secret));
+        assert!(runner.state.pending("diagnostics").unwrap().is_empty());
+        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx));
+        let f = flags(false);
+        let wake = Notify::new();
+        let d = Drive { aid: "diagnostics", host: &host, thread: "th", effort: None,
+            limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
+            redactor: None, runtime: "claude", bot: "acme", session: "th", login: None, fresh: None };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
+        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
+        let err = runner.drive(&d, &mut rx, "turn".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await.err().unwrap();
+        assert_eq!(err.text, "Timeout: max_run_minutes (60 minutes)");
+        assert!(runner.state.pending("diagnostics").unwrap().iter().any(|e| e["payload"]["end_reason"] == err.text));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
@@ -573,7 +624,7 @@ mod tests {
         tx.send(json!({"kind": "delta", "thread_id": "th-3", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
         let (f, began) = (flags(true), Instant::now());
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
-        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
         assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
@@ -608,7 +659,7 @@ mod tests {
         let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
         let (f, began) = (flags(true), Instant::now());
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-5").await.err().expect("not completed");
-        assert!(err.text.contains("loss of ownership"), "{}", err.text);
+        assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
         assert!(began.elapsed() < SALVAGE + Duration::from_secs(1), "{:?}", began.elapsed());
         std::fs::remove_dir_all(dir).ok();
     }

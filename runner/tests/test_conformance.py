@@ -18,9 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.store import encode
-from backend.tests.test_api import api, assign, get, headers, post, put, runner, settled  # noqa: F401
+from backend.store import H, encode
+from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
+from runner import engine
 
 pytestmark = pytest.mark.slow
 
@@ -41,21 +42,24 @@ SECRET = "acme-synthetic-fixture-4821"
 @pytest.fixture(scope="session")
 def rust_binary(tmp_path_factory):
     """The release binary, built once per test run: xdist workers share the base temp directory's lock, and the
-    first to take it builds and copies the binary. A copy, so no worker ever runs a file cargo is relinking."""
-    if not shutil.which("cargo"):
-        pytest.skip("cargo is not installed")
+    first to take it builds and copies the binary. A copy, so no worker ever runs a file cargo is relinking. A
+    release binary already built from these sources (the release gate's, which ships) is used as it is."""
     import fcntl
+    built = ROOT / "runner-rs" / "target" / "release" / "tico-runner"
+    if engine.current(built, ROOT) and not shutil.which("cargo"):
+        pytest.skip("cargo is not installed")
     shared = tmp_path_factory.getbasetemp().parent
     # Inside the checkout, where the binary finds its root (runner-rs/src/env.rs root).
     binary = ROOT / "runner-rs" / "target" / "conformance" / shared.name / "tico-runner"
     with open(shared / "tico-runner.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not binary.exists():
-            subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
+            if engine.current(built, ROOT):
+                subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
             shutil.rmtree(binary.parent.parent, ignore_errors=True)  # earlier runs' copies
             binary.parent.mkdir(parents=True)
             staged = binary.parent / "tico-runner.part"
-            shutil.copy2(ROOT / "runner-rs" / "target" / "release" / "tico-runner", staged)
+            shutil.copy2(built, staged)
             staged.rename(binary)
     return binary
 
@@ -105,6 +109,10 @@ class Computer:
                 subprocess.run(["git", *args], check=True, env=git_env, capture_output=True)
         home, bin_dir = tmp_path / "home", tmp_path / "bin"
         (home / ".codex").mkdir(parents=True)
+        # Grok now checks its scoped local login before accepting a turn.
+        (home / ".grok").mkdir()
+        (home / ".grok/auth.json").write_text(json.dumps({"https://accounts.x.ai/sign-in": {
+            "auth_mode": "oidc", "key": "synthetic-grok-login"}}))
         bin_dir.mkdir()
         self.log_path = tmp_path / "harness.jsonl"
         for name, script in FAKE_PROGRAMS.items():
@@ -118,7 +126,9 @@ class Computer:
         # A Meta-account login, as signing in from Tico leaves it: in the runner's own Muse folder, never ~/.config.
         muse = self.config.parent / f"state-{self.registration['runner_id']}" / "musecode" / "config" / "muse"
         muse.mkdir(parents=True)
-        (muse / "auth.json").write_text("{}")
+        (muse / "auth.json").write_text(json.dumps({
+            "schema_version": 1, "providers": {"meta": {"api_key": "acme-synthetic-meta-login"}},
+        }))
         self.config.write_text(json.dumps({"url": live, "token": self.registration["token"],
                                            "runner_id": self.registration["runner_id"],
                                            "projects_dir": str(tmp_path / "projects"), **(registration or {})}))
@@ -239,6 +249,56 @@ def bot_attempts(api, computer, bot):
         rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": json.loads(r[1] or "null")} for r in rows]
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thread(api, computer):
+    from backend.tests.test_check_models import company
+    from backend.tests.test_task_models import set_task_model
+
+    company(api, "anthropic", "xai")
+    computer.start()
+    task = post(api, "tasks", {"owner": "ops", "title": "Follow the Acme release", "body": "Keep the release ready."})
+
+    def completed(count):
+        turns = until(lambda: (a if len(a := [t for t in computer.attempts() if t["state"] == "completed"]) >= count
+                                else None), f"task turn {count}")
+        assert all(t["result"]["outcome"] == "completed" for t in turns), turns
+        return get(api, f"tasks/{task['id']}")["runs"][0]
+
+    completed(1)
+    old = next(c for c in computer.prompts() if c["harness"] == "claude")
+    old_thread = old["argv"][old["argv"].index("--session-id") + 1]
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6"})
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the task model."})
+    grok = completed(2)
+    assert grok["ran_on"]["task_model"]["source"] == "task"
+    assert "grok-4.6" in grok["ran_on"]["task_model"]["note"]
+    assert computer.prompts()[-1]["harness"] == "grok"
+    # Only synthetic fixture state: represent the checkpoint left by the task-model turn, then make it unavailable.
+    checkpoint = "The Grok turn verified Acme build 42; continue with its release checklist."
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET checkpoint=?,checkpoint_at=?,checkpoint_blocked=0 WHERE id=?",
+                  (checkpoint, H.now(), task["id"]))
+    company(api, "anthropic")
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue after the task model became unavailable."})
+    fallback = completed(3)
+    assert fallback["ran_on"]["task_model"]["source"] == "fallback"
+    assert fallback["ran_on"]["segments"][0]["runtime"] == "claude"
+    call = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
+    assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
+    assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
+    # The cheaper policy deliberately starts every task-model fallback fresh, including consecutive fallbacks.
+    with api.app.state.store.read() as c:
+        latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
+    assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
+    completed(4)
+    last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert "--resume" not in last["argv"]
+    assert f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}" in last["prompt"]
+    assert last["argv"] != call["argv"]
 
 
 def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
@@ -430,6 +490,29 @@ def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, co
         assert settings["security"]["auth"]["selectedType"] == "gemini-api-key"
 
 
+@pytest.mark.parametrize("harness", ["grok"])
+def test_a_grok_key_grant_runs_without_a_computer_subscription(api, computer):
+    from backend.readiness import can_run
+    from backend.tests.test_credentials import create, setup
+    setup(api)
+    secret = "grok-synthetic-granted-key-408"
+    key = create(api, name="Grok API", env="XAI_API_KEY", secret=secret)
+    post(api, f"credentials/{key['id']}/grants", {"subject": "bot:ops"})
+    auth = Path(computer.env["HOME"]) / ".grok/auth.json"
+    auth.unlink()
+    computer.start()
+    with api.app.state.store.read() as c:
+        assert can_run(c, "ops", "grok")["can_run"] is True
+        # Another bot's grant cannot authorize a bot without the key.
+        assert can_run(c, "writer", "grok", runner=computer.registration["runner_id"])["can_run"] is False
+    message = post(api, "chat/ops", {"text": "Use the Grok API key"})
+    until(lambda: reply_to(api, message["conversation_id"]), "the key-only Grok reply")
+    until(lambda: computer.attempts()[-1]["result"], "the key-only Grok completion")
+    assert computer.attempts()[-1]["result"]["outcome"] == "completed"
+    assert computer.prompts()[-1]["env"]["XAI_API_KEY"] == secret
+    assert not auth.exists()
+
+
 def test_a_granted_credential_reaches_the_turn_and_never_the_transcript(api, computer):
     from backend.tests.test_credentials import create, setup
     if computer.harness not in GRANTED_KEYS:
@@ -551,6 +634,31 @@ def test_a_usage_limit_with_no_fallback_set_runs_on_another_signed_in_provider(a
                for d in diagnostics), diagnostics
 
 
+@pytest.mark.parametrize("harness", ["codex"])
+@pytest.mark.parametrize("setup", [{}, {"bot": {"fallback": {"harness": "codex", "model": "gpt-5.5"}}}])
+@pytest.mark.parametrize("alternate", [False, True])
+def test_a_limited_primary_never_retries_its_login_as_a_fallback(api, computer, alternate):
+    from backend.store import H
+    view = get(api, "providers")
+    api.put("/api/v2/providers", json={"enabled": ["openai", "anthropic"] if alternate else ["openai"],
+                                       "model": "gpt-6-luna", "expected_revision": view["revision"], "auto_fallback": True},
+            headers={**headers(), "Idempotency-Key": H.new_id()}).raise_for_status()
+    computer.start()
+    msg = post(api, "chat/ops", {"text": "Please LIMIT yourself"})
+    first = until(lambda: (computer.attempts() or [None])[0], "the primary's attempt")
+    aid = first["id"]
+    result = until(lambda: next((a["result"] for a in computer.attempts() if a["id"] == aid), None), "the completion")
+    assert [p["harness"] for p in computer.prompts()] == (["codex", "claude"] if alternate else ["codex"])
+    if alternate:
+        assert result["outcome"] == "completed" and result["fallback"] == "claude"
+        assert until(lambda: reply_to(api, msg["conversation_id"]), "the fallback reply")["body"] == "Acme reply."
+    else:
+        assert result["limited"] and not result.get("fallback")
+        status = until(lambda: get(api, "bots/ops")["status"], "the held status")
+        assert status["state"] == "limited" and "codex" in status["focus"].lower()
+        assert "retrying after" in status["focus"]   # this fake gives no reset, so the normal backoff holds it
+
+
 # TK-EKWAFWPD: the first of the company's providers is out of quota on this computer too. The hop that hits its limit
 # moves the turn on to the next provider in the same turn, and the next turn skips that login altogether.
 @pytest.mark.parametrize("harness", ["claude"])
@@ -642,10 +750,14 @@ def profiled(tmp_path):
     return directory
 
 
+# A computer whose one login is a profile (`default_profile`) runs every bot there; a bot's own `bot_profiles` entry,
+# from before one login per computer (#1259), is ignored.
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, tmp_path, harness, profiled, rust_binary):
+def test_a_computer_whose_login_is_a_profile_runs_its_bots_in_that_home(api, live, tmp_path, harness, profiled, rust_binary):
+    other = tmp_path / "profiles" / "other"
     machine = Computer(api, live, tmp_path, harness, rust_binary,
-                       registration={"profiles": {"acme": {"dir": str(profiled)}}, "bot_profiles": {"ops": "acme"}})
+                       registration={"profiles": {"acme": {"dir": str(profiled)}, "other": {"dir": str(other)}},
+                                     "default_profile": "acme", "bot_profiles": {"ops": "other"}})
     try:
         machine.start()
         assert machine.readiness()["ops"]["profile"] == "acme"
@@ -657,62 +769,6 @@ def test_a_bot_on_a_subscription_profile_runs_in_that_profiles_home(api, live, t
         assert result["profile_used"] == "acme"
     finally:
         machine.stop()
-
-
-# A named subscription signed in from Settings on a running computer: the sign-in writes it into runner.json, and the
-# heartbeat lists it, shows its sign-in and a turn on it uses it, with no restart. A failed sign-in keeps the profile,
-# listed as not signed in; one taken out of runner.json goes from the next heartbeat.
-@pytest.mark.parametrize("harness", ["codex"])
-@pytest.mark.parametrize("setup", [{"env": {"FAKE_CODEX_LOGIN": "file"}}])
-def test_a_subscription_signed_in_from_the_browser_counts_without_a_restart(api, computer):
-    own_auth = Path(computer.env["CODEX_HOME"]) / "auth.json"
-    own_auth.write_text("{}")
-    computer.start()
-    rid = computer.registration["runner_id"]
-    # The runner starts ready on its own login. A named connection needs that slot free, as after signing out.
-    own_auth.unlink()
-    until(lambda: runtime_row(api, computer).get("authenticated") == "missing",
-          "the computer login signed out, in the heartbeat", timeout=40)
-    signed = lambda name: computer.profiles().get(name, {}).get("codex", {}).get("signed_in")  # noqa: E731
-    state = lambda login: get(api, f"runners/{rid}/logins/{login['id']}")["state"]  # noqa: E731
-    assert computer.profiles() == {}
-    # A failed unsigned profile does not consume the slot; keep it to test heartbeat removal below.
-    failed = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"})
-    until(lambda: state(failed) == "waiting", "the failed sign-in's link and code")
-    (computer.config.parent / "profiles" / "spare" / "codex" / "deny").write_text("")
-    until(lambda: state(failed) == "failed", "the failed sign-in's verdict")
-    until(lambda: signed("spare") is False, "the failed profile, not signed in")
-
-    login = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "chris-chatgpt"})
-    home = computer.config.parent / "profiles" / "chris-chatgpt" / "codex"
-    until(lambda: state(login) == "waiting", "the sign-in's link and code")
-    # Listed while the person is still on the provider's page: there, not signed in yet.
-    until(lambda: signed("chris-chatgpt") is False, "the new profile in the heartbeat")
-    (home / "approve").write_text("")
-    until(lambda: state(login) == "signed_in", "the sign-in's verdict")
-    until(lambda: signed("chris-chatgpt") is True, "the profile signed in, in the heartbeat")
-    put(api, "subscriptions", {"scope": "bot", "target": "ops", "profile": "chris-chatgpt"})
-    msg = post(api, "chat/ops", {"text": "Please answer on Chris's subscription"})
-    until(lambda: reply_to(api, msg["conversation_id"]), "the bot's reply on the new subscription")
-    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
-    assert until(lambda: computer.attempts()[-1]["result"], "the completion")["profile_used"] == "chris-chatgpt"
-
-    denied = post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "spare"}, expected=409)
-    assert denied["error"]["code"] == "subscription_exists"
-
-    registration = json.loads(computer.config.read_text())
-    del registration["profiles"]["spare"]
-    computer.config.write_text(json.dumps(registration))
-    until(lambda: "spare" not in computer.profiles(), "the profile taken out, gone from the heartbeat", timeout=40)
-    assert signed("chris-chatgpt") is True
-    # The subscription left in place still takes turns after another one is taken out.
-    again = post(api, "chat/ops", {"text": "Please answer again on Chris's subscription"})
-    assert until(lambda: len(computer.attempts()) == 2 and computer.attempts()[-1]["result"],
-                 "the second turn's completion")["profile_used"] == "chris-chatgpt"
-    assert "answer again" in computer.prompts()[-1]["prompt"]
-    assert computer.prompts()[-1]["env"]["CODEX_HOME"] == str(home)
-    assert reply_to(api, again["conversation_id"])
-    assert not computer.died()
 
 
 # The signed-in account a computer reports per tool (#610): allow-listed fields only, Codex's without a token refresh.
@@ -806,7 +862,7 @@ def test_two_bots_on_one_chatgpt_login_run_at_once_without_waiting(api, computer
     add_bot(api, computer, tmp_path, "finance")
     if shared_profile:
         config = json.loads(computer.config.read_text())
-        config.update(profiles={"acme": {"dir": str(profiled)}}, bot_profiles={"ops": "acme", "finance": "acme"})
+        config.update(profiles={"acme": {"dir": str(profiled)}}, default_profile="acme")
         computer.config.write_text(json.dumps(config))
     computer.start()
     until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
