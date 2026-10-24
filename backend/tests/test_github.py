@@ -810,6 +810,38 @@ def _reconciler(api, monkeypatch, fetch, mint=None):
     return service, run
 
 
+def test_opened_non_engineering_pr_does_not_need_creation_qa(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    assert not _prs(api, task['id'])[412]['detail'].get('qa_default_pending')
+
+
+def test_stale_non_engineering_qa_marker_settles_without_repeated_github_reads(api, monkeypatch):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    # Existing links can carry the marker written by the old opened-webhook path.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), task['id']))
+    calls = []
+
+    def fetch(method, path, **kw):
+        calls.append(path)
+        assert path == '/repos/ticoteam/tico/pulls/412'
+        return SimpleNamespace(status_code=200, json=lambda: _branch_pr(412, 'planning-notes'))
+
+    service, run = _reconciler(api, monkeypatch, fetch)
+    run(fresh=True)
+    detail = _prs(api, task['id'])[412]['detail']
+    assert not detail.get('qa_default_pending')
+    assert detail['kept'] == 'metadata'
+    assert calls == ['/repos/ticoteam/tico/pulls/412']
+    # Ignore both caches: the settled link itself must exclude the next pass.
+    run(fresh=True)
+    assert calls == ['/repos/ticoteam/tico/pulls/412']
+    with service.store.read() as c:
+        assert H.task_labels(H.task(c, task['id'])) == []
+
+
 def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_from_a_fork(api):
     """A bot that opens a PR and never links it still gets the link its worktree's release waits on."""
     _app(api)
@@ -1031,6 +1063,9 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     still = move(step='Done')
     assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(16, branch, repo='ticoteam/tico-services')})
+    # Linking is necessary; the review gate also needs a current passing receipt.
+    assert move(note='Tests: head ' + 'b' * 40 + ': 9 passed, 0 failed') == 'waiting'
     assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
 
 

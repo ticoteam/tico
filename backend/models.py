@@ -179,6 +179,9 @@ class TaskCreate(Contract):
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
+    change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
+    qa: StrictBool | None = None
+    qa_not_checkable_live: StrictBool = False
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).

@@ -60,6 +60,25 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+## Software review handoffs and QA defaults
+
+On the engineering board, moving a ticket with a linked open PR into **Review 1** or **Review 2** checks CI first, then the test receipt. Creating a **Review 1:** or **Review 2:** child task makes the same checks before queuing its reviewer. A review child also needs a linked PR. Other boards keep their usual flow.
+
+A failing check refuses the move and names the check. Pending checks are allowed. A missing, stale, failed or unrecognised test receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
+
+Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. The reader evaluates the sentence containing the head, so separate sentences about corrected historical failures or other checks still pending do not override that result. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. It accepts `356 pass / 0 fail`, distinguishes an unrecognised receipt from no receipt, and rejects failures such as `40 passed, 2 failing/errored`. A recorded failure at a head cannot be cleared by a passing rerun at that same head.
+
+At engineering-ticket creation, `change_paths` supplies the known paths for the QA rule. The CLI accepts repeated `--change-path` flags. An explicit `qa` boolean (`--qa yes` or `--qa no`) overrides the rule; an author-supplied `qa` tag is retained.
+
+| Changed paths | Default |
+| --- | --- |
+| `ui/`, `desktop/`, `app/` | `qa`, with a not-checkable-live note for the rendered result |
+| Bot or chat behaviour (`bots/`, `chat/`, backend chat/message/wake/execution modules) | `qa` |
+| Docs, CI, scripts, nested tests, backend-only code outside the behaviour classes | No `qa` |
+| Mixed paths | `qa` if any path needs it |
+
+On a PR's first registration, the server reads its complete changed-file list and applies the same default to its linked engineering tickets, including tickets whose paths were unknown at creation. The initial read retries in the background if GitHub is unavailable. Later pushes do not reclassify the ticket. Explicit ticket choices and the PR author's `qa`, `no-qa` or `qa:no` labels override defaults. This sets the Tico ticket's tag; it does not edit GitHub labels or expand bots' label permissions. `qa_not_checkable_live` (`--qa-not-checkable-live`) also requests the candidate-only QA note.
+
 ## Automatic starts
 
 Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
