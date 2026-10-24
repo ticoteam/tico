@@ -1844,6 +1844,10 @@ class LoadSnapshot(Contract):
     running_turns: int = Field(ge=0, le=10_000)
 
 
+class StartPlace(Contract):
+    waiting: Literal["", "shared login", "pre-start requirements"] = ""
+
+
 class Started(Contract):
     thread_id: ID
     load_snapshot: LoadSnapshot | None = None

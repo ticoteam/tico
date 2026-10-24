@@ -2,6 +2,14 @@
 
 A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
 **Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
+Each computer and Health show **running**, **starting**, **waiting** and **queued** turns. Waiting includes the
+reason and the age of the oldest wait. Only running and starting turns occupy a place. A starting turn reserves a
+place atomically for up to **3 minutes**; if it has not started then, it returns to the queue without changing its
+task. A login, quota or other pre-start wait holds no place, so unrelated work can start.
+
+CPU or memory above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Running turns continue. New starts resume when the sustained overload clears.
+
 To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
 team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
 out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.

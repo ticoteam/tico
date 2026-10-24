@@ -703,6 +703,9 @@ class Store:
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             c.executescript(SCHEMA)
+            from . import start_places as _start_places
+            c.executescript(_start_places.SCHEMA)
+            _start_places.restore_waits(c)
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)

@@ -4819,19 +4819,22 @@ def create_app(settings=None):
 
     def computer_rows(c, who):
         from .performance import load_status
+        from .start_places import summary as turn_counts, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
+            counts = turn_counts(c, r["id"], settings)
+            turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:
                 if who.role == "bot":
                     # Discovery and load do not grant access to repositories, logs or operator identity.
                     rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
-                                 **load_status(c, r["id"])})
+                                 **load_status(c, r["id"]), **turns})
                 continue
             bots = [x["bot"] for x in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (r["id"],))
                     if (readable.get(x["bot"]) or {}).get("see")]
@@ -4839,7 +4842,7 @@ def create_app(settings=None):
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
                          **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
-                         **load_status(c, r["id"])})
+                         **load_status(c, r["id"]), **turns})
         return rows
 
     @app.get("/api/v2/computers")
@@ -5514,6 +5517,10 @@ def create_app(settings=None):
                 if fresh is not None:
                     return fresh
         return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid))
+
+    @app.post("/api/v2/attempts/{aid}/start-place")
+    def start_place(request: Request, aid: str, body: M.StartPlace):
+        return mutate(request, body, lambda c: execution.start_place(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/started")
     def started(request: Request, aid: str, body: M.Started):

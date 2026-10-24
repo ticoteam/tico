@@ -39,6 +39,8 @@ pub struct Runner {
     pub socket: Option<CredentialSocket>,
     /// Attempts with a live worker here; recovery leaves them alone.
     pub active: Mutex<HashSet<String>>,
+    /// Workers preparing or running, including one whose lease lapsed while its process still runs.
+    pub places: Mutex<HashSet<String>>,
     /// One push or history publish at a time on this computer.
     pub push_lock: tokio::sync::Mutex<()>,
     pub sign_in: crate::signin::SignIn,
@@ -128,6 +130,7 @@ impl Runner {
             tokens: Arc::new(TokenCache::new()),
             socket: None,
             active: Mutex::new(HashSet::new()),
+            places: Mutex::new(HashSet::new()),
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
@@ -786,6 +789,7 @@ impl Runner {
                 let _ = self.state.interrupted(&aid, &format!("The runner stopped this turn on an error ({why}); see this computer's runner log"));
             }
             self.active.lock().unwrap().remove(&aid);
+            self.places.lock().unwrap().remove(&aid);
             self.attempt_bots.lock().unwrap().remove(&aid);
             crate::lanes::forget(&aid);
             self.lanes.attempts.lock().unwrap().remove(&aid);
@@ -841,8 +845,27 @@ impl Runner {
             state_dir: self.state.directory.clone(),
         };
         self.perbot.watchers.tick(&self.config, &assignments, ctx);
-        while workers.len() < self.capacity && clock.claim_due(&self.events) {
-            let result = self.claim_next().await?;
+        // The server reserves starts atomically; waiting workers do not consume computer capacity.
+        while {
+            let mut places = self.places.lock().unwrap();
+            if places.len() < self.capacity && clock.claim_due(&self.events) {
+                places.insert("<claim>".into());
+                true
+            } else {
+                false
+            }
+        } {
+            let result = self.claim_next().await;
+            {
+                let mut places = self.places.lock().unwrap();
+                places.remove("<claim>");
+                if let Ok(result) = &result {
+                    if let Some(attempt) = result.get("attempt").filter(|a| a.is_object()) {
+                        places.insert(text_of(&attempt["id"]));
+                    }
+                }
+            }
+            let result = result?;
             let attempt = result.get("attempt").cloned().filter(|a| a.is_object());
             let got = attempt.is_some();
             if let Some(attempt) = attempt {
