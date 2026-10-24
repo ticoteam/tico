@@ -61,7 +61,8 @@ else. `SELECT * FROM messages` therefore means "the messages you may read". In p
 Everyone may read `sqlite_master` (the schema) and use `json_each`/`json_tree` on JSON
 columns. Nobody may read the tables below, nor `attempts.token_hash`, `bots.token_hash`,
 or `service_jobs.token_hash`; the columns simply do not exist in
-the view (`no such column`). Writes, `PRAGMA`, `ATTACH`, transactions, `EXPLAIN` (plain) and
+the view (`no such column`). `bot_control.claim_task`, the one task a bot's claims are limited to, reads
+`''` when you may not read that task: you learn a limit is on, not which task. Writes, `PRAGMA`, `ATTACH`, transactions, `EXPLAIN` (plain) and
 multiple statements are refused; `EXPLAIN QUERY PLAN` is allowed.
 
 Reserved, never readable through SQL: `credentials`, `credential_keys`, `credential_grants`,
