@@ -95,6 +95,20 @@ class Identity:
     support: str = ""
 
 
+def touch(c, sql, args):
+    """A last_used hint, written only if the database is free right now: on a pooled read connection (outside the
+    writer gate) the 30 s busy timeout would otherwise hold every sign-in, SSE re-auth included, behind a writer."""
+    try:
+        wait = c.execute("PRAGMA busy_timeout").fetchone()[0]
+        c.execute("PRAGMA busy_timeout=0")
+        try:
+            c.execute(sql, args)
+        finally:
+            c.execute(f"PRAGMA busy_timeout={int(wait)}")
+    except sqlite3.Error:
+        pass
+
+
 def standing(c, pid):
     """"left" when marked as left on the roster (backend/app.py person_update, which also ended their tokens),
     "off" when an owner or admin turned their sign-in off (Settings > Humans), else ""."""
@@ -354,10 +368,7 @@ class Auth:
         # last_used is a hint for the token list, not part of the decision: a script in a loop
         # should not write a row per request, and a locked database must not refuse a read.
         if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            try:
-                c.execute("UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
-            except sqlite3.Error:
-                pass
+            touch(c, "UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
         email = str(row["email"] or "").lower()
         role = "owner" if email and email == self.owner_email else "human"
         return Identity("human:" + row["human"], role, email=email, via_token=True,
@@ -376,10 +387,7 @@ class Auth:
             raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)
         now = H.now()
         if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            try:
-                c.execute("UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
-            except sqlite3.Error:
-                pass
+            touch(c, "UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
     def assistant_principal(self, c, attempt):

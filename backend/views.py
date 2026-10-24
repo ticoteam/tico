@@ -77,12 +77,13 @@ def attempt_details(c, turn):
 def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     readable = auth.bot_accesses(c, who)
     rows = []
+    # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
     for row in c.execute(
             "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
-            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') AND (? IS NULL OR a.bot=?) "
+            "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
             "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
             "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
-            (bot, bot, since, since, limit)):
+            ((bot,) if bot is not None else ()) + (since, since, limit)):
         if not (readable.get(row["bot"]) or {}).get("read"):
             continue
         message = H.message(c, row["message_id"])

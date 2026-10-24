@@ -367,7 +367,6 @@ CREATE TABLE IF NOT EXISTS slack_events(
  edited TEXT, deleted TEXT, updated TEXT, UNIQUE(channel, ts));
 CREATE INDEX IF NOT EXISTS slack_events_thread ON slack_events(channel, thread_ts, ts);
 CREATE INDEX IF NOT EXISTS slack_events_state ON slack_events(state, received);
-CREATE INDEX IF NOT EXISTS slack_events_channel_ts ON slack_events(channel, ts);
 CREATE TABLE IF NOT EXISTS slack_reads(
  channel TEXT NOT NULL, reader TEXT NOT NULL, last_ts TEXT NOT NULL DEFAULT '',
  last_run TEXT, digests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(channel, reader));
@@ -1374,6 +1373,26 @@ class Store:
                                    # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
                                    # expression word for word, or SQLite sorts every conversation.
                                    ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),
+                                   # A person's open chat with a bot (hubdb._pair_conversation, on every say()).
+                                   ("conversations_open_kind", "conversations(kind, COALESCE(last_message_at, created)) "
+                                    "WHERE closed_at IS NULL AND task_id IS NULL"),
+                                   # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
+                                   # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
+                                   ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
+                                   ("approvals_open_requester", "approvals(requested_by) WHERE decision IS NULL"),
+                                   ("approvals_open_created", "approvals(created) WHERE decision IS NULL"),
+                                   # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
+                                   # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
+                                   ("jobs_live_created", "jobs(created) WHERE state IN ('queued','leased','running','input')"),
+                                   ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
+                                   ("jobs_uncertain", "jobs(created) WHERE state='uncertain'"),
+                                   # Open asks to someone, deleted or not (hubdb.tasks_asked_of); conversation_id too,
+                                   # so Health's silent_waits keeps a good plan.
+                                   ("messages_open_ask_to",
+                                    "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                   # PRs at a commit (github.pr_signal, on every check and status webhook): the
+                                   # query's expression word for word.
+                                   ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
@@ -1387,6 +1406,8 @@ class Store:
                                     "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
+                # Duplicated the UNIQUE(channel, ts) autoindex.
+                c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema

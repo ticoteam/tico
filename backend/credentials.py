@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import threading
 from pathlib import Path
@@ -243,7 +244,9 @@ class CredentialCipher:
     def kms_key(self, c, row):
         if self.kms is None:
             import boto3
-            self.kms = boto3.client('kms')
+            from botocore.config import Config
+            # Called inside write transactions: fail in seconds, not botocore's 60 s timeouts and retries.
+            self.kms = boto3.client('kms', config=Config(connect_timeout=3, read_timeout=5, retries={'max_attempts': 2}))
         if row and row['kms_key'] == LOCAL:
             # Credentials saved before a KMS key was set: wrap the same key with KMS, so nothing is re-encrypted.
             key = self.local_key(c, row)
@@ -277,6 +280,19 @@ class CredentialCipher:
             raise
         except Exception:
             raise Problem('vault_unavailable', 'Credential encryption is temporarily unavailable', 503) from None
+
+    def warm(self, store):
+        """Unwrap a stored KMS key once at start, outside any transaction, so the first write that needs it does not
+        call KMS under the writer. Best effort: a failure is logged and the first use tries again."""
+        if not self.key_id or self.cached is not None:
+            return
+        try:
+            with store.read() as c:
+                row = c.execute("SELECT kms_key FROM credential_keys WHERE id='v1'").fetchone()
+                if row and row['kms_key'] == self.key_id:     # only the read-only unwrap; never make or rewrap here
+                    self.key(c)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("credential key warm-up failed: %s", exc)
 
     def encrypt(self, c, cid, secret):
         nonce = os.urandom(12)

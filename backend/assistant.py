@@ -1668,5 +1668,6 @@ def install(app, store, auth, mutate, onboarding):
         finally:
             note = (("Done: " + row["summary"] + (". " + result["error"] if result.get("error") else "")) if ok
                     else ("That did not go through: " + str(result["error"])[:300]))
-            out = settle(aid, who, "done" if ok else "failed", result, note)     # even if the client went away
+            # Off the event loop; the thread finishes the write even if the client went away.
+            out = await asyncio.to_thread(settle, aid, who, "done" if ok else "failed", result, note)
         return out

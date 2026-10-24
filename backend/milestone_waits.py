@@ -58,7 +58,7 @@ def ensure(c):
 
 
 def _present(c):
-    return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_milestone_waits'").fetchone())
+    return _H()._has_table(c, "task_milestone_waits")
 
 
 # ------------------------------------------------------------------------------------------------ parsing

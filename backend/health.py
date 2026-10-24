@@ -1654,6 +1654,8 @@ def view(c, who, settings, auth, github, config):
     stalled = list(c.execute(
         "SELECT id,title,number,owner,updated FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
+        # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
+        "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
         "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
     if stalled:

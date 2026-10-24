@@ -142,6 +142,7 @@ def create_app(settings=None):
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
+        asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
         # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
         if settings.company_file_data:
             from . import company_import
@@ -3795,6 +3796,15 @@ def create_app(settings=None):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
         if not re.fullmatch(r"[a-z0-9_.-]{1,64}", key):
             raise Problem("kind", "A preference key is lower-case letters, digits, dots, dashes", 422)
+        if not request.headers.get("idempotency-key"):
+            # An unchanged value (a page re-saving what it read) answers from a read: no writer wait.
+            with store.read() as c:
+                same = c.execute("SELECT 1 FROM preferences WHERE actor=? AND key=? AND value_json=?",
+                                 (who.actor, key, encode(body.value))).fetchone()
+                if same:
+                    privacy.guard_write(c, getattr(request.state, "privacy_source", who), request.url.path, auth)
+            if same:
+                return {"key": key, "value": body.value}
         def work(c):
             c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
                       "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",

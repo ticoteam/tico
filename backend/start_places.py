@@ -34,7 +34,7 @@ def held(c, runner_id):
     now = H.now()
     return {r[0]: r[1] for r in c.execute(
         "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.runner_id=? AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
+        "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
         "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot",
         (runner_id, now, now))}
 
@@ -64,9 +64,10 @@ def is_waiting(c, aid):
 
 
 def overdue(c):
+    # The redundant IN lets the read walk attempts_live_lease, not every attempt ever run.
     return [r[0] for r in c.execute(
         "SELECT a.id FROM attempts a JOIN start_places p ON p.attempt_id=a.id WHERE a.state='leased' "
-        "AND p.start_until<=?", (H.now(),))]
+        "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
 def reserve(c, attempt):
