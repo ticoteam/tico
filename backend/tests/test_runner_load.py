@@ -34,7 +34,7 @@ def test_sampler_keeps_one_load_row_per_minute_and_prunes_at_48_hours(api):
 def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     r, _, a = setup_attempt(api)
     features = get(api, "runners/desired", token=r["token"])["features"]
-    assert all(features[name] is True for name in ("load_snapshot", "run_rotation", "run_diagnostics"))
+    assert all(features[name] is True for name in ("load_snapshot", "run_rotation", "run_diagnostics", "attempt_thread"))
     now = time.time()
     start = {"at": now, "cpu_pct": 125.0, "mem_pct": 55.0, "running_turns": 2}
     end = {"at": now + 1, "cpu_pct": 25.0, "mem_pct": 45.0, "running_turns": 1}
