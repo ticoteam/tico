@@ -26,7 +26,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, mcp_oauth, harness_actions, model_login, oidc, personal_tokens, views
-from . import owner_link
+from . import ceo_bot, owner_link
 from . import login_holds
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
@@ -593,11 +593,14 @@ def create_app(settings=None):
                                       + settings.app_name, 403)
                     with store.read() as c:
                         record = assistant_instruction(c, request.state.identity, asked)
+                        assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                         if approves:
                             # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                            record = {**record, "assistant": "bot:" + settings.assistant_bot,
+                            # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
+                            acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
+                            record = {**record, "assistant": acting,
                                       **assistant_mod.approval_words(c, request.state.identity, record["cited"],
-                                                                     settings.assistant_bot,
+                                                                     H.actor_id(acting),
                                                                      assistant_mod.approval_id(request.url.path))}
                         delegation_reset = H.DELEGATION.set(record)
             early = None
@@ -1198,12 +1201,12 @@ def create_app(settings=None):
                 raise Problem("forbidden", "Only a human writes to their private Assistant", 403)
             if body.conversation_id and not assistant_room(c, who, body.conversation_id):
                 raise Problem("forbidden", "Use your own Assistant room", 403)
-            assistant_bot = H.bot(c, settings.assistant_bot)
-            if not assistant_bot or assistant_bot["state"] != "active":
-                raise Problem("assistant_off", "The " + settings.assistant_name + " is off", 409)
-            from .assistant import ensure_room
-            body.to = settings.assistant_bot
-            body.conversation_id = ensure_room(c, who.actor, settings.assistant_bot)["id"]
+            # The owner's is the CEO Bot (backend/assistant.py).
+            info = assistant_mod.availability(c, settings, who)
+            if not info["available"]:
+                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+            body.to = info["bot"]
+            body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
         to = auth.target(c, who, body.to)
         if not body.conversation_id:
             from .shared_bots import route
@@ -1217,6 +1220,16 @@ def create_app(settings=None):
                     if not assistant_room(c, who, body.conversation_id):
                         raise Problem("forbidden", settings.assistant_name + " chats only in your own Assistant "
                                       "(/api/v2/assistant); message one of your bots here", 403)
+                    in_assistant_room = True
+                elif who.role in ("human", "owner") and H.actor_id(to) == ceo_bot.SLUG:
+                    # Of people, only the owner talks to the CEO Bot, in the CEO Bot chat (their menu tab). Bots still
+                    # message it; that is its goals session, never the owner's chat. The owner's post with no room
+                    # (the Goals page, `hub chat`) goes to that one chat.
+                    if not body.conversation_id and not who.via and assistant_mod.ceo_seat(c, who):
+                        body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
+                    if not assistant_room(c, who, body.conversation_id) or not assistant_mod.ceo_seat(c, who):
+                        raise Problem("forbidden", "Only the company's owner talks to the " + ceo_bot.name(c)
+                                      + ", in their own chat with it; talk to your Assistant", 403)
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
         auth.require_bot_contact(c, who, to, body.conversation_id,
@@ -2344,7 +2357,7 @@ def create_app(settings=None):
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
-            return target == bot and bot != settings.assistant_bot and views.may_chat(c, auth, who, bot)
+            return target == bot and bot not in (settings.assistant_bot, ceo_bot.SLUG) and views.may_chat(c, auth, who, bot)
         return topic_change.check(store, app.state.judge, who, bot, body, admit, uploads=())
 
     # ------------------------------------------------------------------ updates (backend/updates.py)

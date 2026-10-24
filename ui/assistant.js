@@ -41,7 +41,8 @@
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
     const by = action.proposer || action.proposed_via;
-    const name = {assistant: 'The Assistant', botops: 'BotOps'}[by] || 'A bot';
+    // A card the owner's CEO Bot proposed names it (`by_name`), never "the Assistant".
+    const name = action.by_name || {assistant: 'The Assistant', botops: 'BotOps'}[by] || 'A bot';
     const what = String(action.description || '').trim();
     const title = what && !RAW_TITLE.test(what) ? what : `${name} asks to make a change for you. Details shows exactly what it sends.`;
     // A task change (old → new) and a bulk card's one line per step read as words; any other card's fields are the
@@ -55,7 +56,7 @@
     // never only under Details.
     const sends = Object.entries(action.body || {}).filter(([k, v]) => SENT.has(k) && typeof v === 'string' && v.trim())
       .map(([, v]) => `<blockquote class="asst-said" aria-label="What is sent">${shown(v)}</blockquote>`).join('');
-    const who = {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
+    const who = action.by_name ? action.by_name + ' says: ' : {assistant: 'The assistant says: ', botops: 'BotOps says: '}[by] || '';
     // The same sentence, or its first 300 characters (a summary is cut there), repeats the title.
     const said = String(action.summary || '').trim(), repeats = said === title || said.length >= 300 && title.startsWith(said);
     return `<div class="asst-card" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
@@ -157,6 +158,11 @@
     if (!host) return;
     style();
     const {post, esc, after} = deps;
+    if (info.ceo) {
+      // The owner's CEO Bot is never turned on here: it is always there, and paused or waiting for a computer.
+      host.innerHTML = `<div class="asst-off"><p><strong>${esc(info.name)} is not answering right now.</strong> It answers once it is running again (Settings > Bots).</p></div>`;
+      return;
+    }
     host.innerHTML = `<div class="asst-off"><p><strong>The Assistant is off.</strong> ${info.can_turn_on
       ? `Turn it on to get a private assistant that finds things in ${esc(document.title || 'Tico')} and does them for you.`
       : `Ask the owner of this team to turn it on.`}</p>
