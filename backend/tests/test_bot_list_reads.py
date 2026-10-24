@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, update_feeds, views, task_models, wake_presets
+from backend import auto_tasks, agents, rooms, update_feeds, views, task_models, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -54,6 +54,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
                     "task_model": task_models.of(declared),
+                    "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
                     "wake": wake_presets.effective(declared),
@@ -68,6 +69,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
         row["reports_to"] = ""
     if not level["read"]:
         return {k: v for k, v in row.items() if k in SEE_ONLY}
+    row["task_flow"] = auto_tasks.counts(c, bot["slug"], who)
     row["draining"] = bool(c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot["slug"],)).fetchone())
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
