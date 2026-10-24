@@ -4,6 +4,9 @@
   "state": "active"
  },
  {
+  "kind": "thread_confirmed"
+ },
+ {
   "kind": "delta",
   "text": "Acme ",
   "delta_kind": "text"
@@ -24,7 +27,7 @@
  },
  {
   "kind": "delta",
-  "text": "reply.",
+  "text": "\n\nreply.",
   "delta_kind": "text"
  },
  {
@@ -40,7 +43,7 @@
  },
  {
   "kind": "message",
-  "text": "Acme reply.",
+  "text": "Acme\n\nreply.",
   "final": true
  },
  {

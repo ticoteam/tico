@@ -196,7 +196,7 @@ def rotate(args, io: IO, deps) -> int:
         return 1
     state.write_private(link_file(domain), f"https://{domain}{contract.OWNER_LINK_PATH}#{token}\n")
     s.owner_link_hash = token_hash
-    state.save(domain, s.public(), envfile.render(s.to_env()))
+    state.save(domain, s.public(), s.private_env(envfile.render(s.to_env())))
     io.say(f"A new owner sign-in link is in {link_file(domain)} (0600): send it to {s.owner_email}. It works once, for a week. "
            "The old unused link no longer works" + (", and the owner is signed out everywhere." if args.sign_out else "."))
     return 0

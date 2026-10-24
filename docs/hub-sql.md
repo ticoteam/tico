@@ -101,8 +101,8 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `approvals` | `id, kind, task_id, message_id, payload_json, requested_by, decided_by, decision, decided_at, consumed_at, created` | `kind`: send, spend, publish, merge |
 | `jobs` | `id, message_id, bot, state, created, attempt_id` | one per message a bot has to act on; `state`: queued, leased, running, input, completed, failed, uncertain, cancelled |
 | `attempts` | `id, job_id, bot, runner_id, state, lease_until, created, started, finished, result_json, final_text` | a run (`state`: leased, running, input, completed, failed, interrupted, expired); its streamed output is `attempt_events(attempt_id, seq, kind, payload_json, created)` |
-| `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing` | one per run (`id` = the run's attempt id); `exit` is null while running. `tokens_in` is all input, `cached_tokens` the cached part of it and `input_tokens` the rest. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
-| `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
+| `turns` | `id, bot, started, finished, trigger, message_id, task_id, exit, tokens_in, tokens_out, cost, summary, input_tokens, cached_tokens, output_tokens, model, provider, est_cost_usd, usage_reason, billing, trigger_kind, trigger_source, purpose, writes, outcome, did_nothing, rotated` | one per run (`id` = the run's attempt id); `exit` is null while running. **Sum `input_tokens`, `cached_tokens`, `output_tokens` and `est_cost_usd`** (input = `input_tokens` + `cached_tokens`); every run finished from this change on, failed, interrupted or usage-limited, has them set (older runs keep what they had, and some have none). A run whose runner counted nothing reads 0 tokens and $0, and `usage_reason` says why (`usage_unreported`, `usage_limited`, `no_result`); `cost_unpriced` means tokens were counted but the model has no list price, so `est_cost_usd` is null. On a run finished from this change on, a null `usage_reason` means usage was measured; an older run has a null reason whether or not it was. **Deprecated: `tokens_in`, `tokens_out` and `cost`.** They are no longer written and the old rows keep their data. `tokens_in` and `tokens_out` were the runner's session counter (a resumed thread's running total, so each turn re-counted the whole session), which is why they run about 35x the real per-run figures; `cost` was never filled. Do not sum them. `trigger_kind`, `writes` and `outcome` are explained under [What woke each run](#what-woke-each-run-and-what-it-did) |
+| `run_weekly` | `week, bot, trigger, purpose, runs, input_tokens, cached_input_tokens, output_tokens, acted, no_change, nothing_to_do, unknown, did_nothing, rotated, acted_pct, no_change_pct, nothing_to_do_pct, unknown_pct` | a read-only view: runs per week, bot, trigger and purpose, every attempt counted ([below](#what-woke-each-run-and-what-it-did)) |
 | `schedules` | `id, bot, routine_key, title, cron, event_name, playbook, timezone and enabled (schedule_config), last_fired, next_due, deleted_at` | routines (`docs/routines.md`); `schedule_occurrences(schedule_id, occurrence, task_id, outcome)` says what each firing did |
 | `events` | `ts, actor, action, target, detail_json` | the audit log; `action` such as `task.create`, `sql.query` |
 | `slack_posts` | `message_id, bot, state, attempts, next_attempt, slack_ts, created, updated` | Owner-only outbound queue status for messages the Owner may read; message text, destination and raw errors are hidden. Join `messages` and filter `json_extract(messages.refs_json, '$.task')` for one task. Other callers receive no rows. |
@@ -118,6 +118,14 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `bot_file_versions`, `bot_file_activity` | `file_id, version` or `file_id, action, actor, created` | versions and activity of visible Files |
 | `documents`, `document_versions` | legacy mirror fields | compatibility tables for the older docs mirror |
 | `learnings` | `id, integration, actor, text, created, deleted_at` | Tools: what bots and humans learned about a tool (`integration` is the stored column; `integrations/`, `hub tool learn`) |
+| `assistant_action_weekly`, `mcp_call_weekly` | `week, proposer, status, actions, share_pct` and `week, bot, tool, calls, errors, error_pct, avg_ms, max_ms` | read-only totals for the owner and a bot the owner grants them (API only: `PUT /api/v2/outcome-stats/readers/<slug>`; revoke with `read: false`): how Assistant and BotOps proposals settled (`status`: done, failed, cancelled, expired ...) and how bot MCP tool calls went, per week. No row, text, id or person is in them; the underlying `assistant_actions` stays unreadable to a bot. The same bot may call `hub mcp stats` (no `--via`) |
+
+Only the signed-in owner can grant or revoke access; personal API tokens and delegated Assistant or BotOps turns cannot.
+Delegated turns also cannot read these totals through the owner's role. Revocation removes the bot's access on its next
+request. Buckets are not suppressed: a count of one is visible, without the underlying proposal or person's identity.
+People's MCP calls are excluded from `mcp_call_weekly` and a granted bot's `hub mcp stats`. Assistant proposal
+totals combine all owners by week, proposer and status; action routes and methods are not exposed.
+Tool names in the MCP totals and a granted bot's `hub mcp stats` are registered hub tool names; unknown names count as `other`.
 
 `sqlite_master` lists the rest (`SELECT name, sql FROM sqlite_master WHERE type='table'`).
 
@@ -186,6 +194,11 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
   reaches Tico with the run's token, and every push from its task's worktrees; a push from anywhere else (the
   bot's own checkout, another task's worktree) is not counted.
 
+- **`rotated`**: `tokens` or `turns` when the run started a fresh AI session instead of resuming the bot's last
+  one, because that one had grown past the bot's limit (`rotate_at` input tokens in its newest turn, default
+  400,000; or `rotate_after_turns`, off by default); NULL otherwise. The fresh session gets the task's checkpoint
+  and what was said since the last turn, not the old transcript. `run_weekly` counts these runs as `rotated`.
+
 `purpose` is a short label for what the run was for (`review PR`, `answer person message`): the place that wakes the bot may name it, otherwise it is the default for that bot and trigger, and runs from before it existed were filled the same way. A wake the map does not know reads `unknown`. Group by it: `SELECT purpose, sum(runs), sum(input_tokens) FROM run_weekly GROUP BY purpose`.
 
 A run from before this was recorded has none of these, and reads `unknown`; so does an attempt that never got
@@ -209,14 +222,25 @@ FROM run_weekly WHERE week >= date('now', '-27 days', 'weekday 1') GROUP BY bot 
 
 Wakes that waited (token saving 2/9, `backend/wake_rules.py`): each is one `wake.skipped` event naming the bot, the
 task, the held message (`target`; for a bot's own comment on its task, that comment), its trigger and the rule
-(`parked` or `own_write`). A sample of 50 from last week
-for the audit:
+(`parked`, `own_write` or `same_state`, token saving 3/9: a stall or status check on an idle task that stands as at
+its owner's last checkpoint). Leased or running task sessions keep their recovery checks. Overlapping turns of the
+same bot leave no settled comparison state because their writes cannot be attributed to one turn. A sample of 50
+from last week for the audit:
 
 ```sql
 SELECT ts, json_extract(detail_json, '$.bot') AS bot, json_extract(detail_json, '$.task') AS task,
        json_extract(detail_json, '$.rule') AS rule, json_extract(detail_json, '$.trigger') AS trigger, target AS message
 FROM events WHERE action = 'wake.skipped' AND ts >= date('now', '-13 days', 'weekday 1')
   AND ts < date('now', '-6 days', 'weekday 1') ORDER BY random() LIMIT 50
+```
+
+Replies Tico did not post: a turn woken by Tico on a task already finished that changed nothing leaves one
+`reply.withheld` event (`target` is the run; `bot`, `task`, `to`); its text stays on the run (`attempts.final_text`):
+
+```sql
+SELECT ts, json_extract(detail_json, '$.bot') AS bot, json_extract(detail_json, '$.task') AS task,
+       json_extract(detail_json, '$.to') AS to_person, target AS run
+FROM events WHERE action = 'reply.withheld' ORDER BY ts DESC LIMIT 50
 ```
 
 Who asked what today:

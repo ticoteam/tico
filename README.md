@@ -84,7 +84,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/meetings.md](docs/meetings.md) | Meetings and call transcripts |
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
 | [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
-| [docs/starter-bots.md](docs/starter-bots.md) | The 93 bot templates by group, their card fields and what a good bot looks like |
+| [docs/starter-bots.md](docs/starter-bots.md) | The 98 bot templates by group, their card fields and what a good bot looks like |
 | [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles, models and Dev tickets steps for building software with bots |
 | [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |
@@ -315,7 +315,7 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). The UI has no build step and no runtime network
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI has no build step and no runtime network
 dependency: `marked` and the icon font are vendored in `ui/vendor/` with their licenses.
 
 The live checkout on an owner's Mac is what the runner executes: the launchd jobs run

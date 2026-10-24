@@ -12,6 +12,12 @@ import json
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+# Direct invocation also finds the shared, dependency-free recognizer.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend import test_receipts
 
 try:
     from scripts import freeze_guard as freeze
@@ -20,13 +26,7 @@ except ModuleNotFoundError:  # Direct script invocation.
 
 
 VERDICT = re.compile(r"^VERDICT: (approve|changes) PR #(\d+) head ([0-9a-f]{40})\s*$", re.M)
-ROLE = re.compile(r"^(Review [12]|QA|Docs|Documentation|Technical Writer)\s*:", re.I)
-SHA = re.compile(r"\b[0-9a-f]{40}\b")
-PASS = re.compile(r"\b(pass(?:ed)?|green|success(?:ful)?)\b", re.I)
-TEST = re.compile(r"\b(tests?|pytest|cargo|browser|CI)\b", re.I)
-FAIL = re.compile(r"\b(?:[1-9]\d*\s*(?:fail(?:s|ing|ed|ures?)?|errors?)|fail(?:s|ing|ed|ures?)?|timed?\s*out|timeouts?|not run|pending|"
-                  r"will|planned|0\s*passed|(?:no|not|without)\s+(?:pass(?:ed)?|green|success))\b", re.I)
-FAILED_RESULT = re.compile(r"\b(?:fail(?:s|ing|ed|ures?)?|errors?|timed?\s*out|timeouts?)\b", re.I)
+ROLE = re.compile(r"^(Review [12]|QA|Docs|Documentation|Technical Writer)(?:\s+(?:delta|re-check|recheck))?\s*:", re.I)
 MAX_PAGES = 100
 
 
@@ -115,17 +115,13 @@ def verdicts(task, role, number):
 
 
 def passing_test(text, head):
-    # A green receipt for some other head, or a plan to run tests, is not evidence.
-    # Match head and result on one line, so an old pass cannot bless a new failure.
-    return any(head in SHA.findall(line) and TEST.search(line) and PASS.search(line)
-               and not FAIL.search(re.sub(r"\b0\s*(?:failed|failures?|errors?)\b", "", line, flags=re.I))
+    return any((r := test_receipts.recognise(line)) and r["head"] == head and r["status"] == "passed"
                for line in text.splitlines())
 
 
 def failing_test(line, head):
-    # A subsequent passing rerun does not adjudicate a known failure at the same head.
-    result = re.sub(r"\b(?:0|no)\s+(?:failed|failures?|errors?)\b", "", line, flags=re.I)
-    return head in SHA.findall(line) and TEST.search(line) and FAILED_RESULT.search(result)
+    receipt = test_receipts.recognise(line)
+    return bool(receipt and receipt["head"] == head and receipt["status"] == "failed")
 
 
 def ticket_evidence(task, pr):
@@ -149,13 +145,12 @@ def ticket_evidence(task, pr):
                 gaps.append(f"{role}: verdict names older/different head {last['head']}")
             elif last["verdict"] != "approve":
                 gaps.append(f"{role}: changes requested")
-    messages = owner_messages(task)
-    tests = [source(task, m) for m in messages if TEST.search(m.get("body", ""))]
-    head_tests = [line for receipt in tests for line in receipt["text"].splitlines()
-                  if head in SHA.findall(line) and TEST.search(line)]
-    if any(failing_test(line, head) for line in head_tests):
+    test_state, tests = test_receipts.at_head(task, head)
+    if test_state == "failed":
         gaps.append("Tests: recorded failure at the merged head needs resolution")
-    elif not head_tests or not passing_test(head_tests[-1], head):
+    elif test_state == "unrecognised":
+        gaps.append("Tests: no current passing receipt naming the merged head; unrecognised receipt")
+    elif test_state != "passed":
         gaps.append("Tests: no current passing receipt naming the merged head")
     docs = []
     for child in task.get("children", []):

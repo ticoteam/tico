@@ -45,6 +45,70 @@ function docsMenu(menu, button) {
   });
   menu.addEventListener('click', event => { if (event.target.closest('button,a')) menu.hidePopover(); });
 }
+// ---------------------------------------------------------------- the Librarian sets up Docs
+// The first-run question (backend/librarian_setup.py): where the docs are. The links become sources at once and one
+// task has the Librarian read them and write the map of the docs (playbooks/docs-setup.md). Skip is the person's own;
+// "Set up with the Librarian…" in the menu brings the question back.
+// /api/me names every signed-in person owner or viewer; a member is a viewer there, not human.
+const docsIsPerson = () => ['owner', 'viewer'].includes(S.me?.role);
+let DOCS_SETUP_SENT = null;          // what was just filed, shown until closed
+
+async function docsSetup(slot, {asked, current, openImport, reload}) {
+  const sent = DOCS_SETUP_SENT;
+  if (sent) {
+    slot.innerHTML = `<section class="docs-setup" role="status" aria-labelledby="docs-setup-h">
+        <p class="docs-setup-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>
+        <h2 id="docs-setup-h">Setting up your Docs</h2>
+        <p class="muted">${sent.count ? `${sent.count} ${sent.count === 1 ? 'source is' : 'sources are'} in Docs now. ` : ''}I'm reading what you gave me and writing a map of your docs, so anyone can find things. This usually takes 10–15 minutes.</p>
+        <div class="gs-card-actions"><a class="docs-new" role="button" href="#/task/${esc(sent.task)}">View task</a>
+          <button class="ghost" type="button" data-setup-close>Close</button></div></section>`;
+    slot.querySelector('[data-setup-close]').onclick = () => { DOCS_SETUP_SENT = null; slot.innerHTML = ''; };
+    return;
+  }
+  let setup;
+  try { setup = await get('/v2/librarian/setup'); } catch { return; }
+  if (!current() || !document.body.contains(slot)) return;
+  if (!setup.available) {
+    if (asked) slot.innerHTML = '<p class="docs-setup-off muted">The Librarian is off, so it cannot set up Docs right now.</p>';
+    return;
+  }
+  if (!asked && !setup.docs.show) return;
+  slot.innerHTML = `<section class="docs-setup" aria-labelledby="docs-setup-h"><form data-docs-setup novalidate>
+      <p class="docs-setup-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>
+      <h2 id="docs-setup-h">Where are your docs?</h2>
+      <p class="muted">Tell me where your team keeps what it knows. I'll add each place to Docs, read it, and map it so anyone can find things.</p>
+      <label class="gs-field"><span>Links, one per line</span><textarea name="sources" rows="3" maxlength="20000" autocomplete="off" spellcheck="false" placeholder="https://github.com/acme/handbook&#10;https://help.acme.example"></textarea></label>
+      <label class="gs-field"><span>Anything else? <em>(optional)</em></span><input name="note" type="text" maxlength="4000" autocomplete="off" placeholder="Our policies are in Google Drive"></label>
+      <p class="err" data-error role="alert" hidden></p>
+      <div class="gs-card-actions"><button class="primary" type="submit">Set up Docs</button>
+        <button class="ghost" type="button" data-setup-import>Import files</button>
+        <button class="ghost" type="button" data-setup-skip>${asked ? 'Not now' : 'Skip for now'}</button></div></form></section>`;
+  const form = slot.querySelector('form'), line = form.querySelector('[data-error]');
+  const fail = message => { line.textContent = message; line.hidden = !message; form.querySelector('[type=submit]').disabled = false; };
+  form.querySelector('[data-setup-import]').onclick = () => openImport();
+  form.querySelector('[data-setup-skip]').onclick = async () => {
+    slot.innerHTML = '';
+    if (asked) { location.hash = docsHref(); return; }
+    try { await post('/v2/librarian/setup/docs', {skip: true}); } catch { /* it asks again next visit */ }
+  };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const sources = [...new Set(form.elements.sources.value.split(/[\s,]+/).map(word => word.trim()).filter(Boolean))];
+    const note = form.elements.note.value.trim();
+    if (!sources.length && !note) return fail('Add a link to your docs, or say where they are.');
+    if (sources.length > 20) return fail('Up to 20 links at a time.');
+    fail(''); form.querySelector('[type=submit]').disabled = true;
+    try {
+      const result = await post('/v2/librarian/setup/docs', {sources, note});
+      DOCS_SETUP_SENT = {task: result.task_id, count: (result.sources || []).length};
+      DOC_CACHE_KEY = '';                      // the new sources are in the list at once
+      if (asked) location.hash = docsHref(); else reload();
+    } catch (error) {
+      fail(error?.body?.error?.code === 'librarian_off' ? 'The Librarian is off.' : error.message || 'That did not go through.');
+    }
+  };
+}
+
 // The list is drawn from the last load at once, so opening a doc does not blank it; a fresh load follows.
 let DOC_CACHE_KEY = '';
 // An editor with unsaved text asks before a click in the list leaves it.
@@ -70,8 +134,10 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
     <div class="docs-actions"><button class="docs-new" id="docs-add-source" type="button">Add source</button><a class="docs-new" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>
       <button class="docs-settings" id="docs-more" type="button" popovertarget="docs-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></div>
     <div id="docs-menu" class="docs-pop" popover aria-label="Docs actions"><button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>
+      ${docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: 1})}">Set up with the Librarian…</a>` : ''}
       <a id="docs-archived" href="${docsHref('', archived ? {} : {archived: 1})}">${archived ? 'Active' : 'Archived'}</a></div>
     <p class="docs-feedback" id="docs-feedback" role="status" hidden></p>
+    <div id="docs-setup"></div>
     <div class="docs-workspace${selected ? ' has-selection' : ''}"><aside class="docs-browser" aria-label="Docs" id="docs-browser"><p class="docs-loading">Loading…</p></aside>
     <article class="docs-reader" id="docs-reader">${selected ? `<a class="docs-back" href="${docsHref('', archived ? {archived: 1} : {})}">‹ Docs</a>` : ''}</article></div>`;
   const feedback = $('#docs-feedback');
@@ -102,6 +168,10 @@ window.pageCompanyDocs = async function pageCompanyDocs() {
   let {docs, linked} = DOC_DATA;
   const browser = $('#docs-browser');
   if (params.get('import') === '1') { history.replaceState(null, '', location.pathname + location.search + docsHref()); openImport(); }
+  // The Librarian asks where the docs are on a first visit, while Docs holds nothing a person wrote or linked.
+  const ownDocs = docs.filter(d => !d.path.startsWith('_librarian/') && d.path !== 'FAQ.md');
+  if (docsIsPerson() && !archived && !selected && (DOCS_SETUP_SENT || params.get('setup') === '1' || (!linked.length && !ownDocs.length)))
+    void docsSetup($('#docs-setup'), {asked: params.get('setup') === '1', current, openImport, reload});
 
   // ---------------------------------------------------------------- the list
   const canEditLink = link => admin || (!!mineId && link.added_by === mineId);

@@ -138,3 +138,29 @@ def test_the_server_gets_the_visual_settings():
     for key in ("TICO_VISUAL_ORIGIN", "TICO_VISUAL_SECRET"):
         assert key in environment and environment[key] is None, key
     assert "TICO_VISUAL_SAME_ORIGIN" not in environment
+
+
+def test_the_server_reads_a_starter_plan_file_from_a_read_only_folder_setup_fills():
+    import yaml
+    server = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]
+    assert server["environment"]["TICO_COMPANY_FILE"] is None and server["environment"]["TICO_COMPANY_FILE_B64"] is None
+    from setup import contract, settings
+    (mount,) = [v for v in server["volumes"] if v.endswith(f":{contract.COMPANY_FILE_MOUNT}:ro")]
+
+    def source(env):
+        # Compose's ${VAR:-default}, as the updater runs it: --project-directory /project, the install's .env.
+        import re
+        return re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: env.get(m.group(1)) or m.group(2), mount).split(":")[0]
+    aws = settings.Settings(target="aws", domain="tico.acme.example", company="Acme", owner_email="o@acme.example")
+    assert source(aws.to_env()) == f"{contract.REMOTE_DIR}/{contract.COMPANY_FILE_DIR}"   # the host folder pull-env.sh fills
+    assert source({}) == "tico-company-file" and "tico-company-file" in yaml.safe_load((ROOT / "compose.yaml").read_text())["volumes"]
+
+
+def test_a_runner_sharing_the_host_yields_cpu_and_memory_to_the_server_and_its_front_doors():
+    import yaml
+    server = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    runner = yaml.safe_load((ROOT / "docker/runner.compose.yaml").read_text())["services"]["runner"]
+    for name in ("server", "caddy", "cloudflared"):
+        assert server[name]["cpu_shares"] >= 4 * runner["cpu_shares"]
+        assert server[name].get("oom_score_adj", 0) >= 0     # a negative score is refused by rootless Docker
+    assert runner["oom_score_adj"] > 0

@@ -145,10 +145,42 @@ function htmlPreviewFrame(raw, title) {
   frame.srcdoc = htmlPreviewDoc(raw);
   return frame;
 }
-const VIEW_FILES = new Map();                 // Tico file id -> Promise<{blob, url, name, kind}>
+// Files fetched to be shown here (a chat picture, a file in the viewer) are kept for the visit up to a byte budget per
+// cache: past it the longest unused go, and their blob: URLs are revoked once nothing on the page shows them. Thirty
+// pictures opened in turn held every one for as long as the app stayed open.
+const FILE_KEEP_BYTES = 64e6;
+const fileShown = url => [...document.querySelectorAll('[src^="blob:"], object[data^="blob:"], a[href^="blob:"]')]
+  .some(el => el.getAttribute('src') === url || el.getAttribute('data') === url || el.getAttribute('href') === url);
+// `load()` gives {value, url, bytes}; the cache hands out `value`. A failed load is forgotten, so the next asks again.
+// The file just loaded is never trimmed: its caller has not shown it yet, and a file over the budget on its own (a
+// video, a big PDF) opened blank.
+function fileKeep(cache, key, load) {
+  let entry = cache.get(key);
+  if (entry) { cache.delete(key); cache.set(key, entry); return entry.promise; }   // most recently used last
+  entry = {url: '', bytes: 0};
+  entry.promise = load().then(got => {
+    entry.url = got.url; entry.bytes = got.bytes;
+    fileKeepTrim(cache, entry);
+    return got.value;
+  }, error => { if (cache.get(key) === entry) cache.delete(key); throw error; });
+  cache.set(key, entry);
+  return entry.promise;
+}
+function fileKeepTrim(cache, keep) {
+  let total = 0;
+  for (const entry of cache.values()) total += entry.bytes;
+  for (const [key, entry] of cache) {
+    if (total <= FILE_KEEP_BYTES) break;
+    if (entry === keep || !entry.url || fileShown(entry.url)) continue;
+    URL.revokeObjectURL(entry.url);
+    cache.delete(key);
+    total -= entry.bytes;
+  }
+}
+const VIEW_FILES = new Map();                 // Tico file id -> {promise: Promise<{blob, url, name, kind}>, url, bytes}
 function viewFile(id, fallbackName, version = null) {
   const key = version ? `${id}?v=${version}` : id;
-  if (!VIEW_FILES.has(key)) VIEW_FILES.set(key, (async () => {
+  return fileKeep(VIEW_FILES, key, async () => {
     const response = await fetch(`${API}/v2/files/${encodeURIComponent(id)}${version ? '?v=' + version : ''}`, {credentials: 'same-origin'});
     if (!response.ok) throw new Error(response.status === 403 ? 'You cannot open this file.' : 'Could not open the file.');
     const name = fileNameOf(response) || fallbackName;
@@ -156,10 +188,9 @@ function viewFile(id, fallbackName, version = null) {
     const kind = viewKindOf(name) || (/^text\/csv\b/i.test(raw.type) ? 'csv' : null);
     const type = kind === 'image' ? (/\.png$/i.test(name) ? 'image/png' : /\.gif$/i.test(name) ? 'image/gif' : /\.webp$/i.test(name) ? 'image/webp'
       : /\.svg$/i.test(name) ? 'image/svg+xml' : 'image/jpeg') : (VIEW_TYPES[kind] || raw.type || 'application/octet-stream');
-    const blob = new Blob([raw], {type});
-    return {blob, url: URL.createObjectURL(blob), name, kind};
-  })().catch(error => { VIEW_FILES.delete(key); throw error; }));
-  return VIEW_FILES.get(key);
+    const blob = new Blob([raw], {type}), url = URL.createObjectURL(blob);
+    return {value: {blob, url, name, kind}, url, bytes: blob.size};
+  });
 }
 let VIEW = null;
 function viewerDialog() {

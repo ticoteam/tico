@@ -8,6 +8,8 @@ request's thread, never inside a transaction.
     read(key, base, month)          balance, status, credits, usage by day, the month's statement, the booking link
     day(key, base, day)             one day's usage by hour
     statement_csv(key, base, month) the month's statement as CSV, as HQ writes it
+    servers(key, base)              the company's hosted servers (Settings > Computers), at `<Gateway URL>/servers`
+    start(key, base, server_id)     start one of them again; HQ refuses while the company is paused for credit
 
 Only the owner and admins see the page; the routes refuse everyone else (backend/app.py). Money is whole
 micro-dollars end to end: an answer with a float anywhere is refused rather than shown. The key goes only in the
@@ -17,6 +19,12 @@ What the page shows when it can't show billing (`state`): `no_gateway` (this ins
 with Tico AI Gateway), `no_account` (HQ knows the key but no company bill for it yet: the empty state, with HQ's
 booking link), `refused` (HQ
 refused the key) and `unreachable`.
+
+Hosted servers (paused-start, d8f8efaa): a hosted company's Tico server and bot computers, each on or stopped, with a
+Start for a stopped one. HQ decides each start (Billing 4/5 `may_start`): while the company is paused for credit it
+answers `paused`, shown as PAUSED with a link to its account page (`credit_url`, https only) to ask for more credit. A
+company staff shut down answers `deactivated`. An install HQ hosts nothing for answers `none`, and the section stays
+hidden.
 """
 
 import json
@@ -36,6 +44,10 @@ DAY = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])")
 STATES = ("active", "low", "paused", "grace")
 OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
 REFUSED = ("unknown_key", "revoked_key")
+SERVERS = "/servers"
+SERVER_ID = re.compile(r"pv-[0-9a-f]{16}")
+KINDS = ("tico", "bot_computer")
+PAUSED = "Paused: out of credit. Add credit to start this computer."
 
 
 def _no_float(text):
@@ -48,9 +60,9 @@ def _micros(value):
     return value
 
 
-def _get(key, base, path):
-    """(status, body bytes, content type) of a GET to HQ, or ("unreachable", b"", "")."""
-    request = urllib.request.Request(base + PATH + path, method="GET", headers={
+def _get(key, base, path, method="GET", root=PATH):
+    """(status, body bytes, content type) of a GET (or an empty POST) to HQ, or ("unreachable", b"", "")."""
+    request = urllib.request.Request(base + root + path, method=method, data=b"" if method == "POST" else None, headers={
         "Authorization": "Bearer " + key, "Accept": "application/json, text/csv"})
     opener = OPENER or G._send
     try:
@@ -85,7 +97,7 @@ def _code(body):
 
 
 def _booking(value):
-    """The booking link "Talk to us to add credit" opens: https only, or None."""
+    """The booking link "Talk to us to add credit" opens (or a paused start's account page): https only, or None."""
     return value if isinstance(value, str) and value.startswith("https://") and len(value) <= 300 \
         and not any(ch.isspace() for ch in value) else None
 
@@ -200,3 +212,55 @@ def statement_csv(key, base, month):
     if not kind.startswith("text/csv") or not body.startswith(b"month,line,amount_micros\n"):
         raise Problem("unreachable", "Tico HQ did not give the statement. Try again later.", 502)
     return body.decode("utf-8")
+
+
+def _hq(key, base, path, method="GET"):
+    """(status, payload) from HQ's servers routes, or (None, a state for the page)."""
+    if not key:
+        return None, {"state": "no_gateway"}
+    try:
+        base = G.safe_base(base)
+    except ValueError:
+        return None, {"state": "unreachable"}
+    status, body, _ = _get(key, base, path, method=method, root=SERVERS)
+    if not isinstance(status, int):
+        return None, {"state": "unreachable"}
+    code = _code(body)
+    if status == 401 or code in REFUSED:
+        return None, {"state": "refused"}
+    if status == 404 and code in ("no_account", "not_configured"):
+        return None, {"state": "none"}
+    return status, _payload(body)
+
+
+def servers(key, base):
+    """The company's hosted servers: {state: "ok", servers: [{server_id, kind, power}]}, or a state."""
+    status, data = _hq(key, base, "")
+    if status is None:
+        return data
+    if status != 200 or not isinstance(data.get("servers"), list):
+        return {"state": "unreachable"}
+    if data.get("deactivated") is True:
+        return {"state": "deactivated"}
+    rows = [{"server_id": row["server_id"], "kind": row["kind"], "power": "on" if row.get("power") == "on" else "stopped"}
+            for row in data["servers"] if isinstance(row, dict) and isinstance(row.get("server_id"), str)
+            and SERVER_ID.fullmatch(row["server_id"]) and row.get("kind") in KINDS]
+    return {"state": "ok", "servers": rows} if rows else {"state": "none"}
+
+
+def start(key, base, server_id):
+    """Start one stopped hosted server: {state: "started"}, {state: "paused", message, credit_url}, or another state
+    (`deactivated`, `not_found`, `not_ready`, `refused`, `unreachable`)."""
+    if not SERVER_ID.fullmatch(server_id or ""):
+        raise Problem("invalid", "That is not one of this company's servers", 422)
+    status, data = _hq(key, base, "/%s/start" % server_id, method="POST")
+    if status is None:
+        return data
+    if status == 200:
+        return {"state": "started"}
+    code = data.get("error") if isinstance(data.get("error"), str) else ""
+    if status == 409 and code == "paused":
+        return {"state": "paused", "message": PAUSED, "credit_url": _booking(data.get("credit_url"))}
+    if code in ("deactivated", "not_found", "not_ready"):
+        return {"state": code}
+    return {"state": "unreachable"}

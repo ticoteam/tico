@@ -1,11 +1,10 @@
-# Builds the Tico images (server, runner and updater; linux/amd64 and linux/arm64) and publishes them to
-# ghcr.io/ticoteam: vX.Y.Z and latest on a v* tag. A manual run publishes edge from its branch.
-# Tests run before release, locally or in the manual Release validation workflow; this workflow only builds and publishes.
+# Builds the Tico images (server, runner and updater; linux/amd64 and linux/arm64) from a branch and publishes them to
+# ghcr.io/ticoteam as edge, on a manual run. Release images are not built here: Release validation (ci.yml) builds and
+# tests them, and release.yml points the version tags at those digests.
+# Jobs run on on-demand RunsOn VMs in Tico's own AWS account, so a publish is never cut short by a Spot interruption.
 name: Docker
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -19,7 +18,7 @@ jobs:
         image: [tico, tico-runner, tico-updater]
         platform: [amd64, arm64]
     # Each architecture builds natively: emulating npm and pip installs is slow and flaky.
-    runs-on: ${{ matrix.platform == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/spot=false/extras=s3-cache
     permissions:
       contents: read
       packages: write
@@ -38,7 +37,7 @@ jobs:
           target: ${{ matrix.image == 'tico' && 'server' || matrix.image == 'tico-runner' && 'runner' || 'updater' }}
           platforms: linux/${{ matrix.platform }}
           build-args: |
-            TICO_VERSION=${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}
+            TICO_VERSION=edge
             TICO_COMMIT=${{ github.sha }}
             TICO_REPOSITORY=${{ github.repository }}
           outputs: type=image,name=ghcr.io/ticoteam/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
@@ -58,7 +57,7 @@ jobs:
   publish:
     needs: build
     if: ${{ !cancelled() && needs.build.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     strategy:
       fail-fast: false
       matrix:
@@ -78,25 +77,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # A prerelease tag (v1.2.0-rc1) never moves latest.
-      - name: Create the multi-arch tags
+      - name: Create the multi-arch edge tag
         working-directory: ${{ runner.temp }}/digests
         env:
           IMAGE: ghcr.io/ticoteam/${{ matrix.image }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
           tags=(-t "$IMAGE:edge")
-          if [ "$REF_TYPE" = tag ]; then
-            tags=(-t "$IMAGE:$REF_NAME")
-            case "$REF_NAME" in *-*) ;; *) tags+=(-t "$IMAGE:latest") ;; esac
-          fi
           sources=()
           for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
-          # The registry sometimes drops the manifest upload; retry instead of failing the release.
+          # The registry sometimes drops the manifest upload; retry instead of failing the publish.
           for attempt in 1 2 3 4; do
             timeout 120 docker buildx imagetools create "${tags[@]}" "${sources[@]}" && exit 0
             echo "imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
           done
           exit 1
-      - run: docker buildx imagetools inspect "ghcr.io/ticoteam/${{ matrix.image }}:${{ github.ref_type == 'tag' && github.ref_name || 'edge' }}"
+      - run: docker buildx imagetools inspect "ghcr.io/ticoteam/${{ matrix.image }}:edge"

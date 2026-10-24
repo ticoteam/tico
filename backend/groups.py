@@ -71,8 +71,8 @@ def rows(roster, employees, archived=(), can_see=None):
         if team:
             bots.setdefault(team, []).append(slug)
     return [{"id": gid, "name": g["name"], "parent": g["parent"], "people": people.get(gid, []),
-             "bots": sorted(bots.get(gid, [])), "order": i}
-            for i, (gid, g) in enumerate(roster["org_groups"].items())]
+             "bots": sorted(bots.get(gid, [])), "order": g.get("order", i)}
+            for i, (gid, g) in sorted(enumerate(roster["org_groups"].items()), key=lambda row: row[1][1].get("order", row[0]))]
 
 
 def refresh_teams(c, roster=None):
@@ -169,6 +169,14 @@ def _may_change(auth, who):
         raise Problem("forbidden", "Only an owner or an admin changes groups", 403)
 
 
+
+def _next_order(groups):
+    # Freeze legacy fallback positions before a new key changes their indices in sorted JSON.
+    for i, group in enumerate(groups.values()):
+        group.setdefault("order", i)
+    return max((group["order"] for group in groups.values()), default=-1) + 1
+
+
 def create(c, auth, settings, who, body):
     _may_change(auth, who)
     roster = _roster(c)
@@ -179,7 +187,8 @@ def create(c, auth, settings, who, body):
     if _named(groups, body.name, parent):
         raise Problem("conflict", "There is already a group with that name there", 409)
     gid = _new_id(groups, body.name)
-    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": ""}
+    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": "",
+                   "order": _next_order(groups)}
     people, changed = _apply_members(c, settings, roster, gid, body.add, M.GroupMembers())
     roster = _finish(c, roster, people, changed)
     H.event(c, who.actor, "group.created", gid, {"name": body.name.strip(), "parent": parent})
@@ -249,11 +258,12 @@ def ensure(roster, gid, name):
     for other, group in groups.items():
         if group["name"].strip().lower() == name.strip().lower():
             return other
-    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": ""}
+    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": "",
+                   "order": _next_order(groups)}
     return gid
 
 
-def place(c, settings, slugs):
+def place(c, settings, slugs, group_order=()):
     """The team builder made these bots: each one goes in the group of its template (the group its card is in), which
     is made when the team has none yet. A bot that already has a group of its own keeps it."""
     from . import recruit
@@ -264,10 +274,15 @@ def place(c, settings, slugs):
     homes = recruit.template_groups(settings)
     roster = _roster(c)
     made = set(roster["org_groups"])
+    # Stored JSON sorts object keys, so bot creation order cannot preserve the wizard's chart order.
+    # Only newly made groups take this order; an existing team's groups keep their positions.
+    rank = {gid: i for i, gid in enumerate(group_order)}
+    todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
     for slug in todo:
         home = homes.get(str(configs[slug].get("template") or ""))
         if home and not outside(settings, slug, configs[slug]):
-            _set_bot(c, slug, ensure(roster, home["id"], home["name"]))
+            gid = ensure(roster, home["id"], home["name"])
+            _set_bot(c, slug, gid)
     if set(roster["org_groups"]) != made:
         _save(c, roster)
     refresh_teams(c, roster)

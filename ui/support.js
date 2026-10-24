@@ -289,7 +289,9 @@
       try { access = {...await call('GET', '/support/access'), at: Date.now()}; } catch (_) { /* the next poll asks again */ }
       renderBanner(); renderAccess();
     }
-    accessTimer = setTimeout(pollAccess, typeof S !== 'undefined' && S.me ? 30000 : 2000);
+    // Every 30 s while support is in, for the time left; otherwise every 5 minutes (access is given from this app, and a
+    // tab that gives it asks again at once).
+    accessTimer = setTimeout(pollAccess, typeof S !== 'undefined' && S.me ? (access.active ? 30000 : 300000) : 2000);
   }
   async function stopAccess() {
     if (!access.active) return;

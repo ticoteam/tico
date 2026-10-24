@@ -345,7 +345,7 @@ function taskPropsBind(d, task, change) {
       : {text: 'Snooze…', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     const stepsOnly = pipelineStepsOnly(task);
     if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
-    if (task.status !== 'closed' && (r.mover || r.party) && !stepsOnly) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
+    if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;

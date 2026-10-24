@@ -6,6 +6,7 @@ with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /
 reader, the file, the version and an expiry, and every request on it (each range request too) checks again that the
 reader can still open the file. Nothing on that route reads or sets the app's cookies."""
 import base64
+import errno
 import hashlib
 import hmac
 import html
@@ -301,18 +302,37 @@ def secret(settings):
             raise RuntimeError("TICO_VISUAL_SECRET must be at least 32 characters")
         return given.encode()
     path = settings.db_path.parent / SECRET_FILE
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        if stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise RuntimeError(str(path) + " must be readable only by its owner (chmod 600)") from None
-        value = path.read_text().strip()
-        if len(value) < 32:
-            raise RuntimeError(str(path) + " is too short; delete it to generate a new one")
-        return value.encode()
-    value = secrets.token_hex(32)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(value)
+    if not path.exists():
+        # Written whole, then linked into place: a request that arrives meanwhile never reads a half-made file, and
+        # of two first requests the second link loses and both use the one secret. A filesystem that cannot
+        # hard-link falls back to an exclusive create, which can still show an empty file for a moment.
+        value = secrets.token_hex(32)
+        draft = path.with_name(f".{SECRET_FILE}-{secrets.token_hex(8)}")
+        fd = os.open(draft, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(value)
+            try:
+                os.link(draft, path)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+                    raise
+                try:
+                    out = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    with os.fdopen(out, "w") as handle:
+                        handle.write(value)
+        finally:
+            draft.unlink()
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise RuntimeError(str(path) + " must be readable only by its owner (chmod 600)")
+    value = path.read_text().strip()
+    if len(value) < 32:
+        raise RuntimeError(str(path) + " is too short; delete it to generate a new one")
     return value.encode()
 
 
@@ -473,11 +493,11 @@ def decorate(c, who, files, key, base, messages, full=True):
     the address the route is on: the visual address, or "" for the app's own (the fallback, `full` False). In the
     fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
     preview (`preview_url`, a picture), and Open shows it in the file viewer."""
-    from . import task_privacy as privacy
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
-    route = token_reader(c, files.auth, privacy.actor(who)) if who.role == "bot" else who
+    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
@@ -497,7 +517,7 @@ def decorate(c, who, files, key, base, messages, full=True):
             view = {**a, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
-                actor = privacy.actor(who)
+                actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 inline = full or a["kind"] in MEDIA
                 view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
@@ -566,6 +586,8 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
+    if not isinstance(actor, str):
+        return None
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)

@@ -54,7 +54,7 @@ Loop until nothing is left that you can move:
    it guards a privacy or permission boundary, data safety, or a core task/run flow. Before merging, run
    the test files for what you touched, plus the checks the change obviously affects (catalog, docs
    counts, tool parity). Do not run the full suite for a merge: each release gets one full run on its frozen candidate
-   (docs/releasing.md); the scheduled nightly gate runs separately. GitHub Actions builds and publishes, and its manually dispatched Release validation runs one exact-SHA full release gate when requested; the same workflow is also scheduled nightly on main against the latest published release. Separately, the PR checks workflow runs the default Python suite and the core browser scripts on every pull request to main and every push to main. Compare a local
+   (docs/releasing.md). GitHub Actions builds and publishes, and its manually dispatched Release validation runs one exact-SHA full release gate when the Release Manager requests it, never on a schedule. Separately, the PR checks workflow runs the default Python suite and the core browser scripts on every pull request to main and every push to main. Compare a local
    failure against main before calling it yours.
 4. **PR**: title in plain words; body **What / Why / Surfaces / How it was checked**, and `Closes #<n>`.
    **Surfaces** lists which entries of CLAUDE.md's "Hit every surface" applied and what was done for each.

@@ -25,7 +25,11 @@ skip Reviewer 2, or let one bot cover Security and DevOps. Start with the Builde
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
-for example. Edit each bot's instructions to match its role here, or ask BotOps to do it.
+for example. Edit each bot's instructions to match its role here, or ask BotOps to do it. When reviewers
+are authorized to submit their own reviews, configure a [separate reviewer GitHub App](github-app.md#separate-identity-for-reviewers)
+and use `hub repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
+the review task as well. Required GitHub approvals are dismissed on push, so a changed head needs a current
+approval before merge even when the team's task review policy allows a fixes-only delta.
 
 ## Models and effort
 
@@ -76,8 +80,10 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build |
 | Post Release QA | review | Release Manager | Shipped; QA runs the *check live* tests and watches the *watch live* items for 48 hours |
 | Done | done | QA | Post-release QA passed |
-| Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate or superseded ticket |
-| Won't do | declined | Head of Engineering | Dropped, with a reason |
+| Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
+
+Done and Closed fold into one strip at the end of the board: those tickets are under the Done and Closed tabs. A waiting
+ticket stays at its step with a Waiting tag.
 
 - **Small changes** skip Review 2. Use Reviewer 2 for sign-in, permissions, customer data, billing and anything that
   sends.

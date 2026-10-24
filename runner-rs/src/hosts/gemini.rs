@@ -153,6 +153,8 @@ struct Inner {
     turn: Option<(String, String)>,
     stopper: Option<super::Stopper>,
     reply: HashMap<String, String>,
+    /// Turns that called a tool since their last text: the text after it is a new message.
+    new_message: HashSet<String>,
     interrupted: HashSet<String>,
     done_turns: HashSet<String>,
     reader: Option<tokio::task::JoinHandle<()>>,
@@ -218,6 +220,11 @@ impl GeminiHost {
         thread_id.into()
     }
 
+    /// A thread this host started, once the CLI's `init` said its session is up (a resumed one counts as up).
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+    }
+
     fn argv(&self, thread_id: &str, t: &Thread) -> Vec<String> {
         let model = t.settings.model.clone().filter(|m| !m.is_empty()).unwrap_or_else(|| DEFAULT_MODEL.into());
         let mut argv = self.0.cmd.clone();
@@ -244,7 +251,7 @@ impl GeminiHost {
 
     fn prepare_home(&self, model: &str, effort: Option<&str>, servers: &[Value]) -> std::io::Result<()> {
         use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
         std::fs::create_dir_all(&self.0.home)?;
         if !std::fs::symlink_metadata(&self.0.home)?.is_dir() {
             return Err(std::io::Error::other("Gemini home must be a directory, not a symbolic link"));
@@ -257,9 +264,15 @@ impl GeminiHost {
                 }
                 std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o711))?;
             }
+            // The mode is set while the home is still the supervisor's, or from a turn before, already the bot user's
+            // with it: the supervisor has no CAP_FOWNER, so it cannot change the mode of a folder the bot user owns.
+            if std::fs::symlink_metadata(&self.0.home)?.mode() & 0o777 != 0o700 {
+                std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
+            }
             crate::isolation::adopt(&[self.0.home.clone()]);
+        } else {
+            std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
         }
-        std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))?;
         set_aside_memory(&self.0.home)?;
         let tmp = self.0.home.join(format!("settings-{}.json", uuid::Uuid::new_v4().simple()));
         let written = (|| {
@@ -404,28 +417,33 @@ impl GeminiHost {
                 if let Some(t) = self.inner().threads.get_mut(tid) {
                     t.started = true;
                 }
+                // The session is up: a new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                self.emit(event("thread_confirmed", Some(tid), Some(turn), json!({})));
             }
             "message" if msg["role"] == "assistant" => {
                 let text = text_of(&msg["content"]);
                 if !text.is_empty() {
                     let delta = msg.get("delta").is_none_or(|d| crate::util::truthy(Some(d)));
-                    {
+                    let piece = {
                         let mut inner = self.inner();
+                        let new_message = inner.new_message.remove(turn);
                         let reply = inner.reply.entry(turn.into()).or_default();
                         if delta {
-                            reply.push_str(&text);
+                            super::add_piece(reply, new_message, &text)
                         } else {
                             *reply = text.clone();
+                            text.clone()
                         }
-                    }
+                    };
                     if delta {
-                        self.emit(event("delta", Some(tid), Some(turn), json!({"text": text, "delta_kind": "text"})));
+                        self.emit(event("delta", Some(tid), Some(turn), json!({"text": piece, "delta_kind": "text"})));
                     } else {
                         self.emit(event("message", Some(tid), Some(turn), json!({"text": text, "final": false})));
                     }
                 }
             }
             "tool_use" => {
+                self.inner().new_message.insert(turn.into());
                 self.emit(event("tool", Some(tid), Some(turn), json!({"server": "", "tool": tool(), "status": "started", "item_id": item()})));
             }
             "tool_result" => {
@@ -446,6 +464,7 @@ impl GeminiHost {
                 inner.stopper = None;
             }
             let reply = inner.reply.remove(turn).unwrap_or_default();
+            inner.new_message.remove(turn);
             if !inner.done_turns.insert(turn.into()) {
                 return;
             }
@@ -568,6 +587,26 @@ mod tests {
             s.env.insert(k.into(), v);
         }
         s
+    }
+
+    #[tokio::test]
+    async fn a_new_thread_is_confirmed_only_by_the_clis_init() {
+        let dir = std::env::temp_dir().join(format!("gemini-confirm-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = fake_gemini(&dir);
+        let turn = crate::hosts::fixtures::dir("gemini").join("turn.jsonl");
+        std::fs::write(dir.join("silent.jsonl"), "").unwrap();
+        for (fixture, up) in [(dir.join("silent.jsonl"), false), (turn, true)] {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let host = GeminiHost::new("acme", &dir.join("home"), vec![cmd.clone()], tx);
+            host.start();
+            let thread = host.start_thread(&settings(&dir, &fixture));
+            host.start_turn(&thread, "hello", None).unwrap();
+            let confirmed = turn_events(&mut rx).await.iter().filter(|e| e["kind"] == "thread_confirmed").count();
+            assert_eq!((confirmed, host.confirmed(&thread).is_some()), (up as usize, up), "{}", fixture.display());
+            host.stop().await;
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

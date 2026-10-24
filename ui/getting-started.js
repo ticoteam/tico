@@ -141,7 +141,8 @@ window.gsBoot = function () {
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });
-  setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 60000);
+  // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
+  setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);
 };
 
 // ---------------------------------------------------------------- one listener for all of it

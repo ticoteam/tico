@@ -22,8 +22,9 @@ def real_starters(api, *names):
         shutil.copytree(CATALOG / name, Path(api.app.state.store.settings.catalog_dir) / name, dirs_exist_ok=True)
 
 
-def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its_setup_is_done(environment):
-    """Create, parked, woken only by a person, onboarded by the bot itself; and the member limit ignores parked bots."""
+def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_marks_it_complete(environment):
+    """Create, parked, woken only by a person, ready by the bot itself and completed by a person above it; and the member
+    limit ignores parked bots."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     real_starters(api, "support", "chief-of-staff", "issue-triage")
     computer = machine(api)
@@ -69,15 +70,21 @@ def test_a_starter_is_created_parked_and_leaves_that_state_only_when_it_says_its
     shown = api.get(f"/api/v2/conversations/{chats[0]['id']}/messages", headers=who).json()["messages"]
     assert "Let's set you up." in [m["body"] for m in shown]           # beside the task notice the room already held
 
-    # Only the bot itself (or its manager) says it is onboarded, and saying it twice changes nothing.
-    def call(token):
-        return api.post("/api/v2/bots/support/onboarded", json={}, headers=headers(token))
+    # The bot says it is ready, with what it learned; a person above it marks onboarding complete, once.
+    def call(token, summary=""):
+        return api.post("/api/v2/bots/support/onboarded", json={"summary": summary}, headers=headers(token))
     assert call(computer["token"]).status_code == 403                 # the computer is not the bot
-    said = call(attempt["token"])                                      # the bot, in its own turn
-    assert said.status_code == 200 and said.json() == {"bot": "support", "onboarding_state": "onboarded", "changed": True,
-                                                                "routine": None}
-    assert call(attempt["token"]).json()["changed"] is False
-    assert api.get("/api/v2/bots/support", headers=who).json()["onboarding_state"] == "onboarded"
+    said = call(attempt["token"], "I know the queue and the refund rules.")      # the bot, in its own turn
+    assert said.status_code == 200 and said.json()["stage"] == "onboarding" and said.json()["changed"] is False
+    assert said.json()["ready"]["summary"] == "I know the queue and the refund rules."
+    shown = api.get("/api/v2/bots/support", headers=who).json()
+    assert shown["stage"] == "onboarding" and shown["can_complete_onboarding"] is True
+    assert shown["onboarding_ready"]["summary"] == "I know the queue and the refund rules."
+    done = api.post("/api/v2/bots/support/onboarded", json={}, headers=who)       # the owner, above its manager
+    assert done.status_code == 200 and done.json()["onboarding_state"] == "onboarded" and done.json()["changed"] is True
+    assert call(attempt["token"]).json() == {"bot": "support", "onboarding_state": "onboarded", "stage": "active",
+                                             "changed": False}
+    assert api.get("/api/v2/bots/support", headers=who).json()["stage"] == "active"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
 
     # Parked bots do not count toward a member's limit until they are onboarded.
@@ -151,3 +158,65 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 
+
+
+def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(environment):
+    """Stored selected keys are alphabetical; groups still follow the chart, including on repeated Create."""
+    api = environment(seed={}, catalog_dir=CATALOG)
+    who = signed_in()
+    departments = ["sales", "marketing", "support", "finance", "operations"]
+    templates = ["sales-lead", "marketing-lead", "support-lead", "finance-lead", "ops-manager"]
+    selected = {slug: {"template": slug, "display_name": slug, "instructions": ""} for slug in templates}
+    body = {"names": {"company_name": "Fresh Synthetic Co"},
+            "answers": {"departments": departments}, "selected": selected}
+    assert api.put("/api/v2/setup", json=body, headers=who).status_code == 200
+    # This fresh read exercises encode(sort_keys=True), the source of the original mismatch.
+    saved = api.get("/api/v2/setup", headers=who).json()
+    assert list(saved["selected"]) == sorted(templates)
+    for _ in range(2):
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+        groups = api.get("/api/v2/groups", headers=who).json()
+        assert [group["id"] for group in groups] == departments
+
+    # A manual group added after setup appends, even though stored keys sort it between wizard groups.
+    added = api.post("/api/v2/groups", json={"name": "Legal"}, headers=signed_in())
+    assert added.status_code == 200
+    expected = departments + ["legal"]
+    groups = api.get("/api/v2/groups", headers=who).json()
+    chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
+    assert [group["id"] for group in groups] == expected
+    assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
+    with api.app.state.store.read() as c:
+        saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    assert list(saved["org_groups"]) == sorted(expected)
+    assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(6)))
+
+
+def test_created_groups_append_after_legacy_positions_across_reload_and_repeated_create(environment):
+    """Adding a group preserves legacy positions and the chart/list agree after sorted JSON reloads."""
+    api = environment(seed={}, catalog_dir=CATALOG)
+    who = signed_in()
+    for name in ["Marketing", "Operations"]:
+        assert api.post("/api/v2/groups", json={"name": name}, headers=signed_in()).status_code == 200
+    # Model a roster stored before group creation persisted positions.
+    with api.app.state.store.transaction() as c:
+        legacy = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for group in legacy["org_groups"].values():
+            group.pop("order", None)
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
+    assert all("order" not in group for group in legacy["org_groups"].values())
+    selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
+    assert api.put("/api/v2/setup", json={"answers": {"departments": ["finance"]},
+                                         "selected": selected}, headers=who).status_code == 200
+    expected = ["marketing", "operations", "finance"]
+    for _ in range(2):
+        assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
+        # Separate requests reload the persisted roster, whose object keys are alphabetically sorted.
+        groups = api.get("/api/v2/groups", headers=who).json()
+        chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
+        assert [group["id"] for group in groups] == expected
+        assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
+        with api.app.state.store.read() as c:
+            saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        assert list(saved["org_groups"]) == sorted(expected)
+        assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(3)))

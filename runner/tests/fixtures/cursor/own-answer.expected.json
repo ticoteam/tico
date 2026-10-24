@@ -1,0 +1,29 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "message",
+  "text": "Checking the files.",
+  "final": false
+ },
+ {
+  "kind": "message",
+  "text": "Acme reply.",
+  "final": false
+ },
+ {
+  "kind": "message",
+  "text": "Acme reply, in full.",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

@@ -242,9 +242,11 @@ the usual caps, an empty blocklist.
 
 Sending on and the forward targets come from the Tico server (`GET /api/v2/bots/<slug>/mail-settings`,
 backend/mail_settings.py), which only a person who manages the bot sets (`hub bot mail`, or Settings > Bots > Mail
-sending). `outbound_send` and `forward_to` in bot.yaml are a request with no effect of their own: with no server value,
-or no Tico reachable from the run, every outside send needs an approval. `policy.switch()` reads it once per check;
-tests replace `policy.SERVER_GET`.
+sending). `outbound_send` and `forward_to` in bot.yaml are a request with no effect of their own: with no server value
+every outside send needs an approval. The same read says whether the bot is still onboarding: an onboarding bot sends
+no email, approval or not, and neither does a run that cannot read the setting at all (no credential, no Tico reachable,
+a bad answer), since it cannot confirm the bot is past onboarding. `policy.switch()` reads it once per check; tests
+replace `policy.SERVER_GET`.
 
 `check_draft` is the short version - blocklist, owner-handles-personally, attachments - and that
 one refuses with exit 2, because a draft nobody may write is a mistake to fix rather than

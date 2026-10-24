@@ -38,6 +38,17 @@ account that only lets setup create IAM roles under a permissions boundary, pass
 `--aws-permissions-boundary`: the role is created under it, with both tags, in one call. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
 
+A `--company-file` normally travels in the `.env` parameter, so it must pack to 7 KB. With `--plan-bucket BUCKET`
+(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup puts the packed
+plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on
+`plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
+`/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it
+from `TICO_COMPANY_FILE` (the server mounts that folder by its absolute path, `TICO_COMPANY_FILE_DIR`). Setup deletes the
+object once the running app reads its copy; if S3 refuses, setup says so and the object stays until you delete it or
+the bucket's lifecycle rule, if it has one, expires it. If the first boot stops (a copy or sha256 failure), fix the
+cause and re-run the same command: it finishes that boot. A server set up before `--plan-bucket` gets this release's
+`compose.yaml` and image on that re-run. Charts up to 300 seats fit.
+
 ```
 python3 -m setup destroy --domain tico.example.com --dry-run   # list what carries both tags
 python3 -m setup destroy --domain tico.example.com             # asks you to type the name

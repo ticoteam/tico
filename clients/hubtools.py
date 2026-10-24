@@ -571,6 +571,9 @@ def tag_update(api, args):
                   "description": "Movers: keep an imported ticket's number (unique across the team)"},
        "labels": {"type": "array", "items": {"type": "string"},
                   "description": "Labels: a project name, a kind (bug, front-end). Lower-case words."},
+       "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
+       "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
+       "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -591,6 +594,9 @@ def task_create(api, args):
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
+            body[field] = args[field]
+    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+        if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]
@@ -2186,17 +2192,57 @@ def bot_owners(api, args):
     return api.post(f"bots/{args['slug']}/co-owners", body, key=_key(args))
 
 
-@tool("hub_bot_setup_done", "A starter bot's own call, once its setup is done: it stops "
-      "being `needs_setup`, its routines may run and its work is claimed. Call it on yourself, once "
-      "your answers and first result are recorded; a person who manages the bot may call it for the bot. Repeating it "
-      "changes nothing. A member's bot counts toward their limit of active bots from here on, so this can "
-      "answer `bot_limit`: tell the person to archive a bot or ask an admin.",
+@tool("hub_bot_setup_done", "Mark a bot's onboarding complete, as a person above it on the org chart (its manager, their "
+      "managers or the owner): it becomes Active, its routines run and it takes tasks. Nobody else may. A bot calling it "
+      "on itself says it is ready instead, like hub_bot_ready, and stays Onboarding. Repeating it changes nothing. A "
+      "member's bot counts toward their limit of active bots from here on, so this can answer `bot_limit`: tell the "
+      "person to archive a bot or ask an admin.",
       {"slug": _s("The bot; you, when you leave it out")}, writes=True)
 def bot_onboarded(api, args):
     slug = args.get("slug") or str(api.get("me").get("actor", "")).removeprefix("bot:")
     if not slug:
         raise ValueError("Say which bot: hub bot setup-done <slug>")
     return api.post(f"bots/{slug}/onboarded", {}, key=_key(args))
+
+
+@tool("hub_bot_ready", "Say you are ready to start work, while you are onboarding, with a short summary of what you "
+      "learned. It is shown to the people above you on the org chart; one of them marks your onboarding complete. You "
+      "stay Onboarding until then.",
+      {"summary": _s("A few lines on what you learned and what you will do first")}, required=("summary",), writes=True)
+def bot_ready(api, args):
+    slug = str(api.get("me").get("actor", "")).removeprefix("bot:")
+    return api.post(f"bots/{slug}/onboarded", {"summary": args.get("summary") or ""}, key=_key(args))
+
+
+@tool("hub_seat_list", "The Recruiting seats: roles on the org chart with their job description and who they report "
+      "to, and no bot yet. A seat holds no work: work for its role stays with its manager.", {})
+def seat_list(api, args):
+    return api.get("seats")
+
+
+@tool("hub_seat_create", "Add a Recruiting seat, as a person: a role with its job description, reporting to you or "
+      "someone below you (the owner: anyone). It has no bot, repository or computer until it is filled.",
+      {"title": _s("The role's title"), "description": _s("Its job description"),
+       "reports_to": _s("A bot's slug or human:<id>; you when you leave it out"), "team": _s("Optional group id")},
+      required=("title",), writes=True)
+def seat_create(api, args):
+    body = {k: args[k] for k in ("title", "description", "reports_to", "team") if args.get(k) is not None}
+    return api.post("seats", body, key=_key(args))
+
+
+@tool("hub_seat_update", "Change a Recruiting seat's title, job description, reporting line or group, as a person "
+      "it reports up to (or the owner).",
+      {"seat": _s("The seat id"), "title": _s("New title"), "description": _s("New job description"),
+       "reports_to": _s("A bot's slug or human:<id>"), "team": _s("Group id")}, required=("seat",), writes=True)
+def seat_update(api, args):
+    body = {k: args[k] for k in ("title", "description", "reports_to", "team") if args.get(k) is not None}
+    return api.patch(f"seats/{args['seat']}", body, key=_key(args))
+
+
+@tool("hub_seat_close", "Take a Recruiting seat off the org chart, as a person it reports up to (or the owner).",
+      {"seat": _s("The seat id")}, required=("seat",), writes=True)
+def seat_close(api, args):
+    return api.post(f"seats/{args['seat']}/close", {}, key=_key(args))
 
 
 @tool("hub_human_add", "Add a person to the team roster and the sign-in list, as the person who asked you. A "
@@ -2439,6 +2485,19 @@ def agent_pair_approve(api, args):
       {"code": _s("The pairing code the profile printed")}, required=("code",), writes=True)
 def agent_pair_decline(api, args):
     return _as_person(api).post("agents/pairings/decline", {"code": args["code"]}, key=_key(args))
+
+
+@tool("hub_bot_keep_tasks_going", "Read or set automatic assigned-task starts for a bot you manage. "
+      "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
+      {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
+       "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
+def bot_keep_tasks_going(api, args):
+    who = api.on_behalf_of_requester()
+    bot = who.get(f"bots/{args['bot']}")
+    if 'limit' not in args:
+        return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
+    return who.post(f"bots/{args['bot']}/keep-tasks-going", {
+        "keep_tasks_going": args['limit'], "expected_revision": bot['revision']}, key=_key(args))
 
 
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
@@ -3280,6 +3339,25 @@ def assistant_propose(api, args):
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
 
 
+@tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
+      "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
+      "what you saved. It is theirs alone and shows on What it has learned, where they edit or delete it. The CEO Bot "
+      "in the owner's chat saves what the owner teaches it about the company with layer company.",
+      {"text": _s("One short line, in their words"),
+       "layer": {"enum": ["personal", "company"], "default": "personal",
+                 "description": "personal (theirs), or company (the CEO Bot in the owner's chat only)"}},
+      required=("text",), writes=True)
+def assistant_learn(api, args):
+    return api.post("assistant/learned", {"layer": args.get("layer") or "personal", "text": args["text"]},
+                    key=_key(args))
+
+
+@tool("hub_assistant_learned", "What a person's chat bot has learned: their own layer, and for the owner the "
+      "company layer (vision, priorities, what they taught the CEO Bot about the company).", {})
+def assistant_learned(api, args):
+    return api.get("assistant/learned")
+
+
 # ----------------------------------------------------------------------------- sql, integrations
 @tool("hub_sql", "Read-only SQL over what you may see (docs/hub-sql.md). One SELECT, WITH or "
       "EXPLAIN QUERY PLAN; bind `:key` with `params`.",
@@ -3382,6 +3460,20 @@ def github_create_bot_repo(api, args):
     body = {"slug": args["slug"], "empty": True} if args.get("empty") else \
         {"slug": args["slug"], "template": args.get("template") or "ticoteam/botops"}
     return api.post("github/repos", body, key=_key(args))
+
+
+@tool("hub_repo_review", "Submit this bot's GitHub PR review at an explicit current head. The configured reviewer App "
+      "uses APPROVE or REQUEST_CHANGES; the shared App uses COMMENT. Requires an existing repository "
+      "grant (write for the shared App). VERDICT is appended automatically. A moved head is refused; a lost response is never blindly resubmitted.",
+      {"repository": _s("GitHub owner/repository"), "number": {"type": "integer", "minimum": 1},
+       "head": _s("Reviewed full commit SHA", pattern="^[0-9a-f]{40}$"),
+       "verdict": _s("Review verdict", enum=["approve", "changes"]),
+       "body": _s("Review findings, excluding the automatically appended VERDICT line", maxLength=60000)},
+      required=("repository", "number", "head", "verdict", "body"), writes=True)
+def repo_review(api, args):
+    body = {key: args[key] for key in ("repository", "number", "head", "verdict", "body")}
+    key = args.get("operation_id") or "review-" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+    return api.post("github/reviews", body, key=key)
 
 
 @tool("hub_repo_product_create", "The Owner, or a bot with Create product repositories (every bot, unless the Owner "
@@ -3879,7 +3971,7 @@ HUMANS_AND_ASSISTANT = PEOPLE + ("assistant",)      # views.human_only: bots are
 ASSISTANT_WRITES = {"hub_inbound_create_email", "hub_task_child_create", "hub_task_create", "hub_task_update", "hub_task_comment", "hub_task_label",
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
-                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose"}
+                    "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn"}
 AUDIENCE = {
     **{name: REQUESTER for name in ("hub_repo_list", "hub_repo_update", "hub_bot_repos_get", "hub_bot_repos_set")},
     # Humans use their own rights; BotOps acts through `on_behalf_of`, which the server allows for no other bot.
@@ -3887,9 +3979,10 @@ AUDIENCE = {
     "hub_bot_update": REQUESTER, "hub_api": REQUESTER, "hub_credential_request": BOTOPS,
     "hub_credential_set": BOTOPS, "hub_message_redact": BOTOPS, "hub_support_file": BOTOPS,
     "hub_bot_repo_create": ("owner", "botops"),
+    "hub_repo_review": ("bot", "botops"),
     "hub_repo_product_create": ("owner", "bot", "botops"),   # a bot needs Create product repositories (server)
     **{name: REQUESTER for name in ("hub_credential_grant", "hub_credential_revoke", "hub_credential_import", "hub_credential_delete")},
-    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_pause",
+    **{name: REQUESTER for name in ("hub_bot_create", "hub_bot_restore", "hub_agent_pair_show", "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_bot_place", "hub_bot_go_live", "hub_bot_model", "hub_bot_keep_tasks_going", "hub_bot_pause",
                                     "hub_bot_resume", "hub_bot_access", "hub_bot_owners", "hub_human_add", "hub_group_update",
                                     "hub_tool_add", "hub_tool_update", "hub_tool_remove",
                                     "hub_bot_copy", "hub_bot_update_from_original", "hub_bot_suggest_to_original", "hub_skill_copy")},
@@ -3903,9 +3996,11 @@ AUDIENCE = {
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
+    # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
+    "hub_assistant_learn": HUMANS_AND_ASSISTANT, "hub_assistant_learned": HUMANS_AND_ASSISTANT,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "hub_brief": HUMANS_AND_ASSISTANT, "hub_bot_recent": HUMANS_AND_ASSISTANT,
-    "hub_mcp_stats": HUMANS_AND_ASSISTANT + BOTOPS,
+    "hub_mcp_stats": PEOPLE + BOTS,   # a bot the owner granted outcome stats; the server refuses the rest
     "hub_update_mark_read": HUMANS_AND_ASSISTANT, "hub_update_reply": PEOPLE, "hub_grokbot_sync": PEOPLE, "hub_external_sync": PEOPLE,
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": PEOPLE,
@@ -3913,6 +4008,9 @@ AUDIENCE = {
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
     "hub_update_create": BOTS,                      # only a bot posts an update
+    "hub_bot_ready": BOTS,                          # an onboarding bot's own "I'm ready" (backend/lifecycle.py)
+    # A seat is placed by a person under themselves (views and rights in backend/lifecycle.py).
+    **{name: PEOPLE for name in ("hub_seat_create", "hub_seat_update", "hub_seat_close")},
     # Files are a bot's own: only a bot, or the computer running it, publishes them.
     **{name: BOTS for name in ("hub_file_publish", "hub_file_link", "hub_file_touch", "hub_file_import")},
     # Reads that go over POST, which the Assistant may not make on its own.

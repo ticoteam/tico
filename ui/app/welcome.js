@@ -17,7 +17,7 @@ const ONB_TITLES = {providers: 'AI providers', names: 'Names', about: 'About the
 // The progress row's words: one each, so the row stays on one line (a phone shows the current one only).
 const ONB_SHORT = {providers: 'Providers', names: 'Names', about: 'About', org: 'Team', machine: 'Computer', agent: 'Agent', review: 'Review'};
 // At most one short hint line under a step's title; most steps have none.
-const ONB_BLURB = {providers: 'Bots wait until you add one in Settings > Computers.', agent: 'Optional.'};
+const ONB_BLURB = {providers: 'Choose the subscriptions or API keys your bots use, with Tico Gateway if you want it.', agent: 'Optional.'};
 const ONB_CUSTOMERS = [['businesses', 'Businesses'], ['consumers', 'Consumers'], ['both', 'Both']];
 // The four the server accepts (models.WorkArrival). Adding one here needs the same word there.
 const ONB_ARRIVES = [['email', 'Email'], ['slack', 'Slack'], ['crm', 'CRM'], ['tickets', 'Tickets']];
@@ -123,9 +123,9 @@ function onbRender(state) {
     ${done ? '' : `<ol class="onb-progress" aria-label="Setup steps">${state.steps.map((step, i) =>
       `<li class="${i < state.step ? 'done' : i === state.step ? 'cur' : ''}"${i === state.step ? ' aria-current="step"' : ''}><span>${esc(ONB_SHORT[step])}</span></li>`).join('')}</ol>
       <p class="onb-count sr-only" id="onb-count">Step ${state.step + 1} of ${state.steps.length}</p>`}
-    ${onbSampleHTML(state, done)}
-    ${onbCompanyFileHTML(state, done)}
-    <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>`;
+    ${key === 'providers' ? '' : onbSampleHTML(state, done) + onbCompanyFileHTML(state, done)}
+    <section class="card${key === 'org' ? ' ob-host' : ''}" id="onb-step" data-onb-step="${key}">${onbStepHTML(state, key)}</section>
+    ${key === 'providers' ? onbSampleHTML(state, done) + onbCompanyFileHTML(state, done) : ''}`;
   onbWire(state, key);
 }
 function onbStepHTML(state, key) {
@@ -200,7 +200,7 @@ function onbStepHTML(state, key) {
 function onbSampleHTML(state, done) {
   if (done || state.step !== 0 || state.record.completed) return '';
   return `<div class="onb-sample" id="onb-sample-box"><p><strong>Just trying Tico?</strong>
-    <span class="muted">Start with a made-up company: five bots, each with a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
+    <span class="muted">Start with a made-up company: five bots plus the built-in helpers. Each of the five has a short first task that ends by asking you to approve it. Nothing is sent outside.</span></p>
     <button class="ghost" type="button" id="onb-sample">Start with a sample company</button></div>`;
 }
 const onbImportPending = fields => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
@@ -263,20 +263,34 @@ async function onbUseCompanyFile(state) {
 const onbMachineLabel = state => state?.kind === 'linux' && S.config?.local ? 'This computer'
   : `${firstName(S.me?.name) || 'This'}'s ${state?.kind === 'linux' ? 'server' : 'Mac'}`;
 // [label, command, other]: `other` marks a line that is instead of one above, shown under Other ways.
+function onbSignIns(state) {
+  const view = state.providers || {}, preset = view.preset;
+  if (preset === 'gateway') return [];
+  if (PRESET_PROVIDERS[preset]) return [{runtime: 'claude', label: 'Claude'}, {runtime: 'codex', label: 'ChatGPT through Codex'}];
+  if (preset === 'own-keys') {
+    return (view.providers || []).filter(row => !row.gateway && (view.enabled || []).includes(row.id))
+      .filter((row, i, rows) => rows.findIndex(other => other.runtime === row.runtime) === i)
+      .map(row => ({runtime: row.runtime, label: row.label}));
+  }
+  const runtime = view.default?.runtime || S.config?.default_runtime || '';
+  return runtime ? [{runtime, label: harnessWords(runtime)}] : [];
+}
 function onbCommands(state) {
-  // Signing in to a model comes after a provider is chosen; with none, that step is left out.
-  const runtime = state.providers?.default?.runtime || S.config?.default_runtime || '';
+  // The preset can use several subscriptions, independently of the default model. Key-only harnesses have no login.
+  const signIns = onbSignIns(state).filter(row => state.kind === 'linux'
+    ? harnessCaps(row.runtime).container_login : harnessCaps(row.runtime).terminal_login || harnessCaps(row.runtime).browser_sign_in);
   if (state.kind === 'linux') {
-    const [run, login, plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), runtime);
-    return [run, login, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]].filter(Boolean);
+    const [run, , plain] = dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), '');
+    const logins = signIns.map(row => [`Sign in to ${row.label} (use Sign in in Settings > Computers, or run this after the runner installs the model CLI)`,
+      dockerRunnerCommands(state.code || '<code>', onbMachineLabel(state), row.runtime)[1][1]]);
+    return [run, ...logins, ['With plain Docker instead of the installer line. It has no updater, so it will not follow the server\'s releases', plain[1], true]];
   }
   const file = state.enrollment || '<setup-file>.json';
   return [
     ['Register this Mac for the team',
      `scripts/tico -e <slug> enroll --code-file "$HOME/Downloads/${file}" --label "${onbMachineLabel(state)}"`],
-    runtime ? ['Add the subscription the bots run on',
-     `scripts/tico -e <slug> profile add default\nscripts/tico -e <slug> profile login default ${runtime}`]
-            : null,
+    ...signIns.map((row, i) => [`Add your ${row.label} subscription`,
+     `${i === 0 ? 'scripts/tico -e <slug> profile add default\n' : ''}scripts/tico -e <slug> profile login default ${row.runtime}`]),
     ['Start the bot service', 'scripts/tico -e <slug> install bot'],
   ].filter(Boolean);
 }
@@ -320,6 +334,9 @@ function onbSummaryHTML(state) {
     ${label('Sells to', ONB_CUSTOMERS.find(([value]) => value === a.customers)?.[1] || '')}
     ${label('Software is the product', a.software_product ? (a.software_product === 'yes' ? 'Yes' : 'No') : '')}
     ${label('Team size', a.team_size)}
+    ${label('AI providers', PROVIDER_PRESETS.find(row => row.id === state.providers?.preset)?.label
+      || (state.providers?.providers || []).filter(row => (state.providers.enabled || []).includes(row.id)).map(row => row.label).join(', ')
+      || 'Choose later in Settings > Computers')}
     ${label('Computers', onbMachineStatus(r))}
     ${frSummaryTeamHTML(state)}
   </div>`;
@@ -329,16 +346,24 @@ function onbDoneHTML(state) {
   return `<div class="onb-next" id="onb-next-step">${frNextStepHTML(state)}</div>
     <div id="onb-bots">${onbBotRowsHTML(state)}</div>
     <div id="onb-after">${frNextHTML(state)}</div>
-    ${window.talkLineHTML?.() || ''}
     <div class="onb-actions"><button class="${frWaiting(state) ? 'ghost' : 'primary'}" type="button" id="onb-tasks">Open Tasks</button>
-      <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" data-setup-help="wizard">Want help setting up?</button></div>`;
+      <span class="spacer"></span><span class="muted" id="onb-status"></span><button class="ghost" type="button" id="onb-tour" data-gs-tour>Show me around</button></div>`;
 }
 function onbBotRowsHTML(state) {
   const botOps = onbBotOpsName(state);
   const chosen = new Set(Object.keys(state.record.selected || {}));
   const groups = frBotGroups((state.record.bots || []).filter(bot => !chosen.size || chosen.has(bot.slug)));
-  return groups.map(group => `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}
-    ${group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('')}</section>`).join('') || '<div class="empty">No bots were created.</div>';
+  const sample = state.record.sample;
+  const tasks = sample?.tasks || [];
+  const starter = sample ? `<p class="fr-sample-created">Five bots plus the built-in helpers.</p>${tasks.length ?
+    `<details class="fr-starter-tasks"><summary>${tasks.length} starter ${tasks.length === 1 ? 'task' : 'tasks'} created</summary><ul>${tasks.map((id, i) =>
+      `<li><a href="#/task/${encodeURIComponent(id)}">Starter task ${i + 1}</a></li>`).join('')}</ul></details>` : ''}` : '';
+  const rows = groups.map(group => {
+    const content = group.bots.map(bot => frBotRowHTML(state, bot, botOps)).join('');
+    return group.id === 'built-in' ? `<details class="onb-group onb-builtins" data-onb-group="built-in"><summary>Built-in helpers: ${group.bots.map(bot => esc(bot.display_name || bot.slug)).join(', ')}</summary>${content}</details>`
+      : `<section class="onb-group"${group.id ? ` data-onb-group="${esc(group.id)}"` : ''}>${group.name ? `<h2>${esc(group.name)}</h2>` : ''}${content}</section>`;
+  }).join('');
+  return starter + (rows || '<div class="empty">No bots were created.</div>');
 }
 // The poll redraws only the progress rows: the forms below them keep what was typed.
 function onbRenderDone(state) {
@@ -346,7 +371,9 @@ function onbRenderDone(state) {
   if (!host || host.dataset.onbStep !== 'done') return;
   const rows = $('#onb-bots');
   if (!rows) { host.innerHTML = onbDoneHTML(state); onbWire(state, 'done'); return; }
+  const open = [...rows.querySelectorAll('details')].map(el => el.open);
   rows.innerHTML = onbBotRowsHTML(state);
+  rows.querySelectorAll('details').forEach((el, i) => { el.open = open[i] || false; });
   // The next step is redrawn only when it changes, so keyboard focus on its button survives a poll.
   const next = $('#onb-next-step'), step = document.createElement('div');
   step.innerHTML = frNextStepHTML(state);
@@ -546,6 +573,8 @@ async function onbCompleted(state, record) {
   if (ONB !== state) return;
   applyConfig(done(config || S.config));
   if (!config) void fresh.then(late => { if (late && ONB === state) applyConfig(done(late)); });
+  const providers = await get('/v2/providers').catch(() => null);
+  if (providers && Array.isArray(providers.providers)) state.providers = providers;
   state.step = state.steps.length;
   await onbRevisions(state);
   if (ONB !== state) return;
