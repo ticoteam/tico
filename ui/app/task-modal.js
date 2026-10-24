@@ -17,8 +17,8 @@ function taskDialogWire(d) {
   });
   d.addEventListener('issue-acted', () => d.close());
   d.addEventListener('close', () => {
-    // The close event is queued: when the task was reopened before it fired, it belongs to the closed one.
-    if (d.open) return;
+    // The close event is queued: a newer opening may still be awaiting its first draw.
+    if (d.open || d.taskOpening?.pending) return;
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
     d.tfEl = null; d.tfOpen = null;
@@ -33,7 +33,7 @@ function taskModal() {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   taskDialogWire(d);
   d.addEventListener('close', () => {
-    if (d.open) return;
+    if (d.open || d.taskOpening?.pending) return;
     TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
     const back = d.returnContext; d.returnContext = null;
@@ -97,7 +97,7 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   const peek = !!d.dataset.peek;
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
-    d.taskOpening = {}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
+    d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
   } else askDraftCapture(d);
   const opening = d.taskOpening;
@@ -129,9 +129,12 @@ async function taskModalShow(task, d = taskModal(), opts = {}) {
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
   const onProp = d.contains(document.activeElement) ? document.activeElement.dataset.prop : '';
   if (onProp) d.focusProp = onProp;
+  // A previous close's Back navigation must settle before a new dialog takes its place in history.
+  if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   // Session copy commands need the CLI's manifest even when Tasks is the first page opened.
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
+  opening.pending = false;
   taskModalRunsKeep(d, kept);
   d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
   adopt();
