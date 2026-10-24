@@ -1,5 +1,6 @@
 """Tests read the registry from a fictional company, never from a real environment's."""
 import os
+import sys
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -77,6 +78,21 @@ def pytest_configure(config):
     missing = [str(arg) for arg in config.args if not (base / str(arg).split("::")[0]).exists()]
     if missing:
         raise pytest.UsageError("No such test path: " + ", ".join(missing))
+
+
+PYTEST_WORKERS_MAX = 8
+
+
+def pytest_xdist_auto_num_workers(config):
+    """`-n auto` (pytest.ini): the cores left over, 1 to 8. Several bots run the suite at once on one team box, and
+    eight workers each had five suites at a load of 54 on eight cores, next to the hub. Linux counts the load average
+    against the cores this process may use; macOS's load average stays high when idle, so a Mac takes its cores.
+    PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
+    if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
+        return int(os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"])
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    free = cores - os.getloadavg()[0] if sys.platform.startswith("linux") else cores
+    return max(1, min(PYTEST_WORKERS_MAX, int(free)))
 
 
 def pytest_sessionfinish(session, exitstatus):
