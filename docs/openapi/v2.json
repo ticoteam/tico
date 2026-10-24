@@ -28588,6 +28588,32 @@
             "maxItems": 20,
             "title": "Labels"
           },
+          "change_paths": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 3000,
+            "title": "Change Paths"
+          },
+          "qa": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qa"
+          },
+          "qa_not_checkable_live": {
+            "type": "boolean",
+            "title": "Qa Not Checkable Live",
+            "default": false
+          },
           "top": {
             "type": "boolean",
             "title": "Top",

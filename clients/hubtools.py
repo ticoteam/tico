@@ -571,6 +571,9 @@ def tag_update(api, args):
                   "description": "Movers: keep an imported ticket's number (unique across the team)"},
        "labels": {"type": "array", "items": {"type": "string"},
                   "description": "Labels: a project name, a kind (bug, front-end). Lower-case words."},
+       "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
+       "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
+       "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -591,6 +594,9 @@ def task_create(api, args):
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
+            body[field] = args[field]
+    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+        if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
         body["private"] = args["private"]

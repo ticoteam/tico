@@ -390,9 +390,9 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
-            for field in ("type", "step", "number"):
+            for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
                 if getattr(args, field, None) is not None:
-                    payload[field] = getattr(args, field)
+                    payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
             if args.label:
                 payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
             if args.top:

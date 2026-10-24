@@ -169,3 +169,57 @@ def test_same_head_failure_stays_explicit_even_after_a_passing_rerun():
     task["messages"] = complete()["messages"] + [
         message(task, f"Tests: head {OLD}: 0 passed, 1 failed", ident="old", created="2026-01-03")]
     assert build(task)["gaps"] == 0
+
+
+@pytest.mark.parametrize('where', ['note', 'keeper', 'review-child', 'review-child-builder'])
+def test_receipts_are_collected_from_real_ticket_sources(where):
+    task = complete()
+    task['messages'] = []
+    text = f'Tests: base {BASE} head {HEAD}: 356 pass / 0 fail'
+    if where == 'note':
+        task.update(note=text, updated='2026-01-04')
+    elif where == 'keeper':
+        task['messages'] = [message(task, 'Ready for review. ' + text, actor='keeper')]
+    else:
+        child = task['children'][0]
+        child['messages'].append(message(child, text, actor=task['owner'] if where.endswith('builder') else child['owner']))
+    result = build(task)
+    assert result['gaps'] == 0
+    evidence = result['prs'][0]['tickets'][0]['test_receipts']
+    assert len(evidence) == 1 and evidence[0]['status'] == 'passed'
+    assert text in checklist.markdown(result)
+
+
+def test_unrecognised_missing_failure_and_base_head_are_distinct():
+    task = complete()
+    task['messages'] = []
+    assert 'unrecognised' not in '\n'.join(build(task)['prs'][0]['gaps'])
+    task['note'] = f'Tests: base {BASE} head {HEAD}: results attached'
+    assert 'unrecognised receipt' in '\n'.join(build(task)['prs'][0]['gaps'])
+    task['note'] = f'Tests: base {BASE} head {HEAD}: 40 passed, 2 failing/errored'
+    assert 'recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])
+    task['note'] = f'Tests: base {HEAD} head {OLD}: 9 passed, 0 failed'
+    assert 'no current passing receipt' in '\n'.join(build(task)['prs'][0]['gaps'])
+
+
+def test_mixed_note_scopes_failures_and_pending_to_the_named_head_result():
+    task = complete()
+    task['messages'] = []
+    text = (f'Review 1: receipt gate implemented. Tests: base {BASE} head {HEAD}: '
+            '185 passed, 0 failed, 0 skipped; exit 0, 78.10s. '
+            'Two original existing-fixture failures were corrected before final validation. '
+            'Independent Review 1 and hosted checks pending. '
+            'Full suite, browsers/native builds and installed behavior not run.')
+    task.update(note=text, updated='2026-01-04')
+    assert build(task)['gaps'] == 0
+    task['note'] = text.replace('185 passed, 0 failed', '183 passed, 2 failing/errored')
+    assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])
+    task['messages'] = [message(task, f'Tests: head {HEAD}: 185 passed, 0 failed', created='2026-01-05')]
+    assert 'Tests: recorded failure' in '\n'.join(build(task)['prs'][0]['gaps'])
+
+
+def test_review_two_recheck_title_is_not_mistaken_for_an_optional_absent_review():
+    task = complete()
+    task['children'][1]['title'] = 'Review 2 re-check: PR #12'
+    task['children'][1]['messages'] = []
+    assert 'Review 2: missing verdict' in '\n'.join(build(task)['prs'][0]['gaps'])

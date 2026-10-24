@@ -497,6 +497,29 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+@pytest.mark.parametrize('choice', ['yes', 'no'])
+def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice):
+    from clients import remotecli, hubtools
+    sent = []
+    class Api:
+        def get(self, path, **kw):
+            return {'actor': 'human:ana'}
+        def post(self, path, body, **kw):
+            sent.append(body)
+            return {'task': {'id': 'synthetic'}}
+    api = Api()
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: api)
+    args = hubcli.parser().parse_args(['task', 'create', '--owner', 'cpo', '--title', 'UI change',
+        '--body', 'x', '--qa', choice, '--change-path', 'ui/page.js', '--qa-not-checkable-live'])
+    remotecli.run(args)
+    hubtools.BY_NAME['hub_task_create']['fn'](api, {'owner': 'cpo', 'title': 'UI change', 'body': 'x',
+        'qa': choice == 'yes', 'change_paths': ['ui/page.js'], 'qa_not_checkable_live': True})
+    assert len(sent) == 2
+    assert all(p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js']
+               and p['qa_not_checkable_live'] is True for p in sent)
+
+
 def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
     from clients import remotecli
     from clients.hubtools import BY_NAME
