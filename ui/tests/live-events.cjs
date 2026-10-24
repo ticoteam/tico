@@ -2,7 +2,8 @@
 // what changed, as the server does when a write commits.
 //  - the chat follows its conversation on the page's one stream and reads its snapshot once per change, not on a timer;
 //  - the Needs-you count beside a bot follows the `needs` topic: the event names what changed, and only that is read;
-//  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again;
+//  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again,
+//    and does not redraw for a write that shows nothing new (a worktree heartbeat);
 //  - each reconnect resumes from the last change number;
 //  - the 2-minute refresh asks only for the tasks changed since the list's cursor and applies them, and asks for the
 //    labels with the tag it was given (a 304 then).
@@ -116,6 +117,16 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   await page.locator('#task-body', {hasText: 'Check the release links'}).waitFor();
   await page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // the batch is applied
   assert.equal(reads.tasks, listed, 'a new task does not read the list again');
+  // A computer's heartbeat on a worktree rewrites only the link's own time: the board is not drawn again.
+  const link = updated => ({kind: 'worktree', ref: 'wt-1', label: 'release-notes', updated});
+  const settled = () => page.waitForFunction(() => !LIVE_SOON.has('tasks'), null, {timeout: t(5000)});
+  await send(() => true, block(15, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('a')]})}));
+  await settled();
+  await page.evaluate(() => { window.boardDraws = 0; const draw = tasksRender; tasksRender = (...a) => { window.boardDraws++; return draw(...a); }; });
+  await send(() => true, block(16, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('b')]})}));
+  await settled();
+  assert.equal(await page.evaluate(() => window.boardDraws), 0, 'a heartbeat-only change does not redraw the board');
+  assert.equal(await page.evaluate(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0].updated), 'b', 'the list keeps the newest copy');
 
   // The 2-minute refresh: only what changed since the list's cursor, applied in place; the labels come back as a 304.
   const active = reads.active;

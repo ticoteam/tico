@@ -82,6 +82,7 @@ def active_location(c):
 
 
 def view(c, settings, blobs):
+    from . import tico_storage
     active = c.execute("SELECT * FROM company_storage WHERE active=1").fetchone()
     earlier = c.execute("SELECT * FROM company_storage WHERE active=0 ORDER BY retired DESC").fetchall()
     return {"active": _public(active) if active else None,
@@ -89,6 +90,7 @@ def view(c, settings, blobs):
             "server": {"mode": "s3" if settings.blob_bucket else "local",
                        "location": _location(settings.blob_bucket, settings.blob_prefix) if settings.blob_bucket else ""},
             "copy": {key: blobs.copy_status.get(key, 0) for key in ("done", "total", "failed", "running")},
+            "tico": tico_storage.view(c, settings),
             "doc": "https://github.com/ticoteam/tico/blob/main/docs/files.md#a-companys-own-bucket"}
 
 
@@ -193,16 +195,25 @@ def turn_off(store, who):
 
 
 def apply(store, vault, blobs, copy=True, checked=False):
-    """Point the file store at what is saved now."""
+    """Point the file store at what is saved now: the company's own places, and Tico file hosting's when HQ handed
+    one over (backend/tico_storage.py), which takes new files while it is on."""
+    from . import tico_storage
     with store.read() as c:
         active, earlier = places(c, vault)
-    blobs.configure(active, earlier, store if copy else None, checked=checked)
+        hosting, edge = tico_storage.place(c, vault), tico_storage.edge(c, vault)
+    active, earlier, copy_disk, paused = tico_storage.arrange(active, earlier, hosting)
+    blobs.configure(active, earlier, store if copy else None, checked=checked, copy_disk=copy_disk,
+                    paused=tico_storage.PAUSED if paused else "")
+    blobs.edge = edge
 
 
 def startup(store, vault, blobs):
     """Before the copy loop starts (backend/app.py lifespan), so it copies to the saved place."""
+    from . import tico_storage
+    tico_storage.startup(store, vault, blobs)
     with store.read() as c:
-        saved = c.execute("SELECT 1 FROM company_storage LIMIT 1").fetchone()
+        saved = (c.execute("SELECT 1 FROM company_storage LIMIT 1").fetchone()
+                 or c.execute("SELECT 1 FROM tico_storage WHERE bucket!=''").fetchone())
     if not saved:
         return
     try:
@@ -219,7 +230,9 @@ def for_backup(store, blobs):
     with store.read() as c:
         if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='company_storage'").fetchone():
             return blobs
-        if not c.execute("SELECT 1 FROM company_storage LIMIT 1").fetchone():
+        hosted = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tico_storage'").fetchone()
+        if not c.execute("SELECT 1 FROM company_storage LIMIT 1").fetchone() and not (
+                hosted and c.execute("SELECT 1 FROM tico_storage WHERE bucket!=''").fetchone()):
             return blobs
     from .credentials import Vault
     apply(store, Vault(store), blobs, copy=False)

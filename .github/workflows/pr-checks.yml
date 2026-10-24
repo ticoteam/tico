@@ -194,7 +194,10 @@ jobs:
 
   timings:
     name: PR job timings
-    if: always()
+    # Failed runs keep their timing receipt, but a cancelled run (a superseded pull request push) ends here: a final
+    # job queued after the cancellation can wait for a runner that never comes, holding the newer head's run pending
+    # in the same concurrency group.
+    if: ${{ !cancelled() }}
     needs: [plan, tests, caddy-linux]
     runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && format('runs-on={0}/runner=2cpu-linux-x64/extras=s3-cache', github.run_id) || 'ubuntu-24.04' }}
     timeout-minutes: 3

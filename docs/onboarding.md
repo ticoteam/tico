@@ -250,13 +250,15 @@ an external agent you already have is the **Connect an external agent** button i
 ### An empty Market page
 
 While the market has no entity and no page someone wrote (the seed's pages do not count), the Market page is an empty state
-instead of the graph, the index and the ask box. The owner sees one box for a website, a description
-or links to anything about the market, **Start research**, and an **Attach files** link to the Docs import. Everyone else sees
-"Nothing here yet."
+instead of the graph, the index and the ask box. The owner sees the Librarian's four questions, one at a time (what you sell,
+who buys it, who you compete with, what to watch), with **Skip for now** and an **Attach files** link to the Docs import.
+Answers are kept as given, so a skipped setup shows **Continue** at the same question next time
+([librarian.md](librarian.md#first-run-setup)). Everyone else sees "Nothing here yet."
 
-**Start research** calls `POST /api/v2/setup/getting-started/market` `{"text"}`, which files one task, "Set up the market map", to the
-Librarian and answers `{"task_id", "bot": "librarian"}`; `409 librarian` while the Librarian is not running. The Librarian's
-`playbooks/market-setup.md` researches the sources and writes the market pages and graph ([librarian.md](librarian.md)). The page
+The last question's **Start research** calls `POST /api/v2/librarian/setup/market` with `action: finish`, which files one task,
+"Set up the market map", to the Librarian; `409 librarian` while the Librarian is not running. (`POST
+/api/v2/setup/getting-started/market` `{"text"}` still files the same task from one box of text.) The Librarian's
+`playbooks/market-setup.md` researches the answers and writes the market pages and graph ([librarian.md](librarian.md)). The page
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
 Market page is drawn. The code is `ui/market-page.js`.

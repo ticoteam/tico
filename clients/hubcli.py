@@ -104,6 +104,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
+    hub assistant learn "<line>" [--company]
+                                           in a person's own chat: save what they taught you, in their own
+                                           layer (--company: the CEO Bot, about the company, owner's chat only)
+    hub assistant learned                  what a person's chat bot has learned (What it has learned)
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -768,6 +772,13 @@ def parser():
     s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("--body", default="{}", help="the request's JSON body")
     s.set_defaults(fn="assistant propose")
+    s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
+    s.add_argument("text", help="one short line, in their words")
+    s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
+                   help="the CEO Bot in the owner's chat: about the company, not how they like things")
+    s.set_defaults(fn="assistant learn")
+    assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
+        .set_defaults(fn="assistant learned")
     # Tags keep the existing task --label key contract.
     tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
     s = tag.add_parser("list")
@@ -832,6 +843,9 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
+    s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
+    s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
+    s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
@@ -1848,6 +1862,16 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
+    s = repos.add_parser("review", help="submit a GitHub review at an exact PR head; shared App falls back to COMMENT")
+    s.add_argument("repository", metavar="OWNER/REPO")
+    s.add_argument("number", type=int)
+    s.add_argument("--head", required=True, help="reviewed full 40-character commit SHA")
+    s.add_argument("--verdict", required=True, choices=("approve", "changes"))
+    text = s.add_mutually_exclusive_group(required=True)
+    text.add_argument("--body")
+    text.add_argument("--body-file", help="review text file; VERDICT is appended automatically")
+    s.add_argument("--operation-id", help="stable retry key; defaults to a hash of the review")
+    s.set_defaults(fn="repo review")
     s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository "
                          "(the Owner, or a bot with Create product repositories)")
     s.add_argument("name", help="exact GitHub repository name, without an organization")

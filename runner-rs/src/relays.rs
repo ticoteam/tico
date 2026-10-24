@@ -161,7 +161,7 @@ pub fn poll(runner: &Arc<Runner>) {
 
 /// Optional computer defaults: the first bot's runtime and the Gateway runtime the company chose.
 /// Only isolated computers can run Gateway turns. Passing these as defaults keeps the owner's off
-/// choice effective, while a bot's explicit primary/fallback still makes its harness required.
+/// choice effective, while a bot's explicit primary/task model/fallback still makes its harness required.
 pub fn harness_defaults(runtimes: &HashSet<String>, config: &Value, isolated: bool) -> Vec<String> {
     let mut defaults = vec![];
     if runtimes.is_empty() {
@@ -176,11 +176,15 @@ pub fn harness_defaults(runtimes: &HashSet<String>, config: &Value, isolated: bo
     defaults
 }
 
-/// The runtimes this computer's bots run on (service.harness_runtimes): each assigned bot's and its fallback's.
+/// The runtimes this computer's bots run on: each assigned bot's own, its task model's and its fallback's.
 pub fn harness_runtimes(rows: &[Value]) -> HashSet<String> {
     let mut found = HashSet::new();
     for row in rows {
         found.insert(text_of(&row["config"]["runtime"]));
+        let task_model = &row["config"]["task_model"];
+        if !text_of(&task_model["model"]).trim().is_empty() {
+            found.insert(text_of(&task_model["runtime"]));
+        }
         if let Some(hop) = crate::fallback::configured(&row["config"]) {
             found.insert(hop.runtime);
         }

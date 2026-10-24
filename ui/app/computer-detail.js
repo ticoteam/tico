@@ -108,7 +108,7 @@ function machineRowAddHTML(machine) {
 
 // ---- the pop-up
 function machineConnectionHTML(machine, conn, online, manage) {
-  const kind = conn.shared ? `API key${conn.shared.name ? ` · ${conn.shared.name}` : ''}` : "Computer's login";
+  const kind = conn.shared ? `API key${conn.shared.name ? ` · ${conn.shared.name}` : ''}` : '';
   const tags = conn.shared ? '<span class="pill computer-conn-shared" data-shared>Shared</span>' : '';
   let signIn;
   // Signed in, but its turns can't save a session: the folder is named on screen, and no sign-in is offered for it.
@@ -146,7 +146,7 @@ function machineConnectionHTML(machine, conn, online, manage) {
   // Bots that take turns on one sign-in say so.
   const shared = machineSharedLoginHTML(machine, conn.runtime);
   return `<div class="computer-conn${conn.attention ? ' attention' : ''}" data-connection="${esc(conn.key)}" data-machine-tool="${esc(conn.runtime)}">
-    <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong><span>${esc(kind)}</span>${tags}</div>
+    <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong>${kind ? `<span>${esc(kind)}</span>` : ''}${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
     ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}

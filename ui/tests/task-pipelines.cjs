@@ -265,7 +265,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       {id: 'filed', name: 'Filed', status: 'closed', position: 6, type_id: 'marketing'});
     const decision = {...tasks[2], id: 'decision', owner: 'human:ana', requester: 'bot:ops'};
     tasks.push(decision);
-    await page.evaluate(task => taskModalShow(task), decision);
+    // A task opened uses the types already read; the page's next load reads the edited ones.
+    await page.evaluate(async task => { await tasksLoad(TASKS_ST); taskModalShow(task); }, decision);
     const pickStep = async (id, name) => {
       await page.locator('#task-modal [data-prop="step"]').click();
       await page.locator(`#task-modal .prop-pop [data-prop-pick="${id}"]`).click();

@@ -26,6 +26,7 @@ from . import go_live as pending_go_lives
 from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
+from . import outcome_stats
 from . import ceo_bot, owner_link
 from . import login_holds
 from . import auto_tasks, check_models, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
@@ -2664,19 +2665,30 @@ def create_app(settings=None):
     @app.get("/api/v2/live/stats")
     def live_stats(request: Request, days: int = 7, via: str = ""):
         """How an outside assistant's tool calls perform (backend/mcp.py record_call), per tool:
-        calls, median and p90 server time, typical answer size, errors. For people and BotOps, which
-        tunes them."""
+        calls, median and p90 server time, typical answer size, errors. People and BotOps read all callers;
+        a bot granted outcome stats reads only bot calls. Delegated turns are refused."""
         who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "Tool-call stats are for people and BotOps", 403)
+        with store.read() as c:
+            granted = outcome_stats.may_read(c, who) and who.role == "bot"
+        if (who.via or who.task_actor or
+                (who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER) and not granted)):
+            raise Problem("forbidden", "Tool-call stats are for people, BotOps and a bot the owner granted outcome stats", 403)
+        if granted and via:
+            raise Problem("forbidden", "A bot granted outcome stats reads the totals, not one assistant's calls", 403)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         tools = {}
         with store.read() as c:
-            for row in c.execute("SELECT detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+            for row in c.execute("SELECT actor, detail_json FROM events WHERE action='mcp.call' AND ts>?", (since,)):
+                if granted and not (row["actor"] or "").startswith("bot:"):
+                    continue
                 d = json.loads(row["detail_json"] or "{}")
                 if via and d.get("via") != via:
                     continue
-                t = tools.setdefault(d.get("tool") or "?", {"ms": [], "bytes": [], "errors": 0})
+                name = d.get("tool") or "?"
+                # Unknown names are caller text; only registered tool names leave the event for a granted bot.
+                if granted and name not in outcome_stats.TOOL_NAMES:
+                    name = "other"
+                t = tools.setdefault(name, {"ms": [], "bytes": [], "errors": 0})
                 t["ms"].append(int(d.get("ms") or 0)); t["bytes"].append(int(d.get("bytes") or 0))
                 t["errors"] += bool(d.get("error"))
         def pct(values, p):
@@ -3112,7 +3124,7 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, asked=None):
+    def task_create(c, who, body, lint=True, asked=None, review_prs=None):
         """`asked`: the person a bot's question is put to (backend/media.py task_question). When the task is
         private they are its requester, so its two parties are the bot and them."""
         source = who
@@ -3207,7 +3219,9 @@ def create_app(settings=None):
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
                             number=body.number, mover=mover(c, who) or None,
-                            own_room=H.actor_id(owner) != settings.assistant_bot)
+                            own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
+                            change_paths=body.change_paths, qa=body.qa,
+                            qa_not_checkable_live=body.qa_not_checkable_live)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
@@ -3256,9 +3270,44 @@ def create_app(settings=None):
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
+    def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
+        from . import review_gate
+        # None is reserved for a genuinely unconfigured GitHub integration.
+        # If a skipped preflight becomes applicable during mutation, fail closed.
+        if child_title is not None and not review_gate.REVIEW.match(child_title):
+            return {}
+        if child_title is None and step is None and status is None and task_type is None:
+            return {}
+        with store.read() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            typ = H.type_get(c, task_type if task_type is not None else row.get("type_id") or H.GENERAL_TYPE)
+            if not typ:
+                return {}  # Mutation reports an invalid destination without trusting cached PR evidence.
+            row = {**row, "type_id": typ["id"]}
+            if child_title is None:
+                # Match _task_state's destination resolution, including a type-only
+                # move whose retained status selects a review step on the new board.
+                effective = status if status is not None else row.get("status") or "open"
+                current = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None)
+                if step is not None:
+                    named = next((s for s in typ["steps"] if s["id"] == step), None)
+                    named = named or next((s for s in typ["steps"] if s["name"] == step), None)
+                elif current and current["status"] == effective:
+                    named = current
+                else:
+                    named = next((s for s in typ["steps"] if s["status"] == effective), None)
+                if not named or named["name"] not in ("Review 1", "Review 2"):
+                    return {}
+            if not review_gate.engineering(c, row):
+                return {}
+            prs = review_gate.links(c, row)
+        return review_gate.snapshot(app.state.github_app, prs) if prs else {}
+
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
-        return mutate(request, body, lambda c: task_create(c, request.state.identity, body))
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
+        return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots))
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -3272,6 +3321,7 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
+        snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         def work(c):
             # A person's request to BotOps can purge tasks that are not really needed, as that person.
             who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
@@ -3311,7 +3361,7 @@ def create_app(settings=None):
                 privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
-                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None).get("warnings")
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
             return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
                     **({"warnings": warnings} if warnings else {})}
@@ -5789,6 +5839,8 @@ def create_app(settings=None):
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
+    from . import tico_storage
+    tico_storage.install(app, store, auth)
     from .sql import install_sql
     install_sql(app, store, auth)
     from .judge import install_judge
@@ -5797,6 +5849,7 @@ def create_app(settings=None):
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
     system_routines.install(app, store, auth, mutate)
+    outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
     from .mail import install_mail
@@ -5809,6 +5862,8 @@ def create_app(settings=None):
     install_memory_history(app, store, auth, mutate)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)
+    from .learned import install as install_learned
+    install_learned(app, store, auth, mutate)
     from .mcp import install_mcp
     install_mcp(app, settings)
     from .github import install_github
@@ -5838,6 +5893,8 @@ def create_app(settings=None):
     install_assistant(app, store, auth, mutate, onboarding)
     from .librarian import install as install_librarian
     install_librarian(app, store, auth, mutate, onboarding)
+    from .librarian_setup import install as install_librarian_setup
+    install_librarian_setup(app, store, auth, mutate)
     from .goal_routes import install as install_goal_routes
     install_goal_routes(app, store, auth, mutate, settings)
     from .replay import install as install_replay

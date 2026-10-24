@@ -16,7 +16,7 @@ Some models charge more for a request with a long prompt (`providers.LONG_PROMPT
 and the server prices each request at its own rate. Tokens no request accounts for (an older runner, another runtime, a run of more
 than 2,000 requests) are priced at the lower rate, and the run is counted in `low_estimate_runs`: the page says **estimate, may be
 low**. A runtime that reports no
-tokens (Grok today) shows runs and no tokens.
+tokens (Grok today) shows runs and no tokens. When every API run lacks reported usage or a model price, the cost shows a dash; a measured zero remains $0.00.
 
 A run on a ChatGPT or Claude sign-in (Codex "Signed in with ChatGPT", Claude with `claude.ai` or a long-lived OAuth token, a Cursor
 account) is `billing: subscription`. It costs nothing extra, so its figure is shown as "API-equivalent" and kept out of the estimate of what
@@ -57,7 +57,7 @@ it.
 
 `GET /api/v2/usage?from=&to=&department=&group=bot|day|routine` (UTC dates, default the last 7 days, at most 366) returns `rows` and
 `totals` with `runs`, `input_tokens`, `cached_tokens`, `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
-model), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
+model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `group` selects how rows are aggregated. See `docs/openapi/v2.json`.
 
 ## Filter by the settings used for a run

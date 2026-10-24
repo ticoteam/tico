@@ -9,12 +9,15 @@ const {unrouted} = require('./support/routes.cjs');
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    const visit = async ({role = 'owner', hash = '#/settings/storage'} = {}) => {
+    const visit = async ({role = 'owner', hash = '#/settings/storage', tico = {state: 'off', label: 'Tico file hosting'}} = {}) => {
       const ctx = await browser.newContext({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
       const page = await ctx.newPage();
       const errors = [], calls = [];
       let storage = {active: null, earlier: [], server: {mode: 'local', location: ''}, copy: {done: 0, total: 0, failed: 0, running: false},
-        doc: 'https://example.test/docs/files.md'};
+        doc: 'https://example.test/docs/files.md', tico};
+      let move = null;
+      const estimate = () => move ? {to: 'tico-files-us/c/acme', files: 0, bytes: 0, gb: 0}
+        : {to: 'tico-files-us/c/acme', files: 3, bytes: 2500000000, gb: 2.5};
       page.on('pageerror', e => errors.push(e.message));
       page.on('dialog', d => d.accept());
       await page.route('**/*', route => {
@@ -40,6 +43,13 @@ const {unrouted} = require('./support/routes.cjs');
           if (req.method() === 'DELETE') storage = {...storage, active: null, earlier: [{...storage.active, retired: new Date().toISOString()}]};
           return json(storage);
         }
+        if (p === '/api/v2/system/storage/move') {
+          calls.push(req.method() + ' move ' + (req.postData() || ''));
+          if (req.method() === 'POST') move = {id: 'm1', target: 'tico-files-us/c/acme', state: 'done', estimate_files: 3, estimate_bytes: 2500000000,
+            moved_files: 3, moved_bytes: 2500000000, failed: 0, error: '', matches: true};
+          return json({estimate: estimate(), move});
+        }
+        if (p === '/api/v2/system/storage/tico/check') { calls.push('POST check'); return json(tico); }
         if (p === '/api/employees' || p === '/api/issues') return json([]);
         if (p === '/api/humans') return json({people: [], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -77,12 +87,38 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
+    // Tico file hosting on: nothing to type; Move existing files shows the estimate, confirms and reports it matched.
+    v = await visit({tico: {state: 'on', label: 'Tico file hosting', address: 'acme-files.ticofiles.com', location: 'tico-files-us/c/acme', error: ''}});
+    const hosting = v.page.locator('[data-storage-tico]');
+    await hosting.waitFor();
+    assert.match(await v.page.locator('#set-storage').innerText(), /New files go to Tico file hosting; the company's own storage is this server's disk/);
+    assert.match(await hosting.innerText(), /Pictures, video and audio stored there open from acme-files\.ticofiles\.com/);
+    await v.page.waitForFunction(() => /3 files \(2\.50 GB\) are not in Tico file hosting yet\./.test(document.querySelector('[data-move-line]')?.textContent));
+    assert.equal(await hosting.locator('[data-move]').innerText(), 'Move existing files');
+    assert.equal(await hosting.locator('[data-export]').getAttribute('href'), '/api/v2/system/storage/export');
+    await hosting.locator('[data-move]').click();
+    await v.page.waitForFunction(() => /Moved 3 files, 2\.50 GB, as estimated/.test(document.querySelector('[data-move-line]')?.textContent));
+    assert.deepEqual(JSON.parse(v.calls.find(c => c.startsWith('POST move')).slice(10)), {expect_bytes: 2500000000});
+    assert.equal(await hosting.locator('[data-move]').isHidden(), true, 'nothing left to move');
+    await hosting.locator('[data-tico-check]').click();
+    await v.page.waitForFunction(() => document.querySelector('[data-storage-tico]'));
+    assert.ok(v.calls.includes('POST check'));
+    assert.deepEqual(v.errors, []);
+    await v.ctx.close();
+
+    // Stopped: the same move goes the other way.
+    v = await visit({tico: {state: 'stopped', label: 'Tico file hosting', address: '', location: 'tico-files-us/c/acme', keep_until: '2026-11-22T00:00:00Z', error: ''}});
+    await v.page.locator('[data-storage-tico]').waitFor();
+    assert.match(await v.page.locator('[data-storage-tico]').innerText(), /keeps the files it holds until November 2\d, 2026 .*download them or move them back first/);
+    await v.page.waitForFunction(() => document.querySelector('[data-move]')?.textContent === 'Move files back');
+    await v.ctx.close();
+
     v = await visit({role: 'human', hash: '#/settings'});
     await v.page.locator('#settings-tabs').waitFor();
     assert.equal(await v.page.locator('#settings-storage').count(), 0, 'only the owner has Storage');
     assert.equal(v.calls.length, 0);
     await v.ctx.close();
-    console.log('PASS: Settings > General, owner only, refusal shown, secret cleared, back to server storage');
+    console.log('PASS: Settings > General, owner only, refusal shown, secret cleared, back to server storage, Tico file hosting move and export');
   } finally {
     await browser.close();
   }

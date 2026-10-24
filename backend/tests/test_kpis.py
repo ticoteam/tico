@@ -37,6 +37,27 @@ def test_automatic_cost_uses_measured_api_cost_and_ignores_retired_cost(api):
         assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
 
 
+def test_automatic_cost_distinguishes_missing_usage_from_measured_zero(api):
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing, usage_reason) "
+                      "VALUES(?, 'ops', ?, 0, ?, ?)", [
+            (f"{reason}-{billing}", stamp(1), billing, reason)
+            for reason in ("usage_unreported", "usage_limited", "no_result")
+            for billing in ("api", None)
+        ])
+        # A measured subscription and an API reading outside the window cannot supply a reading.
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("subscription", stamp(1), 50, "subscription"), ("old", stamp(8), 100, "api")])
+        assert botkpis.value(c, "ops", "cost_7d", NOW) is None
+        assert all(r["period_end"] != stamp(0) for r in botkpis.readings(c, "auto:ops:cost_7d", NOW))
+        c.executemany("INSERT INTO turns(id, bot, started, est_cost_usd, billing) VALUES(?, 'ops', ?, ?, ?)", [
+            ("measured", stamp(1), 2.5, "api"), ("legacy-billing", stamp(1), 1.25, None)])
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 3.75
+        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id IN ('measured', 'legacy-billing')")
+        assert botkpis.value(c, "ops", "cost_7d", NOW) == 0
+        assert botkpis.readings(c, "auto:ops:cost_7d", NOW)[-1]["value"] == 0
+
+
 def colour(link, value, days_ago=0, kpi=ACTIVATION, **more):
     return K.assess({**kpi, **more}, link, [reading(value, days_ago)], NOW)
 

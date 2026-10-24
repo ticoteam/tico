@@ -127,10 +127,39 @@ which does not offer it. It returns `{url, final_url, title, text, links, trunca
   export link, and a Drive folder through its embedded listing, when shared with "anyone with the link" (otherwise it says so). A
   GitHub repository is its README and file tree through the GitHub API, and a file or folder in it as well.
 
+## First-run setup
+
+The Librarian is active on day one, and still has a guided first run on each of its two pages. Both are in
+`backend/librarian_setup.py`; what a person chose is their own row in `preferences`.
+
+**Docs.** On a first visit to Docs, while Docs holds nothing a person wrote or linked (the Librarian's own `_librarian/`
+map and `FAQ.md` do not count), a card above the list asks "Where are your docs?": links, one per line, and anything else
+("our policies are in Google Drive"). **Set up Docs** adds each link as a source at once (a public GitHub repository is
+indexed, as with **Add source**) and files one task, "Set up Docs", to the Librarian. Its `playbooks/docs-setup.md` walks each
+source, builds the map (`_librarian/index.md`, `where-things-live.md`, `glossary.md`) and lists in `_librarian/missing.md`
+any place it could not read, with what a person can do about it. **Import files** opens the Docs import. **Skip for now** is
+the person's own choice; **Set up with the Librarian…** in the Docs menu brings the card back at any time.
+
+**Market.** On a first visit to an empty Market page the owner answers four questions, one at a time: what you sell, who
+buys it, who you compete with, and what to watch. Only the first must be answered. Each answer is kept on the server as it
+is given, so **Skip for now** leaves and **Continue** picks up at the same question, in any browser. The last question's
+**Start research** files "Set up the market map" (below), which builds the map from the answers and sets what Market tracks:
+the Coverage universe page opens with a "What Market tracks" section (the competitors, the buyer segments, and the
+channels, topics, rules and people to watch, each with its entity id once it is in the graph, or marked "not found yet"),
+and the daily curate routine puts those first.
+Everyone else sees "Nothing here yet."
+
+| Endpoint | Who |
+|---|---|
+| `GET /api/v2/librarian/setup` | People: whether Docs asks (`docs.show`), and the owner's market answers so far |
+| `POST /api/v2/librarian/setup/docs {sources, note}` or `{skip: true}` | People; `409 librarian_off` while the Librarian is off |
+| `POST /api/v2/librarian/setup/market {answers, step, action: save\|skip\|finish}` | Owner; `finish` needs `answers.sell`, and `409 librarian` while it is not running |
+
 ## Setting up the market
 
-On an empty Market page the owner gives the Librarian one text box: a website, a description, links to anything
-about the market. It arrives as a task, "Set up the market map", and `playbooks/market-setup.md` takes it from there: it reads every
+On an empty Market page the owner answers the Librarian's four questions (First-run setup, above); the older
+`POST /api/v2/setup/getting-started/market {text}` still files the same task from one box of text. It arrives as a task,
+"Set up the market map", and `playbooks/market-setup.md` takes it from there: it reads every
 address with `hub doc fetch` (about 40 fetches in all), uses web search when the harness has it (`web-search` is declared in its
 `bot.yaml`), and writes what it finds with `hub market`: the team itself (`company/self`), competitors and lookalikes with
 their tier, segments, channels, people and rules as entities and edges, each with an evidence row (`hub market report`, then
