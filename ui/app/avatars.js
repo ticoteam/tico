@@ -62,12 +62,15 @@ const avHue = slug => { let h = 7; for (let i = 0; i < String(slug).length; i++)
 // A bot's outline comes from its slug through a seeded PRNG, the same on every page and every load.
 // The seed picks one of ten shape families (a few low cosine harmonics around the circle, so every
 // family stays soft), then turns it, varies its proportions and adds a little noise: two bots rarely
-// look alike. While the bot works, the outline eases to a second outline from the same seed and back.
+// look alike. While the bot works, it breathes: the shape swells and turns a little and back.
 const BLOB_WOBBLE = 0.14;           // how far the outline may sit from the circle, as a share of the radius
 const BLOB_RADIUS = 46;             // the circle the outline wobbles around, in a 100-unit box
 const BLOB_POINTS = 8;              // eight points carry up to four lobes
-const BLOB_MORPH_S = 3.6;           // one full breath while working, in seconds
-const BLOB_CSS_MORPH = !!window.CSS?.supports?.('d', 'path("M0 0")');   // WebKit has no CSS `d`: it gets SMIL
+const BLOB_MORPH_S = 3.6;           // one full breath while working, in seconds (ui/styles/avatars.css)
+// Only a page's own bot breathes (its header, the chat pill, 30 px and up). Rows, the sidebar and lists keep still
+// outlines. The breath is a transform the compositor draws: the outline morph it replaced (SMIL in WebKit, CSS `d`
+// elsewhere) repainted every frame, and on every row a working bot appeared in it cost the desktop app a quarter of a core.
+const BLOB_MORPH_MIN = 30;
 // Each family is a list of [harmonic, weight, phase]: harmonic 2 stretches, 3 makes a rounded triangle,
 // 4 four lobes; mixing them gives beans, eggs and peanuts. `upright` keeps flat shapes flat; `gain`
 // lifts families led by harmonic 1, which otherwise reads as a circle pushed off centre.
@@ -133,19 +136,12 @@ function blobShape(slug, size) {
     return {radii: angles.map((a, i) => BLOB_RADIUS + g * (at(a) + jitter[i] * 0.18)), slopes: angles.map(a => g * dat(a))};
   };
   const still = outline(harmonics, noise);
-  // The working outline shifts each lobe a little and redistributes the noise: it breathes, slowly
-  // and shallowly, rather than turning into another bot.
-  const moving = outline(harmonics.map(([k, w, p]) => [k, w * (0.85 + rnd() * 0.3), p + (rnd() < 0.5 ? -1 : 1) * (0.35 + rnd() * 0.25)]),
-    noise.map(v => v * 0.4 + (rnd() * 2 - 1) * 0.6));
   const shape = {family: fam.name, d: blobPath(still.radii, angles, still.slopes),
-    morph: blobPath(moving.radii, angles, moving.slopes),
     delay: -Math.round(rnd() * BLOB_MORPH_S * 100) / 100};   // bots working at once do not breathe in step
   blobCache.set(key, shape);
   return shape;
 }
-const reducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-const blobMorphStyle = shape => `--d0:path('${shape.d}');--d1:path('${shape.morph}');animation-delay:${shape.delay}s`;
-const blobSmil = shape => `<animate attributeName="d" values="${shape.d};${shape.morph};${shape.d}" dur="${BLOB_MORPH_S}s" begin="${shape.delay}s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.5;1" keySplines=".42 0 .58 1;.42 0 .58 1"/>`;
+const blobBreath = shape => `animation-delay:${shape.delay}s`;
 // Working: running a turn by the status poll, or answering in the chat that is open (the dots are moving).
 function botWorking(slug) {
   if (S.v2?.status?.[slug]?.state === 'running' || S.status?.active?.some(a => a.employee === slug)) return true;
@@ -165,27 +161,26 @@ function botAvatar(bot, size = 18, state) {
     : kind === 'av-initials' ? `;--hue:${hue};font-size:${Math.round(size * 0.42)}px` : '';
   const inner = kind === 'bot-glyph' ? `<span class="av-glyph" style="font-size:${Math.round(size * 0.7)}px">${esc(icon)}</span>`
     : kind === 'av-initials' ? esc(avInitials(slug)) : '';
-  const shape = blobShape(slug, size), working = state === 'running' || state === 'working' || botWorking(slug);
-  const path = working
-    ? `<path d="${shape.d}" style="${blobMorphStyle(shape)}">${BLOB_CSS_MORPH || reducedMotion() ? '' : blobSmil(shape)}</path>`
-    : `<path d="${shape.d}"/>`;
-  return `<span class="av blob ${kind} ${state || ''}${working ? ' morph' : ''}" data-av="${esc(slug)}" style="width:${size}px;height:${size}px;--av-fill:${fill}${vars}" aria-hidden="true">`
-    + `<svg class="av-shape" viewBox="0 0 100 100" focusable="false">${path}</svg>${inner}</span>`;
+  const breathes = size >= BLOB_MORPH_MIN, shape = blobShape(slug, size);
+  const working = breathes && (state === 'running' || state === 'working' || botWorking(slug));
+  return `<span class="av blob ${kind} ${state || ''}${working ? ' morph' : ''}" data-av="${esc(slug)}"${breathes ? ' data-breathe' : ''} style="width:${size}px;height:${size}px;--av-fill:${fill}${vars}" aria-hidden="true">`
+    + `<svg class="av-shape" viewBox="0 0 100 100" focusable="false"${working ? ` style="${blobBreath(shape)}"` : ''}><path d="${shape.d}"/></svg>${inner}</span>`;
 }
 const avatar = botAvatar;
 // Polls and the open chat change who is working without redrawing every avatar: this follows them.
 function botAvatarsSync() {
-  for (const el of document.querySelectorAll('.av.blob[data-av]')) {
-    const on = botWorking(el.dataset.av), path = el.querySelector('.av-shape path');
-    if (on === el.classList.contains('morph') || !path) continue;
-    const shape = blobShape(el.dataset.av, parseFloat(el.style.width) || 18);
+  for (const el of document.querySelectorAll('.av.blob[data-breathe]')) {
+    const on = botWorking(el.dataset.av), svg = el.querySelector('.av-shape');
+    if (on === el.classList.contains('morph') || !svg) continue;
     el.classList.toggle('morph', on);
-    path.replaceChildren();
-    if (!on) { path.removeAttribute('style'); continue; }
-    path.setAttribute('style', blobMorphStyle(shape));
-    if (!BLOB_CSS_MORPH && !reducedMotion()) path.innerHTML = blobSmil(shape);
+    if (on) svg.setAttribute('style', blobBreath(blobShape(el.dataset.av, parseFloat(el.style.width) || 18)));
+    else svg.removeAttribute('style');
   }
 }
+
+// A hidden or minimized window draws nothing, so nothing in it moves: its animations hold (ui/styles/base.css) until it
+// is shown again.
+document.addEventListener('visibilitychange', () => document.documentElement.classList.toggle('page-hidden', document.hidden));
 
 // People: Workspace/Slack photo when we have one, otherwise the same initials circle as a bot with no art.
 const personInitials = name => avInitials(String(name || '?').replace(/[^A-Za-z0-9 ]+/g, ' '));
