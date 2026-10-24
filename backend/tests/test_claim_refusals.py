@@ -91,6 +91,24 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     assert lanes == {"task:" + t["id"] for t in (task, child, other)} | {"main"}
 
 
+def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_limit(api):
+    machine = task_bot(api, lanes=True)
+    other, task = new_task(api, "unrelated"), new_task(api, "the check")
+    turns = {a["lane"]: a for a in (claim(api, machine), claim(api, machine))}
+    for a in turns.values():
+        post(api, f"attempts/{a['id']}/started", {"thread_id": a["lane"]}, machine["token"])
+    post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
+                                   "expected_revision": get(api, "bots/ops")["revision"]})
+    with api.app.state.store.transaction() as c:              # follow-ups to both turns, after the limit is set
+        outside = H.task_comment(c, "human:ana", other["id"], "Use the new numbers.")
+        inside = H.task_comment(c, "human:ana", task["id"], "Check the March total too.")
+    poll = lambda t: [m["id"] for m in post(api, f"attempts/{turns['task:' + t['id']]['id']}/inputs", {},
+                                            machine["token"])["messages"]]
+    assert poll(other) == [] and poll(task) == [inside["id"]]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (outside["id"],)).fetchone()[0] == "queued"
+
+
 def test_claim_limit_migration_upgrades_a_database_at_62_without_lifting_a_drain(api):
     store = api.app.state.store
     task_bot(api, lanes=True)
