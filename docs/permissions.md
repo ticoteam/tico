@@ -10,7 +10,8 @@ team, readable by one group and open to requests from everyone.
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
 Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
-is back; a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
+is back, except that a bot's send is refused as `queue_full` once the queue held for it is full (it never counts as a
+repeat; [How it works](how-it-works.md)); a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
 never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
 
 An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.

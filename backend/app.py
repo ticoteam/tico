@@ -1342,6 +1342,8 @@ def create_app(settings=None):
             stored = {**(message.get("refs") or {}), "attachments": attached}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(stored), message["id"]))
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
+        if (goal and goal["status"] == "active") or body.attachments:
+            H.held_queue_recheck(c, message["id"])
         if who.role == "bot":
             conv = H.conversation(c, message["conversation_id"])
             if who.attempt_id and all(p.startswith("bot:") for p in conv["participants"]):

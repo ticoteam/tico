@@ -93,7 +93,13 @@ for an hour (a loop over new targets). A refused label change (rule `label`, whi
 counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
 A message or task comment to a paused or quarantined bot, from a person or a bot, is kept and runs when it is back;
-the reply's `warning` says so and when that is. A note is kept the same way when a person leaves it, or, to a
+the reply's `warning` says so and when that is. Bot sends are bounded while it is held: once the messages from bots
+waiting for it reach 200 items or 2 MiB in all, or 50 items or 512 KiB from one sender (`TICO_HELD_QUEUE_ITEMS`,
+`TICO_HELD_QUEUE_BYTES`, `TICO_HELD_QUEUE_SENDER_ITEMS`, `TICO_HELD_QUEUE_SENDER_BYTES`), a bot's next message,
+comment or notice to it is refused as `queue_full`. Every waiting message resume would hand over counts, whether
+it waits as a job, a carry-note or in an external agent's inbox; a quiet one nothing carries does not. What was
+already accepted is kept, a person's messages and system notices are never refused, and `queue_full` opens no review
+and never counts as a repeat. A note is kept the same way when a person leaves it, or, to a
 quarantined bot, its manager bot (the bot it reports to on the org chart). A new task or hand-off to a paused,
 quarantined or planned bot is refused as `target_inactive`, with when the bot is back, and so is any other bot's note.
 That refusal is the target's state, not the sender reaching too far: it opens no review and never counts as a repeat,
