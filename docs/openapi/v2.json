@@ -4777,7 +4777,7 @@
     },
     "/api/v2/events": {
       "get": {
-        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, needs=changes sends Needs you as changed ids",
+        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
         "operationId": "streamEvents",
         "parameters": [
           {
@@ -4858,6 +4858,38 @@
                 }
               ],
               "title": "Needs"
+            }
+          },
+          {
+            "name": "task",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task"
+            }
+          },
+          {
+            "name": "party",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Party"
             }
           }
         ],
