@@ -218,7 +218,7 @@ the same rows to a local file that can be read without the server (below).
 | Table | What | Kept |
 | --- | --- | --- |
 | `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
-| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status (at most 50 a minute). | 14 days, 5,000 rows |
+| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds and query count (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |
 | `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes (when SQLite has `dbstat` aggregate mode) refresh at most once per 24 hours and are reused between scans, including across restarts. | 90 days |
@@ -239,6 +239,11 @@ Owners, admins and the team's bots read it at `GET /api/v2/system/metrics?minute
 leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `hub health metrics` or `hub_health_metrics`, and see the
 last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` still answers with the last 300 requests per
 route since the start.
+
+With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
+Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
+These are elapsed timings, so time waiting for CPU can also appear within SQL time. Compare the same
+window's CPU and event-loop lag before attributing the remaining request time to a lock.
 
 ```sql
 -- Where the last hour went, by route

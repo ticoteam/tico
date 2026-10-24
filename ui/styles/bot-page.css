@@ -111,6 +111,55 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-fold[open]>summary::before{transform:rotate(90deg)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
+/* The sidebar's widgets (ui/app/bot-sidebar.js), in the bot's order. A hidden one is not drawn; a set height is the
+   most it grows to, scrolling inside past that. Tasks stops at 500px unless set, and a short list stays short. */
+#pane-tasks{position:relative}
+.bot-w>.rail-sec{border-top:1px solid var(--line)}
+#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden])):not(#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))~.bot-w)>.rail-sec{border-top:0}
+#pane-tasks:not(.editing)>.bot-w[data-off],#pane-tasks[data-loading]>.bot-w{display:none}
+.bot-w[data-h]>.rail-sec{max-height:var(--w-max);overflow-y:auto;overscroll-behavior:contain}
+.bot-w[data-widget=tasks]>.rail-sec{display:flex;flex-direction:column;max-height:var(--w-max,500px);overflow:hidden}
+.bot-w[data-widget=tasks]>.rail-sec>:not(.bot-task-panes){flex:none}
+.bot-task-panes{flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.no-cnt .cnt{display:none}
+/* One edit icon at the sidebar's top right, beside the first widget's own icons. */
+.bot-sidebar-edit{position:absolute;z-index:1;top:var(--s2);right:4px}
+#main.bot-split-layout .bot-sidebar-edit{top:calc(6px + var(--s2));right:8px}
+#pane-tasks:has(>.bot-sidebar-edit:not([hidden]))>.bot-w:not([data-off]):has(>.rail-sec:not([hidden])):not(#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))~.bot-w)>.rail-sec>:is(.rail-head,.rail-h):first-child{padding-right:24px}
+/* Edit mode, where the sidebar sits: Done and Cancel on top, each widget with a handle, an eye and a bottom edge. */
+.bot-rail-editbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:6px;padding:6px 0;background:var(--bg);border-bottom:1px solid var(--line)}
+.bot-rail-editbar[hidden],.bot-w-bar,.bot-w-foot{display:none}
+.bot-rail-editbar .spacer{flex:1}
+.bot-rail-editbar button{padding:3px 12px}
+.editing>.bot-w{margin:8px 0;border:1px dashed var(--line);border-radius:8px}
+.editing>.bot-w>.rail-sec{border-top:0}
+.editing .bot-w-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 0;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.bot-w-bar .spacer{flex:1}
+.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
+.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))>.bot-w-bar>.bot-w-name{visibility:hidden}   /* its own heading says it, just below */
+.bot-w-grip{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:grab;touch-action:none}
+.bot-w-grip:hover,.bot-w-grip:focus-visible{color:var(--ink);background:var(--surface2)}
+.bot-w-eye[aria-pressed=true]{color:var(--ink);opacity:1}
+.bot-w.dragging{opacity:.6}
+.editing>.bot-w[data-off]>:is(.rail-sec,.bot-w-foot){display:none}
+.editing>.bot-w[data-off]>.bot-w-bar{opacity:.6;padding-bottom:4px}
+.editing>.bot-w[data-h]>.rail-sec{height:var(--w-max)}
+.editing .bot-w-foot{display:flex;align-items:center;gap:6px;padding:0 6px}
+.bot-w-size{flex:1;position:relative;height:12px;cursor:ns-resize;touch-action:none;border-radius:4px}
+.bot-w-size::after{content:"";position:absolute;left:calc(50% - 16px);width:32px;top:5px;height:2px;border-radius:1px;background:var(--muted);opacity:.5}
+.bot-w-size:hover::after,.bot-w-size:focus-visible::after{opacity:1}
+.bot-w-size:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* While Done saves, nothing in the draft moves (bot-sidebar.js botDrafting). */
+#pane-tasks[data-saving] :is(.bot-w-size,.bot-w-bar,.bot-task-tabs){pointer-events:none;opacity:.6}
+.bot-w-reset{flex:none;padding:0 6px;font-size:var(--t-sm)}
+.bot-w-reset[hidden]{display:none}
+.editing .bot-task-tabs [data-bot-task-tab]{cursor:grab;touch-action:none;outline:1px dashed var(--line);outline-offset:-1px}
+.editing .bot-task-tabs [data-bot-task-tab].dragging{opacity:.6}
+.bot-tab-add{flex:none;min-width:24px;padding:3px 8px;border:1px dashed var(--line);border-radius:6px;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.bot-tab-add:hover,.bot-tab-add:focus-visible{color:var(--ink)}
+#main.bot-split-layout :is(.bot-rail-editbar,.bot-rail-loading){padding-left:14px;padding-right:12px}
+#main.bot-split-layout .editing>.bot-w{margin-left:8px;margin-right:6px}
+#main.bot-split-layout .editing>.bot-w>.rail-sec{padding-left:6px;padding-right:6px}
 /* Updates: the latest one's text in small type; a long one folds behind "More". */
 .bot-latest .upd-body{margin:0;font-size:var(--t-sm);line-height:1.5;cursor:auto;max-height:9em;overflow:hidden}
 .bot-latest .upd-body.open{max-height:none}

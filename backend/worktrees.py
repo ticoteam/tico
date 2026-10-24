@@ -15,6 +15,7 @@ from clients import git_repository
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
+from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed', 'declined')
@@ -172,8 +173,9 @@ def _live_tasks(c, bot, memo):
 
 
 def live_turn_cache(c, computer):
-    """Prepare provenance without the write lock; the caller validates data_version before using it."""
-    memo = {}
+    """Prepare provenance without the write lock; the caller validates its source clock before using it."""
+    from . import provenance_clock
+    memo = {("provenance_clock",): provenance_clock.current(c)}
     owners = {row['owner'] for row in inventory(c, computer) if H.is_bot(row['owner'] or '')}
     for owner in owners:
         memo[("live_turn", owner)] = _live_tasks(c, H.actor_id(owner), memo)
@@ -182,18 +184,42 @@ def live_turn_cache(c, computer):
 
 def start_refusal(c, task):
     """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
-    started (On Deck, or any task still `open`) or one an open task blocks. A task being worked (`doing`), or one at a
-    review or waiting while its fix-forward or a review fix runs, gets one; so does reassigned work. No step names."""
+    started (On Deck, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
+    task being worked (`doing`), or one at a review or waiting while its fix-forward or a review fix runs, gets one; so
+    does reassigned work."""
     if task['status'] in CLOSED:
         return f"This task is {task['status']}: a finished task gets no new worktree."
     if task['status'] == 'open':
         return 'This task has not started: move it to In Progress first.'
-    blocker = TR.live_blocker(c, task['id'], H.ACTIVE_STATUSES)
-    if blocker:
-        row = H.task(c, blocker) or {}
-        name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or blocker)
-        return f'This task is blocked by {name}: it gets a worktree once that is done.'
+    for row in TR.live_blockers(c, task['id'], H.ACTIVE_STATUSES):
+        if why := unmerged(c, row):
+            name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or row['id'])
+            return f'This task is blocked by {name}, {why}: it gets a worktree once that code is merged.'
     return ''
+
+
+def unmerged(c, blocker):
+    """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
+    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
+    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned). The cutoff
+    is the Pending Release step itself: a step with a ready status may come before work that still changes code."""
+    if blocker['status'] == 'ready':
+        return ''
+    step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()
+    release = c.execute('SELECT min(position) FROM task_steps WHERE type_id=? AND lower(trim(name))=?',
+                        (blocker.get('type_id'), READY_FROM)).fetchone()[0] if step else None
+    if release is not None and step['position'] >= release:
+        return ''
+    prs = c.execute("SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+                    "ORDER BY created,rowid", (blocker['id'],)).fetchall()
+    waiting = [pr for pr in prs if pr['state'] not in ('merged', 'closed')]
+    if not waiting and any(pr['state'] == 'merged' for pr in prs):
+        return ''
+    where = f"still at {step['name']}" if step else f"still {blocker['status']}"
+    if not waiting:
+        return f'{where} with no merged pull request'
+    names = ', '.join(f"#{pr['number']}" if pr['number'] else pr['url'] for pr in waiting)
+    return f"{where} with pull request {names} not merged yet"
 
 
 def released_event(c, row, detail):
@@ -431,14 +457,16 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         else:
             detail.pop('missing_since', None)
             detail.pop('missing_woke', None)
-        task = H.task(c, row['task_id'])
-        if task['status'] not in CLOSED and row['bot_state'] == 'active':
+        # Most reports have no overdue wake; read current task state only when one is due.
+        if row['bot_state'] == 'active':
             for key, since, days, message in (
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
-                    detail[key] = True
+                    task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
+                    if task['status'] not in CLOSED:
+                        H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
+                        detail[key] = True
         # A stamped report is stale when the record was added, attached, re-queued or patched after the
         # computer read it; heartbeat writes don't count, or a busy worktree's reports would always be stale.
         # An unstamped one (an older computer) is stale only when it would move the checkout back.
@@ -500,6 +528,12 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
     # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.
     rows.update({r['id']: r for r in inventory(c, who.runner_id)})
+    # PR metadata is unchanged by cleanup; load it once rather than once per checkout.
+    task_prs = {}
+    for part in H.chunks({row['task_id'] for row in rows.values()}):
+        for pr in c.execute("SELECT task_id,state,created,pr_merged_at,repo,branch FROM task_links "
+                            "WHERE kind='pr' AND task_id IN (%s)" % ','.join('?' * len(part)), part):
+            task_prs.setdefault(pr['task_id'], []).append(pr)
     actions = []
     # This pass changes checkout records, not the tasks carried by active attempts. Share provenance only
     # inside this transaction: fifty finished trees must not walk the same hundred runs fifty times.
@@ -507,8 +541,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     for row in rows.values():
         detail = json.loads(row['detail_json'] or '{}')
         stored = dict(detail)
-        pr_links = c.execute("SELECT state,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
-                             (row['task_id'],)).fetchall()
+        pr_links = task_prs.get(row['task_id'], [])
         prs = [pr['state'] for pr in pr_links]
         finished = all(state in PR_FINISHED for state in prs)
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')

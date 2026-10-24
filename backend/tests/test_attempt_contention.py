@@ -148,6 +148,89 @@ def test_event_batch_replay_conflict_and_gap_are_atomic(api):
         assert c.execute("SELECT last_seq FROM attempts WHERE id='attempt-0'").fetchone()[0] == 3
 
 
+def test_idle_inputs_and_task_read_do_not_wait_on_unrelated_writers(api):
+    import sqlite3
+    computer = fleet(api, attempts=1, trees=0)
+    store = api.app.state.store
+    github = api.app.state.github_app
+    locked, release = threading.Event(), threading.Event()
+
+    def inventory():
+        with github.lock:
+            locked.set()
+            assert release.wait(5)
+
+    holder = sqlite3.connect(store.settings.db_path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        background = pool.submit(inventory)
+        assert locked.wait(2)
+        try:
+            inputs = pool.submit(api.post, '/api/v2/attempts/attempt-0/inputs', json={},
+                                 headers=headers(computer['token']))
+            task = pool.submit(api.get, '/api/v2/tasks/task-0', headers=headers())
+            assert inputs.result(timeout=2).status_code == 200
+            assert task.result(timeout=2).status_code == 200
+        finally:
+            holder.rollback()
+            holder.close()
+            release.set()
+        background.result()
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+    assert api.post('/api/v2/attempts/attempt-0/inputs', json={},
+                    headers=headers(computer['token'])).status_code == 409
+
+
+def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_sources(api, monkeypatch):
+    from backend import task_privacy
+    fleet(api, attempts=1, trees=2)
+    store = api.app.state.store
+    builds = []
+    original = task_privacy._attempt_tasks
+
+    def build(c, aid):
+        builds.append(aid)
+        return original(c, aid)
+    monkeypatch.setattr(task_privacy, '_attempt_tasks', build)
+    with store.read_transaction() as c:
+        assert task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
+    count = len(builds)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1,owner='bot:finance',requester='human:ben' WHERE id='task-0'")
+    with store.read_transaction() as c:
+        assert not task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
+    assert len(builds) == count       # Only neutral provenance survives; permission never does.
+    # Even a manual transaction on a borrowed connection must not publish a clock
+    # value that rollback can reuse for entirely different source rows.
+    with store.read() as c:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute("UPDATE messages SET refs_json=? WHERE id='message-0'", (encode({'task': 'task-1'}),))
+        assert task_privacy.attempt_tasks(c, 'attempt-0') == {'task-1'}
+        c.rollback()
+    with store.transaction() as c:
+        c.execute("UPDATE messages SET refs_json=? WHERE id='message-0'", (encode({'task': 'task-2'}),))
+    with store.read_transaction() as c:
+        assert task_privacy.attempt_tasks(c, 'attempt-0') == {'task-2'}
+
+
+def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
+    from backend import execution
+    from backend.tests.test_api import post
+    computer = fleet(api, attempts=0, trees=20)
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done'")
+        for i in range(20):
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+                      "VALUES(?,?,?,'bot:ops','notice','Synthetic finished task',?,?)",
+                      (f'obsolete-{i}', f'room-{i}', H.KEEPER, H.now(), encode({'task': f'task-{i}'})))
+    assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='cancelled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
+        assert c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0] == 20 - execution.CLAIM_MAINTENANCE
+
+
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
     import sqlite3
     from backend import health, health_monitor

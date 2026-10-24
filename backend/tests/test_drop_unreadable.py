@@ -132,9 +132,44 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
     store = api.app.state.store
     with store.read() as c:
         job = job_of(c, secret["id"])
-    monkeypatch.setattr(execution.Execution, "candidate", lambda self, c, who, body, runner: job)
+    picks = []
+
+    def candidate(self, c, who, body, runner, *, job_id=None):
+        picks.append(job_id)
+        return job
+
+    monkeypatch.setattr(execution.Execution, "candidate", candidate)
     monkeypatch.setattr(execution.Execution, "idle_claim", lambda self, *a, **k: None)
     assert claim(api, machine, "ops") is None
+    assert picks == [None, job["id"]], "select in the read snapshot, then recheck that pick under the writer"
     with store.read() as c:
         assert job_of(c, secret["id"])["state"] == "cancelled"
         assert suppressed(c, job["id"]) == [{"reason": "unreadable"}]
+
+
+def test_a_stale_prepared_pick_waits_without_scanning_for_automatic_work(api, monkeypatch):
+    from backend import auto_tasks
+
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "queued")
+    store = api.app.state.store
+    with store.read() as c:
+        job = job_of(c, task["id"])
+    picks = []
+    backfills = []
+
+    def candidate(self, c, who, body, runner, *, job_id=None):
+        picks.append(job_id)
+        return job if job_id is None else None
+
+    def backfill(*args, **kwargs):
+        backfills.append(True)
+
+    monkeypatch.setattr(execution.Execution, "candidate", candidate)
+    monkeypatch.setattr(execution.Execution, "idle_claim", lambda self, *a, **k: None)
+    monkeypatch.setattr(auto_tasks, "missing", backfill)
+    assert claim(api, machine, "ops") is None
+    assert picks == [None, job["id"]]
+    assert backfills == [], "a stale prepared pick leaves automatic backfill to the next poll"
+    with store.read() as c:
+        assert job_of(c, task["id"])["state"] == "queued"

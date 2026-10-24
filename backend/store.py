@@ -688,6 +688,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        from .provenance_clock import Cache
+        self.provenance_cache = Cache()
 
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=30, isolation_level=None,
@@ -756,6 +758,8 @@ class Store:
             c.executescript(_watchers.SCHEMA)
             from . import bot_task_tabs as _bot_task_tabs
             c.executescript(_bot_task_tabs.SCHEMA)
+            # The sidebar's widgets: order, hidden and heights (Editable bot sidebar); NULL is the default four.
+            H.add_column(c, "bot_task_tabs", "widgets_json", "TEXT")
             from . import learned as _learned
             c.executescript(_learned.SCHEMA)
             from . import health_monitor as _health_monitor
@@ -767,6 +771,8 @@ class Store:
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
+            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
+                H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
             _updates.purge_rejected(c)
@@ -1349,6 +1355,9 @@ class Store:
                                    # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
                                    ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
+                                   # Lease maintenance walks only active runs, never their history.
+                                   ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
+                                   ("jobs_queued", "jobs(id,bot,message_id) WHERE state='queued'"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
                                    # The turns a computer ran in a window, read under the write lock by an
                                    # open overload (backend/performance.py `_runs`).
@@ -1434,6 +1443,8 @@ class Store:
             except Exception:
                 c.rollback()
                 raise
+            from . import provenance_clock
+            provenance_clock.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -1472,6 +1483,8 @@ class Store:
             if identity != self.pool_file:
                 # A restored or replaced database file: connections to the old one are not reused.
                 stale, self.pool, self.pool_file = self.pool, [], identity
+                from .provenance_clock import Cache
+                self.provenance_cache = Cache()
             else:
                 stale = []
             c = self.pool.pop() if self.pool else None
@@ -1481,6 +1494,10 @@ class Store:
             c = self.connect(factory=self.pooled, check_same_thread=False)
             c.pool_file = identity
         c.read_cache = {}
+        c.provenance_cache = self.provenance_cache
+        c.write_transaction = False
+        c.provenance_changes = c.total_changes
+        c.provenance_start = None
         return c
 
     def _give(self, c):
@@ -1511,6 +1528,9 @@ class Store:
                 return c
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:
+                c.write_transaction = True
+                from . import provenance_clock
+                c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
                 c.commit()

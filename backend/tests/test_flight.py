@@ -33,7 +33,7 @@ def store(tmp_path):
 def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
     rec = store.recorder
     for ms in [10] * 18 + [900, 1500]:
-        rec.request("GET /api/v2/tasks", "bot", 200, ms, 100, "bot:finance")
+        rec.request("GET /api/v2/tasks", "bot", 200, ms, 100, "bot:finance", [30, 80, 12])
     rec.request("GET /api/v2/tasks", "human", 503, 5, 10, "human:ana")
     with store.transaction() as c:
         c.execute("SELECT * FROM tasks WHERE id='x1'").fetchall()
@@ -47,7 +47,7 @@ def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
     with store.transaction() as c:
         flight.write(c, taken)
         rows = {r["caller"]: dict(r) for r in c.execute("SELECT * FROM flight_requests")}
-        slow = c.execute("SELECT route,caller,actor,status FROM flight_slow").fetchall()
+        slow = c.execute("SELECT route,caller,actor,status,sql_ms,wait_ms,queries FROM flight_slow").fetchall()
         shapes = {r[0]: r[1] for r in c.execute("SELECT fingerprint,n FROM flight_sql")}
         process = c.execute("SELECT requests,txns FROM flight_process").fetchone()
         rows_ms = c.execute("SELECT total_ms FROM flight_sql WHERE fingerprint LIKE 'WITH RECURSIVE%'").fetchone()[0]
@@ -55,7 +55,7 @@ def test_requests_and_sql_are_aggregated_per_minute_route_and_caller(store):
     assert (bot["n"], bot["errors"], bot["bytes"], bot["max_ms"]) == (20, 0, 2000, 1500)
     assert 10 <= bot["p50"] <= 12.5 and 900 <= bot["p95"] <= 1500
     assert rows["human"]["errors"] == 1
-    assert [tuple(r) for r in slow] == [("GET /api/v2/tasks", "bot", "bot:finance", 200)]
+    assert [tuple(r) for r in slow] == [("GET /api/v2/tasks", "bot", "bot:finance", 200, 30, 80, 12)]
     # Literals are folded: two lookups are one query shape, and no value is kept.
     assert shapes["SELECT * FROM tasks WHERE id='?'"] == 2 and not any("x1" in fp for fp in shapes)
     assert shapes[flight.fingerprint(many)] == 2 and rows_ms > 5
@@ -107,6 +107,19 @@ def test_a_full_buffer_counts_what_it_drops(monkeypatch):
         rec.query("SELECT 1", 0.1)
     rec.drain(MINUTE)
     assert rec.take(MINUTE)["process"][-1] == 2 and rec.take(MINUTE)["process"][-1] == 0
+
+
+def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_path):
+    path = tmp_path / 'synthetic.sqlite'
+    with sqlite3.connect(path) as c:
+        c.execute('CREATE TABLE flight_slow(id INTEGER PRIMARY KEY,ts INTEGER,route TEXT,caller TEXT,actor TEXT,ms REAL,bytes INTEGER,status INTEGER)')
+        c.execute("INSERT INTO flight_slow(ts,route,ms) VALUES(?,?,?)", (MINUTE, 'GET /api/v2/tasks/{tid}', 1500))
+    store = Store(Settings(db_path=path, registry_dir=tmp_path), flight.Recorder())
+    store.initialize(seed_market=False)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        row = dict(c.execute('SELECT * FROM flight_slow').fetchone())
+    assert row['ms'] == 1500 and row['sql_ms'] is None and row['wait_ms'] is None and row['queries'] is None
 
 
 def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatch):
@@ -180,7 +193,9 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
 
         def get(token, path="/api/v2/system/metrics"):
             return client.get(path, headers={"Authorization": "Bearer " + token})
-        assert get("ana-test", "/api/v2/health").status_code == 200
+        response = get("ana-test", "/api/v2/health")
+        assert response.status_code == 200
+        assert 'sql;dur=' in response.headers['server-timing'] and 'wait;dur=' in response.headers['server-timing']
         rec = app.state.flight
         rec.drain()
         taken = rec.take(int(time.time() // 60 * 60) - 120)
