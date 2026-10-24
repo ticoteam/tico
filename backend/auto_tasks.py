@@ -91,9 +91,6 @@ def missing(c, settings, runner, body):
         "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
     busy |= {tuple(v.split('|', 1)) for v in body.busy_lanes or () if '|' in v}
     held = E.turns_here(c, runner['id'])
-    for bot in {b for b, _ in busy}:
-        held[bot] = max(held.get(bot, 0), sum(b == bot for b, _ in busy))
-    share = E.turn_share(c, runner['id'], runner['capacity'])
     held_bots = set(body.busy_bots or ()) | ({b for b, _ in busy} if not E.lanes_on(runner) else set())
     bots = c.execute(f"SELECT a.bot,bc.config_json,bc.onboarding_state,{E.DRAINING_SQL} draining "
                      "FROM assignments a JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
@@ -101,7 +98,7 @@ def missing(c, settings, runner, body):
                      (runner['id'], body.bot, body.bot)).fetchall()
     for bot in sorted(bots, key=lambda r: held.get(r['bot'], 0)):
         slug = bot['bot']
-        if bot['onboarding_state'] in ('needs_setup', 'needs_onboarding') or held.get(slug, 0) >= share:
+        if bot['onboarding_state'] in ('needs_setup', 'needs_onboarding'):
             continue
         why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready, held_bots)
         if why:

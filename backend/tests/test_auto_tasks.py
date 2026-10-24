@@ -129,3 +129,18 @@ def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api)
     attempt = take(api, machine)
     assert attempt and attempt['bot'] == 'ops'
     assert get(api, 'tasks/' + other['id'])['task']['status'] == 'open'
+
+
+def test_automatic_backfill_uses_free_places_while_waiters_still_fence_their_lanes(api):
+    from backend.tests.test_api import claim
+    machine = task_bot(api, lanes=True, capacity=2, others=('finance',))
+    tasks = deck(api, 4)
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/start-place", {'waiting': 'shared login'}, machine['token'])
+    # The waiting worker keeps its task lane, but other tasks may use every actual place.
+    second, third = claim(api, machine), claim(api, machine)
+    assert [a['task']['id'] for a in (first, second, third)] == [t['id'] for t in reversed(tasks[1:])]
+    assert claim(api, machine) is None
+    post(api, f"attempts/{second['id']}/started", {'thread_id': second['lane']}, machine['token'])
+    post(api, f"attempts/{second['id']}/complete", {'outcome': 'completed', 'last_seq': 0, 'text': 'Finished turn.'}, machine['token'])
+    assert claim(api, machine)['task']['id'] == tasks[0]['id']

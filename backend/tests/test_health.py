@@ -35,7 +35,7 @@ def test_all_good(environment, monkeypatch):
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
-        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok"}
+        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
@@ -153,8 +153,9 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "last_seen", "platform", "disk", "update"}
-    assert body["failures"] == [] and set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
+        "id", "label", "online", "last_seen", "platform", "disk", "update", "turn_counts", "turn_summary"}
+    assert body["failures"] == [] and set(checks) == {
+        "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 

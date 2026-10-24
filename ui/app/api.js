@@ -78,7 +78,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
   const payload = JSON.stringify(body), signature = method + ' ' + p + '\n' + payload;
   const key = operationId || pendingWrites.get(signature) || newRequestId();
   pendingWrites.set(signature, key);
-  const deadline = opts.timeout ? performance.now() + opts.timeout : Infinity;
+  const deadline = opts.timeout == null ? Infinity : performance.now() + opts.timeout;
   for (let attempt = 0; attempt < 3; attempt++) {
     const left = deadline - performance.now();
     if (left <= 0) throw writeTimedOut(opts.timeout, signature);
@@ -98,8 +98,19 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
       if (abort.signal.aborted) throw writeTimedOut(opts.timeout, signature);
       if (!(error instanceof TypeError)) throw error;
       // A proxy that signed the person out answered before Tico saw the write, so nothing was saved.
-      if (await sessionProbe()) throw signedOutError(true);
-      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this saved. Retry the same submission in this tab; it will use the same request ID.'), {unconfirmed: true, status});
+      // The probe has its own timeout, but this write may have only milliseconds left. Bound the wait by the
+      // same abort signal as the request; the shared probe can still finish for its other callers.
+      let onAbort;
+      const expired = new Promise((_, reject) => {
+        onAbort = () => reject(writeTimedOut(opts.timeout, signature));
+        abort.signal.addEventListener('abort', onAbort, {once: true});
+      });
+      let signedOut;
+      try { signedOut = await Promise.race([sessionProbe(), expired]); }
+      finally { abort.signal.removeEventListener('abort', onAbort); }
+      if (abort.signal.aborted || performance.now() >= deadline) throw writeTimedOut(opts.timeout, signature);
+      if (signedOut) throw signedOutError(true);
+      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this saved. Retry the same submission in this tab; it will use the same request ID.'), {unconfirmed: true, status, signature});
       opts.onRetry?.(attempt + 1, status);
       await new Promise(resolve => setTimeout(resolve, Math.min(500 * (attempt + 1), Math.max(0, deadline - performance.now()))));
     } finally { clearTimeout(timer); }
@@ -192,7 +203,7 @@ const formFetch = (url, body, opts) => window.TicoObservability
 // `opts` (writeRequestOnce): the timeout applies to a message without files; an upload keeps no time limit, since a
 // large file on a slow line can rightly take minutes, and only reports its retries.
 async function cloudCompose(path, body, files = [], opts = {}) {
-  if (!files.length) return post(path, body, undefined, opts);
+  if (!files.length) return post(path, body, opts.operationId, opts);
   const fd = new FormData();
   for (const [key, value] of Object.entries(body)) fd.append(key, typeof value === 'object' ? JSON.stringify(value) : value);
   files.forEach(file => fd.append('files', file, file.name));
@@ -201,8 +212,8 @@ async function cloudCompose(path, body, files = [], opts = {}) {
   if (!response.ok || !result.task && !result.message) throw new Error(apiError(result, response) || 'The server did not confirm this upload.');
   return result;
 }
-const toast = (msg, isErr, action) => {
-  if (isErr && SESSION.out) return;   // the signed-out banner says why every request fails (session.js)
+const toast = (msg, isErr, action, opts = {}) => {
+  if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
   if (isErr && !action && msg && typeof talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => talkToUs({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;

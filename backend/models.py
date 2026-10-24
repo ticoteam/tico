@@ -1833,6 +1833,8 @@ class Recruit(Contract):
 
 
 class Claim(Contract):
+    # Opt in only after the heartbeat advertises this protocol; old workers keep their delivery leases.
+    start_places: bool = False
     # Bots the runner takes no work for at all (maintenance, or a runner without lanes that is busy).
     busy_bots: list[ID] | None = Field(default=None, max_length=32)
     # Lanes the runner is already running, each "bot|lane" (clients/sessions.py lane), when it runs lanes.
@@ -1848,6 +1850,10 @@ class LoadSnapshot(Contract):
     cpu_pct: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     mem_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     running_turns: int = Field(ge=0, le=10_000)
+
+
+class StartPlace(Contract):
+    waiting: Literal["", "shared login", "pre-start requirements"] = ""
 
 
 class Started(Contract):

@@ -22280,6 +22280,27 @@
           "checked": {
             "type": "string"
           },
+          "computers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "turn_counts": {
+                  "$ref": "#/components/schemas/TurnCounts"
+                },
+                "turn_summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
           "stalled_runs": {
             "type": "array",
             "items": {
@@ -29472,6 +29493,58 @@
         "type": "object",
         "title": "ToolUpdate",
         "description": "A change to a tool a bot already declares (backend/bot_tools.py): only what is sent changes. `scope` keys\nare set one by one (an empty value takes a key off); `note` \"\" clears the note."
+      },
+      "TurnCounts": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "integer"
+          },
+          "starting": {
+            "type": "integer"
+          },
+          "waiting": {
+            "type": "integer"
+          },
+          "queued": {
+            "type": "integer"
+          },
+          "start_seconds": {
+            "type": "integer"
+          },
+          "waits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "oldest": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "count",
+                "oldest",
+                "reason"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "queued",
+          "running",
+          "start_seconds",
+          "starting",
+          "waiting",
+          "waits"
+        ],
+        "additionalProperties": true
       },
       "Unread": {
         "type": "object",
