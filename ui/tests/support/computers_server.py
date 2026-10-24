@@ -97,6 +97,11 @@ def fake_computer(base, admin, label, received, ready, works=True, shared_fetch=
                     raise RuntimeError("the test did not release the shared-key fetch")
         found = call("GET", "runner-model-credentials", token=token, runtime="claude")
         keys = found["credentials"]
+        if shared_fetch and keys and keys[0]["source"] == "shared" and not shared_fetch[0].is_set():
+            # A key poll can race ahead of the request job. Keep this fixture unsigned until that job takes the gate.
+            beat()
+            time.sleep(0.05)
+            continue
         if found.get("signed_out") or found.get("key_off"):
             claude.clear()
             claude.update({"installed": True, "authenticated": "missing"})
