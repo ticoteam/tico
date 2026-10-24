@@ -47,6 +47,10 @@ async function open(browser, me, branches = false) {
     bot('cmo-limited', 'CMO', 'marketing', 'p:ben', {is_branch: true, operator: 'ben', my_access: {see: true, read: false, write: false}}),
     bot('cmo-unknown', 'CMO', 'marketing', 'p:ben', {shared_from: 'cmo', operator: null}),
   );
+  const seats = [];
+  const seatView = seat => ({...seat, kind: 'seat', stage: 'recruiting', can_edit: true,
+    draft: {state: seat.drafted ? 'drafted' : seat.drafting ? 'drafting' : 'none', by: 'CEO Bot', at: ''},
+    description_by: seat.drafted ? 'ceo_bot' : seat.description ? 'person' : 'chart'});
   const groupRows = () => groups.map((g, i) => ({...g, org_parent: g.parent ? 'g:' + g.parent : '', order: i}));
   const apply = (id, body) => {
     const group = groups.find(g => g.id === id);
@@ -88,6 +92,31 @@ async function open(browser, me, branches = false) {
       return json({id: 'new-human'});
     }
     if (p.startsWith('/api/v2/chat/') && method === 'POST') { calls.push(['POST', 'chat', request.postDataJSON()]); return json({}); }
+    if (p === '/api/v2/seats' && method === 'GET') return json({seats: seats.filter(seat => !seat.filled).map(seatView)});
+    if (p === '/api/v2/seats' && method === 'POST') {
+      const body = request.postDataJSON(); calls.push(['POST', 'seats', body]);
+      const seat = {id: 'seat' + (seats.length + 1), team: '', created: '2026-10-24T00:00:0' + seats.length + 'Z', ...body};
+      seats.push(seat);
+      return json(seatView(seat));
+    }
+    let s;
+    if ((s = p.match(/^\/api\/v2\/seats\/([^/]+)(?:\/(open|recruit|hire))?$/))) {
+      const seat = seats.find(row => row.id === s[1]), body = method === 'GET' ? null : request.postDataJSON();
+      if (s[2]) calls.push(['POST', s[2], s[1], body]);
+      if (s[2] === 'open') { if (!seat.description) seat.drafting = true; return json(seatView(seat)); }
+      if (!s[2]) {                                   // the CEO Bot's draft lands by the first poll
+        if (seat.drafting) Object.assign(seat, {drafting: false, drafted: true, description: 'Keeps the books and closes each month.'});
+        return json(seatView(seat));
+      }
+      if (s[2] === 'recruit') return json({seat: seatView(seat), models: [{id: 'fixture-model', name: 'Fixture model'}, {id: 'other-model', name: 'Other model'}],
+        candidates: [
+          {template: 'bookkeeping', name: 'Bookkeeper', reason: 'Matches “closes each month” in the job description', recommended: true, model: 'fixture-model', model_name: 'Fixture model', summary: 'Keeps the ledger.'},
+          {template: 'controller', name: 'Controller', reason: 'Controller fits the role “Ledger” in Finance', recommended: false, model: 'fixture-model', model_name: 'Fixture model', summary: ''}]});
+      seat.filled = true;
+      bots.push(bot('ledger', seat.title, '', seat.reports_to.startsWith('human:') ? 'p:' + seat.reports_to.slice(6) : 'b:' + seat.reports_to,
+        {reports_to: seat.reports_to, status: 'planned', onboarding_state: 'needs_setup', stage: 'onboarding'}));
+      return json({slug: 'ledger', seat: seat.id, stage: 'onboarding', reports_to: seat.reports_to, template: body.template, model: body.model});
+    }
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/messaging/bots') return json({bots: [{bot: 'channel', name: 'Channel Inbox', sources: [{kind: 'slack', id: 'slack:C1', name: '#support'}]}]});
@@ -394,7 +423,7 @@ async function member(browser) {
 }
 
 async function teamAdd(browser) {
-  const {page, errors, calls, failures} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
+  const {page, errors, calls, failures, bots} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
   const choose = async name => {
     await page.locator('#org-add-group').click();
     await page.getByRole('menuitem', {name, exact: true}).click();
@@ -409,20 +438,50 @@ async function teamAdd(browser) {
   assert.equal(await page.locator('#org-add-group').evaluate(el => el === document.activeElement), true);
   assert.deepEqual(calls, []);
 
-  // The template picker creates a bot and refreshes the chart without visiting Settings.
+  // Add bot makes a Recruiting seat first (acceptance 9): it is on the chart before any bot exists, the CEO Bot's draft
+  // of its job description arrives while it is open, Recruit offers one recommended candidate with its model, and the
+  // pick creates the bot in Onboarding where the seat was.
   await choose('Add bot');
   await shot(page, 'team-add-bot-desktop');
-  await page.locator('[data-team-template]').click();
-  await page.locator('[data-cat-toggle=bookkeeping]').check();
-  await page.locator('[data-cat-name=bookkeeping]').fill('Ledger');
-  await page.getByRole('button', {name: 'Add selected', exact: true}).click();
-  await node(page, 'b:bookkeeping').waitFor();
-  const added = calls.shift();
-  assert.equal(added[1], 'bots');
-  assert.equal(added[2].display_name, 'Ledger');
-  assert.equal(added[2].template, 'bookkeeping');
-  assert.deepEqual(added[2].owners, ['ana']);
+  await page.locator('[data-recruit-new] [name=title]').fill('Ledger');
+  await page.locator('[data-recruit-new] [name=reports_to]').selectOption('scout');
+  await page.locator('[data-recruit-new] [type=submit]').click();
+  await page.locator('[data-recruit-draft]', {hasText: 'is drafting'}).waitFor();
+  assert.deepEqual(calls.shift(), ['POST', 'seats', {title: 'Ledger', reports_to: 'scout', description: ''}]);
+  assert.deepEqual(calls.shift(), ['POST', 'open', 'seat1', {}]);
+  assert.equal(bots.some(b => b.name === 'ledger'), false, 'no bot exists until a candidate is picked');
+  await page.locator('#tree a.node.seat[data-seat-open="seat1"]').waitFor({state: 'attached'});
+  assert.match(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').textContent(), /Ledger\s*Recruiting/);
+  assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout'].map(n => n.kind + ':' + n.id)), ['seat:seat1']);
+  await page.locator('[data-recruit-draft]', {hasText: 'Drafted by CEO Bot'}).waitFor({timeout: 8000});
+  assert.equal(await page.locator('#recruit-picker textarea').inputValue(), 'Keeps the books and closes each month.');
+  await page.getByRole('button', {name: 'Recruit', exact: true}).click();
+  const cards = page.locator('[data-recruit-candidate]');
+  await cards.first().waitFor();
+  assert.equal(await cards.count(), 2);
+  assert.equal(await page.locator('[data-recruit-candidate] .pill', {hasText: 'Recommended'}).count(), 1);
+  assert.match(await cards.first().innerText(), /Matches “closes each month”/);
+  await shot(page, 'team-add-bot-candidates');
+  await cards.first().locator('[data-recruit-model]').selectOption('other-model');
+  await cards.first().getByRole('button', {name: 'Pick Bookkeeper'}).click();
+  await node(page, 'b:ledger').waitFor({state: 'attached'});
+  assert.deepEqual(calls.filter(c => c[1] === 'recruit' || c[1] === 'hire'),
+    [['POST', 'recruit', 'seat1', {}], ['POST', 'hire', 'seat1', {template: 'bookkeeping', model: 'other-model'}]]);
+  calls.length = 0;
+  await page.waitForFunction(() => location.hash === '#/bot/ledger');
+  assert.equal(await page.locator('#tree a.node.seat').count(), 0, 'the filled seat leaves the chart');
+  await page.goBack();
+  await page.waitForFunction(() => location.hash === '#/updates');
+  // A permission lost while the form is open creates nothing, and submitting never navigates the page.
+  await choose('Add bot');
+  await page.locator('[data-recruit-new] [name=title]').fill('Analyst');
+  await page.evaluate(() => { S.me.role = 'viewer'; S.me.can_create_bots = false; });
+  await page.locator('[data-recruit-new] [type=submit]').click();
+  await page.locator('[data-recruit-error]:not([hidden])').waitFor();
+  assert.deepEqual(calls, []);
   assert.equal(new URL(page.url()).hash, '#/updates');
+  await page.evaluate(() => { S.me.role = 'owner'; delete S.me.can_create_bots; });
+  await page.keyboard.press('Escape');
 
   // A failed add keeps the entered human available for correction and retry.
   await choose('Add human');
@@ -437,16 +496,16 @@ async function teamAdd(browser) {
   await node(page, 'p:new-human').waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'humans', {email: 'dana@acme.example', name: 'Dana'}]);
 
-  // BotOps starts an editable draft, never sends it, and preserves one already being written.
+  // BotOps (for an agent you already run) starts an editable draft, never sends it, and keeps one being written.
   await choose('Add bot');
-  await page.locator('[data-team-botops]').click();
+  await page.locator('[data-recruit-botops]').click();
   const draft = page.locator('#chat-composer .p-text');
   await draft.waitFor();
   assert.match(await draft.inputValue(), /folder path and computer, or GitHub URL/);
   assert.equal(await draft.evaluate(el => el === document.activeElement), true);
   await draft.fill('Keep this existing request.');
   await choose('Add bot');
-  await page.locator('[data-team-botops]').click();
+  await page.locator('[data-recruit-botops]').click();
   assert.equal(await draft.inputValue(), 'Keep this existing request.');
   assert.deepEqual(calls, [], 'the handoff does not send a chat message');
 

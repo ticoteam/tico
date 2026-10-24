@@ -61,8 +61,11 @@ direct reports' ([Updates](using-tico.md#updates)).
 ## Groups
 
 The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
-**Add section** opens the inline group-name field. **Add bot > From template** opens the template picker;
-**Ask BotOps** opens its chat with an editable request, preserving any draft already there. Describe a custom bot or
+**Add section** opens the inline group-name field. **Add bot** makes a Recruiting seat (a role with no bot yet) under the
+manager you choose and opens it: its job description, which the CEO Bot drafts for the owner, then **Recruit** and the
+pick ([Recruiting a seat](onboarding.md#recruiting-a-seat)). Open seats show on the chart under their manager with a
+**Recruiting** mark; clicking one opens it. **Ask BotOps** in the Add bot form opens its chat with an editable request,
+preserving any draft already there. Describe a custom bot or
 share an existing agent's folder path and computer, or its GitHub URL. Nothing is sent until you send the message;
 BotOps helps work out the setup rather than automatically importing an arbitrary folder.
 

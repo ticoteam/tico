@@ -185,6 +185,7 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   computer slot (`hub seat create|list|update|close`, `/api/v2/seats`, and `seats` on `GET /api/v2/org`). It holds no work:
   a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
   places a seat anywhere; anyone else under themselves or someone below them.
+- A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
@@ -370,11 +371,41 @@ state are also placed. Existing assignments and repository grants stay in place.
 
 ## Adding a bot later
 
-**Tico Recruit** is available from Team → Add bot and Settings → Bots → Add bot. Start with a role title and job
-description, then choose recruiting, a template, an existing agent or a bot from scratch. The optional tools and
-reviewer answers carry into the selected template's instructions. Recruiting compares a few catalog pitches on your
-own Tico without sending the brief to HQ; choosing one uses the existing `POST /api/v2/bots` path and creates a
-planned bot that waits for its setup conversation. External services link to their own setup instructions.
+**Team → Add bot** makes a Recruiting seat first: a role title, who it reports to (you, or for the owner anyone on the
+chart; otherwise a bot you manage) and, optionally, a job description. Then it opens the seat like any other
+([Recruiting a seat](#recruiting-a-seat)). **Ask BotOps** in the same form opens its chat with an editable request
+instead.
+
+**Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Recruit
+candidates** (the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and
+reviewer answers carry into the selected template's instructions. Choosing a template there uses `POST /api/v2/bots`
+and creates a planned bot that waits for its setup conversation. External services link to their own setup instructions.
+
+### Recruiting a seat
+
+Open a seat from its row on the team chart (`person_search` icon, **Recruiting**) or right after Add bot makes it.
+`backend/recruiting.py` does the work; the page is `ui/app/recruit.js`.
+
+- **The job description.** When the owner opens a seat whose description no person wrote, the CEO Bot gets one task,
+  "Draft the job description: <title>", and answers it with `hub seat draft <seat> --text "..."` (or `--file`; MCP
+  `hub_seat_draft`, `POST /api/v2/seats/{id}/draft`, the CEO Bot's own credential only). The seat shows "The CEO Bot is
+  drafting…" and fills in when the draft lands. Until then, or for anyone else, it shows the chart's text. Anyone who may
+  change the seat edits the description (`PATCH /api/v2/seats/{id}`); from then on the words are theirs: a draft arriving
+  later is refused and its task declined, and nobody asks the CEO Bot again. Opening is `POST /api/v2/seats/{id}/open`;
+  reading is `GET /api/v2/seats/{id}`, with `draft.state` (`none`, `drafting`, `drafted`), `description_by` (`ceo_bot`,
+  `chart` or `person`) and `can_edit`.
+- **Recruit** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
+  task: up to three Tico catalog templates matched against the title and description, each with a one-line reason, and
+  exactly one marked **Recommended**. Each carries the model the template suggests among the providers the team has turned
+  on, and the list of those models to choose another. Built-in bots (BotOps, the CEO Bot, the message bot) are never
+  candidates.
+- **The pick** (`POST /api/v2/seats/{id}/hire`, `{template, model}`) creates the bot through the same checks as any new bot:
+  named after the seat, in the seat's place on the chart (`reports_to`) and group, owned by the person who picked, with the
+  template's instructions plus the job description, and **Onboarding**. The seat is then filled and leaves the chart. Only
+  then is its repository made: a starter template's by the computer (`materialize`), any other's by a BotOps "Set up" task.
+  A filled seat, a template that is not a candidate, or a model the team has not turned on is refused and nothing is made.
+- Who may recruit and pick: the owner for any seat; a person for a seat under themselves or someone below them. Bots open
+  and read seats but do not recruit.
 
 The separate [LinkedBots directory](https://agents.tico.dev/) has a playful feed and a small Tico Recruit workspace.
 It can hand a selected template and role brief into your Tico using a URL fragment; it does not authenticate you or

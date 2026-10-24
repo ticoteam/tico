@@ -1,4 +1,4 @@
-/* ui/app/team-add.js — The Team plus menu reuses the section, template and chat flows. */
+/* ui/app/team-add.js — The Team plus menu reuses the section, seat and people flows. */
 'use strict';
 
 const teamAddCanBot = () => !!S.me?.id && settingsCanCreateBots();
@@ -99,35 +99,10 @@ function teamAddDialog(title, body) {
   dialog.showModal();
   return dialog;
 }
+// Add bot makes a Recruiting seat first, then goes through the same flow as opening a seat (ui/app/recruit.js).
 function teamAddBot() {
-  const dialog = teamAddDialog('Add bot', `<div class="team-add-choices">
-    <button type="button" data-team-recruit><strong>Tico Recruit</strong><span>Describe the role, review candidate pitches, then create your bot.</span></button>
-    <button type="button" data-team-template><strong>From template</strong><span>Choose a bot and adjust its instructions.</span></button>
-    <button type="button" data-team-botops><strong>Ask BotOps</strong><span>Create a custom bot, or get help connecting one you already have. Share its folder and computer, or a GitHub URL.</span></button>
-  </div>`);
-  dialog.querySelector('[data-team-recruit]').onclick = () => {
-    if (!teamAddCanBot()) return;
-    dialog.close('next'); void settingsRecruitFlow();
-  };
-  dialog.querySelector('[data-team-template]').onclick = () => {
-    if (!teamAddCanBot()) return;
-    dialog.close('next'); void settingsCatalogPicker();
-  };
-  dialog.querySelector('[data-team-botops]').onclick = () => {
-    if (!teamAddCanBot()) return;
-    const bot = S.emps.find(row => row.name === 'botops' && row.can_chat && !botLimited(row));
-    if (!bot) { toast('BotOps chat is unavailable. Ask your team owner for access.', true); return; }
-    dialog.close('next');
-    const pill = botPill('botops'), box = pq(pill, '.p-text');
-    // Keep a request already being written, including its attachments.
-    if (!box.value.trim()) {
-      box.value = 'Help me add a bot. Here is what it should do, or where it already lives (folder path and computer, or GitHub URL):\n\n';
-      box.dispatchEvent(new Event('input', {bubbles: true}));
-    }
-    pill.focusOnOpen = true;
-    if (location.hash === '#/bot/botops/chat') showBotTab('chat');
-    else location.hash = '#/bot/botops/chat';
-  };
+  setDrawer(false);
+  void recruitNewSeat();
 }
 function teamAddHuman() {
   const dialog = teamAddDialog('Add human', `<form id="team-add-human">

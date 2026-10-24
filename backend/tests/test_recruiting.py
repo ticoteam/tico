@@ -1,5 +1,5 @@
 """Recruiting a seat (backend/recruiting.py): bot-lifecycle-spec.md section 3, acceptance tests 6 to 8. Test 9 (Team >
-Add bot makes a seat first) is the page's: ui/tests/recruit-seat.cjs."""
+Add bot makes a seat first) is the page's: ui/tests/team-groups.cjs."""
 import json
 
 from backend.store import H
