@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
+import anyio
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.datastructures import DefaultPlaceholder
@@ -940,6 +941,9 @@ def create_app(settings=None):
 
     def mutate(request, body, fn, check=None):
         def current_access(c):
+            # Privacy can narrow after middleware preflight, including before a cached retry.
+            source = getattr(request.state, "privacy_source", request.state.identity)
+            privacy.guard_write(c, source, request.url.path, auth)
             if check:
                 check(c)
             batch_path = re.fullmatch(r"/api/v2/batch/([^/]+)/(next|respond|commit)", request.url.path)
@@ -962,7 +966,8 @@ def create_app(settings=None):
 
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
-            raise Problem(refusal["code"], refusal["detail"], refusal["status"])
+            raise Problem(refusal["code"], refusal["detail"], refusal["status"],
+                          extra={"idempotency_refused": True})
         with store.read() as c:
             privacy.require_payload(c, request.state.identity, result)
         return result
@@ -1220,14 +1225,14 @@ def create_app(settings=None):
                                  (body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
                                  kind="message")
         if body.conversation_id:
-            conv = auth.conversation(c, who, body.conversation_id)
+            conv = auth.conversation(c, who, body.conversation_id, write=True)
             if to not in conv["participants"]:
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
             if not msg:
                 raise Problem("not_found", "Original message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"])
+            auth.conversation(c, who, msg["conversation_id"], write=True)
             privacy.require_message(c, who, msg)
             if body.conversation_id and msg["conversation_id"] != body.conversation_id:
                 raise Problem("reference", "Reply belongs to a different conversation", 422)
@@ -1281,10 +1286,17 @@ def create_app(settings=None):
             message = {**message, "woke": False, "held": held}
         return message
 
-    @app.get("/healthz")
-    def health():
+    # Liveness reads the database on its own two threads: when slow handlers hold every worker in the shared
+    # pool, a probe queued behind them would time out and mark a working server unhealthy.
+    health_threads = anyio.CapacityLimiter(2)
+
+    def health_check():
         with store.read() as c:
             c.execute("SELECT 1 FROM cloud_migrations").fetchone()
+
+    @app.get("/healthz")
+    async def health():
+        await anyio.to_thread.run_sync(health_check, limiter=health_threads)
         return {"ok": True, "service": "tico", "protocol": 2, "release": settings.release_id,
                 "environment_id": settings.environment_id}
 
@@ -2707,7 +2719,7 @@ def create_app(settings=None):
     def reply(request: Request, cid: str, body: M.ChatCreate):
         def work(c):
             who = request.state.identity
-            conv = auth.conversation(c, who, cid)
+            conv = auth.conversation(c, who, cid, write=True)
             target = next((p for p in conv["participants"] if p != who.actor and p.startswith("bot:")), None)
             target = target or next((p for p in conv["participants"] if p != who.actor), None)
             if not target:
@@ -2723,7 +2735,7 @@ def create_app(settings=None):
             msg = H.message(c, mid)
             if not msg:
                 raise Problem("not_found", "Message not found", 404)
-            auth.conversation(c, who, msg["conversation_id"])
+            auth.conversation(c, who, msg["conversation_id"], write=True)
             return H.answer(c, who.actor, mid, body.text, unknown=body.unknown)
         return mutate(request, body, work)
 
@@ -2737,7 +2749,7 @@ def create_app(settings=None):
             asked = H.message(c, body.ask)
             if not asked or asked["kind"] != "ask":
                 raise Problem("not_found", "Question not found", 404)
-            auth.conversation(c, who, asked["conversation_id"])
+            auth.conversation(c, who, asked["conversation_id"], write=True)
             privacy.require_message(c, who, asked)
             return clarify_asks.clarify(c, who.actor, body.ask)
         return mutate(request, body, work)
@@ -2751,7 +2763,7 @@ def create_app(settings=None):
             asked = H.message(c, body.ask)
             if not asked or asked["kind"] != "ask":
                 raise Problem("not_found", "Question not found", 404)
-            auth.conversation(c, who, asked["conversation_id"])
+            auth.conversation(c, who, asked["conversation_id"], write=True)
             privacy.require_message(c, who, asked)
             return views.take_recommendation(c, auth, who, asked, body.version)
         return mutate(request, body, work)
@@ -3374,6 +3386,7 @@ def create_app(settings=None):
         (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
         who = request.state.identity
         def work(c):
+            mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
             lifecycle.refuse_send(c, who, None, what="task comments")
@@ -3401,8 +3414,8 @@ def create_app(settings=None):
                 extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
-            for person in people:
-                H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+            copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
+                      for person in people]
             for item in attached:
                 c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)",
                           (item["id"], item["version"]))
@@ -3412,8 +3425,7 @@ def create_app(settings=None):
             msg = next(m for m in comments if m["id"] == msg["id"])
             held = H.held_note(c, msg.get("to_actor"))
             waits = bot_to_bot.held_reason(msg)
-            return {"comment": msg, "comments": comments,
-                    "woke": bool(wake) and not ({"can_wait", wake_rules.MARK} & set(msg.get("refs") or {})),
+            return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
                     **({"visuals": report} if report else {})}
         result = mutate(request, body, work)
@@ -4536,11 +4548,14 @@ def create_app(settings=None):
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
+        # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
+        # harness confirmed a new session (an older one has no such route).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
                                                           "run_pushes": True, "run_rotation": True,
-                                                          "run_diagnostics": True, "load_snapshot": True}}
+                                                          "run_diagnostics": True, "load_snapshot": True,
+                                                          "attempt_thread": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -4853,13 +4868,17 @@ def create_app(settings=None):
             checks = health.view(c, who, settings, auth, getattr(app.state, "github_app", None), config_view(c, settings, who))["checks"]
             result["checks"] = checks
             for check in checks:
-                if check["status"] not in ("warn", "bad", "unknown"):
+                if check["status"] not in ("warn", "bad", "unknown") and not check.get("items"):
                     continue
-                result["issues"].append({"bot": "", "name": check["label"], "kind": check["id"],
-                                         "severity": "high" if check["status"] == "bad" else "medium",
-                                         "text": check["summary"], "fixes": check["fixes"],
-                                         "fix": "; ".join(f["label"] + (": " + f["href"] if f["href"] else "")
-                                                          for f in check["fixes"])})
+                items = check.get("items") or [{"bot": "", "name": check["label"], "text": check["summary"],
+                                                "fixes": check["fixes"]}]
+                for item in items:
+                    fixes = item.get("fixes") or []
+                    result["issues"].append({**item, "kind": check["id"],
+                                             "severity": "high" if check["status"] == "bad" else "low" if check["status"] == "info" else "medium",
+                                             "fix": item.get("fix") or "; ".join(
+                                                 f["label"] + (": " + f["href"] if f["href"] else "") for f in fixes)})
+
             result["issues"].sort(key=lambda i: (fleet_check_module.ORDER[i["severity"]], i["name"].lower(), i["kind"]))
             result["counts"] = {level: sum(i["severity"] == level for i in result["issues"])
                                 for level in fleet_check_module.ORDER}
@@ -4867,19 +4886,22 @@ def create_app(settings=None):
 
     def computer_rows(c, who):
         from .performance import load_status
+        from .start_places import summary as turn_counts, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
+            counts = turn_counts(c, r["id"], settings)
+            turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:
                 if who.role == "bot":
                     # Discovery and load do not grant access to repositories, logs or operator identity.
                     rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
-                                 **load_status(c, r["id"])})
+                                 **load_status(c, r["id"]), **turns})
                 continue
             bots = [x["bot"] for x in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (r["id"],))
                     if (readable.get(x["bot"]) or {}).get("see")]
@@ -4887,7 +4909,7 @@ def create_app(settings=None):
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
                          **screen_listing(r), **performance_listing(r), **views.computer_details(c, r, who, auth),
-                         **load_status(c, r["id"])})
+                         **load_status(c, r["id"]), **turns})
         return rows
 
     @app.get("/api/v2/computers")
@@ -5563,9 +5585,17 @@ def create_app(settings=None):
                     return fresh
         return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid))
 
+    @app.post("/api/v2/attempts/{aid}/start-place")
+    def start_place(request: Request, aid: str, body: M.StartPlace):
+        return mutate(request, body, lambda c: execution.start_place(c, request.state.identity, aid, body))
+
     @app.post("/api/v2/attempts/{aid}/started")
     def started(request: Request, aid: str, body: M.Started):
         return mutate(request, body, lambda c: execution.started(c, request.state.identity, aid, body))
+
+    @app.post("/api/v2/attempts/{aid}/thread")
+    def attempt_thread(request: Request, aid: str, body: M.AttemptThread):
+        return mutate(request, body, lambda c: execution.thread(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/events")
     def events(request: Request, aid: str, body: M.EventBatch):
@@ -5594,6 +5624,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/inputs")
     def inputs(request: Request, aid: str, body: M.Empty):
+        # Most polls find nothing queued: answer those outside the writer gate (execution.idle_inputs).
+        with store.read() as c:
+            validate_identity(c, request.state.identity)
+            idle = execution.idle_inputs(c, request.state.identity, aid)
+            if idle is not None:
+                privacy.require_payload(c, request.state.identity, idle)
+                return idle
         return mutate(request, body, lambda c: execution.inputs(c, request.state.identity, aid))
 
     @app.post("/api/v2/attempts/{aid}/inputs/{mid}/ack")
@@ -5653,6 +5690,8 @@ def create_app(settings=None):
 
     from .chat_goals import install as install_chat_goals
     install_chat_goals(app, store, auth, mutate, send)
+    from .bot_task_tabs import install as install_bot_task_tabs
+    install_bot_task_tabs(app, store, auth, mutate, settings)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)

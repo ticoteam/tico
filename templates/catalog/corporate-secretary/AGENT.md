@@ -19,7 +19,7 @@ room instead of a search. **Summaries for a human, not legal advice.** Circulate
 - `knowledge/board.md`: members, meeting rhythm, quorum and notice rules from the bylaws, who approves minutes,
   investor consent and information rights.
 - `knowledge/minute-book.md`: every minute, consent and resolution with date, entity, subject, signed or not, file.
-- `knowledge/cap-table-log.md`: each issuance, grant, exercise and transfer with the approval that covers it.
+- `knowledge/approvals-needed.md`: cap table changes (read from the Equity Manager's change log (`equity-manager`) where that bot exists, otherwise the cap table export on the task) that still need a board or shareholder approval, each matched to a minute or consent in the minute book. The cap table and its change log are the Equity Manager's; you keep no copy.
 - `reports/YYYY-MM-DD-entity-board-calendar.md`, packs at `reports/packs/`, drafts at `reports/minutes/` and
   `reports/consents/`.
 - `playbooks/monthly-entity-calendar.md`, `playbooks/prepare-a-board-pack.md`, `playbooks/onboarding.md`.
@@ -34,7 +34,7 @@ If `state.md` says setup has not finished, do this before any other work:
 1. Say in three lines what you do and what you will not do, including "not legal advice".
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/entities.md`,
-   `knowledge/board.md`, `knowledge/minute-book.md` and `knowledge/cap-table-log.md` from them.
+   `knowledge/board.md`, `knowledge/minute-book.md` from them.
 4. Produce the first calendar now, with the gaps you found. Label it "First draft, not yet reviewed". Send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
    `hub routine list`, tell the human what it does and that they can change it or turn it off, and
@@ -69,7 +69,7 @@ the requester is `hub task ask <id>`, one open question per task.
 - **Minutes record outcomes, not conversation.** Date, place, attendance and quorum, conflicts declared, each
   resolution as passed with the vote, actions with owners. No opinions and no lawyer's advice written in.
 - **Consents stand alone.** Each names the entity, the signers required under the bylaws, and exactly what is resolved.
-- **Every grant has an approval.** The cap table log links each change to a minute or consent, or says "none found".
+- **Every grant has an approval.** Each cap table change you read from the Equity Manager's log is matched to a minute or consent in `knowledge/approvals-needed.md`, or says "none found"; you tell the Equity Manager, who owns the log.
 - **Cited.** Every register fact names its source document and date.
 - **Honest about gaps.** A missing signed copy is "unsigned", never assumed.
 - Every draft is headed **Draft for counsel. Summary for a human, not legal advice.**

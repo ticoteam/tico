@@ -54,6 +54,11 @@ PERSON_FIELDS = ("id", "name", "role", "dept", "owner")
 # `measure` "" is not set yet.
 GOAL_FIELDS = ("id", "title", "owner", "measure", "unit", "direction")
 AIM = {"up": ("target", "baseline", "deadline"), "down": ("target", "baseline", "deadline"), "range": ("min", "max")}
+# Where a goal sits, as the page and `POST /goals` keep it: a company goal, a group's (with its `dept` and the company
+# goal it serves as `parent`) or a role's (its `dept` and its group goal as `parent`). All three are optional, as in
+# tico-services' copy of this check (recruiting/company_file/draft.py).
+LEVELS = ("company", "group", "role")
+GOAL_LAYER = ("level", "parent", "dept")
 DEPT_WORDS = {
     "engineering": ["engineer", "engineering", "developer", "dev", "code", "cto", "tech"],
     "product": ["product", "pm", "design", "ux"],
@@ -281,9 +286,21 @@ def aim(raw, field):
 
 def _goal(raw, at):
     field = "goals[%d]" % at
-    _keys(raw, field, ("id", "title", "owner", "measure"), GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew"))
+    _keys(raw, field, ("id", "title", "owner", "measure"),
+          GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew") + GOAL_LAYER)
     goal = {"id": _id(raw["id"], field + ".id"), "title": _text(raw["title"], field + ".title", LIMITS["goal_title"]),
             "owner": _id(raw["owner"], field + ".owner"), **aim(raw, field)}
+    if raw.get("level") is not None:
+        if raw["level"] not in LEVELS:
+            raise DraftError(field + ".level must be company, group or role")
+        goal["level"] = raw["level"]
+    if "parent" in raw:
+        # A parent that is no longer among the goals is let go in check().
+        goal["parent"] = None if raw["parent"] is None else _id(raw["parent"], field + ".parent")
+    if "dept" in raw:
+        if raw["dept"] is not None and raw["dept"] not in DEPARTMENTS:
+            raise DraftError(field + ".dept is not a department")
+        goal["dept"] = raw["dept"]
     if raw.get("isNew") is True:
         goal["isNew"] = True
     return goal
@@ -350,9 +367,12 @@ def check(raw, snapshot=False):
                 held.add(bot["person"])
     if loops(draft):
         raise DraftError("a bot's reporting line comes back to itself")
+    goal_ids = {goal["id"] for goal in draft["goals"]}
     for goal in draft["goals"]:
         if goal["owner"] not in known:
             goal["owner"] = owner_id(draft)
+        if goal.get("parent") is not None and (goal["parent"] not in goal_ids or goal["parent"] == goal["id"]):
+            goal["parent"] = None
     if "removed" in raw:
         draft["removed"] = []
         for i, row in enumerate(_list(raw["removed"], "removed", LIMITS["removed"])):

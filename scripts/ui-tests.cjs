@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Runs the browser scripts in ui/tests/*.cjs a few at a time (npm run test:ui).
 // Each script's output is held and printed together, so a failure reads as one block.
-// Usage: node scripts/ui-tests.cjs [-j N] [--all] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
+// Usage: node scripts/ui-tests.cjs [-j N] [--all] [--list] [name-or-path ...]   (free-core jobs, or $TICO_UI_JOBS)
+// --list prints the scripts the same arguments would run, one name per line, and runs nothing (CI splits them
+// across VMs). With TICO_UI_TIMINGS set, each passing script's seconds are written there as JSON {name: seconds}.
 // With no names it runs CORE, the main pages and the privacy boundaries; --all runs every script (the release
 // check does). A name runs that script whether or not it is in CORE. Run locally, it waits for one of the box's
 // heavy-job slots first (scripts/heavy.sh). A script still running after TICO_UI_SCRIPT_TIMEOUT seconds (120, times the
@@ -216,15 +218,13 @@ function stoppedReport({pending, calls, stopped}) {
 }
 
 async function main() {
-  const {cores, idleFraction} = await sampleCpu();
-  const selected = resources(process.env, cores, idleFraction);
-
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'people-access', 'recruit-unit',
                 'settings-forms', 'sign-in-redirect', 'task-privacy', 'tasks-page', 'team-groups', 'visual-cards', 'visual-fallback', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
-  let jobs = selected.jobs;
+  let jobs;
   let all = false;
+  let list = false;
   const wanted = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '-j') {
@@ -232,21 +232,30 @@ async function main() {
       if (!Number.isInteger(jobs) || jobs < 1) throw new Error('-j must be a positive integer');
     }
     else if (args[i] === '--all') all = true;
+    else if (args[i] === '--list') list = true;
     else wanted.push(path.basename(args[i]).replace(/\.cjs$/, ''));
   }
   const chosen = wanted.length ? wanted : all ? null : CORE;
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort()
     .filter(f => !chosen || chosen.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
+  if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
+  const {cores, idleFraction} = await sampleCpu();
+  const selected = resources(process.env, cores, idleFraction);
+  jobs ??= selected.jobs;
   console.log(`UI tests: jobs=${jobs}, slowdown=${selected.slowdown}, timeout=${selected.timeout}s, cores=${cores}, idle=${(idleFraction * 100).toFixed(1)}%`);
 
   const failed = [];
+  const timings = {};
   const started = Date.now();
   const env = {TICO_BROWSER: 'chromium', ...process.env, TICO_UI_SLOWDOWN: String(selected.slowdown)};
   const run = async file => {
     const result = await runScript(path.join(dir, file), {env, timeout: selected.timeout});
     const {code, out, timedOut, secs} = result;
-    if (code === 0 && !timedOut) console.log(`ok    ${file} (${secs.toFixed(1)}s)`);
+    if (code === 0 && !timedOut) {
+      timings[file.replace(/\.cjs$/, '')] = secs;
+      console.log(`ok    ${file} (${secs.toFixed(1)}s)`);
+    }
     else {
       failed.push(file);
       const why = timedOut ? `, stopped: still running after ${selected.timeout}s` : '';
@@ -260,6 +269,7 @@ async function main() {
     while (queue.length) await run(queue.shift());
   }));
   const secs = ((Date.now() - started) / 1000).toFixed(0);
+  if (process.env.TICO_UI_TIMINGS) fs.writeFileSync(process.env.TICO_UI_TIMINGS, JSON.stringify(timings, null, 2) + '\n');
   console.log(failed.length ? `\n${failed.length} of ${files.length} UI scripts failed: ${failed.join(', ')} (${secs}s)`
                             : `\n${files.length} UI scripts passed in ${secs}s`);
   process.exit(failed.length ? 1 : 0);
@@ -272,7 +282,8 @@ function inSlot(env = process.env) { return Boolean(env.CI || env.TICO_HEAVY_HEL
 
 if (require.main === module) {
   const go = () => main().catch(error => { console.error(error.message); process.exitCode = 1; });
-  if (inSlot()) go();
+  // Listing runs nothing, so it never waits for a slot.
+  if (inSlot() || process.argv.includes('--list')) go();
   else {
     // The wrapper's own stop ends the browser scripts, so a stop here is passed on and the exit waits for it.
     const slotted = spawn(path.join(__dirname, 'heavy.sh'), [process.execPath, __filename, ...process.argv.slice(2)],
