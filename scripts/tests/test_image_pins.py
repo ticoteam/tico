@@ -68,7 +68,9 @@ def test_every_base_image_is_pinned_by_digest(dockerfile):
     text = (ROOT / dockerfile).read_text()
     stages = set(re.findall(r'^FROM \S+ AS (\S+)$', text, re.M))
     for image in re.findall(r'^FROM (\S+)', text, re.M):
-        if image not in stages and image != '${PYTHON_IMAGE}':
+        # A stage chosen by an argument (runner-bin-${NATIVE}) is one of the stages; scratch is empty, nothing to pin.
+        stage = re.compile(re.sub(r'\\\$\\\{\w+\\\}', r'[\\w-]+', re.escape(image)))
+        if not any(stage.fullmatch(name) for name in stages) and image not in ('${PYTHON_IMAGE}', 'scratch'):
             assert DIGEST.search(image), f'{dockerfile}: {image} is not pinned by digest'
     for image in re.findall(r'^ARG \w+_IMAGE=(\S+)$', text, re.M):
         assert DIGEST.search(image), f'{dockerfile}: {image} is not pinned by digest'

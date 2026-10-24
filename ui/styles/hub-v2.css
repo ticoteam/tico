@@ -152,7 +152,7 @@
 .docs-edit-head{margin-bottom:14px;padding-bottom:10px}.docs-edit-head h2{font-size:var(--t-lg)}
 .docs-reader-title{min-width:0;flex:1 1 auto}.docs-crumb{font-size:var(--t-sm);margin-bottom:4px!important;overflow-wrap:anywhere}
 .docs-meta{margin-top:6px!important;font-size:var(--t-sm);color:var(--muted)}
-.docs-lock-badge{display:inline-flex;align-items:center;gap:4px;vertical-align:middle;margin-left:8px;padding:1px 8px;border-radius:10px;background:var(--wait-bg);color:var(--wait);font-size:var(--t-sm);font-weight:600;letter-spacing:0}
+.docs-lock-badge{display:inline-flex;align-items:center;gap:4px;vertical-align:middle;margin-left:8px;padding:1px 8px;border-radius:10px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm);font-weight:600;letter-spacing:0}
 .docs-lock-badge svg{width:12px;height:12px}
 .docs-tools{display:flex;flex:none;gap:6px;padding-top:2px}
 .docs-locked-note{margin:-8px 0 16px;font-size:var(--t-sm)}

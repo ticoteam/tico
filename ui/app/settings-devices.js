@@ -373,6 +373,7 @@ function renderSettingsMachines() {
     const facts = [settingsPersonName(machine.operator), machine.version ? `Tico ${machine.version}` : ''].filter(Boolean).join(' · ');
     return `<tr class="machine-card" data-computer-row="${esc(machine.id)}">
       <td><span class="machine-head"><button type="button" class="machine-name" data-computer-open="${esc(machine.id)}" aria-haspopup="dialog">${esc(machine.label)}</button><span class="machine-status" data-machine-status><span class="dot ${status[0]}" aria-hidden="true"></span>${esc(status[1])}</span></span>
+        ${machine.turn_summary ? `<p class="muted machine-turn-counts">${esc(machine.turn_summary)}</p>` : ''}
         <span class="settings-cell-note machine-facts">${esc(facts)} ${machineUpdateWords(machine.update)}</span>${failures ? `<span class="settings-cell-note err">${failures} bot${failures === 1 ? '' : 's'} not ready</span>` : ''}${online && machine.restarting ? `<span class="settings-cell-note" data-machine-restarting title="${esc(`Since ${machine.restarting.slice(0, 16).replace('T', ' ')} UTC`)}">Restarting: it starts new work once its running turns end</span>` : ''}</td>
       <td data-label="AI tools">${machineChipsHTML(machine)}</td></tr>`;
   }).join('');

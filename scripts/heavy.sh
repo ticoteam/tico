@@ -12,6 +12,7 @@
 # A TERM, INT or HUP stops that whole group (TERM, then KILL after 10 s) before the slot goes, so a suite's workers
 # never outlive their slot. With no flock (a Mac), or a lock folder flock cannot lock, it runs unlocked with a
 # warning. On hosted CI (CI set), or inside a job that already holds a slot (TICO_HEAVY_HELD), it runs as it is.
+# With TICO_HEAVY_REMOTE=1 the command runs on a fresh RunsOn VM instead (scripts/remote.py), on the pushed HEAD.
 set -u
 
 if [ "$#" -eq 0 ]; then
@@ -20,6 +21,9 @@ if [ "$#" -eq 0 ]; then
 fi
 if [ -n "${CI:-}" ] || [ -n "${TICO_HEAVY_HELD:-}" ]; then
   exec "$@"
+fi
+if [ "${TICO_HEAVY_REMOTE:-}" = 1 ]; then
+  exec python3 "$(dirname "$0")/remote.py" -- "$@"
 fi
 export TICO_HEAVY_HELD=1
 
