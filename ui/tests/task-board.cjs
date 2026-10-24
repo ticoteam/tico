@@ -242,8 +242,12 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.match(await page.locator('#task-stats-dialog .flow-chart-head').innerText(), /New per week/);
     await page.locator('#task-stats-dialog [data-unit="day"]').click();
     await page.waitForFunction(() => document.querySelectorAll('#task-stats-dialog .flow-col').length === 14);
+    const personFlowRead = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === '/api/v2/tasks/flow' && url.searchParams.get('owner') === 'human:reviewer';
+    });
     await page.locator('#task-stats-dialog select[data-flow-who]').selectOption('human:reviewer');
-    await page.waitForFunction(() => document.querySelector('#task-stats-dialog select[data-flow-who]')?.value === 'human:reviewer');
+    await personFlowRead;
     assert.equal(flowAsked.at(-1).owner, 'human:reviewer', 'the chart reads one person');
     await page.locator('#task-stats-dialog [data-days="365"]').click();
     await page.waitForFunction(() => !document.querySelector('#task-stats-dialog .flow-tile-d'), null, {timeout: 5000});   // a year has no previous period
