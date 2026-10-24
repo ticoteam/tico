@@ -65,7 +65,8 @@ const DEFAULT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name
       }
       if (p === '/api/v2/tasks') {
         const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner' : 'requester';
-        return json({tasks: TASKS.filter(t => t[field] === 'bot:' + who && (field === 'owner' || t.status !== 'done'))});
+        const status = q.get('status');
+        return json({tasks: TASKS.filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
