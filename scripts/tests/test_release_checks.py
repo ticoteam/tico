@@ -14,6 +14,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
     monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: (True, 'edge networks: ok'))
+    monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
 
     for builds_ok, overrides, workers, browser_jobs in (
             (True, {}, '6', None), (False, {}, '6', None),
@@ -108,8 +109,10 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
 
     monkeypatch.setattr(release_checks, 'Check', Check)
     product = {'journey', 'build-server', 'build-runner', 'build-updater', 'smoke', 'side-jobs', 'isolation'}
+    monkeypatch.setattr(release_checks, 'desktop_buildable', lambda: False)
     for part, shard, expected in (('product', None, product), ('browser', None, {'all-browser'}),
-                                  ('python', None, {'all-python'}), ('python', (2, 4), {'python-2-of-4'})):
+                                  ('python', None, {'all-python'}), ('python', (2, 4), {'python-2-of-4'}),
+                                  ('desktop', None, {'desktop-update'})):
         calls.clear()
         monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
         assert release_checks.release(SimpleNamespace(previous=None, part=part, shard=shard)) == 0
@@ -125,6 +128,16 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     assert release_checks.release(SimpleNamespace(previous=None)) == 0
     assert set(calls) == product | {'all-python', 'all-browser'}
     assert calls['all-python'][calls['all-python'].index('-n') + 1] == '2'
+    # Given the images Release validation built, the product part tests those, pulled by digest, as their own version.
+    release_checks.os.environ.update(TICO_RELEASE_VERSION='v1.2.3', TICO_RELEASE_IMAGES=','.join(
+        f'{target}=ghcr.io/acme/{target}@sha256:{"b" * 64}' for target in ('server', 'runner', 'updater')))
+    calls.clear()
+    monkeypatch.setattr(release_checks, 'time', SimpleNamespace(monotonic=iter(range(100, 200)).__next__))
+    assert release_checks.release(SimpleNamespace(previous=None, part='product', shard=None)) == 0
+    assert set(calls) == product - {'build-server', 'build-runner', 'build-updater'} | {'pull-server', 'pull-runner', 'pull-updater'}
+    assert calls['pull-runner'][-3:] == [f'ghcr.io/acme/runner@sha256:{"b" * 64}', 'ghcr.io/ticoteam/tico-runner:v1.2.3',
+                                         'tico-rc-runner:local']
+    release_checks.os.environ.clear()
     calls.clear()
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: (False, 'edge networks: could not create smoke'))
     assert release_checks.release(SimpleNamespace(previous=None, part='product', shard=None)) == 1
