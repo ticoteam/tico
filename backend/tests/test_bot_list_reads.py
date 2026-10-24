@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import auto_tasks, agents, rooms, update_feeds, views, task_models, wake_presets
+from backend import auto_tasks, agents, lifecycle, rooms, update_feeds, views, task_models, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -15,7 +15,8 @@ from backend.tests.test_api import api  # noqa: F401
 
 BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
-            "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default")
+            "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
+           "can_complete_onboarding")
 
 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
@@ -31,6 +32,10 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["operator"] = config["operator"] if config else None
     row["revision"] = config["revision"] if config else None
     row["onboarding_state"] = (config["onboarding_state"] or "") if config else ""
+    row["stage"] = lifecycle.stage(row["onboarding_state"])
+    if row["stage"] == lifecycle.ONBOARDING:
+        row["can_complete_onboarding"] = lifecycle.may_complete(auth, c, who, bot["slug"])
+        row["onboarding_ready"] = lifecycle.ready_of(config["config_json"]) if config else None
     if config:
         repo = config["repo"] or ("emp-" + bot["slug"])
         from backend.shared_bots import follow

@@ -760,13 +760,15 @@ def _server_row(slug):
 
 
 def switch(slug, manifest=None):
-    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward}.
+    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward, read, onboarding}.
 
     `on` and `forward_to` come from the server only. With no server value (none set yet, or no Tico reachable from
-    this run) sending without approval is off. `asks` / `asks_forward` are what bot.yaml requests, for messages."""
+    this run) sending without approval is off. `read` says Tico answered, so `onboarding` is known; a run that
+    cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
+    requests, for messages."""
     if str(slug).strip().lower() == OWNER:
         return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                "asks_forward": []}
+                "asks_forward": [], "read": True, "onboarding": False}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -777,6 +779,8 @@ def switch(slug, manifest=None):
     asks = bool((manifest or {}).get("outbound_send", False))
     out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
     row = _server_row(slug)
+    out["read"] = row is not None
+    out["onboarding"] = bool((row or {}).get("onboarding"))
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -785,7 +789,7 @@ def switch(slug, manifest=None):
                          + (". bot.yaml asks for outbound_send: true, which has no effect by itself" if asks else ""))
         return out
     out["source"] = "server"
-    out["on"] = bool(row.get("outbound_send"))
+    out["on"] = bool(row.get("outbound_send")) and not out["onboarding"]
     out["forward_to"] = [a for a in access.forward_to({"forward_to": row.get("forward_to") or []})]
     who = str(row.get("updated_by") or "a person")
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
@@ -932,6 +936,19 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("verb", f"{slug} declares {', '.join(verbs or ['nothing'])} on {box}, not send")
     ok("verb", f"{slug} may send as {box}")
 
+    # An onboarding bot sends no email until a person above it marks onboarding complete (backend/lifecycle.py).
+    # This comes before the approval read: no approval, Issue or owner message lifts it, and neither does a run that
+    # cannot ask Tico (no credential, unreachable, a bad answer), since it cannot tell the bot is past onboarding.
+    sw = switch(slug, manifest)
+    if sw.get("onboarding"):
+        return no("onboarding", f"{slug} is still onboarding, so it sends no email yet, with or without an approval; "
+                                "a person above it on the org chart marks onboarding complete")
+    if not sw.get("read"):
+        return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
+                                "has finished onboarding and sends no email, with or without an approval; "
+                                "try again once Tico answers")
+    ok("onboarding", f"{slug} is not onboarding")
+
     ext = externals(pol, to)
     ext_cc = externals(pol, cc)
     # One read of the approval Issue for the whole chain. `full` means it names every external
@@ -942,7 +959,6 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
             if approval else None)
     full = bool(appr and appr["full"])
 
-    sw = switch(slug, manifest)
     if not sw["on"]:
         if full:
             ok("outbound_send", f"off ({sw['detail']}), lifted for this message "

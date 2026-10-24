@@ -124,10 +124,13 @@ class FakeSlack(unittest.TestCase):
         access.write_text("owner: ana@acme.example\nallowed: [cara@acme.example]\n")
         self.real_hub_access = slack.load_hub_access
         slack.load_hub_access = lambda path=access: self.real_hub_access(path)
+        self.real_hub_get, self.stage = slack.HUB_GET, "active"   # Tico says the bot is past onboarding
+        slack.HUB_GET = lambda path: {"stage": self.stage} if path.startswith("bots/") and self.stage else None
 
     def tearDown(self):
         slack._request, slack.PROJECTS, slack.audit = (self.real_request, self.real_projects,
                                                        self.real_audit)
+        slack.HUB_GET = self.real_hub_get
         slack.load_hub_access = self.real_hub_access
         os.environ.pop("SLACK_BOT_TOKEN", None)
         if self.old_token is not None:
@@ -164,6 +167,16 @@ class DmGates(FakeSlack):
         self.assertEqual(len(calls), 1)                  # the lookup, then it stopped
         self.assertIn("lead@acme.com", body["error"])
         self.assertIn("hub-access.yaml", body["hint"])
+        self.assertEqual(self.audited, [])
+
+    def test_an_onboarding_bot_or_one_whose_stage_tico_cannot_confirm_sends_nothing(self):
+        for stage in ("onboarding", None):                 # None: no hub credential, or Tico unreachable
+            self.stage = stage
+            for argv in (["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],
+                         ["dm", "--as", self.slug, "--to", "cara@acme.example", "--text", "hi", "--json"]):
+                rc, out, calls = self.run_cli(argv, [OK_OPEN, OK_POST, OK_AUTH])
+                self.assertEqual((rc, calls), (2, []), (stage, argv[0], out))
+                self.assertIn("onboarding", json.loads(out)["error"])
         self.assertEqual(self.audited, [])
 
 
@@ -216,13 +229,13 @@ class ChannelList(FakeSlack):
 
     def setUp(self):
         super().setUp()
-        self.real_get, self.asked = slack.HUB_GET, []
+        self.asked = []
         self.file = Path(self.tmp.name) / "slack-channels.yaml"
         self.answer = {"channels": self.rows, "registry_file": {"present": False, "channels": 0, "imported": True}}
-        slack.HUB_GET = lambda path: (self.asked.append(path), self.answer)[1]
+        slack.HUB_GET = lambda path: ({"stage": "active"} if path.startswith("bots/")
+                                      else (self.asked.append(path), self.answer)[1])
 
     def tearDown(self):
-        slack.HUB_GET = self.real_get
         super().tearDown()
 
     def test_a_run_reads_the_list_from_the_hub_and_the_file_only_until_it_is_imported(self):
