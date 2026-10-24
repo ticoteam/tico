@@ -2,29 +2,47 @@
 
 A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
 **Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
-Each computer and Health show **running**, **starting**, **waiting** and **queued** turns. Waiting includes the
-reason and the age of the oldest wait. Only running and starting turns occupy a place. A starting turn reserves a
-place atomically for up to **3 minutes**; if it has not started then, it returns to the queue without changing its
-task. A login, quota or other pre-start wait holds no place, so unrelated work can start.
-
-CPU or memory above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
-Running turns continue. New starts resume when the sustained overload clears.
-
-The counts describe the computer's total load, including work belonging to other people; wait reasons never name
-bots, tasks, people or accounts. The bot list still follows each viewer's access.
-
-During an update, server and runner negotiate the new start protocol. Older runners retain their existing delivery
-leases, including preparation already underway, until they update; those starts are not cut off after three minutes.
-Legacy waiting turns retain their place too, because those runners cannot obtain a fresh grant before starting.
-Update the runner to release those places safely and enable the four-count capacity rules for its turns.
-Upgraded runners opt in after a successful heartbeat. They hold a place throughout active preparation, release it
-while waiting for a lane or login, and obtain a fresh atomic place before continuing. Repeated missed start deadlines
-use the existing pre-start retry limit and report a failure instead of retrying forever.
-
 To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
 team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
 out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
 These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
+
+## Turn counts
+
+**Unreleased.** The following counts and start rules apply with this update.
+
+The computers list, each computer's pop-up and **Settings → Health** show four counts:
+
+| Count | What it means |
+|---|---|
+| **Running** | The turn has started. |
+| **Starting** | The computer has reserved a place and is preparing the turn. |
+| **Waiting** | The turn needs a login, quota, a free lane or another pre-start requirement. Each reason shows its count and oldest wait. |
+| **Queued** | The work is in line to be picked up. |
+
+For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 queued** separates work from its waits.
+The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
+bots, tasks, people or accounts. The bot list still follows each viewer's access.
+
+On an upgraded runner, only running and starting turns occupy a place. A login, quota or other pre-start wait holds
+none, so unrelated work can start. Waiting for a lane or login releases the place; continuing requires a fresh atomic
+reservation. Two turns cannot take the last place together. Codex's shared ChatGPT login does not normally queue
+turns ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
+
+A starting turn reserves a place for up to **3 minutes (180 seconds)**, including active Git and runtime preparation.
+Keeping that preparation active does not extend the deadline. If the turn has not started, its place is released and
+its work returns to the queue without changing the task. After 10 missed starts for one job since the server last
+started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
+
+CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
+the sustained overload clears. This brake does not change your account, model or computer size.
+
+During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
+their existing delivery leases, including preparation already underway, until they update. Those starts have no new
+three-minute deadline. Legacy waiting turns retain their place too, because those runners cannot obtain a fresh
+reservation before starting. Update the runner to release those places safely and enable the new capacity rules
+for its turns. Upgraded runners opt in after a successful heartbeat and keep the older rules against an older server.
 
 ## Connections
 
