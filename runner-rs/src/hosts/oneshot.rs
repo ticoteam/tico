@@ -174,6 +174,12 @@ impl<W: Wire> OneShot<W> {
         thread_id.into()
     }
 
+    /// A thread this host started, once its harness confirmed the session (Pi's `session` line; a resumed one
+    /// counts as confirmed).
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        self.inner().threads.get(thread_id).filter(|t| t.started).map(|_| thread_id.to_string())
+    }
+
     fn launch(&self, argv: &[String], settings: &Settings) -> std::io::Result<(Child, crate::run_diagnostics::Stderr)> {
         let mut command = if W::ISOLATED { crate::isolation::command(&argv[0]) } else { tokio::process::Command::new(&argv[0]) };
         command
@@ -304,6 +310,8 @@ impl<W: Wire> OneShot<W> {
                     if let Some(t) = self.inner().threads.get_mut(&tid) {
                         t.started = true;
                     }
+                    // A new thread is saved, and the one it replaces let go, only now (execute.rs Fresh).
+                    self.emit(event("thread_confirmed", Some(&tid), Some(&turn), json!({})));
                 }
                 for (kind, fields) in state.out.drain(..) {
                     self.emit(event(kind, Some(&tid), Some(&turn), fields));
