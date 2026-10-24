@@ -472,6 +472,54 @@ def sweep_idempotency(store, now=None, batch=5000):
             return deleted
 
 
+DELTA_RETENTION_DAYS = 14
+DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
+
+
+def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+    """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
+    than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
+
+    A finished run's text is whole in its `message` events and `attempts.final_text`; the pieces only typed the live
+    reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
+    Attempts are walked in creation order from a mark kept in registry_metadata, so a pass never rescans the table;
+    one created before the cutoff and still unfinished is passed over for good."""
+    at = now or H.now()
+    cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
+    created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    with store.read() as c:
+        mark = c.execute("SELECT value_json FROM registry_metadata WHERE key='delta-sweep-mark'").fetchone()
+    mark = json.loads(mark[0]) if mark else ["", ""]
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute("SELECT id,created,finished FROM attempts WHERE created<? AND (created,id)>(?,?) "
+                             "ORDER BY created,id LIMIT 200", (created_before, *mark)).fetchall()
+        done = [r["id"] for r in rows if r["finished"] and r["finished"] < cutoff]
+        while done and deleted < most:
+            with store.transaction() as c:
+                removed = c.execute(
+                    "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events WHERE attempt_id IN (%s) "
+                    "AND kind='delta' AND CASE WHEN json_valid(payload_json) THEN "
+                    "json_extract(payload_json,'$.delta_kind') END IS NOT 'thought' LIMIT ?)"
+                    % ",".join("?" * len(done)), (*done, batch)).rowcount
+            deleted += removed
+            if removed < batch:
+                break
+        else:
+            if done:
+                break                   # the cap was reached inside this group: it is taken up again next pass
+        if not rows:
+            break
+        mark = [rows[-1]["created"], rows[-1]["id"]]
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES('delta-sweep-mark',?) "
+                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        if len(rows) < 200:
+            break
+    return deleted
+
+
 def sweep_mail(store, now=None, batch=5000):
     """Delete mail older than the retention window, including matching FTS rows.
 
@@ -639,10 +687,16 @@ def _pooled(base):
     return type("Pooled" + base.__name__, (base,), body)
 
 
+# Seconds a writer waits for the gate, then for SQLite's lock (busy_timeout, other processes). Together they bound a
+# request's wait for the lock: past that it answers 503 `busy` with Retry-After (app.py storage_handler) instead of
+# holding one of the 40 request threads for a minute while client retries queue behind it.
+WRITE_WAIT = 10
+
+
 class WriterGate:
     """FIFO admission: a scheduler opening its next transaction goes behind already waiting requests."""
 
-    def __init__(self, timeout=30):
+    def __init__(self, timeout=WRITE_WAIT):
         self.lock = threading.Lock()
         self.queue = deque()
         self.timeout = timeout
@@ -692,17 +746,22 @@ class Store:
         self.provenance_cache = Cache()
 
     def connect(self, factory=None, check_same_thread=True):
-        c = sqlite3.connect(str(self.settings.db_path), timeout=30, isolation_level=None,
+        c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
                             factory=factory or self.factory, check_same_thread=check_same_thread)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
-        # As hubdb.connect: a writer waits out a backup checkpoint or a long scheduler pass
-        # rather than answering storage_unavailable.
-        c.execute("PRAGMA busy_timeout=30000")
+        # A writer waits out a backup checkpoint or another process's pass, but not so long that requests pile up
+        # (WRITE_WAIT). hubdb.connect keeps 30 s: it opens the file at start-up, for migrations.
+        c.execute(f"PRAGMA busy_timeout={WRITE_WAIT * 1000}")
         # In WAL mode NORMAL syncs at checkpoints, not on every commit inside the writer gate, where a sync
         # waiting behind other disk writes on the host held every writer for seconds. The database cannot
         # corrupt; an OS crash or power loss can lose the last commits, as with hubdb.connect.
         c.execute(f"PRAGMA synchronous={H.synchronous('NORMAL')}")
+        # The 2 MB default page cache re-read hot index pages on every read of a multi-GB file. 16 MB per connection
+        # (POOL_IDLE kept, a few dozen at peak) fills lazily; the mmap is the OS page cache, shared by all of them.
+        c.execute("PRAGMA cache_size=-16384")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA mmap_size=268435456")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):

@@ -378,6 +378,7 @@ request may succeed later. Some carry one extra fact beside them (a `sign_in` pa
 | 422 | `idempotency_key` | A write without an `Idempotency-Key`. |
 | 422 | `lint`, `date`, `hierarchy`... | A rule of the product refused the request. `detail` says what to change. |
 | 429 | `cap`, `budget` | A daily allowance is used. |
+| 503 | `busy` | The database was busy. Wait for `Retry-After` seconds and retry with the same `Idempotency-Key`. |
 | 503 | `storage_unavailable` | Try again shortly (`retryable: true`); back off. |
 
 Request validation (a missing field, a wrong type or an unknown field) uses the same envelope:

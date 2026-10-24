@@ -14,7 +14,7 @@ from . import system_routines as SR
 from .batch_work import isolated
 from .harnesses import SYNCED_SQL
 from .statuses import PARKED_SQL
-from .store import H, encode, sweep_idempotency, sweep_mail
+from .store import H, encode, sweep_deltas, sweep_idempotency, sweep_mail
 
 
 def stamp(at):
@@ -399,6 +399,7 @@ class Scheduler:
                     SR.prune(c)                                # each system job keeps its last runs
                 sweep_idempotency(self.store, stamp(at))
                 sweep_mail(self.store, stamp(at))
+                sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep two weeks
                 from . import events
                 events.sweep(self.store, stamp(at))            # live events keep a day
                 from . import flight

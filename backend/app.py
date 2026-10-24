@@ -394,6 +394,11 @@ def create_app(settings=None):
     async def storage_handler(request, exc):
         telemetry.capture("request", exc, 503, route=error_route(request))
         request.state.telemetry_captured = True
+        # The write lock stayed taken past store.WRITE_WAIT: a load answer, not a fault. Clients retry with the same
+        # Idempotency-Key (runner, clients/tico.py, ui/app/api.js), so the write lands once.
+        if "locked" in str(exc) or "busy" in str(exc):
+            return JSONResponse({"error": {"code": "busy", "detail": "Tico is busy; retry shortly", "retryable": True}},
+                                status_code=503, headers={"Retry-After": "2"})
         # No SQL, database paths, or request bodies in client-facing diagnostics.
         return JSONResponse({"error": {"code": "storage_unavailable", "detail": "Please retry shortly",
                                        "retryable": True}}, status_code=503)
@@ -592,12 +597,14 @@ def create_app(settings=None):
                             raise Problem("too_large", "Request exceeds the upload limit", 413)
                         chunks.append(chunk)
                     request._body = b"".join(chunks)
+                # assistant_owns reads the database: off the event loop.
                 if (getattr(request.state, "identity", None) and request.state.identity.via
                         and not request.state.identity.confirmed
-                        and not assistant_writes(request.method, request.url.path, settings, getattr(request, "_body", b""),
-                                                 request.state.identity.actor,
-                                                 lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
-                                                 assistant_direct(), assistant_to_bot)):
+                        and not await asyncio.to_thread(lambda: assistant_writes(
+                            request.method, request.url.path, settings, getattr(request, "_body", b""),
+                            request.state.identity.actor,
+                            lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
+                            assistant_direct(), assistant_to_bot))):
                     # A task change, comment or link, a decline or an answer the person asked for in their own Assistant
                     # chat: the turn cites their message and it runs as them, recorded via assistant for that message
                     # (backend/assistant.py).
@@ -620,25 +627,30 @@ def create_app(settings=None):
                                       "/api/v2/assistant/batch); approving is a card unless the person lets you "
                                       "decide approvals, then their cited words. The person confirms a card in "
                                       + settings.app_name, 403)
-                    with store.read() as c:
-                        record = assistant_instruction(c, request.state.identity, asked)
-                        assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
-                        if approves:
-                            # Recorded on the approval: decided by the Assistant for the person, their words quoted.
-                            # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
-                            acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
-                            record = {**record, "assistant": acting,
-                                      **assistant_mod.approval_words(c, request.state.identity, record["cited"],
-                                                                     H.actor_id(acting),
-                                                                     assistant_mod.approval_id(request.url.path))}
-                        delegation_reset = H.DELEGATION.set(record)
+                    def cited():
+                        with store.read() as c:
+                            record = assistant_instruction(c, request.state.identity, asked)
+                            assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
+                            if approves:
+                                # Recorded on the approval: decided by the Assistant for the person, their words quoted.
+                                # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
+                                acting = request.state.identity.task_actor or "bot:" + settings.assistant_bot
+                                record = {**record, "assistant": acting,
+                                          **assistant_mod.approval_words(c, request.state.identity, record["cited"],
+                                                                         H.actor_id(acting),
+                                                                         assistant_mod.approval_id(request.url.path))}
+                            return record
+                    delegation_reset = H.DELEGATION.set(await asyncio.to_thread(cited))
             early = None
             caller = getattr(request.state, "identity", None)
             if caller:
                 request.state.privacy_source = caller
             if caller and request.method not in ("GET", "HEAD", "OPTIONS"):
-                with store.read() as c:
-                    privacy.guard_write(c, caller, request.url.path, auth)
+                # A bot caller walks its run's provenance here: in a thread, so the event loop keeps serving.
+                def guard():
+                    with store.read() as c:
+                        privacy.guard_write(c, caller, request.url.path, auth)
+                await asyncio.to_thread(guard)
             # The Assistant's citation was checked above; only BotOps borrows a requester's identity here.
             on_behalf = None if getattr(caller, "via", "") == "assistant" else request.headers.get(botops_act.HEADER)
             if (not on_behalf and getattr(request.state, "identity", None) is not None
@@ -4757,7 +4769,13 @@ def create_app(settings=None):
                              snapshot.execute("PRAGMA data_version").fetchone()[0] == version)
                 return execution.heartbeat(c, request.state.identity, body,
                                            live_tasks=selected if unchanged else None)
-            return mutate(request, body, work)
+            result = mutate(request, body, work)
+        # The roster, providers and repositories behind the assignments are read from a snapshot after the commit,
+        # not under the write lock: a heartbeat keeps no receipt (store.is_poll), so nothing replays them.
+        with store.read_transaction() as c:
+            result["assignments"] = execution.assigned(c, request.state.identity)
+            privacy.require_payload(c, request.state.identity, {"assignments": result["assignments"]})
+        return result
 
     @app.get("/api/v2/runners/desired")
     def desired_runner_release(request: Request):
@@ -4915,7 +4933,11 @@ def create_app(settings=None):
 
     @app.get("/api/v2/runners/{rid}/logins/{lid}")
     def read_login(request: Request, rid: str, lid: str):
-        # A read that also expires: a sign-in nobody finished does not stay open.
+        # A read that also expires: a sign-in nobody finished does not stay open. Polled while a sign-in runs, so the
+        # write lock is taken only when something has run out.
+        with store.read() as c:
+            if not model_login.sweep_due(c):
+                return model_login.read(c, request.state.identity, rid, lid, auth=auth, swept=False)
         with store.transaction() as c:
             return model_login.read(c, request.state.identity, rid, lid, auth=auth)
 
@@ -4932,6 +4954,10 @@ def create_app(settings=None):
     @app.get("/api/v2/runner-logins")
     def runner_logins(request: Request):
         who = request.state.identity
+        with store.read() as c:
+            execution.runner(c, who)
+            if not model_login.sweep_due(c):
+                return {"logins": model_login.pending(c, who.runner_id, swept=False)}
         with store.transaction() as c:
             execution.runner(c, who)
             return {"logins": model_login.pending(c, who.runner_id)}
@@ -4956,6 +4982,11 @@ def create_app(settings=None):
     @app.get("/api/v2/runner-harness-actions")
     def runner_harness_actions(request: Request):
         who = request.state.identity
+        with store.read() as c:
+            execution.runner(c, who)
+            if not harness_actions.sweep_due(c):
+                return {"actions": harness_actions.pending(c, who.runner_id, swept=False),
+                        "choices": harness_actions.choices(c, who.runner_id)}
         with store.transaction() as c:
             execution.runner(c, who)
             return {"actions": harness_actions.pending(c, who.runner_id),

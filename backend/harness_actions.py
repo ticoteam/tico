@@ -109,8 +109,16 @@ def recent(c, rid):
     return out
 
 
-def pending(c, runner_id):
-    sweep(c)
+def sweep_due(c):
+    """Whether `sweep` has anything to change: a poll reads without the write lock when it has not."""
+    now = H.now()
+    return bool(c.execute("SELECT 1 FROM runner_harness_actions WHERE (state IN ('requested','running') AND created<?) "
+                          "OR created<? LIMIT 1", (H.shift(now, hours=-EXPIRES_HOURS), H.shift(now, days=-KEEP_DAYS))).fetchone())
+
+
+def pending(c, runner_id, swept=True):
+    if swept:
+        sweep(c)
     rows = c.execute("SELECT * FROM runner_harness_actions WHERE runner_id=? AND state IN ('requested','running') "
                      "ORDER BY created", (runner_id,)).fetchall()
     return [{"id": r["id"], "harness": r["harness"], "action": r["action"]} for r in rows]

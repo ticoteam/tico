@@ -1349,6 +1349,7 @@ class Execution:
         awake_since = self.waking(row, now)
         self.record_contact(now)
         offered_before = screen.available(row)
+        stored = (row["version"], row["platform"], row["capacity"], row["readiness_json"], row["capabilities_json"])
         del row
         from .subscriptions import record
         record(c, who.runner_id, body.profiles, body.readiness)
@@ -1401,10 +1402,18 @@ class Execution:
             readiness.pop('shared_env', None)
         # The platform named at enrollment stands: backend/sql.py decides on it (a heartbeat
         # from a stolen credential must not turn a shared server into a personal Mac).
-        c.execute("UPDATE runners SET last_seen=?,awake_since=?,version=?,platform=coalesce(nullif(platform,''),?),"
-                  "capacity=?,readiness_json=?,capabilities_json=?,readiness_at=? WHERE id=?",
-                  (now, awake_since, body.version, body.platform, body.capacity,
-                   encode(readiness), encode(sorted(set(body.capabilities))), now, who.runner_id))
+        # Most beats repeat the last report: then only the contact times move (readiness_at too: the page tells a
+        # report from one before a change by it).
+        reported = (body.version, stored[1] or body.platform, body.capacity, encode(readiness),
+                    encode(sorted(set(body.capabilities))))
+        if reported == stored:
+            c.execute("UPDATE runners SET last_seen=?,awake_since=?,readiness_at=? WHERE id=?",
+                      (now, awake_since, now, who.runner_id))
+        else:
+            c.execute("UPDATE runners SET last_seen=?,awake_since=?,version=?,platform=coalesce(nullif(platform,''),?),"
+                      "capacity=?,readiness_json=?,capabilities_json=?,readiness_at=? WHERE id=?",
+                      (now, awake_since, body.version, body.platform, body.capacity, reported[3], reported[4], now,
+                       who.runner_id))
         if not offered_before and screen.CAPABILITY in body.capabilities:
             screen.first_offer(c, who.runner_id)
         from . import bot_tools
@@ -1469,7 +1478,8 @@ class Execution:
         restart = c.execute("SELECT restart_requested,performance FROM runners WHERE id=?", (who.runner_id,)).fetchone()
         if restart and restart["restart_requested"]:
             c.execute("UPDATE runners SET restart_requested=NULL WHERE id=?", (who.runner_id,))
-        return {"server_time": H.now(), "assignments": self.assigned(c, who), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
+        # The assignments are read after the commit (app.py heartbeat route), off the write lock.
+        return {"server_time": H.now(), "start_places": True, "runtime_credential_source": True, "subscription_accounts": True, "worktree_record_stamp": True, "worktree_actions": sendable,
                 # Whether the runner samples its performance (backend/performance.py).
                 "performance": bool(restart) and restart["performance"] != "off",
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
@@ -1906,22 +1916,27 @@ class Execution:
         if awake_since != runner["awake_since"]:
             H.event(c, H.KEEPER, "runner.waking", who.runner_id,
                     {"last_seen": runner["last_seen"], "awake_since": awake_since})
-        if awake_since != runner["awake_since"] or not runner["last_seen"] \
-                or runner["last_seen"] <= H.shift(now, seconds=-CONTACT_EVERY):
+        if self.stamp_due(runner, now):
             c.execute("UPDATE runners SET last_seen=?,awake_since=? WHERE id=?",
                       (now, awake_since, who.runner_id))
         return awake_since
 
-    def contact(self, c, who):
+    def stamp_due(self, runner, now):
+        return (self.waking(runner, now) != runner["awake_since"] or not runner["last_seen"]
+                or runner["last_seen"] <= H.shift(now, seconds=-CONTACT_EVERY))
+
+    def contact(self, c, who, *, check=False):
         """A runner's open event stream is contact, as a claim or a heartbeat is: its keepalives keep
         `last_seen` (Health, waking periods) current while the runner sends little else, and keep
         `served_at` current so a lapsed lease is not mistaken for this server's stall. Problem 403
-        for a revoked computer."""
+        for a revoked computer. With `check`, on a read connection: whether a write is due, writing nothing."""
         runner = self.runner(c, who)
         if not runner:
             raise Problem("forbidden", "This computer is no longer registered", 403)
         now = H.now()
         self.record_contact(now)
+        if check:
+            return self.stamp_due(runner, now)
         self.stamp(c, who, runner, now)
 
     def claim(self, c, who, body, selected=None, *, prepared=False):

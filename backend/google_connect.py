@@ -196,6 +196,14 @@ def require_self(who):
     return H.actor_id(who.actor)
 
 
+def expiring(c):
+    """Whether `expire` has anything to end: the status page reads without the write lock when it has not."""
+    now = time.time()
+    return c.execute("SELECT 1 FROM google_connects WHERE (status IN ('signing_in','ready') AND started<?) "
+                     "OR (status IN ('finishing','revoking') AND started<?) LIMIT 1",
+                     (now - SIGN_IN_SECONDS, now - CLAIM_SECONDS)).fetchone()
+
+
 def expire(c):
     """Sign-ins nobody finished, and claims a computer never answered, end as failures the person can read."""
     now = time.time()
@@ -266,6 +274,9 @@ def install(app, store, publisher, mutate):
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
         """Your own Google connection: the mailbox it is for, its state, and why it failed."""
+        with store.read() as c:
+            if not expiring(c):
+                return person_view(c, request.state.identity)
         with store.transaction() as c:
             expire(c)
             return person_view(c, request.state.identity)

@@ -1390,6 +1390,18 @@ def install(app, store, auth, mutate, onboarding):
     def assistant(request: Request):
         """The caller's own chat: the CEO Bot chat for the owner, an Assistant room for everyone else."""
         who = own(request)
+        # Every chat load: read first, and take the write lock only when a confirm is overdue or the room needs
+        # opening or moving to this owner.
+        with store.read() as c:
+            create = availability(c, settings, who)["available"]
+            if chat_bot(c, settings, who) == ceo_bot.SLUG:
+                room = find_ceo_room(c)
+                ready = room.get("owner_actor") == who.actor if room else not create
+            else:
+                room = find_room(c, who.actor)
+                ready = bool(room) or not create
+            if ready and not expiring(c):
+                return view(c, who, room)
         with store.transaction() as c:
             expire(c)
             room = chat_room(c, settings, who, create=availability(c, settings, who)["available"])
@@ -1554,6 +1566,10 @@ def install(app, store, auth, mutate, onboarding):
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"))
         return mutate(request, body, work)
+
+    def expiring(c):
+        return c.execute("SELECT 1 FROM assistant_actions WHERE status='running' AND running_since<? LIMIT 1",
+                         (H.shift(H.now(), seconds=-RUNNING_TTL_S),)).fetchone()
 
     def expire(c):
         """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""

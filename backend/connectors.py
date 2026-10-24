@@ -295,7 +295,7 @@ def install_connectors(app, store, execution, mutate):
         """Which connector jobs this computer runs because the owner named its operator in
         TICO_PROCESSING_OPERATORS. Empty means: run them only where the Google key or a connected account is,
         or where a person's Connect Google waits to be finished."""
-        with store.transaction() as c:
+        with store.read() as c:
             runner = execution.runner(c, request.state.identity)
             named = runner["operator"] in store.settings.processing_operators
             if named:
@@ -453,18 +453,20 @@ def install_connectors(app, store, execution, mutate):
         who = request.state.identity
         if who.role not in ("bot", "human", "owner"):
             raise Problem("identity", "Calendar appointments are available to bots and people", 403)
-        with store.transaction() as c:
+        # Read outside the write lock; the audit event is written in a short transaction before anything is returned.
+        with store.read() as c:
             person, address = calendar_person(c, calendar)
             calendar_allowed(c, who, address, person)
             row = c.execute("SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?",
                             (person["id"],)).fetchone()
+        with store.transaction() as c:
             H.event(c, who.actor, "calendar.read", address, {})
-            if not row:
-                return {"calendar": address, "events": [], "updated": None, "stale": True}
-            payload = json.loads(row["payload_json"])
-            stale = row["updated"] < H.shift(H.now(), seconds=-180)
-            return {"calendar": address, "events": payload["events"], "updated": row["updated"],
-                    "version": row["version"], "stale": stale}
+        if not row:
+            return {"calendar": address, "events": [], "updated": None, "stale": True}
+        payload = json.loads(row["payload_json"])
+        stale = row["updated"] < H.shift(H.now(), seconds=-180)
+        return {"calendar": address, "events": payload["events"], "updated": row["updated"],
+                "version": row["version"], "stale": stale}
 
     @app.post("/api/v2/calendar/appointments")
     def schedule_appointment(request: Request, body: CalendarAppointmentCreate):

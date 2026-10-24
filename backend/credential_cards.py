@@ -403,6 +403,11 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         return {"id": row["id"], "bot": row["bot"], "env": row["env"], "state": row["state"], "message": row["message"],
                 "credential_id": row["credential_id"], "created": row["created"], "updated": row["updated"]}
 
+    def imports_due(c):
+        now = H.now()
+        return c.execute("SELECT 1 FROM credential_imports WHERE (state='requested' AND created<?) OR created<? LIMIT 1",
+                         (H.shift(now, seconds=-IMPORT_EXPIRES_S), H.shift(now, days=-2))).fetchone()
+
     def sweep_imports(c):
         now = H.now()
         c.execute("UPDATE credential_imports SET state='failed',message='The computer did not answer in time',updated=? "
@@ -454,10 +459,14 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     @app.get("/api/v2/runner-credential-imports")
     def runner_imports(request: Request):
         who = request.state.identity
-        with store.transaction() as c:
+        # A computer's poll: the write lock only when an import has run out.
+        with store.read() as c:
+            due = imports_due(c)
+        with (store.transaction() if due else store.read()) as c:
             if who.role != "runner" or not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (who.runner_id,)).fetchone():
                 raise Problem("forbidden", "Only a registered computer may ask for this", 403)
-            sweep_imports(c)
+            if due:
+                sweep_imports(c)
             rows = c.execute("SELECT i.id,i.bot,i.env FROM credential_imports i JOIN assignments a ON a.bot=i.bot "
                              "WHERE a.runner_id=? AND i.state='requested' ORDER BY i.created", (who.runner_id,)).fetchall()
             return {"imports": [dict(r) for r in rows]}

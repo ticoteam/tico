@@ -355,3 +355,25 @@ def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):
             remove(c, Identity("human:ana", "owner", via="botops", confirmed=True), r["runner_id"], "codex", "work", {})
     assert no.value.status == 403 and "BotOps cannot remove a subscription" in str(no.value)
     assert pending(api, r) == []
+
+
+def test_a_write_kept_from_the_lock_answers_busy_with_retry_after_and_a_beat_rewrites_only_what_changed(api):
+    import uuid
+    r = online(api)
+    store = api.app.state.store
+    with store.read() as c:
+        before = c.execute("SELECT readiness_json,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+    beat(api, r["token"])
+    with store.read() as c:
+        after = c.execute("SELECT readiness_json,last_seen FROM runners WHERE id=?", (r["runner_id"],)).fetchone()
+    assert after[0] == before[0] and after[1] >= before[1]
+    store.writer.acquire()
+    timeout, store.writer.timeout = store.writer.timeout, 0.05
+    try:
+        res = api.post("/api/v2/runners/heartbeat", json={"version": "test", "platform": "test", "readiness": {},
+                       "capabilities": CAPABLE}, headers={**headers(r["token"]), "Idempotency-Key": uuid.uuid4().hex})
+    finally:
+        store.writer.timeout = timeout
+        store.writer.release()
+    assert res.status_code == 503 and res.headers["retry-after"] == "2", res.text
+    assert res.json()["error"] == {"code": "busy", "detail": "Tico is busy; retry shortly", "retryable": True}

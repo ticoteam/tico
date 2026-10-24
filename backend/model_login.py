@@ -141,6 +141,13 @@ def sweep(c):
     c.execute("DELETE FROM model_logins WHERE created<?", (H.shift(now, days=-1),))
 
 
+def sweep_due(c):
+    """Whether `sweep` has anything to change: a poll reads without the write lock when it has not."""
+    now = H.now()
+    return bool(c.execute(f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created<? LIMIT 1",
+                          (now, H.shift(now, days=-1))).fetchone())
+
+
 def view(row):
     state = row["state"]
     return {"id": row["id"], "kind": row["kind"], "runner_id": row["runner_id"], "runtime": row["runtime"],
@@ -555,9 +562,10 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
     return view(row)
 
 
-def read(c, who, rid, lid, auth=None):
+def read(c, who, rid, lid, auth=None, swept=True):
     _operator(c, who, rid, auth)
-    sweep(c)
+    if swept:
+        sweep(c)
     return view(_login(c, rid, lid))
 
 
@@ -598,9 +606,10 @@ def cancel(c, who, rid, lid, auth=None):
     return view(_login(c, rid, lid))
 
 
-def pending(c, runner_id):
+def pending(c, runner_id, swept=True):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
-    sweep(c)
+    if swept:
+        sweep(c)
     rows = c.execute(f"SELECT * FROM model_logins WHERE runner_id=? AND {ACTIVE_SQL} ORDER BY created",
                      (runner_id,)).fetchall()
     return [{"id": r["id"], "runtime": r["runtime"], "profile": r["profile"], "expires_at": r["expires_at"],

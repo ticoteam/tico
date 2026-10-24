@@ -437,12 +437,10 @@ class Oidc:
         if row["expires_at"] <= now or row["last_seen"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
             return None
         if row["last_seen"] < H.shift(now, seconds=-TOUCH_EVERY):
-            # A hint for the idle clock: a locked database must not turn a read into a refusal.
-            try:
-                with self.store.transaction() as w:
-                    w.execute("UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
-            except Exception:
-                pass
+            # A hint for the idle clock, written only if the database is free right now (auth.touch): a sign-in never
+            # queues behind writers for it, and a skipped one is retried by the next request a minute on.
+            from .auth import touch
+            touch(c, "UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
         return str(row["email"] or "").lower()
 
     def logout(self, headers):

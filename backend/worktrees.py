@@ -142,6 +142,8 @@ def supported(c):
 
 LIMIT = 100           # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
+READINGS = ('last_activity', 'size_mb', 'activity_at')     # a worktree report's readings that move as a bot works
+READINGS_EVERY = 300
 PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
 
 
@@ -511,7 +513,12 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         branch = report.branch if report.state == 'present' and row['branch'] is None else None
         # Every heartbeat reports every worktree; only a difference is written. A write is a task change that every
         # open board follows (backend/events.py), and a computer retrying a failed cleanup reports every few seconds.
-        if (state, row['branch'] or branch, detail) != before:
+        # A tree a bot is working in moves its activity and size on every beat: those alone are written at most every
+        # READINGS_EVERY seconds, nothing decides on them sooner (the stall wake waits days).
+        readings = ((state, row['branch'] or branch) == before[:2] and row['updated']
+                    and row['updated'] > H.shift(now, seconds=-READINGS_EVERY)
+                    and all(detail.get(k) == before[2].get(k) for k in set(detail) | set(before[2]) if k not in READINGS))
+        if (state, row['branch'] or branch, detail) != before and not readings:
             c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail_json=?,updated=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
             row['updated'] = H.now()

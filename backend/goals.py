@@ -335,6 +335,15 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
     return goal(conn, goal_id)
 
 
+def reads_due(conn, actor, goal_ids, every=600):
+    """The goals `mark_read` would change: read by someone else, or not by `actor` in `every` seconds. A bot reads its
+    goals many times an hour; the read path writes only when one is due."""
+    since = H.shift(H.now(), seconds=-every)
+    return [r[0] for part in H.chunks(sorted(set(goal_ids))) for r in conn.execute(
+        "SELECT id FROM goals WHERE id IN (%s) AND (last_read_by IS NOT ? OR last_read_at IS NULL OR last_read_at<?)"
+        % ",".join("?" * len(part)), (*part, actor, since))]
+
+
 def mark_read(conn, actor, goal_ids):
     """`hub goal list` and `hub goal show` from a bot: the signal that the mandate was read."""
     ts = H.now()

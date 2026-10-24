@@ -65,6 +65,8 @@ DB_WAIT = 2.0                   # seconds the recorder's own database writes wai
 PENDING_MAX = 120               # table writes kept for the next try while the lock is busy (about two hours of minutes)
 LONG_HOLD_MS = 5000             # a write transaction holding the lock this long is logged with its route and code site
 LONG_HOLD_PER_MINUTE = 20
+LOG_HOLD_MS = 250               # a write transaction holding the lock this long goes to the server log with its code site
+LOG_HOLD_PER_MINUTE = 30
 MINUTE_DAYS = 2                 # request minutes older than this become hours
 SHORT_DAYS = 14                 # requests, slow requests, process minutes
 LONG_DAYS = 90                  # SQL hours, database sizes, events
@@ -200,13 +202,29 @@ def begin(conn, recorder=None, *, gate=None, checkout=None):
         if gate is not None:
             gate.release()
         rec.transaction((held - started) * 1000, hold_ms)
+        site = _log_hold(route, hold_ms, (held - started) * 1000) if hold_ms >= LOG_HOLD_MS else None
         if hold_ms >= LONG_HOLD_MS:             # who held it: the call site is read only for a long hold
-            rec.long_hold(route, _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
+            rec.long_hold(route, site or _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
     return done
 
 
 def _nothing():
     pass
+
+
+_logged = [0, 0]                # [minute, holds logged in it]
+
+
+def _log_hold(route, hold_ms, wait_ms):
+    minute = int(time.time() // 60)
+    if _logged[0] != minute:
+        _logged[:] = [minute, 0]
+    if _logged[1] >= LOG_HOLD_PER_MINUTE:
+        return None
+    _logged[1] += 1
+    site = _site(traceback.extract_stack())
+    LOG.warning("write lock held %.0f ms (waited %.0f ms) at %s %s", hold_ms, wait_ms, site, route or "")
+    return site
 
 
 def caller_kind(who):

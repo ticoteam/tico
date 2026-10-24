@@ -264,12 +264,18 @@ def install(app, store, auth, mutate, settings):
             return {"events": [{**r, "actor_name": known.get(r["actor"], H.actor_id(r["actor"]))} for r in rows]}
 
     # ------------------------------------------------------------------ goals
+    def mark_read(who, due):
+        if due:
+            with store.transaction() as c:
+                G.mark_read(c, who.actor, due)
+
     @app.get("/api/v2/goals")
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
         """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal."""
         who = request.state.identity
         auth.domain(who)
-        with store.transaction() as c:
+        due = []
+        with store.read() as c:
             if all:
                 statuses = tuple(status.split(",")) if status else None
                 rows = readable_goals(c, who, G.goals(c, status=statuses, live_only=not statuses))
@@ -278,8 +284,9 @@ def install(app, store, auth, mutate, settings):
             roster, entries, archived = org_shape(c)
             out = G.for_actor(c, actor, roster, entries, archived)
             if who.role == "bot" and actor == who.actor:
-                G.mark_read(c, who.actor, [g["id"] for g in out["goals"] + out["chain"]])
-            return out
+                due = G.reads_due(c, who.actor, [g["id"] for g in out["goals"] + out["chain"]])
+        mark_read(who, due)
+        return out
 
     @app.get("/api/v2/goals/tree")
     def goals_tree(request: Request):
@@ -359,13 +366,14 @@ def install(app, store, auth, mutate, settings):
     def goal_show(request: Request, gid: str):
         who = request.state.identity
         auth.domain(who)
-        with store.transaction() as c:
+        with store.read() as c:
             row = goal_or_404(c, gid)
             if not readable_goals(c, who, [row]):
                 raise Problem("not_found", "Unknown goal", 404)
-            if who.role == "bot":
-                G.mark_read(c, who.actor, [gid])
-            return {"goal": G.view(c, row, auth.task_sql(c, who))}
+            due = G.reads_due(c, who.actor, [gid]) if who.role == "bot" else []
+            out = {"goal": G.view(c, row, auth.task_sql(c, who))}
+        mark_read(who, due)
+        return out
 
     @app.post("/api/v2/goals")
     def goal_create(request: Request, body: M.GoalCreate):

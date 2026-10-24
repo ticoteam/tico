@@ -945,8 +945,8 @@ def keepalive_seconds(store):
 
 class Beat:
     """A quiet stream's keepalive and the check that rides on it (a lapsed sign-in, a revoked computer,
-    contact). The check runs beside the keepalive, never before it: a write waits up to the database's
-    30 s busy timeout for the lock, and a keepalive held behind it outlasts the runner's read timeout,
+    contact). The check runs beside the keepalive, never before it: a write waits up to store.WRITE_WAIT
+    for the lock, and a keepalive held behind it outlasts the runner's read timeout,
     so the stream drops on a busy server. A check that refuses ends the stream on the loop's next pass."""
 
     def __init__(self, check):
@@ -1138,9 +1138,13 @@ def install_runner(app, store, execution):
 
         def touch():
             # Contact, and the same check of the computer's row as every read: last_seen moves while the
-            # stream is open, and a revoked computer's stream ends within two keepalives.
-            with store.transaction() as c:
-                execution.contact(c, who)
+            # stream is open, and a revoked computer's stream ends within two keepalives. The check is a read; the
+            # write lock is taken only when last_seen is due (CONTACT_EVERY), not at every keepalive.
+            with store.read() as c:
+                due = execution.contact(c, who, check=True)
+            if due:
+                with store.transaction() as c:
+                    execution.contact(c, who)
 
         def start():
             touch()

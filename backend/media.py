@@ -664,9 +664,12 @@ def install_media(app, store, auth, mutate, send_message, task_create):
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
         from .task_review import comment_rights, edit_version, file_added
-        with store.read() as c:
-            tid = auth.resolve_task(c, who, tid)
-            comment_rights(c, auth, who, tid)
+        def allowed():
+            with store.read() as c:
+                found = auth.resolve_task(c, who, tid)
+                comment_rights(c, auth, who, found)
+                return found
+        tid = await asyncio.to_thread(allowed)
         upload_key(request)
         poster = None
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
@@ -850,11 +853,14 @@ def install_media(app, store, auth, mutate, send_message, task_create):
             return view(c, request.state.identity, meta["id"])
         return await asyncio.to_thread(write, request, body, uploads, work)
 
+    def writable(who, rid):
+        with store.read() as c:
+            authorized(c, who, rid, write=True)
+
     @app.post("/api/meetings/{rid}/attachments", openapi_extra=upload_contract(M.Empty))
     async def attach(request: Request, rid: str):
         human_only(request.state.identity)
-        with store.read() as c:
-            authorized(c, request.state.identity, rid, write=True)
+        await asyncio.to_thread(writable, request.state.identity, rid)
         body, uploads = await form(request, M.Empty, blobs, store)
         if not uploads:
             raise Problem("attachments", "Attach at least one file", 422)
@@ -889,8 +895,7 @@ def install_media(app, store, auth, mutate, send_message, task_create):
     @app.post("/api/meetings/{rid}/send")
     async def send(request: Request, rid: str):
         human_only(request.state.identity)
-        with store.read() as c:
-            authorized(c, request.state.identity, rid, write=True)
+        await asyncio.to_thread(writable, request.state.identity, rid)
         body, uploads = await form(request, Send, blobs, store)
         return await asyncio.to_thread(write, request, body, uploads,
                                        lambda c: deliver(c, auth, request.state.identity, rid, body, uploads))

@@ -103,7 +103,7 @@ def test_failed_writer_releases_admission_and_rolls_back(tmp_path, monkeypatch):
     # Neither an acquisition failure nor an interrupted transaction can strand the next writer.
     with s.transaction() as c:
         assert c.execute("SELECT x FROM t").fetchone()[0] == 1
-        assert c.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        assert c.execute("PRAGMA busy_timeout").fetchone()[0] == 10000
         c.execute("UPDATE t SET x=3")
 
 
@@ -228,3 +228,28 @@ def test_test_databases_skip_the_disk_sync_and_servers_keep_theirs(tmp_path, mon
     hub = H.connect(tmp_path / "hub.db")
     assert sync(hub) == 1
     hub.close()
+
+
+def test_sweep_deltas_drops_old_finished_runs_text_pieces_only(tmp_path):
+    from backend.store import H, sweep_deltas
+    s = store(tmp_path)
+    now = H.now()
+    old, recent = H.shift(now, days=-20), H.shift(now, days=-3)
+    with s.transaction() as c:
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
+                  "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        for aid, created, finished in (("a-old", old, H.shift(old, hours=1)), ("b-recent", recent, recent),
+                                       ("c-open", old, None)):
+            c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
+            for seq, kind, payload in ((1, "delta", '{"text":"Hel","delta_kind":"text"}'), (2, "delta", '{"text":"lo"}'),
+                                       (3, "delta", '{"text":"hm","delta_kind":"thought"}'),
+                                       (4, "message", '{"text":"Hello","final":true}'), (5, "tool", '{"tool":"x"}')):
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+                          (aid, seq, kind, payload, created))
+    assert sweep_deltas(s, now, batch=1) == 2
+    with s.read() as c:
+        left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
+    assert left == {("a-old", 3), ("a-old", 4), ("a-old", 5)} | {(a, n) for a in ("b-recent", "c-open") for n in range(1, 6)}
+    assert sweep_deltas(s, now) == 0, "the mark moved past what was swept"

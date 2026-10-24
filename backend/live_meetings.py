@@ -1288,8 +1288,10 @@ def install_live_meetings(app, store, auth, write):
         if after < 0:
             raise Problem("event_cursor", "Event cursor must be non-negative", 400)
         cursor = max(after, 0)
-        with store.read() as c:
-            _require_read(c, auth, who, rid)
+        def readable():
+            with store.read() as c:
+                _require_read(c, auth, who, rid)
+        await asyncio.to_thread(readable)
 
         def poll(current):
             auth.authenticate(request.headers)
