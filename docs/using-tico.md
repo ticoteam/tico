@@ -31,6 +31,21 @@ Below it come **Assigned to others**, the latest **Updates** (all of them behind
 a section with nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
 Tasks are one tab each.
 
+**How do I change a bot's task tabs?**
+If you manage the bot, you can change its tabs. The bot can also change its own layout.
+
+1. Open the settings icon beside **Tasks** (**Tab settings**).
+2. Choose **Add a tab**, give it a name, and pick its **Task types**, **States** and **Waiting on** filter.
+   For example, name it "Product tasks", select **Product roadmap**, and keep **Open**, **Doing** and **Waiting** checked.
+   Leave task types unchecked to include every type. Pick at least one state.
+3. Choose **Save**. The tab appears with its count and matching tasks. If saving fails, the window shows the error for you to correct.
+
+In the same window, edit a tab's name, use the arrows to reorder it, or remove it. Keep at least one tab.
+You can edit a custom tab's filters; built-in tabs keep their filters.
+**Reset to the four built-in tabs** restores the defaults immediately. **Cancel** discards unsaved edits.
+Everyone opening the bot sees its saved layout. Your **Assistant** is the exception: its tabs are personal to you.
+Tabs scroll sideways when they do not fit, with no limit on the number of tabs.
+
 **How do I ask a bot a question?**
 Open the bot's page and use its **Chat** tab; the reply comes back into the same conversation.
 Work on a task happens in that task's own thread: tap the task's row in the chat to follow it or write to it.
