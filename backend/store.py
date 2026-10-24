@@ -1366,7 +1366,8 @@ class Store:
                                    # A computer asking after the tasks its session checkouts are kept for.
                                    ("attempts_bot_lane", "attempts(bot, lane)"),
                                    # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
-                                   ("attempts_state_finished", "attempts(state, finished)"),
+                                   # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
+                                   ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
