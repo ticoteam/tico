@@ -500,12 +500,14 @@ async function teamAdd(browser) {
   await page.locator('[data-recruit-new] [name=title]').fill('Payroll');
   await page.locator('[data-recruit-new] [name=description]').fill('Runs payroll.');
   await page.locator('[data-recruit-new] [type=submit]').click();
+  await page.locator('[data-recruit-go]').waitFor({state: 'visible'});
   const text = page.locator('#recruit-picker textarea'), saveButton = page.locator('[data-recruit-save]');
   await text.waitFor();
   calls.length = 0;
   let release;
   seatSave.hold = new Promise(resolve => { release = resolve; });
   await text.fill('Runs payroll every two weeks.');
+  await saveButton.waitFor({state: 'visible'});
   await saveButton.click();
   await text.fill('Runs payroll every two weeks and files the quarterly taxes.');
   await saveButton.dispatchEvent('click');
