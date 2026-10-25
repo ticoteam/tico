@@ -1,8 +1,10 @@
-"""tico.company.yaml, format 0.2: written from a draft as the setup page's `toYAML()` writes it, and read back.
+"""tico.company.yaml, formats 0.2 and 0.3: written from a draft as the setup page's `toYAML()` writes it, and read back.
 
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
 a bot's `reports_to` set by the visitor or BotOps, the one `first_job`, and an existing agent's department and reason.
+Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. A plan without a strategy is still written as
+0.2, byte for byte, so its file imports on an app from before 0.3; the reader takes both.
 """
 import datetime as dt
 import json
@@ -12,8 +14,10 @@ from . import draft as D
 from .keys import scrub_all
 
 FORMAT = "0.2"
+STRATEGY_FORMAT = "0.3"
+FORMATS = (FORMAT, STRATEGY_FORMAT)
 HEADER = ("# tico.company.yaml", "# Made with Tico setup at https://tico.team/setup",
-          "# Format 0.2. Import in Tico's first-run setup or with tico setup --company-file.",
+          "# Format %s. Import in Tico's first-run setup or with tico setup --company-file.",
           "# No passwords, keys or credentials are stored here; tools are connected on your own install.")
 NOT_SET = "# not set yet: which number, and by when?"
 # YAML 1.1 reads these bare words as booleans or null, and a leading digit can read as a number or a date.
@@ -58,8 +62,10 @@ def to_yaml(draft, created=None):
     created = created or dt.datetime.now(dt.timezone.utc)
     head = D.owner(draft)
     head_id = head["id"] if head else "you"
-    L = list(HEADER)
-    L += ["version: %s" % FORMAT, "created: %s" % created.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
+    strategy = D.has_strategy(draft) or any("bet" in g for g in draft["goals"])
+    version = STRATEGY_FORMAT if strategy else FORMAT
+    L = [line % version if "%s" in line else line for line in HEADER]
+    L += ["version: %s" % version, "created: %s" % created.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.")
           + "%03dZ" % (created.microsecond // 1000)]
     company = draft["company"]
     L += ["company:", "  name: %s" % q(company["name"]), "  about: %s" % q(company["about"]),
@@ -98,12 +104,55 @@ def to_yaml(draft, created=None):
               "    unit: %s" % q(g["unit"]), "    direction: %s" % g["direction"]]
         for key in D.AIM[g["direction"]]:
             L.append("    %s: %s" % (key, g[key] or "null" if key == "deadline" else num(g[key])))
+        if "bet" in g:
+            L.append("    bet: %s" % word(g["bet"]))
+    if strategy:
+        L += strategy_lines(draft.get("strategy") or D.blank_strategy())
     L += ["rules:", "  mode: %s" % draft["rules"]["mode"], "  never_without_a_person:" + ("" if draft["rules"]["never"] else " []")]
     L += ["    - %s  # %s" % (r, D.RULES[r]) for r in draft["rules"]["never"]]
     L.append("  review: %s  # %s" % (draft["rules"]["review"], D.REVIEW[draft["rules"]["review"]]))
     L += ["tools:", "  mode: %s" % draft["tools"]["mode"],
           "  connect: [%s]  # connected after setup, never during it" % ", ".join(tool_list(draft))]
     return "\n".join(L) + "\n"
+
+
+def _items(key, rows, indent, lines):
+    """A list of entries under `key`: `[]` on the key's line when empty, else one `- ` entry per row."""
+    pad = " " * indent
+    out = ["%s%s:%s" % (pad, key, "" if rows else " []")]
+    for row in rows:
+        first, *rest = lines(row)
+        out += ["%s  - %s" % (pad, first)] + ["%s    %s" % (pad, line) for line in rest]
+    return out
+
+
+def strategy_lines(s):
+    """The `strategy:` block, format 0.3: every part written, an empty one as "" or []."""
+    market, listening = s["market"], s["listening"]
+    L = ["strategy:", "  summary: %s" % q(s["summary"]), "  vision: %s" % q(s["vision"]), "  sections:"]
+    L += ["    %s: %s" % (key, q(s["sections"][key])) for key in D.SECTIONS]
+    L += _items("bets", s["bets"], 2, lambda b: [
+        "id: %s" % word(b["id"]), "statement: %s" % q(b["statement"]), "why: %s" % q(b["why"]),
+        "rules_out: %s" % q(b["rules_out"]), "wrong_if: %s" % q(b["wrong_if"]),
+        "check_by: %s" % (b["check_by"] or q(""))])
+    definition = market["definition"]
+    L += ["  market:", "    definition:", "      root: %s" % q(definition["root"]), "      in: %s" % q(definition["in"]),
+          "      out: %s" % q(definition["out"]), "      year: %s" % num(definition["year"])]
+    L += _items("segments", market["segments"], 4, lambda g: [
+        "key: %s" % word(g["key"]), "name: %s" % q(g["name"]),
+        "parent: %s" % ("null" if g["parent"] is None else word(g["parent"])), "usd: %s" % num(g["usd"]),
+        "method: %s" % word(g["method"]), "arithmetic: %s" % q(g["arithmetic"]),
+        "evidence: [%s]" % ", ".join(q(u) for u in g["evidence"]), "ours: %s" % str(g["ours"]).lower(),
+        "next: %s" % str(g["next"]).lower()])
+    L += _items("players", market["players"], 4, lambda p: [
+        "name: %s" % q(p["name"]), "url: %s" % q(p["url"]),
+        "segments: [%s]" % ", ".join(word(key) for key in p["segments"])])
+    L += ["  listening:", "    requests:" + ("" if listening["requests"] else " []")]
+    L += ["      - %s" % q(text) for text in listening["requests"]]
+    L += _items("posts", listening["posts"], 4, lambda p: [
+        "source: %s" % word(p["source"]), "url: %s" % q(p["url"]), "title: %s" % q(p["title"]),
+        "when: %s" % (p["when"] or q("")), "tag: %s" % word(p["tag"])])
+    return L
 
 
 # ---------------------------------------------------------------------------------------------------- reading
@@ -119,9 +168,41 @@ def _str(value):
         if isinstance(value, (int, float)) and not isinstance(value, bool) else value
 
 
+def _part(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _strategy(raw):
+    """The strategy block as the draft keeps it: dates as text, a missing text as "", the rest for D.check to judge."""
+    raw = _part(raw)
+    market, listening = _part(raw.get("market")), _part(raw.get("listening"))
+    definition, sections = _part(market.get("definition")), _part(raw.get("sections"))
+    return {"summary": _str(raw.get("summary")), "vision": _str(raw.get("vision")),
+            "sections": {key: _str(sections.get(key)) for key in D.SECTIONS},
+            "bets": [{"id": _str(b.get("id")), **{key: _str(b.get(key)) for key in
+                                                  ("statement", "why", "rules_out", "wrong_if", "check_by")}}
+                     for b in _rows(raw, "bets")],
+            "market": {"definition": {"root": _str(definition.get("root")), "in": _str(definition.get("in")),
+                                      "out": _str(definition.get("out")), "year": definition.get("year")},
+                       "segments": [{"key": _str(g.get("key")), "name": _str(g.get("name")),
+                                     "parent": None if g.get("parent") is None else _str(g.get("parent")),
+                                     "usd": g.get("usd"), "method": _str(g.get("method")) or "top_down",
+                                     "arithmetic": _str(g.get("arithmetic")),
+                                     "evidence": [_str(u) for u in g.get("evidence") or []],
+                                     "ours": g.get("ours") is True, "next": g.get("next") is True}
+                                    for g in _rows(market, "segments")],
+                       "players": [{"name": _str(p.get("name")), "url": _str(p.get("url")),
+                                    "segments": [_str(key) for key in p.get("segments") or []]}
+                                   for p in _rows(market, "players")]},
+            "listening": {"requests": [_str(r) for r in listening.get("requests") or []],
+                          "posts": [{"source": _str(p.get("source")), "url": _str(p.get("url")),
+                                     "title": _str(p.get("title")), "when": _str(p.get("when")),
+                                     "tag": _str(p.get("tag"))} for p in _rows(listening, "posts")]}}
+
+
 def from_yaml(text):
-    """The draft a company file holds (D.DraftError when it isn't a format 0.2 file Tico can read). Key-shaped strings
-    in it are removed. The draft starts on the chart tab with no undo, chat, removed or pending."""
+    """The draft a company file holds (D.DraftError when it isn't a format 0.2 or 0.3 file Tico can read). Key-shaped
+    strings in it are removed. The draft starts on the chart tab with no undo, chat, removed or pending."""
     import yaml  # PyYAML: only reading a file needs it.
 
     if not isinstance(text, str) or len(text) > D.LIMITS["draft_bytes"]:
@@ -130,8 +211,8 @@ def from_yaml(text):
         doc = yaml.safe_load(text)
     except yaml.YAMLError:
         raise D.DraftError("the file isn't valid YAML") from None
-    if not isinstance(doc, dict) or str(doc.get("version")) != FORMAT:
-        raise D.DraftError("the file isn't a format %s company file" % FORMAT)
+    if not isinstance(doc, dict) or str(doc.get("version")) not in FORMATS:
+        raise D.DraftError("the file isn't a format %s company file" % " or ".join(FORMATS))
     doc, _ = scrub_all(doc)
     company = doc.get("company") if isinstance(doc.get("company"), dict) else {}
     draft = D.blank()
@@ -171,6 +252,8 @@ def from_yaml(text):
                 "measure": _str(g.get("measure")), "unit": _str(g.get("unit")), "direction": g.get("direction") or "up"}
         for key in D.AIM.get(goal["direction"], ()):
             goal[key] = _str(g.get(key)) or None if key == "deadline" else g.get(key)
+        if g.get("bet") is not None:
+            goal["bet"] = _str(g["bet"])
         draft["goals"].append(goal)
     rules = doc.get("rules") if isinstance(doc.get("rules"), dict) else {}
     tools = doc.get("tools") if isinstance(doc.get("tools"), dict) else {}
@@ -178,6 +261,8 @@ def from_yaml(text):
                       "review": rules.get("review")}
     draft["tools"] = {"mode": tools.get("mode"), "connect": (tools.get("connect") or []) if tools.get("mode") == "custom" else []}
     draft["seq"] = len(draft["people"]) + len(draft["bots"]) + len(draft["goals"]) + 1
+    if isinstance(doc.get("strategy"), dict):
+        draft["strategy"] = _strategy(doc["strategy"])
     draft = D.check(draft)
     # A reports-to the file names is kept only where it differs from the line the chart draws anyway.
     for bot in draft["bots"]:

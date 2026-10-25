@@ -127,8 +127,9 @@ strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strateg
 Setup starts with **What are you building** and **Your bets** ([Onboarding](onboarding.md#the-screens)):
 
 1. **What are you building.** An existing team pastes its website and one line; a new idea is described in a few
-   sentences. With a URL the server fetches home, about, pricing and customers right away, fills *Who we serve* and
-   *What we sell* marked **unconfirmed**, and proposes two or three bets the site implies, each with what it rules out.
+   sentences. With a URL the server fetches home, about, pricing and customers right away, fills the summary, the
+   vision and the four sections (each section marked **unconfirmed**), and proposes three bets the site implies, each
+   with what it rules out.
 2. **Your bets.** Claims to confirm or strike, not open questions. The page fills in on the right as the owner answers.
    To leave the step: one active bet with a rules-out and a wrong-if, and one line under *What we won't do*. Without a
    model provider, or when the research failed, it is the same fields as a plain form; when the research gave up it
@@ -146,17 +147,21 @@ polls it:
 | `state` | Meaning |
 |---|---|
 | `running` | `step` is `reading` (fetching pages) then `thinking` (the model call) |
-| `done` | `written` is `{sections, bets, revision}`: the sections filled, the proposed bet ids, the draft's new revision |
+| `done` | `written` is `{sections, fields, bets, revision}`: the sections filled, which of `summary` and `vision` were filled, the proposed bet ids, the draft's new revision |
 | `gave_up` | the owner wrote the draft meanwhile (`error.code` `edited`) or a newer job started (`superseded`); nothing was written and `found` holds what the research found, to offer by hand |
 | `failed` | `error.code` is the fetch code (`private_address`, `timeout` ...), the model's, `empty`, `interrupted` when the server restarted mid-run (or it ran 10 minutes; it then writes nothing), or `cleared` when setup's website and line were cleared |
 | `no_model` | no model provider: the step is a plain form |
 
 Every job also carries `url`, `text`, `pages` (`[{url, title}]` or `{url, error}`, never page text), `found`
-(`{serve, sell, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered) and `started`/`finished`;
+(`{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered)
+and `started`/`finished`;
 the last five jobs are kept. The fetch is the doc-link fetch's guard: http and https only, every address the name
 resolves to must be public, each redirect re-checked, at most four pages of 8,000 characters in 45 seconds, and no
 server credentials sent. The model call is the one-shot path the update writer uses (the Tico AI Gateway, else the
-team's own provider key); no runner or agent turn is involved. Sections are written only where empty, each starting
+team's own provider key); no runner or agent turn is involved. Its prompt and answer schema are
+`backend/strategy_prompt.py`, a file with no imports that Tico HQ's setup page keeps a pinned copy of, so both draft
+the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
+The summary, vision and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
 due in 90 days. Nothing is published. There is no `hub` or MCP verb for it: it is a browser setup step.
 

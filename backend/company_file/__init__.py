@@ -1,4 +1,5 @@
-"""The company file engine behind tico.team/setup: the draft, its edit actions, and tico.company.yaml (format 0.2).
+"""The company file engine behind tico.team/setup: the draft, its edit actions, and tico.company.yaml (format 0.2, or
+0.3 when the plan has a strategy).
 
 No model and no transport: functions over the draft dict the page keeps. Whatever serves the page's
 `POST /api/onboarding/turn` gives the model `SPEC["actions"]` as its tools and runs each tool call through a `Turn`:
@@ -7,18 +8,20 @@ No model and no transport: functions over the draft dict the page keeps. Whateve
     result = turn.apply(name, tool_input)    # {"ok": True, "said": ...} or {"ok": False, "refused": ...}
     draft = turn.finish()                    # what goes back to the page; `undo` holds the plan before the turn
     turn.keys_removed                        # a key-shaped string was cut: tell the visitor not to paste keys
+    turn.changed                             # the parts the turn changed ("bots", "sections.know", "bets.b1" ...)
+    turn.market_note                         # set when the visitor asked for the market to be sized again
 
 Standard library only, except that `from_yaml` needs PyYAML. Self-contained so it can be copied as is: Tico HQ
 (ticoteam/tico-services) serves the setup page from a copy taken from a published Tico release
 (`scripts/build_catalog_json.py --out DIR`), with the actions, catalogue and company models for the page's browser planner.
 """
 from .actions import Refusal, Turn, apply_action, undo
-from .draft import LIMITS, MODELS, ROLES, SEATS, SPEC, DraftError, blank
+from .draft import LIMITS, MODELS, ROLES, SEATS, SPEC, DraftError, blank, blank_strategy
 from .keys import scrub, scrub_all
-from .yamlfile import FORMAT, from_yaml, to_yaml
+from .yamlfile import FORMAT, FORMATS, from_yaml, to_yaml
 
-__all__ = ["DraftError", "FORMAT", "LIMITS", "MODELS", "ROLES", "Refusal", "SEATS", "SPEC", "Turn", "apply_action", "blank",
-           "from_yaml", "scrub", "scrub_all", "to_yaml", "undo", "validate"]
+__all__ = ["DraftError", "FORMAT", "FORMATS", "LIMITS", "MODELS", "ROLES", "Refusal", "SEATS", "SPEC", "Turn", "apply_action",
+           "blank", "blank_strategy", "from_yaml", "scrub", "scrub_all", "to_yaml", "undo", "validate"]
 
 
 def validate(draft):

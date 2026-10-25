@@ -47,7 +47,7 @@ def load(source):
             or len(draft["company"]["about"]) > 2000
             or any(len(person["name"]) > 100 for person in draft["people"])):
         raise D.DraftError("Use a company/owner name up to 100 characters and a company description up to 2000 characters")
-    saved = {k: draft[k] for k in D.TOP}
+    saved = D.plan_of(draft)
     if "models" in document:
         models = document["models"]
         if not isinstance(models, dict) or models.get("source") not in ("gateway", "own"):
@@ -69,7 +69,7 @@ def canonical(saved):
 def file_text(source):
     """A scrubbed company file for a provisioning worker's private local file."""
     saved = load(source)
-    text = to_yaml({k: saved[k] for k in D.TOP})
+    text = to_yaml(D.plan_of(saved))
     if "models" in saved:
         text += "models: " + canonical(saved["models"]) + "\n"
     return text

@@ -2,7 +2,8 @@
 
 `Turn` is one visitor turn. It takes the draft as the page sent it (the visitor's own edits stand), removes key-shaped
 strings, starts an empty chart from the company model closest to the company's signals, runs the actions one at a time (a refused action leaves the draft
-as it was) and, when the plan changed, keeps the draft from before the turn in `undo`.
+as it was) and, when the plan changed, keeps the draft from before the turn in `undo`. It records the parts each action
+changed (`changed`), so the page can show which part the chat updated.
 """
 import calendar
 import copy
@@ -658,6 +659,108 @@ def tools_set(draft, args, today, notes):
     return "Set the tools to connect after setup."
 
 
+# ---------------------------------------------------------------------------------------------------- the strategy
+STRATEGY_PARTS = {"summary": "the summary", "vision": "the vision", "serve": "Who we serve", "sell": "What we sell",
+                  "know": "What we know", "not": "What we won't do"}
+CHECK_DAYS = 90             # a new bet is looked at again this many days out
+
+
+def _strategy(draft):
+    if draft.get("strategy") is None:
+        draft["strategy"] = D.blank_strategy()
+    return draft["strategy"]
+
+
+def _bet(draft, ref):
+    found = next((b for b in _strategy(draft)["bets"] if b["id"] == str(ref).strip().lower()), None)
+    if not found:
+        raise Refusal("There's no bet \"%s\"." % str(ref)[:80])
+    return found
+
+
+def set_strategy_text(draft, args, today, notes):
+    field = args["field"]
+    limit = D.LIMITS["strategy_line"] if field in ("summary", "vision") else D.LIMITS["section"]
+    text = _text(args, "text", limit, needed=False)
+    strategy = _strategy(draft)
+    if field in ("summary", "vision"):
+        strategy[field] = text
+    else:
+        strategy["sections"][field] = text
+    return ("Cleared %s." if not text else "Updated %s.") % STRATEGY_PARTS[field]
+
+
+def _check_by(args, today):
+    return deadline(args["check_by"], today) if str(args.get("check_by") or "").strip() else ""
+
+
+def set_bet(draft, args, today, notes):
+    bet = _bet(draft, args["id"])
+    fields = ("statement", "why", "rules_out", "wrong_if", "check_by")
+    if not any(key in args for key in fields):
+        raise Refusal("Say what to change: the statement, why, what it rules out, what would show it wrong, or when "
+                      "to check.")
+    if "statement" in args:
+        bet["statement"] = _text(args, "statement", D.LIMITS["statement"])
+    for key in ("why", "rules_out", "wrong_if"):
+        if key in args:
+            bet[key] = _text(args, key, D.LIMITS["bet_text"], needed=False)
+    if "check_by" in args:
+        bet["check_by"] = _check_by(args, today)
+    return "Updated bet %s." % bet["id"][1:]
+
+
+def add_bet(draft, args, today, notes):
+    bets = _strategy(draft)["bets"]
+    if len(bets) >= D.LIMITS["bets"]:
+        raise Refusal("The strategy has %d bets, the most it holds. Drop one first." % D.LIMITS["bets"])
+    taken = {b["id"] for b in bets}
+    bet = {"id": next("b%d" % n for n in range(1, D.LIMITS["bets"] + 1) if "b%d" % n not in taken),
+           "statement": _text(args, "statement", D.LIMITS["statement"])}
+    for key in ("why", "rules_out", "wrong_if"):
+        bet[key] = _text(args, key, D.LIMITS["bet_text"], needed=False)
+    bet["check_by"] = (today + dt.timedelta(days=CHECK_DAYS)).isoformat()
+    bets.append(bet)
+    return "Added bet %s: %s" % (bet["id"][1:], bet["statement"])
+
+
+def drop_bet(draft, args, today, notes):
+    bet = _bet(draft, args["id"])
+    _strategy(draft)["bets"].remove(bet)
+    linked = [g for g in draft["goals"] if g.get("bet") == bet["id"]]
+    for goal in linked:
+        del goal["bet"]
+    return "Removed bet %s.%s" % (bet["id"][1:], " %d goal%s no longer tied to a bet." % (
+        len(linked), " is" if len(linked) == 1 else "s are") if linked else "")
+
+
+def add_listening_request(draft, args, today, notes):
+    requests = _strategy(draft)["listening"]["requests"]
+    text = _text(args, "text", D.LIMITS["request"])
+    if text.lower() in {r.strip().lower() for r in requests}:
+        raise Refusal("That is already being watched.")
+    if len(requests) >= D.LIMITS["requests"]:
+        raise Refusal("At most %d things are watched. Drop one first." % D.LIMITS["requests"])
+    requests.append(text)
+    return "Watching for: %s" % text
+
+
+def drop_listening_request(draft, args, today, notes):
+    listening = _strategy(draft)["listening"]
+    text = str(args.get("text") or "").strip().lower()
+    found = next((r for r in listening["requests"] if r.strip().lower() == text), None)
+    if found is None:
+        raise Refusal("Nothing called \"%s\" is being watched." % str(args.get("text"))[:80])
+    listening["requests"].remove(found)
+    return "Stopped watching for: %s" % found
+
+
+def resize_market(draft, args, today, notes):
+    """Changes nothing: the turn keeps the note (`Turn.market_note`) and whatever serves the turn sizes the market again."""
+    _text(args, "note", D.LIMITS["market_scope"])
+    return "Sizing the market again with that."
+
+
 def step_go(draft, args, today, notes):
     draft["step"] = args["step"]
     return "Moved to %s." % args["step"]
@@ -707,7 +810,22 @@ def seat_fill(draft, args, today, notes):
 ACTIONS = {fn.__name__: fn for fn in (
     company_set, model_use, seat_fill, bot_add, bot_remove, bot_rename, bot_set_reports_to, bot_set_start, bot_set_routine, bot_set_first_job,
     team_remove, goal_add, goal_edit, goal_remove, person_set, agent_set, rules_set_never, rules_set_review,
-    rules_use_defaults, tools_set, step_go)}
+    rules_use_defaults, tools_set, set_strategy_text, set_bet, add_bet, drop_bet, add_listening_request,
+    drop_listening_request, resize_market, step_go)}
+
+
+def touched(before, after):
+    """The parts of the plan that differ: a top-level part by name, and the strategy by its own parts (summary,
+    vision, sections.know, bets.b1, market, listening.requests), as the page's "Updated from chat" flash names them."""
+    out = [key for key in ("company", "people", "bots", "goals", "rules", "tools") if before.get(key) != after.get(key)]
+    one, two = before.get("strategy") or D.blank_strategy(), after.get("strategy") or D.blank_strategy()
+    out += [key for key in ("summary", "vision") if one[key] != two[key]]
+    out += ["sections." + key for key in D.SECTIONS if one["sections"][key] != two["sections"][key]]
+    bets_one, bets_two = {b["id"]: b for b in one["bets"]}, {b["id"]: b for b in two["bets"]}
+    out += ["bets." + key for key in sorted(set(bets_one) | set(bets_two)) if bets_one.get(key) != bets_two.get(key)]
+    out += ["market"] if one["market"] != two["market"] else []
+    out += ["listening." + key for key in ("requests", "posts") if one["listening"][key] != two["listening"][key]]
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------- a turn
@@ -720,6 +838,8 @@ class Turn:
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the
     empty chart was started from a company model, and `started` is BotOps's one line on which model and what it added.
+    `changed` lists the parts the turn's actions changed (`touched`), in order; `market_note` is what the visitor said
+    when they asked for the market to be sized again (`resize_market`), else None.
     """
 
     def __init__(self, raw, today=None):
@@ -733,6 +853,7 @@ class Turn:
             self.draft = D.check(self.draft)
         # The model is where the chart begins, not a change to undo.
         self.before = D.content(self.draft)
+        self.changed, self.market_note = [], None
 
     def apply(self, name, args):
         """{"ok": true, "said": what changed} or {"ok": false, "refused": why}. A refused action changes nothing."""
@@ -755,8 +876,14 @@ class Turn:
             return {"ok": False, "refused": str(refusal)}
         except D.DraftError as error:
             return {"ok": False, "refused": "That change would break the plan: %s." % error}
+        self._touch(self.draft, work)
         self.draft = work
+        if name == "resize_market":
+            self.market_note = args["note"].strip()
         return {"ok": True, "said": " ".join([said] + notes)}
+
+    def _touch(self, before, after):
+        self.changed += [path for path in touched(before, after) if path not in self.changed]
 
     def _undo(self, args):
         if args not in ({}, None):
@@ -765,7 +892,9 @@ class Turn:
         if snapshot is None:
             return {"ok": False, "refused": "There's nothing to undo yet."}
         keep = {key: self.draft[key] for key in ("step", "chat", "pending") if key in self.draft}
-        self.draft = D.check({**copy.deepcopy(snapshot), **keep})
+        undone = D.check({**copy.deepcopy(snapshot), **keep})
+        self._touch(self.draft, undone)
+        self.draft = undone
         # Undone is the new starting point: one level, so a second undo has nothing to go back to.
         self.before = D.content(self.draft)
         return {"ok": True, "said": "Undid the last change."}

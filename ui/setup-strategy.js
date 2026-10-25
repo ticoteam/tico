@@ -92,15 +92,21 @@ function ssJobHTML(state) {
   if (job.state === 'gave_up') return ssFoundHTML(state);
   return (job.written?.bets || []).length ? `<p class="ss-job muted" role="status">Drafted from ${from}. Keep, edit or strike each.</p>` : '';
 }
+// What a run drafts besides bets (backend/strategy_prompt.py): the summary and vision, then the four sections.
+const SS_LINES = {summary: 'Summary', vision: 'Vision'};
+const ssFoundKeys = () => [...Object.keys(SS_LINES), ...STRAT_SECTIONS.map(sec => sec.key)];
+const ssFoundTitle = k => SS_LINES[k] || STRAT_SECTIONS.find(sec => sec.key === k).title;
+// The draft's own text for a found key: the summary and vision are on the draft, the rest are its sections.
+const ssDraftText = (draft, k) => (k in SS_LINES ? draft?.[k] : draft?.sections?.[k]);
 // A run that gave up wrote nothing (the draft changed under it): what it found, to take by hand.
 function ssFoundHTML(state) {
-  const found = state.strat.job.found || {}, sections = state.strat.data?.draft?.sections || {}, {one} = ssLabel(state.strat.data);
+  const found = state.strat.job.found || {}, draft = state.strat.data?.draft, {one} = ssLabel(state.strat.data);
   const have = new Set(ssLive(state).map(b => stratText(b.statement).toLowerCase()));
   const row = (k, text, attr) => `<li class="ss-found-row"><span class="strat-bet-k">${esc(k)}</span><span>${esc(text)}</span>
       <button class="ghost strat-mini" type="button" ${attr}>Add</button></li>`;
   const rows = [
-    ...['serve', 'sell'].filter(k => stratText(found[k]) && !stratText(sections[k]) && !state.strat.used.includes(k))
-      .map(k => row(STRAT_SECTIONS.find(sec => sec.key === k).title, found[k], `data-ss-use="${k}"`)),
+    ...ssFoundKeys().filter(k => stratText(found[k]) && !stratText(ssDraftText(draft, k)) && !state.strat.used.includes(k))
+      .map(k => row(ssFoundTitle(k), found[k], `data-ss-use="${k}"`)),
     ...(found.bets || []).map((b, i) => [b, i]).filter(([b, i]) => stratText(b.statement) && !have.has(stratText(b.statement).toLowerCase()) && !state.strat.used.includes('bet' + i))
       .map(([b, i]) => row(one, b.statement, `data-ss-take="${i}"`))];
   return `<div class="ss-found" id="ss-found"><p class="ss-job muted" role="status">The draft changed while this ran, so nothing was written${rows.length ? '. It found:' : '.'}</p>
@@ -291,7 +297,9 @@ function ssBind(state) {
   };
   for (const b of root.querySelectorAll('[data-ss-use]')) {
     const key = b.dataset.ssUse;
-    take(b, key, () => put('/v2/strategy/draft', {sections: {[key]: stratText(found[key])}, revision: data?.draft?.revision ?? null}));
+    const text = stratText(found[key]);
+    take(b, key, () => put('/v2/strategy/draft', {...(key in SS_LINES ? {[key]: text} : {sections: {[key]: text}}),
+      revision: data?.draft?.revision ?? null}));
   }
   for (const b of root.querySelectorAll('[data-ss-take]')) {
     const i = Number(b.dataset.ssTake), bet = (found.bets || [])[i] || {};

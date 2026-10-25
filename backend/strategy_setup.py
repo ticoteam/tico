@@ -6,13 +6,13 @@ page's own links or their usual addresses) through `clients/doc_fetch.py`, the s
 and https on the ordinary ports, every address the name resolves to public (no loopback, private, link-local or
 metadata address), each redirect checked again, 5 MB and 20 seconds a page, at most PAGES pages and BUDGET_S seconds
 in all, and no credential of the server's ever sent. Then one model call, with no runner: the writer the daily-update
-drafts use (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own provider with a server key). It
-answers *Who we serve* and *What we sell* and two or three bets the site implies, each with what it rules out and a
-suggested wrong-if.
+drafts use (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own provider with a server key), with
+the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the same). It answers a summary, a vision,
+the four sections and three bets the site implies, each with what it rules out and a suggested wrong-if.
 
 What it writes, as the owner who started it, and never published:
-- the two sections, only where the draft's is empty, each starting with the UNCONFIRMED line, which the owner deletes
-  by keeping or editing the text;
+- the summary and vision, and each of the four sections, only where the draft's is empty; each section starts with
+  the UNCONFIRMED line, which the owner deletes by keeping or editing the text;
 - each bet as `proposed`, its wrong-if a sentence with a check date CHECK_DAYS out.
 
 It writes against the draft's `revision` as it was when the job started: when the owner has written since (or started
@@ -36,6 +36,7 @@ from clients import doc_fetch as F
 from . import hubdb as H
 from . import models as M
 from . import strategy as S
+from . import strategy_prompt as P
 from .store import Problem, encode
 
 log = logging.getLogger("tico.strategy_setup")
@@ -46,7 +47,7 @@ PAGES = 4                   # the home page and at most three more
 PAGE_CHARS = 8_000          # of each page's text sent to the model
 BUDGET_S = 45               # no new page is read after this many seconds
 STALE_S = 600               # a job running this long was cut off by a restart
-BETS = 3
+BETS = P.BETS
 CHECK_DAYS = 90             # a suggested wrong-if says when to look again
 SECTION_CHARS = 1_500       # a drafted section: a start, not the owner's page
 WHY_CHARS = 600
@@ -57,17 +58,7 @@ UNCONFIRMED = "_Unconfirmed: drafted from {source}._"
 WANTED = (("about", r"about|company|our-story|who-we-are"),
           ("pricing", r"pricing|plans|price"),
           ("customers", r"customers|case-stud|stories|testimonials"))
-INSTRUCTIONS = (
-    "You draft the start of a team's strategy from its website and the owner's own words. Reply with one JSON object "
-    "and nothing else: {\"serve\": \"...\", \"sell\": \"...\", \"bets\": [{\"statement\": \"...\", \"why\": \"...\", "
-    "\"rules_out\": \"...\", \"wrong_if\": \"...\"}]}.\n"
-    "- serve: who the team serves: the customer, and what they use today instead. Two to four short sentences.\n"
-    "- sell: what the team sells and how it charges for it.\n"
-    "- bets: two or three bets the pages imply. A statement is one sentence that could turn out wrong (\"Prices low "
-    "enough to win far more customers than the incumbents\"); why says the reasoning in one sentence; rules_out says "
-    "what the bet refuses (\"white-glove onboarding\"); wrong_if says, in one sentence, what would show it wrong.\n"
-    "Use only what the pages and the owner say. Never invent a number: a price, a count or a share appears only when a "
-    "page or the owner states it. Leave a field empty (\"\") when nothing says it.")
+INSTRUCTIONS = P.INSTRUCTIONS
 
 # Test seams: names and sockets for the fetch, and how the job is started.
 RESOLVER = None
@@ -254,7 +245,7 @@ def run(store, job_id):
         code = exc.code if isinstance(exc, J.JudgeError) else "error"
         log.info("Strategy research failed (%s)", type(exc).__name__)
         return _fail(store, job_id, code, "The model did not answer usably; fill the fields in yourself")
-    if not (found["serve"] or found["sell"] or found["bets"]):
+    if not (any(found[k] for k in P.FIELDS) or found["bets"]):
         return _fail(store, job_id, "empty", "Nothing usable came back; fill the fields in yourself", found=found)
     with store.transaction() as c:
         return finish(c, job_id, found)
@@ -319,8 +310,8 @@ def _clip(value, limit, one_line=False):
 
 
 def draft(write, job, pages):
-    """{serve, sell, bets: [{statement, why, rules_out, wrong_if}]} from one model call, clipped to what the draft
-    takes."""
+    """{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]} from one model call,
+    clipped to what the draft takes."""
     user = json.dumps({"owner_words": job["text"], "website": job["url"],
                        "pages": [{"url": p["url"], "title": p.get("title") or "", "text": p["text"]}
                                  for p in pages if p.get("text")]}, ensure_ascii=False)
@@ -335,8 +326,8 @@ def draft(write, job, pages):
                      "wrong_if": _clip(item.get("wrong_if"), S.WRONG_TEXT_MAX, True)})
         if len(bets) == BETS:
             break
-    return {"serve": _clip(raw.get("serve"), SECTION_CHARS), "sell": _clip(raw.get("sell"), SECTION_CHARS),
-            "bets": bets}
+    return {"summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True), "vision": _clip(raw.get("vision"), S.VISION_MAX, True),
+            **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS}, "bets": bets}
 
 
 # ----------------------------------------------------------------------------- writing the draft
@@ -357,10 +348,11 @@ def finish(c, job_id, found):
                                   "written; what it found is below" if newest else "A newer research job replaced "
                                   "this one"}})
     actor, source = job["actor"], source_of(job["url"])
-    sections = {k: unconfirmed(found[k], source) for k in ("serve", "sell")
-                if found[k] and not row["sections"][k].strip()}
-    if sections:
-        S.update_draft(c, actor, row["revision"], sections=sections)
+    sections = {k: unconfirmed(found[k], source) for k in S.FIXED_KEYS
+                if found.get(k) and not row["sections"][k].strip()}
+    lines = {k: found[k] for k in ("summary", "vision") if found.get(k) and not row[k].strip()}
+    if sections or lines:
+        S.update_draft(c, actor, row["revision"], sections=sections or None, **lines)
     made = []
     live = [b for b in S.bets(c) if b["status"] != "retired"]
     known = {b["statement"].strip().lower() for b in live}
@@ -380,7 +372,8 @@ def finish(c, job_id, found):
             made.append(bet["id"])
             known.add(item["statement"].lower())
     return _put(c, {**job, "state": "done", "step": None, "finished": H.now(), "found": found,
-                    "written": {"sections": sorted(sections), "bets": made, "revision": S.draft(c)["revision"]}})
+                    "written": {"sections": sorted(sections), "fields": sorted(lines), "bets": made,
+                                "revision": S.draft(c)["revision"]}})
 
 
 # ----------------------------------------------------------------------------- HTTP
