@@ -1,0 +1,31 @@
+# In the style of Blue Ocean Strategy: a value curve against the alternatives, then what to eliminate, reduce, raise
+# and create.
+id: blue-ocean
+name: Blue Ocean
+applies_to: strategy
+description: 'In the style of Blue Ocean Strategy: what to eliminate, reduce, raise and create.'
+minutes: 10
+listed: true
+steps:
+  - key: rivals
+    ask: Who do buyers compare you to today? Name two or three.
+    input: list
+    hint: Include "do nothing" or "hire someone" if that is the real alternative.
+  - key: factors
+    ask: What do buyers weigh when they choose? List five to eight factors.
+    input: list
+    hint: Price, setup time, support, accuracy, the things you hear on sales calls.
+  - key: scores
+    ask: Score you and each rival 0-5 on each factor.
+    input: scores
+    rows_from: factors
+    columns_from: rivals
+  - key: errc
+    ask: Which factors could you eliminate, reduce, raise, or create that nobody offers today?
+    input: text
+output:
+  chart: value_curve
+  sections: [The curve today, Eliminate / Reduce / Raise / Create, What it means for the bets]
+sharpen:
+  - Competitor pricing and plan limits for the rivals named
+  - Review-site complaints about the rivals, by factor

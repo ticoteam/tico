@@ -1,34 +1,36 @@
-# Plain questions any team can answer: the first default. Its own sections on who you serve, what you sell, how you
-# win and pricing are fixed sections of every strategy now (serve, sell, know), so only channels and brand are left
-# to suggest.
-# Not listed until the page can switch guides (docs/strategy.md); the stored shape is the same for every guide.
+# Plain questions any team can answer: the first default, kept for teams that used it. Not listed.
 id: plain
 name: Plain
+applies_to: strategy
 description: Plain questions any team can answer. The first default, kept for teams that used it.
+minutes: 8
 listed: false
-bets_label: Bets
-bet_label: Bet
-questions:
+steps:
   - key: q1
     ask: Who is the one kind of customer you would choose if you could only have one, and what are they trying to get done?
+    input: text
   - key: q2
     ask: When one of them picks you, what did they almost pick instead, and why did they not?
+    input: text
   - key: q3
     ask: What do you charge, and what would break if you charged double or half?
+    input: text
   - key: q4
     ask: Where did your last ten customers come from, and which of those channels would you double down on?
+    input: text
   - key: q5
     ask: Name one thing a competitor does well that you have decided not to do.
+    input: text
   - key: q6
     ask: What request from a good customer have you turned down in the last year, and why?
+    input: text
   - key: q7
     ask: If the team had to describe itself in one sentence to a stranger at a conference, what is the sentence?
+    input: text
   - key: q8
     ask: What is the bet you are making that most people in your market would call wrong?
-suggested_sections:
-  - key: reach
-    title: Channels
-    prompt: 'How buyers find you and how you reach them: the two or three channels that bring most of them, and the one you are betting on next.'
-  - key: brand
-    title: Brand and voice
-    prompt: What the team should sound like and stand for in every message, and the words it never uses.
+    input: text
+output:
+  chart: none
+  sections: [Channels, Brand and voice]
+sharpen: []

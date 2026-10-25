@@ -40,6 +40,10 @@ The reason is a few lines at most: what tripped, with its date and source; which
 why, in one sentence. Pick one; do not leave it as a menu. A trip card does not count toward the five a day: a
 wrong bet should not wait until tomorrow.
 
+If the evidence is thin or the bet is one the owner may want to stress-test before deciding, say in the reason that
+the Scenarios or Pre-mortem lens (`playbooks/run-a-lens.md`) on this bet would help; do not run it as part of this
+task.
+
 ## 3. Finish
 
 `hub task update <id> --status done --note "<the bet, what tripped, your pick>"`. Add one line to `state.md` (the

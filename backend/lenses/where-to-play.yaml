@@ -1,0 +1,25 @@
+# Where to play: pick two or three segments of the market, and for each say why the team would win and what it would
+# give up. The changes go to "Who we serve" and "What we won't do".
+id: where-to-play
+name: Where to play
+applies_to: market
+description: 'Pick two or three segments to serve, why you would win each, and what you would give up.'
+minutes: 8
+listed: true
+steps:
+  - key: segments
+    ask: Which two or three segments of the market are you drawn to?
+    input: list
+    hint: Name them as buyers would, not as analysts do.
+  - key: win
+    ask: For each one, why would you win there?
+    input: text
+  - key: give_up
+    ask: What would you have to give up, or stop doing, to serve them well?
+    input: text
+output:
+  chart: table
+  sections: [The segments compared, Why we would win, What we would give up]
+sharpen:
+  - Spend and growth for each segment named
+  - Who the leading rivals are in each segment named

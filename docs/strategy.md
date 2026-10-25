@@ -17,7 +17,7 @@ Three activities make one loop:
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
 
-This page is the shape, guides, who may do what, setup, publishing, the fit check, what bots see, and the API.
+This page is the shape, lenses, who may do what, setup, publishing, the fit check, what bots see, and the API.
 
 ## The page
 
@@ -63,20 +63,19 @@ arithmetic, never a goal's lifecycle status. A bet whose goals have no KPI shows
 pricing page" says nothing about whether a pricing bet is right. Linking a goal to a bet is optional; the page offers
 "not tied to a bet" as a filter, never as a nag.
 
-## Guides
+## Lenses
 
-A **guide** changes what the CEO Bot asks and the word on the list, never what is stored. It is one YAML file: a
-name, the word for bets (default **Bets**), six to ten interview questions in its style, and optional suggested extra
-sections. `hub strategy guides` and `GET /api/v2/strategy/guides` list the ones on offer.
+A **lens** is a set of questions from a known framework, run once against the published strategy (or your draft, if
+you are the owner) or the market. The result is a summary, sections, a chart, findings about your bets and changes you
+may add to the draft one at a time; nothing is published or written by itself. The listed lenses are Playing to Win,
+Blue Ocean, Scenarios, Seven Powers, Good Strategy, Pre-mortem and Positioning for the strategy, and Where to Play and
+Five Forces for the market. They are in [Lenses](lenses.md).
 
-- **Default** (the only one listed today): questions in the founder-native style of the YC application and a16z's
-  go-to-market writing: what you make and who needs it; what you understand that others don't; how you make money
-  and how much; who you fear and what stops a bigger company copying you; the wedge you enter through; the price
-  that breaks; the request you turned down; the bet most people would call wrong. It is "in the style of", not
-  theirs.
-- **Later, on demand:** Rumelt's kernel, Playing to Win, OGSM, V2MOM and Dunford positioning, each as questions and a
-  label only. Switching will be a Settings choice on the Strategy page, not a setup step, and switching never changes
-  the stored shape.
+The CEO Bot's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
+writing: what you make and who needs it; what you understand that others don't; how you make money and how much;
+who you fear and what stops a bigger company copying you; the wedge you enter through; the price that breaks; the
+request you turned down; the bet most people would call wrong. It is "in the style of", not theirs. The other guides
+became lenses; `hub strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
 
 ## Who may do what
 
@@ -216,7 +215,8 @@ hub strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID 
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
     [--status proposed|active] [--rank N]
 hub strategy bet update <id> [the same flags]      hub strategy bet retire <id>      (owner only)
-hub strategy guides
+hub strategy guides                     deprecated; the Default guide only
+hub lens list|run|show|runs            see Lenses (lenses.md)
 hub goal create ... --bet <id>          hub goal update <id> --bet <id>
 ```
 
@@ -233,11 +233,12 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active |
 | `GET /strategy/summary` | any bot or human | plain text: the summary, one line per active bet with its wrong-if, "version N" |
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills `serve` and `sell` marked unconfirmed and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
-| `GET /strategy/guides` | any reader | the listed guides |
+| `GET /strategy/guides` | any reader | deprecated: the Default guide only |
+| `/lenses/...` | see [Lenses](lenses.md#hub-and-the-api) | list, run, read, add a change to the draft, sharpen |
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
-rules_out?, wrong_if?, cites?, status?}]}`. Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
+rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 

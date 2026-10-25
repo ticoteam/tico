@@ -1382,6 +1382,9 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
+                # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
+                from .lenses import ensure as ensure_lenses
+                ensure_lenses(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

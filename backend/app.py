@@ -175,6 +175,13 @@ def create_app(settings=None):
                 strategy_setup.stop_running(c)
         except Exception as exc:
             telemetry.capture("strategy_setup", exc)
+        # A lens run the last process was making has no thread now: it fails, and the run page says so.
+        try:
+            from . import lenses
+            with store.transaction() as c:
+                lenses.stop_running(c)
+        except Exception as exc:
+            telemetry.capture("lenses", exc)
         # An assistant still named after the company becomes "Assistant" (idempotent).
         try:
             with store.transaction() as c:
@@ -6075,6 +6082,8 @@ def create_app(settings=None):
     install_strategy(app, store, auth, mutate)
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
+    from .lenses import install as install_lenses
+    install_lenses(app, store, auth, mutate)
     from .listening import install as install_listening
     install_listening(app, store, auth, mutate)
     from .archive import install_archives

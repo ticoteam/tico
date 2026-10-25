@@ -33,11 +33,10 @@ Start from the record, not from memory.
 - `hub strategy show`: the published version, if there is one, with its bets, `goals_by_bet` and `health_by_bet`.
   You do not see the owner's draft; only they do. If a version is published, this run is a revision: read
   `hub strategy versions` and propose only what should change, saying why in the proposal's reason.
-- `hub strategy guides`: use the **default** guide. Its questions, in the style of the YC application and a16z's
-  go-to-market writing, are what you turn into claims: what you make and who needs it, what you understand that
+- The questions to turn into claims, in the style of the YC application and a16z's go-to-market writing: what you make and who needs it, what you understand that
   others don't, how you make money and how much, who you fear and what stops a bigger company copying you, the wedge
-  you enter through, the price that breaks, the request you turned down, the bet most people would call wrong. Do
-  not offer other guides.
+  you enter through, the price that breaks, the request you turned down, the bet most people would call wrong.
+  Lenses (`playbooks/run-a-lens.md`) come after a first strategy is published, not before.
 - The market: `hub market show company/self` (who the team is, from the Librarian's research), then
   `hub doc search --market "<the team's name>"`, the Overview and Theses pages, and Open questions. The market
   pages are the evidence the bets cite. If the market is empty, say so in the proposal's reason: the Librarian's

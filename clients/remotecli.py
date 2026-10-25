@@ -568,6 +568,19 @@ def run(args, who=None):
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
+    if cmd == "lens":
+        from clients import hubtools
+        if sub == "list":
+            return hubtools.lens_list(client, {"applies_to": "market" if args.market else None})
+        if sub == "run":
+            answers = json.loads(Path(args.answers_file).read_text(encoding="utf-8-sig")) if args.answers_file else {}
+            if not isinstance(answers, dict):
+                raise APIError("answers", "--answers-file is a JSON object of {step key: answer}")
+            return hubtools.lens_run(client, {"lens": args.id, "answers": answers, "draft": args.draft,
+                                              "wait": 0 if args.no_wait else hubtools.LENS_WAIT_MAX, "operation_id": key})
+        if sub == "show":
+            return hubtools.lens_show(client, {"id": args.id})
+        return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
     if cmd == "market":
         if sub == "show":
             return client.get("market/entities/" + args.id)

@@ -1,0 +1,32 @@
+# In the style of scenario planning: two uncertainties that matter most make four possible worlds. How each bet fares
+# in each world becomes a signpost to watch, which is what a wrong-if is for.
+id: scenarios
+name: Scenarios
+applies_to: strategy
+description: 'In the style of scenario planning: four possible worlds from two uncertainties, and the signposts that tell you which one is arriving.'
+minutes: 10
+listed: true
+steps:
+  - key: first
+    ask: What is the first thing outside your control that could change the most for you in the next few years?
+    input: text
+    hint: A price, a rule, a rival, a technology, a customer habit.
+  - key: first_ends
+    ask: What are the two ends of it? Give the low end first, then the high end.
+    input: list
+  - key: second
+    ask: What is the second thing, one that does not move with the first?
+    input: text
+  - key: second_ends
+    ask: What are the two ends of that one? Low end first, then high end.
+    input: list
+  - key: horizon
+    ask: How far ahead are you looking?
+    input: choice
+    options: [One year, Three years, Five years]
+output:
+  chart: matrix_2x2
+  sections: [The four worlds, How each bet fares, Signposts to watch]
+sharpen:
+  - Recent data on the first uncertainty, from sources that publish it
+  - Recent data on the second uncertainty, from sources that publish it

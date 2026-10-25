@@ -182,6 +182,14 @@ def urgent(item):
                                        and (p.get("payload") or {}).get("source") == S.TRIPPED))
 
 
+def _lens_name(p):
+    """The lens a strategy proposal came from (`source: lens`, backend/lenses.py), by name, or None."""
+    from . import lenses
+    payload = p.get("payload") or {}
+    found = lenses.lens(payload.get("lens")) if payload.get("source") == S.LENS else None
+    return found["name"] if found else None
+
+
 def _ask(item, manager=ceo_bot.NAME):
     """The task's title and body: the ask first, in plain words. `manager` is the bot's name (backend/ceo_bot.py)."""
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
@@ -227,8 +235,11 @@ def _ask(item, manager=ceo_bot.NAME):
                 f"{closes}it is decided.")
         return title, body
     if p["kind"] == "strategy_draft":
+        lens = _lens_name(p)
+        if lens:
+            title += f" from the {lens} lens"
         body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
-                + (f" because {p['reason'].rstrip('.')}" if p.get("reason") else "")
+                + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
                 + f": {_change(p, name)}. Confirming writes it to the draft; publishing stays your click on the "
                   f"Strategy page (#/strategy). {closes}it is decided.")
         return title, body

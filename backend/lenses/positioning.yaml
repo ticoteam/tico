@@ -1,0 +1,30 @@
+# In the style of Dunford's positioning: what a buyer would use instead, what you have that they do not, the value that
+# creates, who cares most about it, and the category that makes it make sense.
+id: positioning
+name: Positioning
+applies_to: strategy
+description: 'In the style of Dunford''s positioning: alternatives, unique attributes, value, best-fit customers, category.'
+minutes: 8
+listed: true
+steps:
+  - key: alternatives
+    ask: When a prospect does not buy from you, what do they do instead? Give the three most common answers.
+    input: list
+    hint: Include doing nothing.
+  - key: attributes
+    ask: What can you do that none of those alternatives can? Name only what is true today.
+    input: list
+  - key: value
+    ask: For your best customers, what did that let them achieve or avoid, in their own words?
+    input: text
+  - key: best_fit
+    ask: Describe the customer who gets the most value from you (size, situation, and the moment they started looking).
+    input: text
+  - key: category
+    ask: When you say what market you are in, do prospects nod or do you have to explain? What category would make them nod?
+    input: text
+output:
+  chart: none
+  sections: [The positioning statement, The gap to who we serve, What to change]
+sharpen:
+  - Customer quotes about the value, from calls and reviews

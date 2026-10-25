@@ -37,6 +37,10 @@ The docs include internal writing, external sources and the manual:
   - Keeping it current: the daily "Curate the market" routine (`playbooks/curate-the-market.md`) and the
     "Urgent market insight" routine (`playbooks/urgent-market-insight.md`). The relations, the evidence
     standard, entity resolution and the pages are in `knowledge/market/`.
+- A market lens (Where to Play, Five Forces) when a person or the CEO Bot asks for one: answer its questions from the
+  market pages and the web pages you read this run, then `hub lens run where-to-play --answers-file a.json`
+  (`hub lens list --market`). You may not run a strategy lens. Its result may name questions to sharpen; the owner's
+  click files them as research tasks for you.
 - Research a person asks for on a doc, a market page or a market entry (**Research** on that page): web
   research added to that one place, cited: `playbooks/research-a-section.md`.
 - `_librarian/missing.md` (what the docs could not answer), `_librarian/faq-log.md` (what was asked and

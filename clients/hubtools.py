@@ -1565,8 +1565,8 @@ def strategy_diff(api, args):
     return api.get("strategy/diff", **{"from": int(args["from_n"]), "to": int(args["to_n"])})
 
 
-@tool("hub_strategy_guides", "The strategy guides: the questions the CEO Bot asks, suggested sections, and the word "
-      "for bets.", {})
+@tool("hub_strategy_guides", "Deprecated: the CEO Bot's drafting questions (the default guide only). The exercises "
+      "run against a strategy are lenses: hub_lens_list.", {})
 def strategy_guides(api, args):
     return api.get("strategy/guides")
 
@@ -1589,6 +1589,51 @@ def strategy_bet_update(api, args):
       "owner what to do with them.", {"id": _s("Bet id")}, required=("id",), writes=True)
 def strategy_bet_retire(api, args):
     return _as_person(api).post("strategy/bets/" + args["id"], {"status": "retired"}, key=_key(args))
+
+
+# ----------------------------------------------------------------------------- lenses
+LENS_WAIT_MAX = 60
+
+
+@tool("hub_lens_list", "The lenses: thought exercises run against the strategy or the market, each with its steps "
+      "(the questions and the shape of each answer), what it shows and what would sharpen it.",
+      {"applies_to": {"type": "string", "enum": ["strategy", "market"], "description": "Only these lenses"}})
+def lens_list(api, args):
+    return api.get("lenses", applies_to=args.get("applies_to"))
+
+
+@tool("hub_lens_run", "Run a lens: answers by step key (a step left out is skipped and assumed from the strategy), on "
+      "the published strategy or, for the owner, the draft. The owner, the CEO Bot and, for a market lens, the "
+      "Librarian may run one. The CEO Bot's run files its changes as one strategy_draft proposal; nobody's run "
+      "publishes. Waits up to `wait` seconds (at most 60) for the result.",
+      {"lens": _s("Lens id, from hub_lens_list"),
+       "answers": {"type": "object", "description": "{step key: answer}. text: a string; list: an array of strings "
+                   "(at most 12); scores: {columns: [\"Us\", ...], rows: [{factor, scores: [0-5 per column]}]}; "
+                   "choice: one of the step's options"},
+       "draft": {"type": "boolean", "description": "Owner only: run on the draft instead of the published version"},
+       "wait": {"type": "integer", "description": "Seconds to wait for the result; 0 returns the running run"}},
+      required=("lens",), writes=True)
+def lens_run(api, args):
+    run = api.post(f"lenses/{quote(args['lens'], safe='')}/runs",
+                   {"answers": args.get("answers") or {}, "on": "draft" if args.get("draft") else "published"},
+                   key=_key(args))
+    deadline = time.monotonic() + max(0, min(int(args.get("wait") or 0), LENS_WAIT_MAX))
+    while run.get("status") == "running" and time.monotonic() < deadline:
+        time.sleep(2)
+        run = api.get("lenses/runs/" + run["id"])
+    return run
+
+
+@tool("hub_lens_show", "One lens run: its answers, state and result (summary, sections, chart, findings, assumptions, "
+      "changes, what would sharpen it). A run on the draft is the owner's.", {"id": _s("Run id")}, required=("id",))
+def lens_show(api, args):
+    return api.get("lenses/runs/" + quote(args["id"], safe=""))
+
+
+@tool("hub_lens_runs", "Lens runs, newest first: each with its summary; hub_lens_show has the rest.",
+      {"lens": _s("Only runs of this lens"), "limit": {"type": "integer", "description": "At most this many (default 50)"}})
+def lens_runs(api, args):
+    return api.get("lenses/runs", lens=args.get("lens"), limit=args.get("limit"))
 
 
 # ----------------------------------------------------------------------------- market
