@@ -8,8 +8,13 @@ Settings > Health also lists checks that belong to one feature, documented on th
 suggestions with no receiving bot are in [Public roadmaps](roadmaps.md), and the Tico AI Gateway key (near or at its
 monthly cap, not recognised, or not ready) is in [Tico AI Gateway](ai-gateway.md#what-the-card-says).
 
-**Unreleased:** the **Turns** check shows each computer's running, starting, waiting and queued counts, with each
+The **Turns** check shows each computer's running, starting, waiting and queued counts, with each
 wait reason and oldest age. See [Turn counts](computers.md#turn-counts) for the start deadline, load brake and older-runner rules.
+
+The **Company turns** check records when the company warning level is crossed, even when Health Monitor is off.
+It shows the company count, warning and stop levels, and when the incident opened or resolved.
+See [Company turn levels](computers.md#company-turn-levels) for what counts, defaults, recovery and how an admin changes the levels.
+This record does not provide the separate automatic fixer.
 
 Health's **Stuck bots** check and `hub health check` name the bot, queued job count, oldest queued age,
 why it cannot start, and a fix or a command to inspect its runs. **Tasks not progressing** names visible tasks

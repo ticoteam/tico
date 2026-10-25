@@ -864,3 +864,173 @@ def test_a_goal_with_a_bad_level_dept_or_parent_or_another_field_is_still_refuse
     draft["goals"][-1][field] = value
     with pytest.raises(D.DraftError):
         D.check(draft)
+
+
+# ------------------------------------------------------------------------------------- the strategy block (format 0.3)
+FIXTURES = Path(__file__).parent / "fixtures" / "company_strategy"
+FIXTURE_CREATED = dt.datetime(2026, 10, 25, 12, tzinfo=dt.timezone.utc)
+
+
+def fixture_draft():
+    return json.loads((FIXTURES / "draft.json").read_text())
+
+
+def test_a_plan_with_a_strategy_is_written_as_format_0_3_exactly_as_the_setup_page_writes_it():
+    """The same text the page's toYAML() writes (both repos test against this file); it reads back to the same file."""
+    text = (FIXTURES / "company.yaml").read_text()
+    assert C.to_yaml(fixture_draft(), FIXTURE_CREATED) == text
+    back = C.from_yaml(text)
+    assert C.to_yaml(back, FIXTURE_CREATED) == text
+    assert back["strategy"] == D.check(fixture_draft())["strategy"]
+    assert [g.get("bet") for g in back["goals"]] == ["b1", "b2"]
+    assert yaml.safe_load(text)["version"] == 0.3 and "# Format 0.3." in text
+
+
+def test_a_plan_without_a_strategy_is_still_format_0_2_byte_for_byte():
+    draft = fixture_draft()
+    del draft["strategy"]
+    for goal in draft["goals"]:
+        goal.pop("bet")
+    text = C.to_yaml(draft, FIXTURE_CREATED)
+    assert "version: 0.2\n" in text and "# Format 0.2." in text and "strategy" not in text and "bet:" not in text
+    # A blank strategy (the chat touched it and cleared it) writes no block either.
+    assert C.to_yaml({**draft, "strategy": C.blank_strategy()}, FIXTURE_CREATED) == text
+    assert "strategy" not in C.from_yaml(text)
+
+
+def test_the_starter_import_keeps_the_strategy_and_a_file_without_one_saves_as_before():
+    text = (FIXTURES / "company.yaml").read_text()
+    saved = starter.load(text)
+    assert saved["strategy"]["bets"][0]["id"] == "b1" and saved["goals"][0]["bet"] == "b1"
+    assert C.from_yaml(starter.file_text(text))["strategy"] == saved["strategy"]
+    draft = fixture_draft()
+    del draft["strategy"]
+    assert "strategy" not in starter.load(C.to_yaml(draft, FIXTURE_CREATED))
+
+
+def test_a_strategy_is_let_go_of_quietly_where_the_page_can_t_help_it_and_refused_where_it_is_wrong():
+    draft = fixture_draft()
+    s = draft["strategy"]
+    s["market"]["segments"][1]["parent"] = "gone"            # a parent that left: the segment moves to the top
+    s["market"]["segments"][0]["evidence"] = []               # a size without a source: the size goes
+    s["market"]["players"][0]["segments"].append("gone")      # a player's segment that left
+    draft["goals"][1]["bet"] = "b5"                           # a bet that is gone: the goal keeps going without it
+    out = D.check(draft)
+    segments = {g["key"]: g for g in out["strategy"]["market"]["segments"]}
+    assert segments["schedules"]["parent"] is None and segments["gc-suites"]["usd"] is None
+    assert out["strategy"]["market"]["players"][0]["segments"] == ["gc-suites", "schedules"]
+    assert out["goals"][0]["bet"] == "b1" and "bet" not in out["goals"][1]
+    # Every key inside the block is optional; what is missing comes back empty.
+    assert D.check({**fixture_draft(), "strategy": {"summary": "Short."}})["strategy"] == {
+        **C.blank_strategy(), "summary": "Short."}
+    for path, value in ((("bets", 0, "id"), "b9"), (("bets", 1, "id"), "b1"), (("market", "segments", 1, "key"), "bim"),
+                        (("market", "segments", 0, "ours"), True), (("market", "segments", 2, "method"), "guess"),
+                        (("market", "players", 0, "url"), "ftp://example.com"), (("listening", "posts", 0, "tag"), "x"),
+                        (("summary",), "x" * 401), (("bets", 0, "check_by"), "soon"), (("colour",), "red")):
+        bad = fixture_draft()
+        *parents, last = path
+        target = bad["strategy"]
+        for key in parents:
+            target = target[key]
+        target[last] = value
+        with pytest.raises(C.DraftError):
+            D.check(bad)
+
+
+def test_the_chat_edits_the_strategy_and_the_turn_names_each_part_it_touched():
+    turn = C.Turn(fixture_draft(), TODAY)
+    said = [turn.apply(*step) for step in (
+        ("set_strategy_text", {"field": "know", "text": "Supers text photos all day."}),
+        ("set_bet", {"id": "b2", "wrong_if": "Cycles run past 60 days"}),
+        ("add_bet", {"statement": "Price per crew", "why": "Crews are the unit", "rules_out": "Per-seat", "wrong_if": ""}),
+        ("drop_bet", {"id": "b1"}),
+        ("add_listening_request", {"text": "Builders asking about crew pricing"}),
+        ("drop_listening_request", {"text": "superintendents asking for a better schedule app"}),
+        ("resize_market", {"note": "Count specialty contractors too"}))]
+    assert all(r["ok"] for r in said), said
+    draft = turn.finish()
+    s = draft["strategy"]
+    assert s["sections"]["know"] == "Supers text photos all day."
+    assert [b["id"] for b in s["bets"]] == ["b2", "b3", "b4"] and s["bets"][-1]["check_by"] == "2027-01-15"
+    assert "bet" not in draft["goals"][0] and draft["goals"][1]["bet"] == "b2"
+    assert s["listening"]["requests"] == ["Competitor changelogs: Trestle, FieldCraft", "Builders asking about crew pricing"]
+    assert turn.changed == ["sections.know", "bets.b2", "bets.b4", "goals", "bets.b1", "listening.requests"]
+    assert turn.market_note == "Count specialty contractors too"
+    assert C.from_yaml(C.to_yaml(draft, CREATED))["strategy"] == s
+
+
+@pytest.mark.parametrize("name,args", [
+    ("set_strategy_text", {"field": "mission", "text": "x"}), ("set_strategy_text", {"field": "know", "text": "x" * 2001}),
+    ("set_bet", {"id": "b9", "why": "x"}), ("set_bet", {"id": "b1"}), ("set_bet", {"id": "b1", "statement": ""}),
+    ("add_bet", {"statement": "x", "why": "", "rules_out": ""}), ("drop_bet", {"id": "b4"}),
+    ("add_listening_request", {"text": "competitor changelogs: trestle, fieldcraft"}),
+    ("drop_listening_request", {"text": "nothing like it"}), ("resize_market", {"note": ""})])
+def test_a_bad_strategy_action_is_refused_in_words_and_changes_nothing(name, args):
+    turn = C.Turn(fixture_draft(), TODAY)
+    before = copy.deepcopy(turn.draft)
+    result = turn.apply(name, args)
+    assert result["ok"] is False and result["refused"] and turn.draft == before and turn.changed == []
+
+
+def test_the_strategy_holds_its_limits_and_says_so_plainly():
+    draft = fixture_draft()
+    turn = C.Turn(draft, TODAY)
+    assert all(turn.apply("add_bet", {"statement": "Bet %d" % i, "why": "", "rules_out": "", "wrong_if": ""})["ok"]
+               for i in range(2))
+    over = turn.apply("add_bet", {"statement": "One too many", "why": "", "rules_out": "", "wrong_if": ""})
+    assert over == {"ok": False, "refused": "The strategy has 5 bets, the most it holds. Drop one first."}
+
+
+def test_a_full_strategy_at_every_limit_beside_a_300_seat_chart_fits_the_starter_import():
+    L = D.LIMITS
+
+    def prose(n):
+        """Text at full length that the key scrubber leaves alone (a long run of letters reads as a key)."""
+        return ("a word " * n)[:n]
+
+    url = ("https://example.com" + "/a-path" * L["url"])[:L["url"]]
+    strategy = {
+        "summary": prose(L["strategy_line"]), "vision": prose(L["strategy_line"]),
+        "sections": {key: prose(L["section"]) for key in D.SECTIONS},
+        "bets": [{"id": "b%d" % i, "statement": prose(L["statement"]), "why": prose(L["bet_text"]),
+                  "rules_out": prose(L["bet_text"]), "wrong_if": prose(L["bet_text"]), "check_by": "2027-01-23"}
+                 for i in range(1, L["bets"] + 1)],
+        "market": {"definition": {"root": prose(L["market_root"]), "in": prose(L["market_scope"]),
+                                  "out": prose(L["market_scope"]), "year": 2026},
+                   "segments": [{"key": "seg-%d" % i, "name": prose(L["segment_name"]), "parent": None, "usd": 10 ** 12,
+                                 "method": "top_down", "arithmetic": prose(L["arithmetic"]),
+                                 "evidence": [url] * L["evidence"], "ours": False, "next": False}
+                                for i in range(L["segments"])],
+                   "players": [{"name": prose(L["player_name"]), "url": url,
+                                "segments": ["seg-%d" % i for i in range(L["segments"])]} for _ in range(L["players"])]},
+        "listening": {"requests": [("%d " % i + prose(L["request"]))[:L["request"]] for i in range(L["requests"])],
+                      "posts": [{"source": "web", "url": url, "title": prose(L["post_title"]), "when": "2026-10-24",
+                                 "tag": "market"} for _ in range(L["posts"])]}}
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "bookkeeping", "title": "Books"}))
+    owner_only = {**draft, "company": {**draft["company"], "name": "Acme"}, "people": [p for p in draft["people"] if p["owner"]],
+                  "strategy": strategy}
+    saved = starter.load(C.to_yaml(owner_only, CREATED))
+    assert saved["strategy"] == D.check(owner_only)["strategy"] and len(saved["bots"]) == 300
+    assert len(starter.canonical(saved).encode()) < starter.MAX_BYTES
+
+
+@pytest.mark.parametrize("url", ["https://alice:pw@example.com/x", "https://alice@example.com", "https://[",
+                                 "https://example.com:abc/", "https://[::1"])
+def test_an_address_with_a_user_name_or_one_that_can_t_be_read_is_refused_plainly(url):
+    for path in (("market", "players", 0, "url"), ("listening", "posts", 0, "url"), ("market", "segments", 0, "evidence")):
+        bad = fixture_draft()
+        *parents, last = path
+        target = bad["strategy"]
+        for key in parents:
+            target = target[key]
+        target[last] = [url] if last == "evidence" else url
+        with pytest.raises(C.DraftError, match="no user name or password"):
+            D.check(bad)
+
+
+def test_a_bet_added_to_a_plan_with_no_strategy_starts_the_block_and_undo_takes_it_back():
+    draft, (added,) = run(started(), ("add_bet", {"statement": "Own the phone", "why": "", "rules_out": "", "wrong_if": ""}))
+    assert added["ok"] and draft["strategy"]["bets"][0]["id"] == "b1" and "strategy" not in draft["undo"]
+    assert "version: 0.3" in C.to_yaml(draft, CREATED)
+    undone, _ = run(draft, ("undo", {}))
+    assert "strategy" not in undone

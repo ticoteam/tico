@@ -40,6 +40,18 @@ team is set up on the welcome page, the server starts with the file fixed back t
 company file at all, or the owner presses **Dismiss** on the welcome page. A server start with the same broken file
 shows it again.
 
+**Unreleased:** A file from the setup page's Strategy step (format 0.3, with a `strategy` block) also brings the strategy
+it drafted, for the owner to confirm; nothing is published. The preview lists it under `strategy`. The import writes the
+[strategy draft](strategy.md#setup): the summary and vision, and the four sections marked
+`_Unconfirmed: drafted from the company file._` (only where empty), with the file's listening requests as a
+**Watching** section; each bet `proposed`, its wrong-if a text test due on the file's check date (90 days out when it
+has none); and each goal on the bet it came from. With a market not defined yet it adds the
+[market by spend](librarian.md#market-spend): the definition and its segments, each sized segment's size `proposed`
+on its own evidence (a segment with none stays unsized), the company in its `ours` segment, and each player as a company
+on the market graph with its site a watched page. The posts the page found are filed as new market insights, so the
+Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
+named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
+
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:
 they are kept on the setup record to invite, and a role under them reports to the owner until they are invited

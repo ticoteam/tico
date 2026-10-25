@@ -312,7 +312,7 @@ samples are retained for 48 hours. Six consecutive readings spanning five minute
 set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
 turning diagnostics off clears it and hides `latest_sample`.
 
-**Unreleased:** this sustained-load flag holds new starts on that computer, including reservations that have not
+This sustained-load flag holds new starts on that computer, including reservations that have not
 started yet. Running turns continue, and new starts resume when the flag clears
 ([Turn counts](computers.md#turn-counts)).
 
