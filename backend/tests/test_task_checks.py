@@ -8,7 +8,8 @@ from backend import task_checks as TC
 from backend.store import H
 from backend import models as M
 from backend.auth import Identity
-from backend.tests.test_api import api, as_member, get, headers, post, put  # noqa: F401
+from backend.tests.test_api import api, as_member, claim, get, headers, post, put  # noqa: F401
+from backend.tests.test_member_bots import botops, turn  # noqa: F401  (fixture)
 
 
 class Decide:
@@ -131,13 +132,14 @@ def test_a_match_the_caller_cannot_read_is_never_named_sent_to_decide_or_blockin
     private = post(api, "tasks", {"owner": "finance", "title": "Draft the severance letters", "body": "Synthetic.",
                                   "private": True})
     body = M.TaskCreate(owner="finance", title="Draft severance letters today", body="Synthetic.")
-    turn = Identity("human:ana", "owner", "ana@acme.example", task_actor="bot:ops")
-    assert api.app.state.create_check(turn, body) is None and model.calls == 0
+    run = Identity("human:ana", "owner", "ana@acme.example", task_actor="bot:ops")
+    assert api.app.state.create_check(run, body) is None and model.calls == 0
     assert events(api, "task_check.caught", TC.DUPLICATE) == []
-    # The same create as Ana herself, who can read it, is caught.
+    # The same create as Ana herself, who can read it, is caught (a private match is not named).
     r = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Draft severance letters soon", "body": "S."},
                  headers=headers("ana-test"))
-    assert r.status_code == 422 and r.json()["error"]["task_check"]["match"]["id"] == private["id"], r.text
+    assert r.status_code == 422 and r.json()["error"]["task_check"]["match"] == {"private": True}, r.text
+    assert private["id"][:8] not in r.text
 
 
 def test_fix_never_links_to_a_task_the_person_cannot_read_and_missing_reads_the_same(api):
@@ -151,3 +153,42 @@ def test_fix_never_links_to_a_task_the_person_cannot_read_and_missing_reads_the_
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM task_relations").fetchone()[0] == 0
         assert H.task(c, mine["id"])["status"] == "open"
+
+
+def test_a_private_match_is_never_named_in_the_refusal_or_its_audit(api):
+    api.app.state.judge = Decide()
+    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Synthetic.", "private": True})
+    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": "Plan the reorg timeline", "body": "S."},
+                 headers=headers("ana-test"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "task_check", r.text
+    assert "existing private task" in r.json()["error"]["detail"]
+    with api.app.state.store.read() as c:
+        audit = str([tuple(row) for row in c.execute("SELECT detail_json FROM refusals")] +
+                    [tuple(row) for row in c.execute("SELECT target,detail_json FROM events WHERE action IN "
+                                                     "('refused','task_check.caught','judge.call')")])
+    for leak in ("Plan the reorg\"", "Plan the reorg\\\"", private["id"][:8]):
+        assert leak not in r.text and leak not in audit, leak
+    assert len(events(api, "task_check.caught", TC.DUPLICATE)) == 1
+
+
+def test_botops_filing_for_a_person_only_checks_what_both_can_read(api, botops):
+    """A later BotOps run (its own rights) cites Cara's open task as the body's request_id, with no on-behalf-of header:
+    the create is Cara's, BotOps the second principal, and the check reads as both before any Decide call - not as
+    BotOps alone, which is on the private match."""
+    from backend.tests.test_botops_parity import _wake, act
+    from backend.tests.test_member_bots import finish
+    cara = turn(api, botops, "cara-test", "Ask Ben about the badge printer")
+    asked = act(api, cara, "POST", "tasks", {"owner": "botops", "title": "Ask Ben about the badge printer",
+                                             "body": "For Cara.", "request_id": cara["message"]["id"]})
+    assert asked.status_code == 200, asked.text
+    cited = (asked.json().get("task") or asked.json())["id"]
+    finish(api, botops, cara)
+    finish(api, botops, claim(api, botops, "botops"))
+    with api.app.state.store.transaction() as c:      # BotOps' own private task with Ben: Cara is not on it
+        H.task_create(c, "bot:botops", "Rotate the signing keys", "Synthetic.", "human:ben", private=True)
+    api.app.state.judge = model = Decide()
+    later = _wake(api, botops)
+    r = act(api, later, "POST", "tasks", {"owner": "ben", "title": "Rotate signing keys soon", "body": "Synthetic.",
+                                          "request_id": cited}, ref=None)
+    assert r.status_code == 200 and model.calls == 0, r.text
+    assert r.json()["task"]["requester"] == "human:cara"
