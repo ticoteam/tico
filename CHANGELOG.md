@@ -7,6 +7,23 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-10-25
+
+### Added
+- **The CEO Bot acts on goals at level 3.** At **Acts on its own**, it creates or reorders bot tasks to recover red or stalled goals and settles competing work between Heads. It records each decision with a reason and an **Undo**, and explains each goal recovery in a comment. Work reserved for the owner stays a proposal ([Your CEO Bot](docs/ceo-bot.md#the-three-levels)).
+- **The CEO Bot answers from recorded rules.** At **Acts on its own**, it answers bots' questions only from recorded decisions, team rules or approved proposals, with a citation. Questions those sources do not cover go to the owner. A broken bot blocking a goal gets a repair request to BotOps ([Your CEO Bot](docs/ceo-bot.md)).
+- **The turn fixer frees proven-dead turns.** It releases stopped starts and expired turns whose computer is confirmed no longer running the bot. Tasks and history stay. A slow reply or healthy wait keeps its place; a stopped start stays stopped. Turns that may have pushed, sent or paid wait for review before retrying ([The turn fixer](docs/computers.md#the-turn-fixer)).
+- **Health explains company-turn incidents.** One **Company turns** finding shows wait reasons, oldest waits, recent progress, computer load and the likely bottleneck. An incident still open after five minutes gets one BotOps task, or Support if BotOps is unavailable. The owner gets one notice after an hour or when the main wait needs a person ([The turn fixer](docs/computers.md#the-turn-fixer)).
+
+### Changed
+- **Wake presets batch more background news.** Comments from Tico or bots, task changes and other nonblocking notices share the preset's batch window. Human messages, assignments, questions, awaited results, blockers, review requests, approvals and live feeds keep their immediate wakes. A held batch does not delay them ([Wakes](docs/creating-bots.md#7-harness-model-effort-and-fallback)).
+
+### Fixed
+- **Undo keeps the CEO Bot from repeating a change.** At level 3, a task change the owner previously undid becomes a proposal if the CEO Bot tries it again. This covers creating the same task for the same bot, reordering, reassigning and closing ([The CEO Bot log](docs/ceo-bot.md#the-ceo-bot-log)).
+- **Batched notices no longer block immediate work.** A notice waiting for its batch no longer makes **Run now**, resumed work, meeting turns, update requests or automatic task starts look as though a run already waits. ([Wakes](docs/creating-bots.md#7-harness-model-effort-and-fallback)).
+- **BotOps actions for a person wake bots immediately.** When BotOps acts with a person's delegated rights, notices of the action count as that person's action. They no longer wait in a wake-preset batch ([Wakes](docs/creating-bots.md#7-harness-model-effort-and-fallback)).
+- **Update snapshot cleanup handles disappearing temporary files.** If SQLite removes a temporary journal during cleanup, the updater skips the missing file. An unfinished snapshot reports that it did not finish instead of failing with a traceback; the next attempt still clears leftover partial copies ([Releasing](docs/releasing.md)).
+
 ## [0.4.2] - 2026-10-23
 
 ### Added
@@ -4347,7 +4364,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/ticoteam/tico/compare/v0.4.6...v0.4.7
 [0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
