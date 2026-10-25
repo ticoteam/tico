@@ -4001,6 +4001,9 @@ def worktree_heads(detail):
     return sorted({detail.get("pushed"), local} - {None, ""})
 
 
+CURRENT_WORKTREE = "NOT EXISTS (SELECT 1 FROM task_links successor WHERE successor.task_id={alias}.task_id AND successor.kind='worktree' AND json_extract(successor.detail_json,'$.rebind_from')={alias}.id)"
+
+
 def unlinked_pushes(conn, task_id):
     """The task's worktrees whose branch carries pushed commits of the task's own and no pull request link on that
     repository (a link whose branch GitHub has not reported yet counts): work a hand-off would leave with nothing to
@@ -4014,8 +4017,8 @@ def unlinked_pushes(conn, task_id):
     app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone() if conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='github_app'").fetchone() else None
     out = []
-    for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links WHERE task_id=? AND kind='worktree' "
-                                "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL",
+    for w in _rows(conn.execute("SELECT id,repo,branch,detail_json FROM task_links l WHERE task_id=? AND kind='worktree' "
+                                "AND coalesce(state,'unknown')<>'removed' AND repo IS NOT NULL AND branch IS NOT NULL AND " + CURRENT_WORKTREE.format(alias='l'),
                                 (task_id,))):
         detail = _json(w["detail_json"], {}) or {}
         remote = detail.get("remote") or {}
@@ -4271,6 +4274,11 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     if not have:
         refuse(conn, actor, "not-found", f"no link {link_id} on {task_id}")
     _task_link_allowed(conn, actor, row, mover, have["kind"])
+    if have['kind'] == 'worktree' and 'detail_json' in have:
+        if not conn.execute('SELECT 1 FROM task_links l WHERE l.id=? AND ' + CURRENT_WORKTREE.format(alias='l'), (link_id,)).fetchone():
+            refuse(conn, actor, 'worktree_history', 'A retired worktree generation stays in the task history')
+        if have.get('state') == 'removed' and _json(have.get('detail_json'), {}).get('rebind_from'):
+            refuse(conn, actor, 'worktree_history', 'A recovery worktree registration stays in the task history')
     if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail_json' in have:
         detail = json.loads(have.get('detail_json') or '{}')
         detail['delete_requested'] = True

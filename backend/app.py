@@ -4698,7 +4698,7 @@ def create_app(settings=None):
                     or set(body) - {"title", "body", "owner", "relations", "due", "private", "on_behalf_of"}):
                 return False
         else:
-            found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|ask|links|worktrees(?:/attach)?))?", path)
+            found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|ask|links|worktrees(?:/(?:attach|rebind))?))?", path)
             if not found or body.get("close"):
                 return False
             ref = found.group(1)

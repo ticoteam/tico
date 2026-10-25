@@ -221,8 +221,8 @@ def register_worktree_pr(c, pr):
     if not app or str(app["org"] or "").lower() != match.group(1).lower():
         return set()
     made = set()
-    for row in H._rows(c.execute("SELECT id,task_id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                 "AND branch=?", (repo.lower(), branch))):
+    for row in H._rows(c.execute("SELECT id,task_id,detail_json FROM task_links l WHERE kind='worktree' AND lower(repo)=? "
+                                 "AND branch=? AND " + H.CURRENT_WORKTREE.format(alias="l"), (repo.lower(), branch))):
         if not c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
                          (row["task_id"], repo.lower(), int(match.group(3)))).fetchone():
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
@@ -663,8 +663,8 @@ def refresh_task_prs(service, task_id):
 def _worktree_detail(service, repo, branch, change):
     """Apply `change(detail)` to every worktree link on this repository branch, in its own write."""
     with service.store.transaction() as c:
-        for row in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                     "AND branch=?", (repo.lower(), branch))):
+        for row in H._rows(c.execute("SELECT id,detail_json FROM task_links l WHERE kind='worktree' AND lower(repo)=? "
+                                     "AND branch=? AND " + H.CURRENT_WORKTREE.format(alias="l"), (repo.lower(), branch))):
             detail = H._json(row["detail_json"], {}) or {}
             change(detail)
             c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
@@ -748,7 +748,7 @@ def reconcile_worktree_prs(service):
                 "SELECT w.repo,w.branch,w.detail_json,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
                 "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
                 "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
-                "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
+                "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") + " AND " + H.CURRENT_WORKTREE.format(alias="w") +
                 " AND NOT EXISTS (SELECT 1 FROM task_links p WHERE p.task_id=w.task_id AND p.kind='pr' "
                 "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)", (org,))):
                 b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
@@ -864,8 +864,8 @@ def push(c, payload):
     if WORKTREE_BRANCH.match(branch) and not payload.get("deleted") and head_sha:
         # A worktree branch's first push asks for its draft pull request; the background pass opens or reuses it
         # (reconcile_worktree_prs), so nothing here calls GitHub inside the write and the push's checks run as usual.
-        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
-                                       "AND branch=?", (repo.lower(), branch))):
+        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links l WHERE kind='worktree' AND lower(repo)=? "
+                                       "AND branch=? AND " + H.CURRENT_WORKTREE.format(alias="l"), (repo.lower(), branch))):
             detail = H._json(link["detail_json"], {}) or {}
             detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
             detail.pop("stale_push_cleared", None)     # a release names only a stale push the newest push left behind

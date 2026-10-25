@@ -652,6 +652,14 @@ def task_worktree_attach(api, args):
     return command(api, 'attach', args['path'], args.get('task'))
 
 
+@tool("hub_task_worktree_rebind", "Register an unconfirmed recovery branch for a finished task worktree, keeping its history.",
+      {"task": TASK_ID, "branch": _s("New recovery branch"), "path": _s("Fresh path under tasks/<task-short>/"),
+       "reason": _s("Why the worktree needs a new branch")}, required=("task", "branch", "reason"), writes=True)
+def task_worktree_rebind(api, args):
+    return api.post(f"tasks/{args['task']}/worktrees/rebind",
+                    {key: args[key] for key in ('branch', 'path', 'reason') if args.get(key) is not None}, key=_key(args))
+
+
 @tool("hub_task_show", "One task with its history and conversation. For several tasks, hub_task_show_many reads "
       "them in one call.", {"id": TASK_ID}, required=("id",))
 def task_show(api, args):

@@ -18495,6 +18495,77 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/worktrees/rebind": {
+      "post": {
+        "summary": "Owner-authorized recovery registration; old history and task status stay unchanged; runner PATCH confirms presence",
+        "operationId": "rebindTaskWorktree",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rebind"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorktreeRebindReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/triggers": {
       "get": {
         "summary": "Every trigger with its address (no secret), settings and routines",
@@ -31787,6 +31858,41 @@
         ],
         "additionalProperties": true
       },
+      "Rebind": {
+        "properties": {
+          "branch": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Branch"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "branch",
+          "reason"
+        ],
+        "title": "Rebind"
+      },
       "Recent": {
         "type": "object",
         "properties": {
@@ -38637,6 +38743,93 @@
         "required": [
           "secret",
           "url"
+        ],
+        "additionalProperties": true
+      },
+      "WorktreeRebindReceipt": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "old_link_id": {
+            "type": "string"
+          },
+          "old_branch": {
+            "type": "string"
+          },
+          "new_link_id": {
+            "type": "string"
+          },
+          "new_branch": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "confirmation_state": {
+            "enum": [
+              "unconfirmed"
+            ]
+          },
+          "link_id": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending"
+            ]
+          },
+          "checkout_state": {
+            "enum": [
+              "attached_pending"
+            ]
+          },
+          "setup_pending": {
+            "type": "boolean"
+          },
+          "expected_head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checkout_target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "branch",
+          "checkout_state",
+          "checkout_target",
+          "confirmation_state",
+          "event_id",
+          "expected_base",
+          "expected_head",
+          "link_id",
+          "new_branch",
+          "new_link_id",
+          "old_branch",
+          "old_link_id",
+          "path",
+          "setup_pending",
+          "state",
+          "task_id"
         ],
         "additionalProperties": true
       },

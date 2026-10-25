@@ -120,6 +120,8 @@ def run(args, who=None):
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
+    if fn == "task worktree rebind":
+        return via_tool(client, args)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
         from runner.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)

@@ -169,7 +169,7 @@ DO = _routes(
     ("POST", rf"tasks/{_S}/(comments|links|ask|run-now)"),
     # Another bot's task worktrees: a person who moves tasks may add one or ask for one to be cleaned up (the route
     # checks); the computer removes it once the bot is idle.
-    ("POST", rf"tasks/{_S}/worktrees(/attach)?"), ("DELETE", rf"tasks/{_S}/links/{_S}"),
+    ("POST", rf"tasks/{_S}/worktrees(/(attach|rebind))?"), ("DELETE", rf"tasks/{_S}/links/{_S}"),
     ("POST", r"docs"), ("PATCH", rf"docs/{_S}"), ("POST", rf"docs/{_S}/restore"),
     ("POST", r"linked-docs"), ("PATCH", rf"linked-docs/{_S}"),
     ("POST", rf"meetings/{_S}/delete"), ("POST", "meetings/granola/sync"),
@@ -423,7 +423,7 @@ def fix(path, code, status, acting, names, base=""):
         # in chat would not help. Say who sets it and where.
         text = mail_settings_hint(bot, slug)
         link = "#/settings"
-    elif re.fullmatch(API + rf"tasks/{_S}/worktrees(?:/attach)?", normalize(path) or ""):
+    elif re.fullmatch(API + rf"tasks/{_S}/worktrees(?:/(?:attach|rebind))?", normalize(path) or ""):
         # A worktree is made with the task's owner bot's own repository access (backend/worktrees.py), so no one's
         # request lends it: say who gives that access.
         text = ("The task's bot needs write access to that repository: an owner or admin gives it in Settings > "

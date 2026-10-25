@@ -18,7 +18,7 @@ Before creation, the computer makes a quick, bounded attempt to refresh the mirr
 
 An interrupted add resumes only when the task link and a local initialization marker identify the same task, path, repository, branch, base clone, target and expected commit, and the exact worktree is clean. The marker records checkout phases locally; the service stores only a hash of the base-clone path. Setup starts after checkout completion is recorded. Tico never restores missing files based on deletion-only status: any changed or incomplete worktree stays untouched and pending. A queued link with an existing path, a different base clone, or a mismatched marker is also left untouched. The add response includes the link's persisted state; a missing state is never treated as present. A legacy link already recorded as `present` remains present only while its registered repository and branch match, setup is complete, and no tracked files are missing; this compatibility state does not create a new completion marker or upgrade a pending link. Dirty or untracked legacy work is retained. Missing tracked files and ambiguous legacy paths remain unverified; `hub task worktree setup` does not promote them.
 
-There is no automatic in-place repair for a dirty, partial or legacy tree. Keep its directory and branch unchanged while a person reviews the task link, Git status and history and preserves any wanted local edits. If a replacement is chosen, create it at a separate sibling path from a human-verified local source branch, using a unique recovery branch, then attach that completed worktree:
+There is no automatic in-place repair for a dirty, partial or legacy tree. Keep its directory and branch unchanged while a person reviews the task link, Git status and history and preserves any wanted local edits. For a finished registration that needs a different branch, use the recovery flow below. An additional worktree with no existing registration can attach at a separate sibling path from a human-verified local source branch:
 
 ```sh
 git -C "$HUB_WORKSPACE/repos/<owner>__<repo>" worktree add -b "recovery/<task-short>-<suffix>" \
@@ -27,6 +27,19 @@ hub task worktree attach "tasks/<task-short>/recovery-<suffix>" --task <task-id>
 ```
 
 This leaves the original tree and branch in place; copy or apply selected uncommitted changes only after review. Do not reset, prune or retry `add` or `setup` against the original path to recover it.
+
+### Recover a finished registration
+
+Release → rebind → runner confirmation → attach keeps the original registration and pull request history. First finish the old branch's pull request and let the computer release/remove its worktree. A live present worktree or an open pull request refuses rebind. The task owner or a human with owner rights can then register a verified recovery branch in the same repository:
+
+```sh
+hub task worktree rebind <task-id> --branch "tico/<task-short>-recovery" \
+  --path "tasks/<task-short>/recovery-<suffix>" --reason "Recover after the original pull request merged"
+```
+
+The optional path must be a fresh folder under `tasks/<task-short>/`; omitting it selects a fresh recovery folder. A branch already registered to any task is refused. The registration is pending and unconfirmed: it does not claim that a checkout exists. Materialize the verified recovery branch at that path from the managed repository base, then run `hub task worktree attach <path> --task <task-id>`. Attach verifies the local repository, branch and base, records checkout proof and PATCHes the new link to confirm it before returning successfully. A heartbeat alone cannot confirm a recovery registration. Attach on the retired branch is refused.
+
+The command and MCP tool `hub_task_worktree_rebind` share `POST /api/v2/tasks/{task}/worktrees/rebind`, with JSON fields `branch`, optional `path`, and required `reason`. The receipt includes `task_id`, `old_link_id`, `old_branch`, `new_link_id`, `new_branch`, `event_id`, `confirmation_state=unconfirmed`, and the new path and pending checkout state. Retried requests with the same idempotency key return the original receipt. The old link and PR fields remain unchanged; an event names both branches, the actor and the reason. Task status and step stay unchanged, including Pending Release and QA Fixes. Old cleanup flags never carry into the recovery generation, and old PRs cannot release it; its own later PR, expiry and normal cleanup rules apply. Rebind requires exactly one current worktree registration on the task; ambiguous multi-repository tasks are refused.
 
 Attach accepts an existing Git worktree inside the team workspace whose base is also there. The command checks its repository and branch. Paths cannot pass through symlinks or the base-clone folder `repos`. Equivalent paths, including differences in letter case, cannot belong to different tasks. After a task is reassigned, its new owner can reuse a removed worktree link; if the previous owner still has a worktree awaiting cleanup, Add creates a separate folder and branch. A folder under `tasks/<task-short>/` can only attach to that task. A path-only API attachment awaits the computer's report to identify its repository and branch and verify write access. Before reporting it present, the computer verifies the worktree registration and repository, confirms the task branch/base, and records a local readiness marker. If tracked files are missing before this initial proof exists, it remains pending and unverified; the original path is preserved and no files are restored. Dirty edits and untracked files are preserved when the existing checkout can be verified. Use the separate sibling-worktree recovery path above when completion cannot be established.
 

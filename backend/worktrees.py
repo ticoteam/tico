@@ -103,6 +103,24 @@ class Attach(Contract):
     branch: str | None = Field(default=None, max_length=200)
 
 
+class Rebind(Contract):
+    branch: str = Field(min_length=1, max_length=200)
+    path: str | None = Field(default=None, max_length=1000)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+# Generations point backwards so retiring one never changes its historical row.
+CURRENT = H.CURRENT_WORKTREE.format(alias='l')
+
+
+def validate_branch(branch):
+    if (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith(('-', '/'))
+            or '..' in branch or '//' in branch
+            or any(part.startswith('.') or part.endswith(('.', '.lock')) for part in branch.split('/'))
+            or branch.endswith('/')):
+        raise Problem('worktree_branch', 'Invalid worktree branch', 422)
+
+
 class SessionTask(Contract):
     bot: str = Field(min_length=1, max_length=100)
     task: str = Field(min_length=1, max_length=100)
@@ -308,7 +326,7 @@ def inventory(c, computer):
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
             f"LEFT JOIN bots b ON ('bot:' || b.slug)={owner} "
             "WHERE l.kind='worktree' AND l.computer_id=? AND (coalesce(l.state,'unknown')<>'removed' "
-            "OR (t.status NOT IN ('done','closed','declined') AND b.state='active'))", (computer,))]
+            f"OR (t.status NOT IN ('done','closed','declined') AND b.state='active')) AND {CURRENT}", (computer,))]
 
 
 def attached(c, task_id, computer, bot):
@@ -319,7 +337,7 @@ def attached(c, task_id, computer, bot):
     owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
     rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id "
                      f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
-                     "ORDER BY l.created", (task_id, computer, "bot:" + bot)).fetchall()
+                     f"AND {CURRENT} ORDER BY l.created", (task_id, computer, "bot:" + bot)).fetchall()
     return [{"repo": r["repo"] or "", "branch": r["branch"] or "", "path": r["path"]} for r in rows
             if r["path"] and not json.loads(r["detail_json"] or "{}").get("setup_pending")]
 
@@ -350,7 +368,7 @@ def holdings(c, owner):
     or `in_progress`. A worktree the computer kept says why in `kept`."""
     rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,l.created,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
-                     "AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
+                     f"AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND {CURRENT} ORDER BY l.created", (owner,)).fetchall()
     out = []
     for row in rows:
         prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
@@ -360,7 +378,7 @@ def holdings(c, owner):
         if row['status'] in CLOSED:
             clear, why = 'task_finished', 'task ' + row['status']
         elif (prs and all(s in PR_FINISHED for s in states)
-              and (row['status'] != 'doing' or allocation_has_pr(row, detail, prs))):
+              and (row['status'] != 'doing' and not detail.get('rebind_from') or allocation_has_pr(row, detail, prs))):
             clear = 'merged' if any(s in ('merged', 'shipped') for s in states) else 'closed'
             why = 'pull request ' + clear
         elif any(p['state'] == 'open' and p['review_state'] == 'approved' and p['checks'] != 'failing'
@@ -507,6 +525,8 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                  row['state'] if stale and report.state in ('pending', 'present') else
                  'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state not in ('ready', 'legacy_present') else
                  'pending' if row['state'] == 'pending' and row['repo'] and report.state == 'missing' else report.state)
+        if row['state'] == 'pending' and detail.get('rebind_from') and state == 'present':
+            state = 'pending'       # recovery registration needs the explicit PATCH receipt
         detail['current_branch'] = report.branch
         if not current_error(state, detail):
             detail.pop('error', None)
@@ -571,7 +591,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             detail['held'] = held
         else:
             detail.pop('held', None)
-        if released and row['task_status'] == 'doing' and not allocation_has_pr(row, detail, pr_links):
+        if released and (row['task_status'] == 'doing' or detail.get('rebind_from')) and not allocation_has_pr(row, detail, pr_links):
             released = False
         reason = ('task finished' if closed else
                   'pull request merged' if any(s in ('merged', 'shipped') for s in prs) else 'pull request closed')
@@ -598,7 +618,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
         action = ('remove' if (closed and (finished or detail.get('delete_requested')) or released) and row['state'] != 'removed'
                   else 'restore' if not closed and restore_requested(row, detail)
                   else 'prepare' if not closed and preparable(c, row, detail) else None)
-        if detail.get('delete_requested') and row['state'] == 'removed':
+        if detail.get('delete_requested') and row['state'] == 'removed' and not detail.get('rebind_from'):
             c.execute('DELETE FROM task_links WHERE id=?', (row['id'],))
             continue
         if action == 'remove':
@@ -663,7 +683,21 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     parts = PurePosixPath(path).parts
     if attaching and parts[0].casefold() == 'tasks' and (len(parts) < 3 or parts[1] != short):
         raise Problem('worktree_path', 'This worktree belongs to another task', 409)
-    candidates = list(c.execute("SELECT * FROM task_links WHERE kind='worktree' AND (computer_id=? OR task_id=?)", (assigned['id'], task['id'])))
+    candidates = list(c.execute(f"SELECT l.* FROM task_links l WHERE kind='worktree' AND (computer_id=? OR task_id=?) AND {CURRENT}", (assigned['id'], task['id'])))
+    if not attaching:
+        recovery = next((r for r in candidates if r['task_id'] == task['id'] and r['repo'] == repo
+                         and json.loads(r['detail_json'] or '{}').get('rebind_from')), None)
+        if recovery:
+            path = recovery['path']
+    if branch and c.execute("SELECT 1 FROM task_links l WHERE l.task_id=? AND l.kind='worktree' AND l.branch=? "
+                            f"AND NOT ({CURRENT})", (task['id'], branch)).fetchone():
+        raise Problem('worktree_superseded', 'That branch belongs to a retired worktree generation', 409)
+    if attaching:
+        retired = c.execute("SELECT l.path FROM task_links l WHERE l.task_id=? AND l.kind='worktree' "
+                            f"AND NOT ({CURRENT})", (task['id'],)).fetchall()
+        if any(unicodedata.normalize('NFC', r['path'] or '').casefold() == unicodedata.normalize('NFC', path).casefold()
+               for r in retired):
+            raise Problem('worktree_superseded', 'That path belongs to a retired worktree generation', 409)
     canonical = unicodedata.normalize('NFC', path).casefold()
     existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     suffix = ''
@@ -680,6 +714,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':
             detail = json.loads(existing['detail_json'] or '{}')
+            if branch and branch != existing['branch']:
+                raise Problem('worktree_branch', 'Worktree branch does not match its task link', 409)
             if existing['state'] == 'pending' and detail.get('pending_expired'):
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
@@ -706,7 +742,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
     if why := start_refusal(c, task):
         raise Problem('worktree_start', why, 409)
-    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
+    count = c.execute(f"SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed' AND {CURRENT}", (task['owner'],)).fetchone()[0]
     if count >= LIMIT and brief:
         raise Problem('worktree_limit', f'This bot already has {LIMIT} worktrees.', 409, extra={'limit': LIMIT})
     if count >= LIMIT:
@@ -751,8 +787,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                 'expected_base': None}
     slug = re.sub('[^a-z0-9]+', '-', task['title'].lower()).strip('-')[:50] or 'task'
     branch = branch or (None if attaching else f'tico/{short}-{slug}{suffix}')
-    if branch is not None and (not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or branch.startswith('-') or '..' in branch or '@{' in branch or branch.endswith(('/', '.', '.lock')) or '//' in branch):
-        raise Problem('worktree_branch', 'Invalid worktree branch', 422)
+    if branch is not None:
+        validate_branch(branch)
     link = uuid.uuid4().hex
     now = H.now()
     c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,path,updated) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
@@ -806,6 +842,59 @@ def install(app, store, auth, mutate):
             return provision(c, who, task, repo, path, body.branch, default_org=store.settings.github_owner)
         return mutate(request, body, work)
 
+    @app.post('/api/v2/tasks/{tid}/worktrees/rebind')
+    def rebind(request: Request, tid: str, body: Rebind):
+        who = request.state.identity
+        def work(c):
+            validate_identity(c, who)
+            task = auth.task(c, who, auth.resolve_task(c, who, tid))
+            human_owner = who.role == 'owner' or (who.role == 'human' and not who.support
+                                                  and who.email.lower() in auth.bot_admins)
+            if not (human_owner or who.role == 'bot' and who.actor == task['owner']):
+                raise Problem('worktree_owner', 'Only the task owner or a human with owner rights may rebind its worktree', 403)
+            if not H.is_bot(task['owner']):
+                raise Problem('worktree_owner', 'A managed worktree must belong to a bot-owned task', 403)
+            validate_branch(body.branch)
+            if not body.reason.strip():
+                raise Problem('worktree_reason', 'Give the reason for rebinding this worktree', 422)
+            links = c.execute(f"SELECT l.* FROM task_links l WHERE task_id=? AND kind='worktree' AND {CURRENT}",
+                              (task['id'],)).fetchall()
+            if len(links) != 1:
+                raise Problem('worktree_link', 'Rebind requires exactly one current task worktree', 409)
+            old = links[0]
+            detail = json.loads(old['detail_json'] or '{}')
+            prs = c.execute("SELECT state,repo,branch FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchall()
+            matched = [pr for pr in prs if (pr['repo'] or '').casefold() == (old['repo'] or '').casefold()
+                       and pr['branch'] in (None, old['branch'])]
+            finished = bool(matched) and all(pr['state'] in PR_FINISHED for pr in matched)
+            if (old['state'] == 'present' or any(pr['state'] not in PR_FINISHED for pr in prs)
+                    or not (old['state'] == 'removed' or detail.get('release_requested') or finished)):
+                raise Problem('worktree_live', 'Release the current worktree and finish its open pull request before rebinding', 409)
+            if not old['repo']:
+                raise Problem('worktree_repo', 'The current link must identify its repository', 409)
+            if c.execute("SELECT 1 FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
+                         (old['repo'], body.branch)).fetchone():
+                raise Problem('worktree_branch_linked', 'This branch is already linked to a task', 409)
+            path = relative(body.path or f"tasks/{task['id'][:8]}/{git_repository.folder(old['repo'])}-recovery-{uuid.uuid4().hex[:8]}")
+            if PurePosixPath(path).parts[:2] != ('tasks', task['id'][:8]) or len(PurePosixPath(path).parts) < 3:
+                raise Problem('worktree_path', 'Use a path under this task’s managed worktree root', 422)
+            # A distinct path prevents a stale cleanup action for the old tree touching its replacement.
+            if c.execute("SELECT 1 FROM task_links WHERE kind='worktree' AND computer_id=? AND lower(path)=lower(?)",
+                         (old['computer_id'], path)).fetchone():
+                raise Problem('worktree_path', 'Use a fresh recovery path, separate from historical worktrees', 409)
+            new = provision(c, who, task, old['repo'], path, body.branch, default_org=store.settings.github_owner)
+            row = c.execute('SELECT detail_json FROM task_links WHERE id=?', (new['link_id'],)).fetchone()
+            fresh = {**json.loads(row['detail_json']), 'rebind_from': old['id'], 'allocation_started': H.now()}
+            c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(fresh), new['link_id']))
+            event = H.event(c, who.actor, 'worktree.rebound', task['id'],
+                            {'old_link_id': old['id'], 'old_branch': old['branch'],
+                             'new_link_id': new['link_id'], 'new_branch': body.branch, 'reason': body.reason.strip()})
+            H._task_event(c, task['id'], who.actor, 'worktree.rebound', old['branch'], body.branch, body.reason.strip())
+            return {'task_id': task['id'], 'old_link_id': old['id'], 'old_branch': old['branch'],
+                    'new_link_id': new['link_id'], 'new_branch': body.branch, 'event_id': event['id'],
+                    'confirmation_state': 'unconfirmed', **new}
+        return mutate(request, body, work)
+
     @app.patch('/api/v2/tasks/{tid}/links/{link_id}')
     def update(request: Request, tid: str, link_id: str, body: Update):
         who = request.state.identity
@@ -817,6 +906,8 @@ def install(app, store, auth, mutate):
             link = c.execute("SELECT * FROM task_links WHERE id=? AND task_id=? AND kind='worktree'", (link_id, task_id)).fetchone()
             if not link:
                 raise Problem('not_found', 'No such task worktree', 404)
+            if c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='worktree' AND json_extract(detail_json,'$.rebind_from')=?", (task_id, link_id)).fetchone():
+                raise Problem('worktree_superseded', 'That worktree generation is retired; confirm the current link', 409)
             if who.role == 'runner':
                 if link['computer_id'] != who.runner_id:
                     raise Problem('forbidden', 'Worktree belongs to another computer', 403)
@@ -845,6 +936,10 @@ def install(app, store, auth, mutate):
             legacy_attach_report = (bare_present and link['state'] == 'pending'
                                     and detail.get('checkout_state') == 'attached_pending')
             legacy_confirm = bare_present and link['state'] == 'present' and detail.get('checkout_state') == 'legacy_present'
+            if detail.get('rebind_from'):
+                legacy_restore_report = legacy_add_report = legacy_attach_report = legacy_confirm = False
+            if body.branch is not None and link['branch'] is not None and body.branch != link['branch']:
+                raise Problem('worktree_branch', 'Worktree branch does not match its task link', 409)
             if body.state == 'present' and (checkout_state != 'ready' or setup_pending
                     or not body.expected_head or not body.checkout_target or not body.expected_base) \
                     and not (legacy_restore_report or legacy_add_report or legacy_attach_report or legacy_confirm):
