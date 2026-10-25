@@ -168,6 +168,13 @@ def create_app(settings=None):
                 onboarding.ensure_task_manager(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # The Librarian gets the market posts from Listening, once (Settings > Listening).
+        try:
+            from . import listening
+            with store.transaction() as c:
+                listening.seed_market(c, settings)
+        except Exception as exc:
+            telemetry.capture("listening", exc)
         # A strategy research run the last process was doing has no thread now: it stops, and setup shows the form.
         try:
             from . import strategy_setup

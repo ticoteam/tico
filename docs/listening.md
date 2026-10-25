@@ -11,8 +11,9 @@ inbox. A receiving bot accepts, rejects or marks each post as a duplicate. A sco
 
 1. Open **Settings > Bots > Add from template**, choose Listening, and press **Set up** on its page.
    Tell it one topic to watch, the sources to read and what a useful result looks like. Connect any requested Tools and Credentials.
-2. Ask your owner or computer operator to configure one destination in the server's `registry/listening.yaml`, as below.
-   Choose a receiving bot that already exists, such as Content. Without destinations, posts can be saved and scored but route nowhere.
+2. Add one destination in **Settings > Listening** (owner), as below. Choose a receiving bot that already exists, such as Content.
+   Without destinations, posts can be saved and scored but route nowhere. The same destinations can be written in the server's
+   `registry/listening.yaml`, which suits a company that keeps its registry in a repository.
 3. Configure a server Decision provider ([Decision setup](../questions/README.md)). Ask Listening for one sweep, then review the
    receiver's result before changing its Routine. Use `hub listening stats` to distinguish an empty sweep from a blocked source.
 
@@ -24,6 +25,24 @@ destinations:
     receiver: bot:content
     what: a question a useful article could answer
 ```
+
+## Settings > Listening
+
+The owner and admins see every destination: its category, receiving bot, threshold and where it comes from. The owner adds,
+edits and removes the ones saved in Settings (category, receiving bot, threshold from 0 to 1, optional readers and `unless`,
+and what the receiver reads). The same checks as the file apply: the category must be a yes-or-no question in the active
+question set, the receiver and readers must exist, and a bad destination is refused when it is saved. A destination from
+`listening.yaml` is shown read-only; if Settings saves one with the same key, the saved one wins, and removing it brings the
+file's back. Changes affect the next decision; inbox rows stay.
+
+When the Librarian exists and nothing routes `market`, Tico adds a `market` destination once: category `market`, threshold 0.70,
+receiver `bot:librarian`. Remove it in Settings and it stays removed.
+
+| Call | Who | Returns |
+|---|---|---|
+| `GET /api/v2/listening/destinations` | owner, admins | `destinations` (each with `source`: `settings` or `yaml`), `categories`, `receivers` |
+| `PUT /api/v2/listening/destinations/{key}` | owner | the saved destination; body `{category, threshold, receiver, readers?, unless?, what?}`; `422` when invalid |
+| `POST /api/v2/listening/destinations/{key}/remove` | owner | removes a saved destination; `409 yaml` for one only the file has |
 
 Categories are question ids in `questions/listening-item.json`. Optional `readers` can read a destination; only its receiving bot
 or the Team owner can resolve it. An optional `unless: {category: vendor_pitch, threshold: 0.70}` excludes posts that clear

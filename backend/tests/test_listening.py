@@ -5,7 +5,7 @@ import json
 
 from backend import listening as L
 from backend.store import H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
 
 RECEIVERS = ("listening", "librarian", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
 
@@ -135,3 +135,118 @@ def test_invalid_registry_questions_refuse_decisions_without_private_details(api
     assert response["error"]["code"] == "judge_questions"
     assert "private-question-fixture-value" not in json.dumps(response)
     assert engine.calls == []
+
+
+# ----------------------------------------------------------------------------- Settings > Listening
+def _settings(api):
+    return api.app.state.store.settings
+
+
+def _merged(api):
+    with api.app.state.store.read() as c:
+        return L.destinations(_settings(api), c, check_questions=False)
+
+
+def _save(api, key, token="ana-test", expected=200, **fields):
+    body = {"category": "lead", "threshold": 0.8, "receiver": "bot:sales-ops", **fields}
+    return put(api, f"listening/destinations/{key}", body, token=token, expected=expected)
+
+
+def test_a_destination_saved_in_settings_wins_over_the_file_on_the_same_key_and_routes_a_post(api):
+    _bots(api)
+    api.app.state.judge = FakeJudge()
+    _save(api, "leads", threshold=0.5, receiver="bot:influencer")
+    _save(api, "extra", category="content", receiver="librarian")
+    merged = _merged(api)
+    assert merged["leads"]["receiver"] == "bot:influencer" and merged["leads"]["threshold"] == 0.5
+    assert "unless" not in merged["leads"], "the saved row replaces the file's whole entry"
+    assert merged["extra"]["receiver"] == "bot:librarian" and merged["content"]["receiver"] == "bot:content-social"
+    listing = get(api, "listening/destinations")
+    assert {d["key"]: d["source"] for d in listing["destinations"]}["leads"] == "settings"
+    assert {d["key"]: d["source"] for d in listing["destinations"]}["market"] == "yaml"
+    assert [d for d in listing["destinations"] if d["key"] == "leads"][0]["overrides_yaml"] is True
+    listening = _token(api, "listening")
+    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [
+        _post("1", "A team lead asks for a tool [lead]")]}, token=listening)
+    post(api, "listening/judge", {}, token=listening)
+    assert [i["destination"] for i in get(api, "intake?destination=leads", token=_token(api, "influencer"))["items"]] == ["leads"]
+
+
+def test_a_destination_the_file_would_refuse_is_refused_when_it_is_saved(api):
+    _bots(api)
+    for bad in ({"category": "vendor_pitch_typo"}, {"category": "lead", "threshold": 0}, {"threshold": 1.5},
+                {"receiver": "bot:nobody"}, {"receiver": "human:ana"}, {"readers": ["bot:nobody"]},
+                {"unless": {"category": "nope", "threshold": 0.5}}, {"unless": {"category": "vendor_pitch", "threshold": 2}}):
+        assert _save(api, "bad", expected=422, **bad)["error"]["code"] == "invalid", bad
+    _save(api, "Not A Key", expected=422)
+    assert "bad" not in _merged(api)
+    ok = _save(api, "good", readers=["bot:doc-updater", "bot:doc-updater"], unless={"category": "vendor_pitch", "threshold": 0.7})
+    assert ok["destination"]["readers"] == ["bot:doc-updater"] and ok["destination"]["unless"]["threshold"] == 0.7
+
+
+def test_only_the_owner_writes_destinations_and_only_owner_and_admins_read_them(api):
+    _bots(api)
+    for token in ("ben-test", "cara-test", _token(api, "librarian")):
+        _save(api, "mine", token=token, expected=403)
+        post(api, "listening/destinations/market/remove", {}, token=token, expected=403)
+    assert "mine" not in _merged(api)
+    get(api, "listening/destinations", token="ben-test")
+    get(api, "listening/destinations", token="cara-test", expected=403)
+    get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
+
+
+def test_a_destination_only_the_file_has_cannot_be_removed_and_a_saved_one_can(api):
+    _bots(api)
+    assert post(api, "listening/destinations/market/remove", {}, expected=409)["error"]["code"] == "yaml"
+    post(api, "listening/destinations/nothing/remove", {}, expected=404)
+    _save(api, "market", threshold=0.9)
+    assert _merged(api)["market"]["threshold"] == 0.9
+    post(api, "listening/destinations/market/remove", {})
+    assert _merged(api)["market"]["threshold"] == 0.70, "removing the saved one brings the file's back"
+
+
+def test_the_market_destination_is_offered_once_and_a_removal_sticks(api):
+    settings = _settings(api)
+    with api.app.state.store.transaction() as c:
+        assert L.seed_market(c, settings) is False, "no Librarian, nothing to offer"
+    _bots(api)
+    (settings.registry_dir / L.LISTENING_FILE).write_text("destinations: {}")
+    with api.app.state.store.transaction() as c:
+        assert L.seed_market(c, settings) is True
+    assert _merged(api)["market"] == {"category": "market", "threshold": 0.7, "receiver": "bot:librarian",
+                                      "what": "a post about the market: competitors, buyers, prices, regulation"}
+    with api.app.state.store.transaction() as c:
+        assert L.seed_market(c, settings) is False
+    post(api, "listening/destinations/market/remove", {})
+    with api.app.state.store.transaction() as c:
+        assert L.seed_market(c, settings) is False
+    assert "market" not in _merged(api)
+
+
+def test_the_market_destination_is_not_offered_when_one_already_routes_market(api):
+    _bots(api)                                  # the file already sends category market to the Librarian
+    with api.app.state.store.transaction() as c:
+        assert L.seed_market(c, _settings(api)) is False
+        assert c.execute("SELECT count(*) FROM listening_destinations").fetchone()[0] == 0
+
+
+def test_health_reads_destinations_saved_in_settings(api):
+    from backend import health
+    _bots(api)
+    (_settings(api).registry_dir / L.LISTENING_FILE).write_text("destinations: {}")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
+                  "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')")
+    with api.app.state.store.read() as c:
+        check = health._listening(c, _settings(api))
+    assert check["status"] == "warn" and "typo" in check["summary"]
+    _save(api, "typo", category="market", receiver="bot:librarian")
+    with api.app.state.store.read() as c:
+        assert health._listening(c, _settings(api)) is None
+
+
+def test_hub_sql_shows_saved_destinations_to_the_owner_and_admins_only(api):
+    _bots(api)
+    _save(api, "extra", category="content")
+    assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["extra"]]
+    assert post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][0][0] == 0

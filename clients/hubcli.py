@@ -1490,7 +1490,7 @@ def parser():
     s.set_defaults(fn="market refresh")
     s = market.add_parser("page", help="read one market page (overview, coverage-universe, ...), or rewrite it from a Markdown file")
     s.add_argument("name", help="overview, structure-and-size, coverage-universe, people-who-matter, channels, "
-                                "regulation-and-catalysts, theses or open-questions")
+                                "regulation-and-catalysts, theses, open-questions or customer-themes")
     s.add_argument("--body-file", dest="body_file", help="the whole page in Markdown; - reads stdin; omit to read the page")
     s.set_defaults(fn="market page")
 

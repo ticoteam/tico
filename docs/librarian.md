@@ -185,6 +185,18 @@ gets them at its next start. The server accepts market writes only from the Libr
 still writes only under `_librarian/` and `FAQ.md`. Earlier releases had a separate Market Analyst bot; an install that still has
 one archives it at its next start and hands its open tasks to the Librarian.
 
+**Customer themes.** The Librarian keeps one more market page, **Customer themes** (`market/customer-themes`): what customers keep
+asking for, complaining about and objecting to, each with a count, the date last seen and short quotes. Its **Customer themes**
+routine runs on `meeting.ready`, so it reads only live team meetings; a private, pending or dismissed meeting never reaches it
+([Meetings](meetings.md)). For each meeting it files a piece of evidence per theme (source kind `meeting`, a quote of 200
+characters or fewer, no personal or company names) and rewrites the page. A meeting counts once for a theme. A theme seen in
+three or more meetings is marked **Thesis**, which the CEO Bot can cite in a bet. It reads mail only if a mailbox is granted to
+it. A new team gets the routine with the Librarian; an existing install gets it when the Librarian's template is next applied
+(or add it with `hub routine set customer-themes --on meeting.ready`, as in [Routines](routines.md)).
+
+**Sources a team brings.** Some sources do not allow resale, so Tico cannot supply them. A team can grant its own Crunchbase,
+Similarweb or similar credential to the Librarian, and the sources catalog marks those sources `team_key`.
+
 ## Built-in
 
 Like the assistant and BotOps, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets

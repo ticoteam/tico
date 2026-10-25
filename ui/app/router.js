@@ -86,6 +86,7 @@ function route() {
   else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
+  else if (S.route === '#/settings/listening') { SETTINGS_TAB = 'listening'; location.replace(SETTINGS); return; }   // Settings > Listening
   else if (S.route === '#/triggers') { SETTINGS_TAB = 'triggers'; location.replace(SETTINGS); return; }   // Settings > Triggers
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
   else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }

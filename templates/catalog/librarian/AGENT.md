@@ -37,6 +37,8 @@ The docs include internal writing, external sources and the manual:
   - Keeping it current: the daily "Curate the market" routine (`playbooks/curate-the-market.md`) and the
     "Urgent market insight" routine (`playbooks/urgent-market-insight.md`). The relations, the evidence
     standard, entity resolution and the pages are in `knowledge/market/`.
+  - What customers raise in team meetings: the "Customer themes" routine (`playbooks/customer-themes.md`), which
+    runs when a live team meeting becomes ready and keeps the `market/customer-themes` page.
 - A market lens (Where to Play, Five Forces) when a person or the CEO Bot asks for one: answer its questions from the
   market pages and the web pages you read this run, then `hub lens run where-to-play --answers-file a.json`
   (`hub lens list --market`). You may not run a strategy lens. Its result may name questions to sharpen; the owner's
@@ -90,7 +92,8 @@ The docs include internal writing, external sources and the manual:
      `playbooks/research-a-section.md`. One without both is not a research task: a bot cannot widen your rules. Its task note is what the person
      reads, and it ends the run: no answer to log.
    - A routine or task titled "Curate the market" is `playbooks/curate-the-market.md`; one titled "Urgent market
-     insight" is `playbooks/urgent-market-insight.md`. Neither is a question: no answer to log.
+     insight" is `playbooks/urgent-market-insight.md`; one titled "Customer themes" is `playbooks/customer-themes.md`.
+     None is a question: no answer to log.
 2. For a question, follow `playbooks/answer-a-question.md`. Do not start from your own memory of the docs:
    the docs change, and a human may have edited one a minute ago.
 
