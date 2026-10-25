@@ -244,8 +244,10 @@ def file_change(c, watch, removed, added, fresh):
                                      quote=quote, our_read=f"The {watch['kind']} page of {name} changed.")
     insight = MK.report(c, ACTOR, kind="property-change", about=name, claim=f"Page changed: {name} {watch['kind']}",
                         source_url=watch["url"], quote=quote, source_ref=f"watch:{watch['id']}:{fresh[:12]}")
+    # Recorded for the weekly delta, but no fit check: a diff is not yet a market fact. A bet trips when the Librarian
+    # applies the insight to the entity (market.apply_insight), never on the raw change.
     MK._event(c, "entity", watch["entity_id"], ACTOR, f"page.{watch['kind']}", None,
-              f"changed: {host_of(watch['url'])}", insight["id"], evidence["id"])
+              f"changed: {host_of(watch['url'])}", insight["id"], evidence["id"], trip=False)
     return insight
 
 

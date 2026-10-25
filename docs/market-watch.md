@@ -12,8 +12,9 @@ changes. It is for the pages where a change is news: pricing, changelog, careers
 - A later read that differs from the baseline by at least 40 characters files three things: a piece of evidence (source kind
   `page-change`, the added and removed lines as its quote), a market insight for the Librarian to curate, and an event on
   the entity. The baseline moves only when a change is filed, so small edits add up.
-- A bet that cites the entity, or whose thesis wrong-if watches it, trips the fit check like any other market change
-  ([Strategy](strategy.md#the-fit-check)).
+- A change alone never trips a bet: it may be layout or wording. When the Librarian applies the insight to the entity, a
+  bet that cites the entity, or whose thesis wrong-if watches it, trips the fit check like any other market change
+  ([Strategy](strategy.md#the-fit-check)). A rejected insight trips nothing.
 - Lines that are only numbers, dates or a copyright notice are ignored, so a changing year files nothing.
 - Pages are read on the server through the same guard as `hub doc fetch`: public addresses only, every redirect checked,
   5 MB and 20 seconds. A page that cannot be read is marked `error` or `blocked` on its watch; the others still run.

@@ -156,7 +156,7 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 
 
-def test_a_change_to_a_page_trips_a_bet_that_cites_the_entity(seeded, monkeypatch):
+def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded, monkeypatch):
     with_ceo_bot(seeded)
     write(seeded, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
     add_bet(seeded, cites=["company/northwind"], wrong_if={"kind": "thesis", "market_id": "company/northwind"})
@@ -165,6 +165,14 @@ def test_a_change_to_a_page_trips_a_bet_that_cites_the_entity(seeded, monkeypatc
     pages(monkeypatch, BASE, CHANGED)
     check(seeded)
     check(seeded)
+
+    def bet_tasks():
+        with seeded.app.state.store.read() as c:
+            return [(t["title"], t["owner"]) for t in H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))]
+    assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+        insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]
+    post(seeded, f"market/insights/{insight_id}/apply",
+         {"evidence": {"source_kind": "page-change", "source_url": PAGE, "quote": "Pro plan now $12", "our_read": "A price rise."},
+          "entity_id": "company/northwind", "summary": "Raised the Pro plan to $12."})
+    assert bet_tasks() == [("Bet 1: may be wrong", "bot:goal-manager")]

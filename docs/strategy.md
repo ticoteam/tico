@@ -198,7 +198,8 @@ runs at every level: at Passive the server still files the task, and the CEO Bot
 
 The Librarian's [weekly briefing](market-briefing.md) feeds the same check from the other side: when it touches an active
 bet, the CEO Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
-[page monitors](market-watch.md) are what turn a competitor's changed pricing page into a market event a bet can trip on.
+[page monitors](market-watch.md) turn a competitor's changed pricing page into an insight; a bet trips on it only once the
+Librarian applies it to the entity.
 
 ## What bots see
 
