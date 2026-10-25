@@ -155,6 +155,7 @@ Anywhere else, and whenever the mail does not go, the page says so in words and 
 in with Tico accounts, so it can't email invites. Tell Dana to sign in at https://... with dana@...*, too many invites to
 that address today (3 a day per address, 50 a day per install), or the mail could not be delivered. A sent invite is
 recorded (`invites` in `GET /api/v2/access`, audit event `person.invited`) and the row says **Invited 2h ago**.
+The time updates while the page stays open and when you return to the tab. Hover over it for the full date.
 One click sends at most one email: a repeat of the same request (the page retrying a lost answer) never sends again,
 and if Tico can't tell whether it went, it says so instead of sending; clicking again sends a new one.
 
@@ -168,17 +169,21 @@ Owners and admins can create a Tico account for someone who has no account yet.
 **Create password** appears only when your Tico account sign-in service supports it, and never in a rehearsal.
 
 1. Open **Settings > Humans**.
-2. Find the teammate's row, such as Dana at `dana@acme.example`. They need an email address and **Can sign in** enabled.
+2. Find the teammate's row, such as Casey at `casey@example.invalid`. They need an email address and **Can sign in** enabled.
 3. Open their ⋯ menu and choose **Create password**.
-4. In **Account created**, press **Copy** to copy the email and password, then share them privately with Dana.
+4. In **Account created**, press **Copy** to copy the email and password, then share them privately with Casey.
 5. Press **Done** to close the dialog.
 
-Dana can sign in to this Tico with that email and password. The password appears once; Tico keeps no copy to show again.
-Dana chooses **Forgot password?** on the sign-in page to prove the email address and set their own password.
+![Synthetic Account created dialog showing a fictional email address, a DEMO-ONLY password, Copy, and Done.](images/people-account-created.png)
+
+*Synthetic example. The email and password are fictional; no account was created.*
+
+Casey can sign in to this Tico with that email and password. The password appears once; Tico keeps no copy to show again.
+Casey chooses **Forgot password?** on the sign-in page to prove the email address and set their own password.
 Until then, the account signs in only at this install.
 
-If the dialog closes or the answer is lost, ask Dana to use **Forgot password?**; repeating the same request cannot reveal the password again.
-If Dana already has a Tico account, use **Send invite** instead. A daily account limit means trying again tomorrow.
+If the dialog closes or the answer is lost, ask Casey to use **Forgot password?**; repeating the same request cannot reveal the password again.
+If Casey already has a Tico account, use **Send invite** instead. A daily account limit means trying again tomorrow.
 If **Create password** is absent, use **Send invite** where offered, or your sign-in provider's own accounts.
 
 ## API
