@@ -6369,9 +6369,8 @@ def own_stuck_blockers(conn, row, at=None):
     parent's window is released is the case seen; a question for a person in a subtask is not (it
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
-    woken it, it is quiet again). Nor is a subtask in `review` (its reviewer moves it) or one with a run of its own
-    queued or going (quiet_work.own_job): that run moves it. Being blocked by these does not hold `row` back from
-    the stall watcher. A `row` waiting on a person (`waiting_on`) waits on them, not on its subtask: [] too."""
+    woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
+    A parent waiting on a person belongs to that person. These waits exempt the parent from the stall watcher."""
     from .milestone_waits import pending as milestone_pending
     from .quiet_work import own_job
     at = at or now()

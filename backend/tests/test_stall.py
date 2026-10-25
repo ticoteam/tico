@@ -6,7 +6,6 @@ import json
 import pytest
 
 from backend import milestone_waits as MW
-from backend import quiet_work as QW
 from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 
@@ -319,7 +318,7 @@ def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_tim
 
 
 @pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked", "hold_in_review",
-                                  "hold_has_a_run"])
+                                  "hold_job_queued", "hold_job_leased", "hold_job_running"])
 def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c, hold_parent=case != "not_a_subtask")
@@ -332,10 +331,20 @@ def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
             H.task_ask(c, "bot:finance", hold["id"], "Which window do you mean?")
         if case == "hold_in_review":     # its reviewer moves it
             c.execute("UPDATE tasks SET status='review' WHERE id=?", (hold["id"],))
-        if case == "hold_has_a_run":     # the run its creation queued moves it
-            assert QW.own_job(c, hold)
+        if case.startswith("hold_job_"):
+            job = c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                            "JOIN conversations cv ON cv.id=m.conversation_id "
+                            f"WHERE j.bot='finance' AND {H.MESSAGE_TASK_SQL}=?", (hold["id"],)).fetchone()[0]
+            c.execute("UPDATE jobs SET state=? WHERE id=?", (case.removeprefix("hold_job_"), job))
         assert flagged(c, window, hold, other, minutes=2 if case == "fresh" else 6,
-                       keep_jobs_of="finance" if case == "hold_has_a_run" else None) == (False, False)
+                       keep_jobs_of="finance" if case.startswith("hold_job_") else None) == (False, False)
+        if case.startswith("hold_job_"):
+            # Another task's queued job on the same bot cannot exempt this hold.
+            c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
+            assert flagged(c, window, hold, other, keep_jobs_of="finance") == (True, True)
+        elif case == "hold_in_review":
+            c.execute("UPDATE tasks SET status='doing' WHERE id=?", (hold["id"],))
+            assert flagged(c, window, hold, other) == (True, True)
 
 
 def test_a_parent_waiting_on_a_person_is_not_stalled_by_its_quiet_hold(api):
@@ -372,7 +381,7 @@ def test_creating_a_task_that_blocks_two_of_its_ancestors_returns_both_warnings(
                                              {"task": root["id"], "kind": "blocks"}]})
     hold = made["task"]["id"]
     assert f"subtask of {window['id']}" in made["warning"] and f"subtask of {root['id']}" in made["warning"]
-    assert hold in made["warning"] and "Tico wakes the task's owner" in made["warning"]
+    assert made["warning"].count(hold) == 2
 
 
 def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):

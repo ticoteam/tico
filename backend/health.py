@@ -1709,7 +1709,8 @@ def view(c, who, settings, auth, github, config):
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
     # Waiting tasks can also escalate when held only by their own quiet subtasks.
     stalled = [row for row in c.execute(
-        "SELECT * FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
+        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
