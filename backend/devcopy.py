@@ -61,6 +61,8 @@ EMPTY = (
     # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
     # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
     "feed_walks", "feed_cursors", "feed_deliveries",
+    # Task Manager chat: people's words, and pending cards a confirm would still run
+    "task_manager_messages",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
@@ -90,7 +92,7 @@ KEEP = frozenset((
     "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "storage_moves", "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_marks", "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools",
