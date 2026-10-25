@@ -227,7 +227,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_STYLE_LINT` | What a writing problem in a bot's ask to a person or in its update does: `warn` (the default: written, with a warning), `refuse`, or `off` | `refuse` |
 | `TICO_BLOCK_EXTERNAL_INVITES` | Set to `1` to limit bots to inviting humans on the team roster to calendar events (default: any address). Set it on computers too for `mail calendar add` | `1` |
 | `TICO_PROCESSING_OPERATORS` | Humans whose computers may run the Close transcript importer and tool publishers | `dana` |
-| `TICO_SCHEDULER` | `1` runs the routine scheduler in this process | `1` |
+| `TICO_SCHEDULER` | `1` runs the routine scheduler and the other timed loops (webhook pulls from Tico Gateway, sleep when idle) in this process | `1` |
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
 | `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
@@ -303,10 +303,10 @@ private GitHub repositories.
 
 ## Developer notes
 
-The suite is small on purpose. Run it locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). Write tests while you build if they help, then keep only the few that
-guard what matters most: security and privacy boundaries, data safety (migrations, backup, restore),
-the updater and release path, and core contracts (job claim and lease, task writes, chat, the API
-schema), plus one happy path per major feature. The default Python suite runs in about a minute on a laptop;
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
+the updater and release path, core contracts (job claim and lease, task writes, chat, the API
+schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;
 tests that need real git, Docker or a server are marked `@pytest.mark.slow` and run with `-m slow` (and at release).
 
 ```bash

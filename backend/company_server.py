@@ -5,7 +5,9 @@ pastes a one-time server code from the portal. Preview asks HQ which company the
 Connect makes a one-time proof, keeps only its digest here for PENDING_S, and sends the proof to HQ with this server's
 public address, install id (backend/census.py) and version. HQ fetches `GET <public address>/api/v2/company-connection/
 proof`, the one route here with no sign-in (backend/app.py `request_guard`), which answers the digest only while a
-connect is pending. On a match HQ answers with the company and a server key (`tsk_...`).
+connect is pending. On a match HQ answers with the company and a server key (`tsk_...`). A server with no https public
+address (the local install, `http://127.0.0.1:8765`) sends `public_url: null`: HQ skips the proof, links it on the code
+alone and shows it as a local server, with no address.
 
 The server key is sealed with the credential vault's data key (backend/credentials.py `CredentialCipher.seal`) in
 `registry_metadata` KEY, like the gateway key: no read returns it, and no event or log line carries it. With it the
@@ -235,13 +237,10 @@ def _refusal(status, result):
 
 
 def public_url(settings):
-    """This server's address as HQ must reach it: https, or http on loopback (a test HQ)."""
+    """This server's address as HQ must reach it, or None when it has none: only an https address can be proved, so
+    a local install (http on loopback or a private address) links without one."""
     url = str(settings.public_url or "").rstrip("/")
-    parsed = urlparse(url)
-    if parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost", "::1")):
-        return url
-    raise Problem("company_connection_unavailable", "This server needs an https public address (TICO_PUBLIC_URL) "
-                  "before it can link to a Tico company.", 409)
+    return url if urlparse(url).scheme == "https" else None
 
 
 def connect(store, vault, settings, who, body, install_id):

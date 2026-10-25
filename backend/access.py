@@ -628,7 +628,7 @@ def home_domain(owner_email, allowed_domains):
 
 def view(c, settings, roster, proxy_kind, owner_id):
     """What the People tab renders."""
-    from . import directory
+    from . import directory, people_remove
     owner, access = load_owner(c, settings), load_access(c, settings)
     domains_ = company_domains(c, settings, owner["email"])
     home = home_domain(owner["email"], access["allowed_domains"])
@@ -643,7 +643,9 @@ def view(c, settings, roster, proxy_kind, owner_id):
                        "add_people": can_add_people(p, role, domains_),
                        "add_people_default": p.get("add_people") is None,
                        "sign_in": bool(p.get("sign_in", True)),
-                       "can_sign_in": bool(p["email"]) and not left and bool(p.get("sign_in", True))})
+                       "can_sign_in": bool(p["email"]) and not left and bool(p.get("sign_in", True)),
+                       # Left and nothing to keep: the owner may remove them for good (backend/people_remove.py).
+                       "removable": left and people_remove.removable(c, p)})
     return {"owner": {**owner, "person": owner_id}, "people": people, **{
         k: access[k] for k in ("allowed", "allowed_domains", "admins", "bot_admins", "member_bot_limit", "revision",
                                "updated", "updated_by")},

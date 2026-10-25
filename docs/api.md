@@ -46,9 +46,15 @@ The operation groups below are generated from the committed spec's tags. After r
 | Health | Whether the installation is working. |
 | Live events | One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, messages, runs, bots and Needs you as they change, resumable from a change number. |
 | Tags | Tags, metadata, markdown checklists and reusable templates. |
+| Events | The catalog of named events ([guide](routines.md)). |
 | Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
+| Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
+| Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
+| Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
+| Notices | Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release check. |
+| Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
@@ -210,6 +216,50 @@ New tasks and canonical chats to an original route to the caller's active branch
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
 
 Public roadmap publication, requesters and anonymous endpoints are described in [Public roadmaps](roadmaps.md).
+
+## Incoming webhooks
+
+Anything that can send an HTTP POST can start routines and rules. `POST /api/v2/triggers` (`name`, optional `id`) makes one and
+answers with its address once; `POST /api/v2/hooks/{id}/{secret}` is the address a sender calls. `GET /api/v2/triggers`,
+`/triggers/{id}` and `POST /triggers/{id}` (`name`, `preset`, `type_from`, `hourly`, `keep_days`, `unheard`) read and change them;
+`/rotate`, `/signing`, `/recover`, `/relay`, `/relay/rotate`, `/relay/wake`, `/relay/delete`, `/delete`, `GET /deliveries`, `GET /deliveries/{delivery}`
+(`?part=n` for a bot) and `POST /deliveries/{delivery}/replay` sit under `/triggers/{id}`. `GET /api/v2/relay` shows the Tico
+Gateway state, `GET /api/v2/event-types` the event catalog and `GET /api/v2/notices` the notices from Tico Team. The whole
+story, with the CLI, is on [Webhooks](webhooks.md).
+
+## Outgoing webhooks
+
+Tico posts an event to an address you choose when something happens: a task is made, finishes or is blocked; an approval is
+asked or decided; a bot is held or fails; a release is published; and more. Add them in Settings → Webhooks → Outgoing, or use
+the API, `hub webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
+
+```
+hub webhook create --name "Acme orders" --url https://hooks.acme.example/tico --events 'task.*' 'custom.*'
+```
+
+`POST /api/v2/webhooks` answers with the secret (`whsec_...`) once; keep it. `GET /api/v2/webhooks` lists endpoints with
+their delivered and failed counts for 7 days; `GET /api/v2/webhooks/{id}/sends` is the send log (state, attempts, last status,
+next try). Per endpoint: `update`, `rotate` (the old secret also signs for 24 hours), `pause`, `resume`, `delete`, `send`
+(a `custom.*` event), `example` (a sample of any event), `enable`, `recover` and `replay` (send again what gave up, or
+what was never sent, since a date) and `sends/{id}/retry`.
+
+A delivery is a `POST` of
+
+```json
+{"type": "task.done", "version": 1, "timestamp": "2026-10-25T10:00:00Z", "data": {"id": "t_1", "title": "Ship it"},
+ "links": {"app": "https://tico.acme.example/#/task/t_1", "api": "https://tico.acme.example/api/v2/tasks/t_1"}}
+```
+
+signed as [Standard Webhooks](https://www.standardwebhooks.com): `webhook-id` (stable across retries), `webhook-timestamp`
+(fresh on each try) and `webhook-signature: v1,<base64 HMAC-SHA256>` over `id.timestamp.body` with the key in the secret.
+Delivery is at-least-once, so a receiver dedupes on `webhook-id`. Any `2xx` is delivered; `webhook-delivery: abort-message`
+cancels the send; anything else, redirects included (never followed), retries after 5 seconds, 5 minutes, 30 minutes, 2, 5 and
+10 hours, and 10 hours again, then fails and says so in Health and Needs you (once a day per endpoint). Each endpoint has
+`rate_per_hour` (600): sends over it wait, none are dropped. Events are kept 30 days.
+
+Addresses are checked on every try: `https` only (plain `http` for `localhost` when the owner allows it), no credentials in
+the address, no proxy, and every address the name resolves to must be public. The response is not read past 1 KB.
+Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 

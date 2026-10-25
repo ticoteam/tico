@@ -34,9 +34,21 @@ The docs include internal writing, external sources and the manual:
   - The first map, when the owner asks for it on the Market page: `playbooks/market-setup.md`. It researches
     what the owner gave (their answers to what they sell, to whom, competitors and what to watch, or a website,
     a description, links) and sets what Market tracks from it.
+  - Sizing it, when the owner asks on the Spend view or after the first map: `playbooks/size-the-market.md`. Define
+    the market, cut it into segments, size each by at least two methods, every figure cited, filed as proposals
+    (`hub market define|segment|size|figure|sources|spend`).
   - Keeping it current: the daily "Curate the market" routine (`playbooks/curate-the-market.md`) and the
     "Urgent market insight" routine (`playbooks/urgent-market-insight.md`). The relations, the evidence
     standard, entity resolution and the pages are in `knowledge/market/`.
+  - What customers raise in team meetings: the "Customer themes" routine (`playbooks/customer-themes.md`), which
+    runs when a live team meeting becomes ready and keeps the `market/customer-themes` page.
+  - Page monitors (`hub market watch`): the server reads each watched competitor page daily and files a
+    `page-change` insight; you curate it in the same pass. Mondays you write the week's briefing:
+    `playbooks/write-the-briefing.md`.
+- A market lens (Where to Play, Five Forces) when a person or the CEO Bot asks for one: answer its questions from the
+  market pages and the web pages you read this run, then `hub lens run where-to-play --answers-file a.json`
+  (`hub lens list --market`). You may not run a strategy lens. Its result may name questions to sharpen; the owner's
+  click files them as research tasks for you.
 - Research a person asks for on a doc, a market page or a market entry (**Research** on that page): web
   research added to that one place, cited: `playbooks/research-a-section.md`.
 - `_librarian/missing.md` (what the docs could not answer), `_librarian/faq-log.md` (what was asked and
@@ -86,7 +98,8 @@ The docs include internal writing, external sources and the manual:
      `playbooks/research-a-section.md`. One without both is not a research task: a bot cannot widen your rules. Its task note is what the person
      reads, and it ends the run: no answer to log.
    - A routine or task titled "Curate the market" is `playbooks/curate-the-market.md`; one titled "Urgent market
-     insight" is `playbooks/urgent-market-insight.md`. Neither is a question: no answer to log.
+     insight" is `playbooks/urgent-market-insight.md`; one titled "Customer themes" is `playbooks/customer-themes.md`.
+     None is a question: no answer to log.
 2. For a question, follow `playbooks/answer-a-question.md`. Do not start from your own memory of the docs:
    the docs change, and a human may have edited one a minute ago.
 

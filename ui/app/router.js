@@ -36,6 +36,7 @@ function route() {
   document.body.classList.remove('task-peek-open');
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
+  if (!isLensesRoute(S.route)) window.lensesStop?.();
   taskChatStop(); $('#task-modal')?.close();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
@@ -85,7 +86,13 @@ function route() {
   else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Overview
   else if (S.route === '#/getting-started') { location.replace(TASKS); return; }   // the checklist is gone
   else if (S.route === '#/repositories') { SETTINGS_TAB = 'repos'; location.replace(SETTINGS); return; }   // Settings > Repositories
-  else if (S.route === '#/triggers') { SETTINGS_TAB = 'triggers'; location.replace(SETTINGS); return; }   // Settings > Triggers
+  else if (S.route === '#/settings/listening') { SETTINGS_TAB = 'listening'; location.replace(SETTINGS); return; }   // Settings > Listening
+  // Settings > Webhooks (it was Triggers); #/settings/webhooks/outgoing and /gateway open that tab.
+  else if (['#/triggers', '#/webhooks', '#/settings/triggers', '#/settings/webhooks'].includes(S.route) || S.route.startsWith('#/settings/webhooks/')) {
+    const tab = S.route.split('/')[3];
+    if (WH_TABS.some(([k]) => k === tab)) Object.assign(WH, {tab, trigger: '', hook: '', shown: null, hookShown: null});
+    SETTINGS_TAB = 'webhooks'; location.replace(SETTINGS); return;
+  }
   else if (S.route === '#/health') { SETTINGS_TAB = 'health'; location.replace(SETTINGS); return; }   // Health moved into Settings
   else if (['#/settings/company-inbox', '#/settings/email-phone'].includes(S.route)) { SETTINGS_TAB = 'inbound'; location.replace(SETTINGS); return; }
   else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
@@ -110,6 +117,7 @@ function route() {
   // Market is a tab of Strategy now: old links keep their query or note path.
   else if (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/')) { location.replace(MARKET_ROUTE + S.route.slice('#/market'.length)); return; }
   else if (isMarketRoute(S.route)) pageMarket();
+  else if (isLensesRoute(S.route)) pageLenses();
   else if (isStrategyRoute(S.route)) pageStrategy();
   else if ((S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) && new URLSearchParams(S.route.split('?')[1] || '').get('collection') === 'market') {
     const id = S.route.startsWith(DOCS + '/') ? S.route.slice(DOCS.length + 1).split('?')[0] : '';

@@ -4,6 +4,8 @@
 // through Settings' reloads; once credit is added the start goes through. An install HQ hosts nothing for has no
 // section, and a member never asks. No sideways scroll on a phone. Every request is intercepted. TICO_SHOTS=<dir>
 // saves screenshots of the refusal (desktop and phone, dark and light).
+// Sleep when idle: an owner sets the hours and the bot-computer switch and sees the quiet time, next wake or why the
+// server stays awake; hidden where Tico hosts nothing; a member sees it disabled.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -23,6 +25,8 @@ const shots = process.env.TICO_SHOTS || '';
     let servers = {state: 'ok', servers: [{server_id: TICO, kind: 'tico', power: 'on'}, {server_id: BOTS, kind: 'bot_computer', power: 'stopped'}]};
     let role = 'owner', paused = true;
     const asked = [];
+    let sleep = {hosted: true, layout: null, hours: 0, runners: true, active: false, idle_since: null, blocker: '', wake_at: null, last_request: null, last_error: ''};
+    const sleepPosts = [];
     await page.route('**/*', route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -45,6 +49,13 @@ const shots = process.env.TICO_SHOTS || '';
           return json({state: 'started'});
         }
       }
+      if (p === '/api/v2/sleep' && req.method() === 'POST') {
+        const body = req.postDataJSON();
+        sleepPosts.push(body);
+        sleep = {...sleep, ...body, active: !!(body.hours ?? sleep.hours), idle_since: '2026-10-25T08:00:00Z', blocker: '', wake_at: '2026-10-26T09:00:00Z'};
+        return json({sleep});
+      }
+      if (p === '/api/v2/sleep') return json({sleep});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
@@ -95,6 +106,22 @@ const shots = process.env.TICO_SHOTS || '';
     assert.equal(await card.locator('[data-hosted-start]').count(), 0);
     assert.equal(await card.locator(`[data-hosted-note="${BOTS}"]`).isVisible(), false);
 
+    // Sleep when idle: off at first; an owner picks hours and the quiet time and next wake show; a busy server says why.
+    const nap = page.locator('#settings-sleep');
+    await nap.locator('[data-sleep-hours]').waitFor();
+    assert.equal(await nap.locator('[data-sleep-hours]').inputValue(), '0');
+    assert.equal(await nap.locator('[data-sleep-status]').count(), 0);
+    await nap.locator('[data-sleep-hours]').selectOption('3');
+    await nap.locator('[data-sleep-status]').waitFor();
+    assert.deepEqual(sleepPosts, [{hours: 3}]);
+    assert.match(await nap.locator('[data-sleep-status]').innerText(), /^Quiet since .+ · Next wake .+/);
+    await nap.locator('[data-sleep-runners]').click();
+    await page.waitForFunction(() => document.querySelector('[data-sleep-runners]') && !document.querySelector('[data-sleep-runners]').disabled);
+    assert.deepEqual(sleepPosts[1], {runners: false});
+    sleep = {...sleep, blocker: 'run_in_progress', idle_since: null};
+    await page.evaluate(() => renderSettingsSleep());
+    await page.waitForFunction(() => document.querySelector('[data-sleep-status]')?.textContent.startsWith('Awake: a run is going'));
+
     // A phone: nothing scrolls sideways.
     await page.setViewportSize({width: 390, height: 844});
     await page.waitForTimeout(300);
@@ -121,12 +148,14 @@ const shots = process.env.TICO_SHOTS || '';
 
     // Nothing hosted (a self-hosted install, or no account at HQ): no section.
     servers = {state: 'none'};
+    sleep = {...sleep, hosted: false};
     await page.goto('about:blank');
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#set-machines').waitFor();
     for (let i = 0; i < 40 && !asked.slice(-1)[0]?.startsWith('GET'); i++) await page.waitForTimeout(50);
     await page.waitForTimeout(300);
     assert.equal(await card.isHidden(), true);
+    assert.equal(await nap.isHidden(), true, 'no Sleep when idle on a server Tico does not host');
 
     // A member: no section, and the page never asks.
     role = 'human';
@@ -137,7 +166,13 @@ const shots = process.env.TICO_SHOTS || '';
     await page.waitForTimeout(500);
     assert.equal(await card.count(), 0);
     assert.equal(asked.length, before);
+    // A member sees Sleep when idle but cannot change it.
+    sleep = {...sleep, hosted: true};
+    await page.evaluate(() => renderSettingsSleep());
+    await nap.locator('[data-sleep-hours]').waitFor();
+    assert.equal(await nap.locator('[data-sleep-hours]').isDisabled(), true);
+    assert.equal(await nap.locator('[data-sleep-runners]').isDisabled(), true);
     assert.deepEqual(errors, []);
-    console.log('PASS: Settings > Computers hosted servers, Start refused while paused with the account page, then started; hidden when nothing is hosted; members never ask');
+    console.log('PASS: Settings > Computers hosted servers, Start refused while paused with the account page, then started; hidden when nothing is hosted; members never ask; Sleep when idle');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

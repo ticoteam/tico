@@ -141,6 +141,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Waiting checks** | Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task. | Hourly |
 | **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |
 | **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |
+| **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily |
 | **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |
 | **Cleanup** | Clears old events, mail, retry keys and recorder data. | Hourly |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly |

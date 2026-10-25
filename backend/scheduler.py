@@ -182,6 +182,7 @@ class Scheduler:
         self.gateway_checked = None
         self.billing_checked = None
         self.stale_checked = None
+        self.hosted_checked = None
         self.marks = {}             # a controlled job's last start in this process, if its record could not be written
 
     def due(self, key, at, cfgs, last):
@@ -434,6 +435,17 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
+        # Page monitors (backend/market_watch.py): once a day the watched competitor pages are read on their own thread.
+        try:
+            from . import market_watch
+            market_watch.tick(self.store, at)
+        except Exception as exc:
+            failures.append({"market_watch": type(exc).__name__})
+        try:
+            from . import webhook_delivery
+            webhook_delivery.ensure()                          # a delivery worker that died comes back on the next tick
+        except Exception as exc:
+            failures.append({"webhook_delivery": type(exc).__name__})
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.
@@ -444,11 +456,19 @@ class Scheduler:
                     # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
                     c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
                     SR.prune(c)                                # each system job keeps its last runs
+                    from . import rules
+                    rules.prune_events(c)                      # the webhook rules' repeat ledger keeps 30 days
+                    from . import webhook_delivery
+                    webhook_delivery.prune(c, stamp(at))       # outgoing webhooks: events and finished sends keep a month
+                    from . import webhooks
+                    webhooks.auto_disable(c, stamp(at))        # an endpoint that failed every attempt for five days is turned off
                 sweep_idempotency(self.store, stamp(at))
                 sweep_mail(self.store, stamp(at))
                 sweep_deltas(self.store, stamp(at))            # finished runs' streamed text pieces keep two weeks
                 from . import events
                 events.sweep(self.store, stamp(at))            # live events keep a day
+                from . import triggers
+                triggers.sweep(self.store, stamp(at))          # webhook bodies keep their trigger's days, delivery ids 30
                 from . import flight
                 flight.sweep(self.store, at.timestamp())       # the flight recorder's minutes become hours
                 from . import performance
@@ -521,6 +541,18 @@ class Scheduler:
                 if due:
                     company_server.heartbeat_later(self.store)
                 run.did("Sent" if due else "Nothing to send", quiet=not due)
+        if self.hosted_checked is None or at - self.hosted_checked >= timedelta(minutes=1):
+            # Every minute on a hosted server: the release Tico support scheduled for it, read from HQ every 15
+            # minutes, started once no bot turn runs (backend/hosted_updates.py). On its own thread; nothing at all on
+            # a self-run server, and nothing until support sets one.
+            self.hosted_checked = at
+            from . import hosted_updates
+            if hosted_updates.on(self.store.settings):
+                with SR.recording(self.store, "hosted_update", failures) as run:
+                    due = hosted_updates.due(self.store)
+                    if due:
+                        hosted_updates.tick_later(self.store)
+                    run.did("Checked" if due else "Nothing scheduled", quiet=not due)
         if self.stale_checked is None or at - self.stale_checked >= timedelta(minutes=5):
             # Stale ticket review (backend/stale_review.py), while the team has it on: its watermark and saved preset
             # space the passes (hourly by default);

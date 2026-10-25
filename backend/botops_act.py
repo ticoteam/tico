@@ -196,6 +196,8 @@ DO = _routes(
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),
     ("POST", r"system/update(/check)?"),
+    # Sleep when idle: an owner's or an admin's call, which the route checks.
+    ("POST", r"sleep"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is

@@ -90,14 +90,33 @@ def chosen_grant(value):
     return {"full_name": name, "access": access, **({"run_workflows": workflows} if workflows is not None else {})}
 
 
+MARKET_SPEND = ("market define", "market segment add", "market segment tree", "market size add", "market size decide",
+                "market size list", "market figure add", "market sources", "market spend", "market research")
+
+
+def market_spend(client, args, tool):
+    """The spend commands run the MCP tool of the same name; `sources --add-file` reads its YAML here."""
+    fn = args.fn
+    if fn == "market sources" and args.add_file:
+        import yaml
+        loaded = yaml.safe_load(Path(args.add_file).read_text())
+        args.add = loaded if isinstance(loaded, list) else [loaded]
+    return tool(client, args)
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
+    if fn.startswith(("trigger relay ", "relay ", "sleep ")):
+        return via_tool(client, args)
+    # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
+    if fn.startswith(("trigger ", "rule ", "notice ")) or fn == "event-types":
+        return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
@@ -224,7 +243,7 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
-    if fn in ("decision readout", "decision outcome"):
+    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search", "gateway fetch"):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
@@ -287,6 +306,22 @@ def run(args, who=None):
         if fn == "service-key revoke":
             return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]
+    if args.cmd == "webhook":
+        from clients import hubtools
+        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
+        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        if fn in ("webhook create", "webhook update"):
+            try:
+                hubtools.webhook_options(fields)
+            except ValueError as exc:
+                raise APIError("header", str(exc), 422) from None
+        if fn == "webhook send":
+            raw = fields.pop("data", None) or "{}"
+            try:
+                fields["data"] = json.loads(Path(raw[1:]).read_text() if raw.startswith("@") else raw)
+            except (OSError, ValueError):
+                raise APIError("data", "--data must be JSON, or @file holding JSON") from None
+        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     identity = client.get("me")
     actor = identity["actor"]
     key = os.environ.get("HUB_OPERATION_ID")
@@ -568,6 +603,29 @@ def run(args, who=None):
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
+    if cmd == "lens":
+        from clients import hubtools
+        if sub == "list":
+            return hubtools.lens_list(client, {"applies_to": "market" if args.market else None})
+        if sub == "run":
+            answers = json.loads(Path(args.answers_file).read_text(encoding="utf-8-sig")) if args.answers_file else {}
+            if not isinstance(answers, dict):
+                raise APIError("answers", "--answers-file is a JSON object of {step key: answer}")
+            return hubtools.lens_run(client, {"lens": args.id, "answers": answers, "draft": args.draft,
+                                              "wait": 0 if args.no_wait else hubtools.LENS_WAIT_MAX, "operation_id": key})
+        if sub == "show":
+            return hubtools.lens_show(client, {"id": args.id})
+        return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
+    if fn.startswith("market watch "):
+        return via_tool(client, args)
+    if fn == "market briefing latest":
+        return via_tool(client, args)
+    if fn == "market briefing post":
+        body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
+        items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
+        return via_tool(client, args, body=body, items=items)
+    if cmd == "market" and fn in MARKET_SPEND:
+        return market_spend(client, args, tool)
     if cmd == "market":
         if sub == "show":
             return client.get("market/entities/" + args.id)

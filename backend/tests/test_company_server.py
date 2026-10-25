@@ -16,6 +16,8 @@ INSTALL_ID = "cc4a8541-2661-4eb8-a1d3-a34e913571c0"
 COMPANY = {"id": "2615c13e-d164-414f-94a5-782f0ea1b2f8", "name": "Acme", "slug": "acme"}
 SERVER_KEY = "tsk_synthetic_server_key_0123456789"
 PATH = "/api/v2/company/server-connection"
+ADDRESS = "https://tico.example.com"
+REAL_PUBLIC_URL = CS.public_url
 
 
 def reply(status, body=None):
@@ -37,6 +39,7 @@ def hq(api, monkeypatch):
         fake.seen.append(request)
         return fake.answers[(request.method, request.url.path)](request)
     monkeypatch.setattr(CS, "TRANSPORT", httpx.MockTransport(handle))
+    monkeypatch.setattr(CS, "public_url", lambda settings: ADDRESS)     # the test app itself is on loopback http
     return fake
 
 
@@ -66,7 +69,7 @@ def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
     r = api.post(PATH, headers=headers(), json={"code": CODE, "preview": True})
     assert r.status_code == 200 and r.json() == {"company": COMPANY, "preview": True}
     sent = json.loads(hq.seen[0].content)
-    assert sent["preview"] is True and sent["install_id"] == INSTALL_ID and sent["public_url"].startswith("http://127.0.0.1")
+    assert sent["preview"] is True and sent["install_id"] == INSTALL_ID and sent["public_url"] == ADDRESS
     assert set(sent) == {"code", "public_url", "install_id", "version", "proof", "preview"}
     assert api.get(PATH, headers=headers()).json() == {"company": None}
 
@@ -82,6 +85,34 @@ def test_preview_then_connect_proves_the_address_and_seals_the_key(api, hq):
             json.dumps([list(r) for r in c.execute("SELECT * FROM events")])
         assert CS.view(c)["company"] == COMPANY
     assert SERVER_KEY not in everything and SERVER_KEY not in json.dumps(view)
+
+
+@pytest.mark.parametrize("configured,sent", [
+    ("http://127.0.0.1:8765", None), ("http://localhost:8765/", None), ("http://192.168.1.20:8765", None),
+    ("http://tico.example.com", None), ("", None), ("https://tico.example.com/", "https://tico.example.com")])
+def test_only_an_https_address_is_sent_to_hq(configured, sent):
+    assert REAL_PUBLIC_URL(type("S", (), {"public_url": configured})()) == sent
+
+
+def test_a_local_server_links_with_no_address_and_shows_the_company(api, hq, monkeypatch):
+    monkeypatch.setattr(CS, "public_url", REAL_PUBLIC_URL)             # the test app's own address: http on loopback
+    bodies = []
+
+    def connect(request):
+        bodies.append(json.loads(request.content))
+        return reply(201, {"company": COMPANY, "workspace_id": "ws_1", "server_key": SERVER_KEY,
+                           "portal_url": "https://app.tico.dev/servers"})
+    hq.answers[("POST", "/v1/portal/server-connection")] = connect
+    hq.answers[("GET", "/v1/portal/server")] = lambda request: reply(200, {
+        "company": COMPANY, "workspace_id": "ws_1", "portal_url": "https://app.tico.dev/servers",
+        "credit": {"balance_cents": 250}})
+    r = api.post(PATH, headers=headers(), json={"code": CODE, "preview": False})
+    assert r.status_code == 200, r.text
+    assert bodies[0]["public_url"] is None and bodies[0]["install_id"] == INSTALL_ID
+    assert set(bodies[0]) == {"code", "public_url", "install_id", "version", "proof", "preview"}
+    assert r.json()["company"] == COMPANY and r.json()["credit"] == {"balance_cents": 250}
+    assert api.get(PATH, headers=headers()).json()["company"] == COMPANY
+    assert len(hq.gateway_soon) == 1                                    # its company Gateway key is asked for as usual
 
 
 def test_hq_refusals_and_bad_answers_are_plain_errors(api, hq, monkeypatch):

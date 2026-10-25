@@ -106,6 +106,8 @@ def announce(c, auth, rid, meta):
              'ended': meta.get('ended'), 'duration_ms': meta.get('duration_ms')}
     for event in ('meeting.ready', 'recording.ready'):
         emit(c, event, rid, facts, title=meta.get('title') or rid, content=content, auth=auth)
+    H.hook(c, 'meeting.ready', rid, lambda: {'id': rid, 'title': meta.get('title') or rid, 'source': meta.get('source'),
+                                              'ended': meta.get('ended')}, 'keeper', revision=0)
 
 
 def request_send(rid, email, sender, destination, instructions, attachments):

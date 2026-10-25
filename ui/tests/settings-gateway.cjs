@@ -22,8 +22,11 @@ const {unrouted} = require('./support/routes.cjs');
       models: [
         {id: 'opus-5-5', label: 'opus 5.5', runtime: 'claude', provider: 'anthropic',
           efforts: ['low', 'high'], default_effort: 'high', harnesses: ['claude']},
-        tico('tico-cheap-1.1', 'Tico Cheap 1.1', 'Haiku'), tico('tico-mid-1.0', 'Tico Mid 1.0', 'Sonnet'),
-        tico('tico-power-1.0', 'Tico Power 1.0', 'Opus'), {...tico('tico-cheap-1.0', 'Tico Cheap 1.0', 'Haiku'), deprecated: true},
+        tico('tico-general-low-1.0', 'General · Low 1.0', 'Haiku'), tico('tico-general-medium-1.0', 'General · Medium 1.0', 'Sonnet'),
+        tico('tico-general-high-1.0', 'General · High 1.0', 'Opus'),
+        // Another department's tier is the bot's pick to make: the company default does not list it.
+        {...tico('tico-sales-high-1.0', 'Sales · High 1.0', 'Opus'), tier: {department: 'sales', level: 'high', fast: false}},
+        {...tico('tico-mid-1.0', 'Mid 1.0 (old lineup)', 'Sonnet'), deprecated: true, lineup: 'old'},
       ],
       harnesses: [{id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}, {id: 'pi', label: 'pi', runtime: 'pi'}],
       default: {runtime: 'claude', model: 'opus-5-5'},
@@ -108,15 +111,15 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(!(await page.content()).includes(KEY), 'the key is nowhere on the page');
     // Connected: the Tico models are offered by their Tico names, saying what runs underneath.
     const tic = (await modelOptions()).filter(o => o.value.startsWith('tico-'));
-    assert.deepEqual(tic.map(o => o.text), ['Tico Cheap 1.1', 'Tico Mid 1.0', 'Tico Power 1.0'], 'retired Cheap 1.0 is not offered');
-    // A default saved as retired Cheap 1.0 stays offered, marked, so saving something else never moves it.
-    assert.deepEqual(await page.evaluate(models => providersModels({providers: [], default: {model: 'tico-cheap-1.0'}},
+    assert.deepEqual(tic.map(o => o.text), ['General · Low 1.0', 'General · Medium 1.0', 'General · High 1.0'], 'General at each level; the old lineup is not offered');
+    // A default saved on the old lineup stays offered, so saving something else never moves it.
+    assert.deepEqual(await page.evaluate(models => providersModels({providers: [], default: {model: 'tico-mid-1.0'}},
       models, ['tico']).map(row => row.label), catalog.models),
-      ['Tico Cheap 1.1', 'Tico Mid 1.0', 'Tico Power 1.0', 'Tico Cheap 1.0 (retired)']);
-    assert.equal(tic.find(o => o.value === 'tico-mid-1.0').title, 'Claude Sonnet 5.5 underneath');
-    assert.equal(await page.evaluate(() => settingsModelPickName('tico-mid-1.0')), 'Tico Mid 1.0 (Claude Sonnet 5.5 underneath)',
+      ['General · Low 1.0', 'General · Medium 1.0', 'General · High 1.0', 'Mid 1.0 (old lineup)']);
+    assert.equal(tic.find(o => o.value === 'tico-general-medium-1.0').title, 'Claude Sonnet 5.5 underneath');
+    assert.equal(await page.evaluate(() => settingsModelPickName('tico-general-medium-1.0')), 'General · Medium 1.0 (Claude Sonnet 5.5 underneath)',
       "a bot's model list says what runs underneath");
-    assert.equal(await page.evaluate(() => modelWords('tico-power-1.0')), 'Tico Power 1.0');
+    assert.equal(await page.evaluate(() => modelWords('tico-power-1.0')), 'Power 1.0 (old lineup)');
     // A URL-only save keeps the saved key: no key in the body.
     await card.locator('[data-gateway-url]').fill('https://gateway.example.test/v1/gateway');
     await card.locator('[data-gateway-save]').click();

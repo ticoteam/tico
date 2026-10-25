@@ -396,8 +396,27 @@ or blocked on someone else (`task_blocked`). A plain
 comment, another bot's status or step move, and the bot's own write (`own_write`, ignored) do not. A rule's outcome is
 `ignore`, `note`, `batch`, `wake`, `ask` or `action`. **Ask** writes the message as a note and puts one item in the
 Needs you list of the task's human (its requester if a person, else its owner's operator), once per task and rule.
-**Action** runs `close`, `move_step`, `set_wait`, `relate` or `note` as the keeper, with the rule id in the task's history,
+**Action** runs `close`, `move_step`, `set_wait`, `relate`, `note`, `wake_bot` or `send_webhook` as the keeper, with the rule id in the task's history,
 and writes the message as a note; if the action fails the bot is woken instead (`fail_open`).
+
+**Events without a task.** Some events are not a message to a bot and have no task: `webhook.received` (an incoming
+webhook was accepted) and `tico.notice`. A rule names one as its `event`
+(or a prefix such as `webhook.*`) and `hub event-types` lists them. Rules on these events are judged by `judge_event`,
+which fires every enabled row, bot rows before department rows before team rows, then by position, at most one row per
+target. A bot's first row decides it, so a bot-scope `ignore` silences the team's wake for that bot and no other. An
+`ignore` with no bot ends the rows after it for every target. A bare `*` row is for messages only and never reaches
+these events. Scopes are team, department and bot (not type, task or `batch`), and `when` holds only `trigger` (the
+webhook's id) and `type` (the event type the sender gave, a trailing `*` allowed). The same (event, trigger, delivery)
+twice does nothing the second time; Tico forgets a delivery after 30 days. An error does nothing and leaves a
+`rule.event_error` event. A row that does something is logged as `rule.event`.
+
+Two actions work on these events and on message events. **`wake_bot`** `{bot, text}` writes `text` to the bot's main
+room and wakes it; **`send_webhook`** `{webhook, type, data}` sends an outgoing webhook event to one
+endpoint. `text` and the strings in `data` may use `{{path}}` placeholders, such as `{{type}}`, `{{data.order}}` or
+`{{data.items.0.name}}`: a missing path is empty, nothing is evaluated, a substituted value is never read as a template,
+and text is cut at 4 KB. A bot-scope `wake_bot` row wakes its own bot. Writing `wake_bot` needs the right to change that
+bot; writing `send_webhook` is for a person, or a bot with outbound sending on, and never the CEO Bot. A failed
+`wake_bot` on a message event wakes the bot as usual (`fail_open`); a failed `send_webhook` is only logged.
 
 A task entering a step is the event `step_entered`; a rule's `when` can name the `step` and the `role` (`owner`,
 `requester`, `qa`, `release_manager`, `other`). A team with no `step_entered` rule writes nothing on a step move. A Dev
@@ -419,6 +438,7 @@ you may act on, `hub rule apply <id>` edits the rule with your own right to edit
 an open suggestion (that rule is not suggested again for 28 days) or, on an applied one, puts the rule back if nobody has
 changed it since. The same three are `hub_rule_suggestions`, `hub_rule_apply` and `hub_rule_dismiss`, and
 `GET /api/v2/rules/suggestions` with `POST .../{id}/apply` and `.../{id}/dismiss`.
+`GET /api/v2/event-types` (`hub event-types`, `hub_event_types`) lists the named events a rule or routine can use.
 
 ## Snoozing a task
 

@@ -283,6 +283,8 @@ def hold(c, settings, bot, fails, kind, error, now):
     c.execute("UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
               (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot))
     H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
+    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
+           H.KEEPER, revision=now)
 
 
 def release(c, actor, bot):
@@ -296,6 +298,8 @@ def release(c, actor, bot):
     bot_stops.close_item(c, state.get("task_id"), "Released.")
     if state.get("held_at"):
         H.event(c, actor, "bot.run_released", bot, {"fails": state.get("fails"), "error_class": state.get("error_class")})
+        H.hook(c, "bot.released", bot, lambda: {"bot": bot, "reason": "failed_runs", "released_by": actor}, actor,
+               revision=H.now())
     return bool(state.get("held_at") or state.get("wait_until"))
 
 

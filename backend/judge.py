@@ -68,8 +68,10 @@ DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role
 # provider answers, so a caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
 # The most one chain of providers takes, all of them together: each is asked with what is left (`J.within`), so the
-# server answers before its slowest caller stops waiting (30 s: `hub decision ask`, the MCP tools, `J.from_env`).
+# server answers before its slowest caller stops waiting (`J.HUB_WAIT`, 45 s: `hub decision ask`, the MCP tools, `J.from_env`).
 CHAIN_SECONDS = 25
+# The same when the Gateway answers decisions with a language model (Decisions level Medium or High: 30 s for its own try).
+SLOW_CHAIN_SECONDS = J.GATEWAY_SLOW_TIMEOUT + 5
 # Tico Decide's price in USD per 1M input and output tokens (Tico AI Gateway lineup 1.0): what the team's monthly cap
 # counts a Gateway call at when its answer carries no cost.
 GATEWAY_USD_PER_MTOK = (0.06, 0.0)
@@ -182,7 +184,9 @@ def cost_usd(settings, model, usage):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
     if model in J.GATEWAY_MODELS:
-        rate_in, rate_out = GATEWAY_USD_PER_MTOK
+        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks.
+        listed = providers.price_of(model)
+        rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
     elif priced(settings, model):
@@ -296,22 +300,35 @@ def gateway(settings, store=None, vault=None):
     or with neither."""
     if settings.rehearsal:
         return None
-    if settings.gateway_key:
-        return J.gateway(settings.gateway_key, settings.gateway_url) if settings.gateway_url else None
+    if settings.gateway_key and not settings.gateway_url:
+        return None
+    if settings.gateway_key and store is None:
+        return J.gateway(settings.gateway_key, settings.gateway_url)
     if store is None:
         return None
 
     def engine(state, questions, label=None):
         from .credentials import Vault
-        keys = vault or Vault(store)
         with store.read() as c:
-            secret = gateway_connection.key(c, keys, settings) if keys.configured else ""
-            base = gateway_connection.url(c, settings)
-            bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
+            level = providers.load(c, settings)["decide_level"]
+            if settings.gateway_key:
+                secret, url, bot = settings.gateway_key, settings.gateway_url, None
+            else:
+                keys = vault or Vault(store)
+                secret = gateway_connection.key(c, keys, settings) if keys.configured else ""
+                url = G.decisions_url(gateway_connection.url(c, settings))
+                bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
         if not secret:
             raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")
-        return J.gateway(secret, G.decisions_url(base), headers=bot)(state, questions, label)
-    engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, True
+        return J.gateway(secret, url, model=J.decide_model(level), timeout=J.decide_timeout(level),
+                         headers=bot)(state, questions, label)
+
+    def level():
+        with store.read() as c:
+            return providers.load(c, settings)["decide_level"]
+    engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, not settings.gateway_key
+    engine.level = level
+    engine.current_model = lambda: J.decide_model(level())
     return engine
 
 
@@ -345,7 +362,8 @@ def ordered(steps):
     def engine(state, questions, label=None):
         J.validate(state, questions, label)
         failed, first, paid = None, None, []
-        with J.within(CHAIN_SECONDS):
+        slow = any(J.normalize_level(step.level()) != "low" for step in steps if hasattr(step, "level"))
+        with J.within(SLOW_CHAIN_SECONDS if slow else CHAIN_SECONDS):
             for i, step in enumerate(steps):
                 try:
                     result = step(state, questions, label)
@@ -366,8 +384,10 @@ def ordered(steps):
 
 
 def step_models(steps, default=J.MODEL):
-    """The model each of `steps` asks as (`default` for one that does not say: a test's fake)."""
-    return [getattr(step, "model", "") or default for step in steps]
+    """The model each of `steps` asks as (`default` for one that does not say: a test's fake). A step whose model follows
+    the company's Decisions level says it now (`current_model`), so the spend reservation prices the model that will run."""
+    return [(getattr(step, "current_model", None) or (lambda: ""))() or getattr(step, "model", "") or default
+            for step in steps]
 
 
 def primary_engine(settings, store=None, vault=None):

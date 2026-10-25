@@ -126,6 +126,14 @@ A release before v0.3.52 keeps only the release fields. When one of those names 
 message's `url` in place of the release link, which is what its **New version · View changelog** opens. A v0.2 install with
 counting off asks GitHub and cannot be reached this way.
 
+A server with a Gateway key also gets targeted notices (`kind` info, security or billing) through its Tico Gateway relay, without
+waiting for the 6-hour check: a built-in webhook `_tico` ("Tico Team", no address of its own, never deleted; only its `keep_days` changes)
+receives them, the server pulls every minute for them (every 15 seconds when it has relay addresses of its own), and each shows once in the
+same banner as the message from `/v1/latest`. Rules see one as the event `tico.notice` with `type` set to its kind. Built-in team rules
+wake BotOps and ask the owner for a security notice, leave BotOps a note for an info notice, and ask the owner for a billing notice;
+the owner edits or switches them off in Settings > Rules but cannot delete them. `hub notice list` (`GET /api/v2/notices`) lists them.
+The webhooks page covers this from the user's side ([Webhooks](webhooks.md#notices-from-tico-team)).
+
 The team writes them with the staff key (`Authorization: Bearer $HQ_STAFF_KEY`):
 
 - `POST /v1/staff/notices` `{"versions": "0.2", "body": "You're on 0.2: update to get one-tap support.", "url": "https://..."}`

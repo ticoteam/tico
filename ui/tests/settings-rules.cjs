@@ -4,12 +4,18 @@
 // asks for that task's rows and has its way back; at phone width nothing scrolls sideways; and the Releases card's
 // Release now shows only to those the server lets ask (`can_release`). Suggestions: Apply and Undo post and the rule
 // below is read again; the block hides when empty. A type row edits like any other: its step from the type's steps,
-// and an action's own fields saved as params. Fixtures only.
+// and an action's own fields saved as params. An event with no task (webhook.received) swaps the task conditions for
+// which webhook and the call's type, offers only wake_bot and send_webhook, and checks send_webhook's data is JSON
+// (with {{…}} inside strings) before saving. Fixtures only; the event catalog is the backend's own.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {execFileSync} = require('node:child_process');
+const path = require('node:path');
+const CATALOG = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3', ['-c', 'import json; from backend.event_catalog import listing; print(json.dumps(listing()))'],
+  {cwd: path.join(__dirname, '../..')}).toString());
 
 const FLOOR_422 = 'Person message always wakes the bot: a rule cannot make it wait';
 const builtins = [
@@ -68,6 +74,9 @@ async function open(browser, role, hash = '#/settings/rules', viewport = {width:
       technical_writer: '', next: null, last: null, pending: 2, can_change: role === 'owner', can_release: role === 'owner'});
     if (p === '/api/v2/release/now') { writes.push({path: p, body: req.postDataJSON()}); return json({sent: true, reason: '', task: 't-rel', tickets: 2}); }
     if (p === '/api/v2/task-types') return json({types: TYPES});
+    if (p === '/api/v2/event-types') return json({items: CATALOG});
+    if (p === '/api/v2/triggers') return json({triggers: [{id: 'shop', name: 'Shop', event: 'webhook.shop', routines: [], builtin: false}]});
+    if (p === '/api/v2/webhooks') return json({items: [{id: 'wh1', name: 'Zapier', host: 'hooks.zapier.com', events: ['*'], enabled: true}], more: false});
     // The server lists only the suggestions the viewer may act on.
     if (p === '/api/v2/rules/suggestions') return json({suggestions: role === 'owner' ? suggestions.filter(x => x.status !== 'dismissed') : [], more: false});
     const act = p.match(/^\/api\/v2\/rules\/suggestions\/([^/]+)\/(apply|dismiss)$/);
@@ -82,7 +91,8 @@ async function open(browser, role, hash = '#/settings/rules', viewport = {width:
       lists.push(url.search);
       const kind = url.searchParams.get('scope_kind');
       const rows = kind === 'task' ? [{...taskRow}] : kind === 'builtin' ? builtins : kind === 'bot' ? [...profileRows, rules.find(r => r.id === 'r-bot')] : rules;
-      return json({rules: rows, events: ['person_message', 'comment', 'step_entered'], outcomes: ['wake', 'note', 'batch', 'ignore'], scopes: [], more: false});
+      return json({rules: rows, events: ['person_message', 'comment', 'step_entered'], outcomes: ['wake', 'note', 'batch', 'ignore'], scopes: [], more: false,
+        sourceless_events: CATALOG.filter(e => e.sourceless).map(e => e.name)});
     }
     if (p === '/api/v2/rules') {
       const body = req.postDataJSON();
@@ -187,6 +197,7 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
       // A seeded Dev tickets row: Edit and Delete; its step is one of the type's steps; QA and the Release Manager are roles.
       await row(page, 'r-type').locator('[data-rule-edit]').click();
       const form = page.locator('[data-rule-form]');
+      await form.waitFor();   // the form opens once the event catalog and endpoints are read
       assert.equal(await form.locator('[data-rule-delete]').count(), 1);
       assert.equal(await form.locator('select[name=step]').inputValue(), 'QA Fixes');
       assert.deepEqual(await form.locator('select[name=step] option').evaluateAll(els => els.map(el => el.value)), ['', 'In QA', 'QA Fixes', 'Pending Release']);
@@ -207,6 +218,72 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
       assert.deepEqual(saved.body.when, {role: 'owner', step: 'QA Fixes'});
       assert.equal(saved.body.then, 'action');
       assert.match(await row(page, 'r-type').locator('[data-rule-text]').innerText(), /THEN move it to Pending Release\n/);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // webhook.received: its own WHEN, team/department/bot scopes, the event actions only, and data that must be JSON.
+      const {page, errors, writes} = await open(browser, 'owner');
+      await row(page, 'r-team').waitFor();
+      await page.locator('[data-rule-new]').click();
+      const form = page.locator('[data-rule-form]');
+      await form.locator('select[name=event]').selectOption('webhook.received');
+      assert.equal(await form.locator('[name=actor]').isVisible(), false, 'no task conditions');
+      assert.deepEqual(await form.locator('select[name=when_trigger] option').evaluateAll(els => els.map(e => e.value)), ['', 'shop']);
+      await form.locator('select[name=when_trigger]').selectOption('shop');
+      await form.locator('[name=when_type]').fill('order.*');
+      const off = sel => form.locator(sel).evaluateAll(els => els.filter(e => e.disabled).map(e => e.value));
+      assert.deepEqual(await off('select[name=scope_kind] option'), ['type', 'task']);
+      assert.deepEqual(await off('select[name=then] option'), ['batch']);
+      await form.locator('select[name=then]').selectOption('action');
+      assert.deepEqual(await off('select[name=action] option'), ['close', 'move_step', 'set_wait', 'relate', 'note']);
+      assert.equal(await form.locator('select[name=action]').inputValue(), 'wake_bot');
+      await form.locator('select[name=action]').selectOption('send_webhook');
+      assert.equal(await form.locator('[name=param_note]').isVisible(), false);
+      await form.locator('select[name=param_webhook]').selectOption('wh1');
+      await form.locator('[name=param_type]').fill('custom.order');
+      await form.locator('[name=param_data]').fill('{"id": {{payload.id}}}');
+      await form.locator('button[type=submit]').click();
+      await page.waitForFunction(() => document.querySelector('[data-rule-error]')?.textContent === 'Data is not valid JSON');
+      assert.equal(writes.length, 0, 'nothing sent while the data does not parse');
+      await form.locator('[name=param_data]').fill('{"id": "{{payload.id}}", "via": "tico"}');
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[0].body, {event: 'webhook.received', then: 'action', when: {trigger: 'shop', type: 'order.*'}, note: '', on: true,
+        params: {action: 'send_webhook', webhook: 'wh1', type: 'custom.order', data: {id: '{{payload.id}}', via: 'tico'}}, scope_kind: 'team', scope_id: ''});
+      // A wake at the team names the bot to tell, with its text.
+      await page.locator('[data-rule-new]').click();
+      await form.locator('select[name=event]').selectOption('webhook.received');
+      await form.locator('select[name=then]').selectOption('wake');
+      await form.locator('select[name=tell_bot]').selectOption('ops');
+      await form.locator('[name=tell_text]').fill('A new order came in');
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[1].body.params, {bot: 'ops', text: 'A new order came in'});
+      assert.deepEqual(writes[1].body.when, {});
+      // Make a task and forward run only on an event with no task; forward only on webhook.received.
+      await page.locator('[data-rule-new]').click();
+      await form.locator('select[name=event]').selectOption('comment');
+      await form.locator('select[name=then]').selectOption('action');
+      assert.deepEqual(await off('select[name=action] option'), ['create_task', 'forward']);
+      await form.locator('select[name=event]').selectOption('webhook.received');
+      await form.locator('select[name=action]').selectOption('create_task');
+      await form.locator('select[name=param_owner]').selectOption('ops');
+      await form.locator('[name=param_title]').fill('{{type}} from {{trigger.name}}');
+      await form.locator('[name=param_body]').fill('Order {{payload.id}}');
+      assert.equal(await form.locator('[name=param_webhook]').isVisible(), false);
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[2].body.params, {action: 'create_task', owner: 'ops', title: '{{type}} from {{trigger.name}}', body: 'Order {{payload.id}}'});
+      await page.locator('[data-rule-new]').click();
+      await form.locator('select[name=event]').selectOption('webhook.received');
+      await form.locator('select[name=then]').selectOption('action');
+      await form.locator('select[name=action]').selectOption('forward');
+      assert.equal(await form.locator('[name=param_type]').isVisible(), false);
+      await form.locator('select[name=param_webhook]').selectOption('wh1');
+      await form.locator('button[type=submit]').click();
+      await form.waitFor({state: 'detached'});
+      assert.deepEqual(writes[3].body.params, {action: 'forward', webhook: 'wh1'});
       assert.deepEqual(errors, []);
       await page.close();
     }

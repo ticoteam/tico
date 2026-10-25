@@ -6,6 +6,10 @@ summary every bot reads on every run, a vision, three to five **bets**, and four
 publishes it; the [CEO Bot](ceo-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
+**Market views.** The Market tab shows the market in views: Players (the graph), Spend, Buyers, Value chain and
+Size vs growth. Spend is the default once a segment is sized. How the market is defined, cut into segments and sized
+is in [Librarian](librarian.md#market-spend).
+
 Three activities make one loop:
 
 | Activity | Who | What it produces |
@@ -17,7 +21,7 @@ Three activities make one loop:
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
 
-This page is the shape, guides, who may do what, setup, publishing, the fit check, what bots see, and the API.
+This page is the shape, lenses, who may do what, setup, publishing, the fit check, what bots see, and the API.
 
 ## The page
 
@@ -63,20 +67,19 @@ arithmetic, never a goal's lifecycle status. A bet whose goals have no KPI shows
 pricing page" says nothing about whether a pricing bet is right. Linking a goal to a bet is optional; the page offers
 "not tied to a bet" as a filter, never as a nag.
 
-## Guides
+## Lenses
 
-A **guide** changes what the CEO Bot asks and the word on the list, never what is stored. It is one YAML file: a
-name, the word for bets (default **Bets**), six to ten interview questions in its style, and optional suggested extra
-sections. `hub strategy guides` and `GET /api/v2/strategy/guides` list the ones on offer.
+A **lens** is a set of questions from a known framework, run once against the published strategy (or your draft, if
+you are the owner) or the market. The result is a summary, sections, a chart, findings about your bets and changes you
+may add to the draft one at a time; nothing is published or written by itself. The listed lenses are Playing to Win,
+Blue Ocean, Scenarios, Seven Powers, Good Strategy, Pre-mortem and Positioning for the strategy, and Where to Play and
+Five Forces for the market. They are in [Lenses](lenses.md).
 
-- **Default** (the only one listed today): questions in the founder-native style of the YC application and a16z's
-  go-to-market writing: what you make and who needs it; what you understand that others don't; how you make money
-  and how much; who you fear and what stops a bigger company copying you; the wedge you enter through; the price
-  that breaks; the request you turned down; the bet most people would call wrong. It is "in the style of", not
-  theirs.
-- **Later, on demand:** Rumelt's kernel, Playing to Win, OGSM, V2MOM and Dunford positioning, each as questions and a
-  label only. Switching will be a Settings choice on the Strategy page, not a setup step, and switching never changes
-  the stored shape.
+The CEO Bot's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
+writing: what you make and who needs it; what you understand that others don't; how you make money and how much;
+who you fear and what stops a bigger company copying you; the wedge you enter through; the price that breaks; the
+request you turned down; the bet most people would call wrong. It is "in the style of", not theirs. The other guides
+became lenses; `hub strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
 
 ## Who may do what
 
@@ -90,6 +93,9 @@ sections. `hub strategy guides` and `GET /api/v2/strategy/guides` list the ones 
 **The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
 bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
 `revision`, so two editors get a conflict (`409`), not a silent overwrite.
+
+If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
+A failed bet move also reloads the list; check the order before trying again.
 
 The CEO Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
@@ -124,8 +130,9 @@ strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strateg
 Setup starts with **What are you building** and **Your bets** ([Onboarding](onboarding.md#the-screens)):
 
 1. **What are you building.** An existing team pastes its website and one line; a new idea is described in a few
-   sentences. With a URL the server fetches home, about, pricing and customers right away, fills *Who we serve* and
-   *What we sell* marked **unconfirmed**, and proposes two or three bets the site implies, each with what it rules out.
+   sentences. With a URL the server fetches home, about, pricing and customers right away, fills the summary, the
+   vision and the four sections (each section marked **unconfirmed**), and proposes three bets the site implies, each
+   with what it rules out.
 2. **Your bets.** Claims to confirm or strike, not open questions. The page fills in on the right as the owner answers.
    To leave the step: one active bet with a rules-out and a wrong-if, and one line under *What we won't do*. Without a
    model provider, or when the research failed, it is the same fields as a plain form; when the research gave up it
@@ -143,17 +150,21 @@ polls it:
 | `state` | Meaning |
 |---|---|
 | `running` | `step` is `reading` (fetching pages) then `thinking` (the model call) |
-| `done` | `written` is `{sections, bets, revision}`: the sections filled, the proposed bet ids, the draft's new revision |
+| `done` | `written` is `{sections, fields, bets, revision}`: the sections filled, which of `summary` and `vision` were filled, the proposed bet ids, the draft's new revision |
 | `gave_up` | the owner wrote the draft meanwhile (`error.code` `edited`) or a newer job started (`superseded`); nothing was written and `found` holds what the research found, to offer by hand |
 | `failed` | `error.code` is the fetch code (`private_address`, `timeout` ...), the model's, `empty`, `interrupted` when the server restarted mid-run (or it ran 10 minutes; it then writes nothing), or `cleared` when setup's website and line were cleared |
 | `no_model` | no model provider: the step is a plain form |
 
 Every job also carries `url`, `text`, `pages` (`[{url, title}]` or `{url, error}`, never page text), `found`
-(`{serve, sell, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered) and `started`/`finished`;
+(`{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered)
+and `started`/`finished`;
 the last five jobs are kept. The fetch is the doc-link fetch's guard: http and https only, every address the name
 resolves to must be public, each redirect re-checked, at most four pages of 8,000 characters in 45 seconds, and no
 server credentials sent. The model call is the one-shot path the update writer uses (the Tico AI Gateway, else the
-team's own provider key); no runner or agent turn is involved. Sections are written only where empty, each starting
+team's own provider key); no runner or agent turn is involved. Its prompt and answer schema are
+`backend/strategy_prompt.py`, a file with no imports that Tico HQ's setup page keeps a pinned copy of, so both draft
+the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
+The summary, vision and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
 due in 90 days. Nothing is published. There is no `hub` or MCP verb for it: it is a browser setup step.
 
@@ -170,6 +181,9 @@ The owner edits the draft and publishes with a note. **Publish** refuses, and th
 
 - at least one bet is active with a `rules_out` and a `wrong_if`, and
 - *What we won't do* is not empty.
+
+Changes only to a bet's market citations or the guide also enable **Publish** when these conditions hold.
+Saving the summary while a bet editor or publish form is open does not prevent you from submitting that form.
 
 Publishing snapshots every bet that is not retired, with its status, as version *n*, and opens a fresh draft copied
 from it. Then:
@@ -192,6 +206,11 @@ The CEO Bot's `bet-tripped.md` playbook reads the bet, the evidence, the reading
 goals linked to the bet, and writes **one Decide card** for the owner: a `strategy_draft` proposal that retires the
 bet, rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
 runs at every level: at Passive the server still files the task, and the CEO Bot only writes the card.
+
+The Librarian's [weekly briefing](market-briefing.md) feeds the same check from the other side: when it touches an active
+bet, the CEO Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
+[page monitors](market-watch.md) turn a competitor's changed pricing page into an insight; a bet trips on it only once the
+Librarian applies it to the entity.
 
 ## What bots see
 
@@ -216,7 +235,8 @@ hub strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID 
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
     [--status proposed|active] [--rank N]
 hub strategy bet update <id> [the same flags]      hub strategy bet retire <id>      (owner only)
-hub strategy guides
+hub strategy guides                     deprecated; the Default guide only
+hub lens list|run|show|runs            see Lenses (lenses.md)
 hub goal create ... --bet <id>          hub goal update <id> --bet <id>
 ```
 
@@ -233,11 +253,12 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 | `POST /strategy/bets`, `/strategy/bets/{id}` | the owner only | create; partial update including `rank` and `status`; at most seven active |
 | `GET /strategy/summary` | any bot or human | plain text: the summary, one line per active bet with its wrong-if, "version N" |
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills `serve` and `sell` marked unconfirmed and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
-| `GET /strategy/guides` | any reader | the listed guides |
+| `GET /strategy/guides` | any reader | deprecated: the Default guide only |
+| `/lenses/...` | see [Lenses](lenses.md#hub-and-the-api) | list, run, read, add a change to the draft, sharpen |
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
-rules_out?, wrong_if?, cites?, status?}]}`. Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
+rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 

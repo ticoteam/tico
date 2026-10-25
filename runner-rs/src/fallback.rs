@@ -98,6 +98,10 @@ fn choose(config: &Value, choices: &[Value], env: &crate::env::Env, tried: &[Str
             return None;
         }
         let runtime = crate::harness_tools::runtime_of(&harness);
+        // The server's pick for this bot (`gateway_fallback`, its department and level) replaces the company row's
+        // model when the hop is the Gateway.
+        let pick = text_of(&config["gateway_fallback"]);
+        let model = if crate::hosts::pi::is_gateway(Some(&model)) && crate::hosts::pi::is_gateway(Some(&pick)) { pick.trim().to_string() } else { model };
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         Some(Hop { harness, runtime, model, reasoning_effort: effort, default: true })
     })
@@ -483,6 +487,21 @@ mod tests {
         // With the relay, the Gateway needs neither a pi login nor an OpenRouter key.
         let hop = default_choice(&config, &choices, &env, |_| false).unwrap();
         assert_eq!((hop.harness.as_str(), hop.model.as_str(), hop.default), ("pi", "tico-mid-1.0", true));
+    }
+
+    #[test]
+    fn the_gateway_hop_runs_the_bots_own_pick_when_the_server_sent_one() {
+        let choices = vec![json!({"runtime": "pi", "harness": "pi", "model": "tico-general-medium-1.0"})];
+        let mut env = crate::env::Env::new();
+        env.insert(crate::gateway_relay::KEY_ENV.into(), "relay-fixture".into());
+        let mut config = json!({"runtime": "claude", "harness": "claude-code", "model": "claude-sonnet-5-5",
+                                "gateway_fallback": "tico-engineering-high-1.0"});
+        assert_eq!(default_choice(&config, &choices, &env, |_| false).unwrap().model, "tico-engineering-high-1.0");
+        // No pick, or one that is not a Tico model: the company's row stands.
+        config["gateway_fallback"] = json!("");
+        assert_eq!(default_choice(&config, &choices, &env, |_| false).unwrap().model, "tico-general-medium-1.0");
+        config["gateway_fallback"] = json!("gpt-5.5");
+        assert_eq!(default_choice(&config, &choices, &env, |_| false).unwrap().model, "tico-general-medium-1.0");
     }
 
     #[test]

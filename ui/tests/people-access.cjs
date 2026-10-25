@@ -31,7 +31,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       owner: {email: owner, revision: 1, person: 'ana'},
       people: people.map(p => {
         const isOwner = p.email === owner, role = isOwner ? 'owner' : p.admin ? 'admin' : 'member';
-        return {...p, left: !!p.left, owner: isOwner, role, bot_admin: role === 'admin', create_bots: p.create_bots !== false,
+        return {...p, left: !!p.left, removable: !!p.left && !p.history, owner: isOwner, role, bot_admin: role === 'admin', create_bots: p.create_bots !== false,
                 add_people: p.add_people === undefined ? true : !!p.add_people, add_people_default: p.add_people === undefined,
                 sign_in: p.sign_in !== false, can_sign_in: !p.left && !!p.email && p.sign_in !== false};
       }),
@@ -73,6 +73,9 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
         if ('role' in body) row.admin = body.role === 'admin';
         for (const k of ['create_bots', 'add_people', 'left', 'sign_in']) if (k in body) row[k] = body[k];
         return json({person: m[1]});
+      }
+      if ((m = p.match(/^\/api\/v2\/humans\/([^/]+)$/)) && method === 'DELETE') {
+        calls.push(['remove', m[1]]); people = people.filter(x => x.id !== m[1]); return json({person: m[1], removed: true});
       }
       if ((m = p.match(/^\/api\/v2\/humans\/([^/]+)$/)) && method === 'POST') {
         const body = request.postDataJSON(); calls.push(['left', m[1], body]);
@@ -164,9 +167,23 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       await dialog.locator('[type=submit]').click();
       assert.deepEqual(await next(), ['left', 'cy', {left: true}]);
     });
+    // A left person with no history can be removed behind its confirm; one with history can only be restored.
+    people.push({id: 'dee', name: 'Dee Typo', email: 'dee@acme.example', left: true},
+                {id: 'eve', name: 'Eve Old', email: 'eve@acme.example', left: true, history: true});
     await page.locator('.people-left summary').click();
-    await page.locator('.people-row.is-left[data-person=cy] [data-person-act=restore]').click();
-    assert.deepEqual(await next(), ['edit', 'cy', {left: false}]);
+    await repainted(async () => {
+      await page.locator('.people-row.is-left[data-person=cy] [data-person-act=restore]').click();
+      assert.deepEqual(await next(), ['edit', 'cy', {left: false}]);
+    });
+    await page.locator('.people-left summary').click();
+    assert.equal(await row('eve').locator('[data-person-act=remove]').count(), 0);
+    await row('dee').locator('[data-person-act=remove]').click();
+    assert.match(await dialog.textContent(), /can't be undone/);
+    await repainted(async () => {
+      await dialog.locator('[type=submit]').click();
+      assert.deepEqual(await next(), ['remove', 'dee']);
+    });
+    assert.equal(await row('dee').count(), 0);
 
     // Domain sign-in is the company domain on the allow list; anything else listed stays, shown as a chip.
     assert.equal(await page.locator('#people-domain').isChecked(), false);

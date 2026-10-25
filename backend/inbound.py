@@ -428,6 +428,8 @@ class Inbound:
                     from .routines import emit
                     emit(c,'inbound.received',item['delivery_id'],{'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
                                                                 'kind':item['kind'],'has_code':bool(code)})
+                    H.hook(c,'inbound.received',item['delivery_id'],lambda: {'message_id':item['delivery_id'],'inbox_id':item['inbox_id'],
+                                                                           'kind':item['kind']},'keeper',revision=0)
             # Keep cumulative gap summaries; the cursor commit and gap update are atomic with messages.
             old = json.loads(c.execute('SELECT gaps_json FROM inbound_sync WHERE singleton=1').fetchone()[0])
             gaps = {(g['inbox_id'],g['from'],g['to']):g for g in old+page.get('gaps',[])}

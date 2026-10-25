@@ -53,44 +53,35 @@ stops at its first line on an open setup question does nothing every time it fir
 A routine runs on a time (`cron`, five fields, in `timezone`, America/Los_Angeles by default) or
 on something happening in Tico (`on`), never both. Tico emits `meeting.ready` when a team meeting with a transcript is first imported (a private meeting emits nothing; `recording.ready` is its old name and is still emitted, so older routines keep firing; see [Meetings](meetings.md)). It emits `release_published` when a release in the release repository is published (not a prerelease), one task per release, with the carried tickets listed. It emits `market.insight.urgent` when someone reports a market insight with
 `--urgent`; that opens the Librarian's urgent market routine and does not fire for an ordinary report. It emits `strategy.published`
-with subject `v{n}` when the owner publishes a [strategy](strategy.md) version. Every bot already gets the new summary and active
+with subject `v{n}` when the owner publishes a [strategy](strategy.md) version. It emits `market.briefing` with subject
+`<ISO week>` when the Librarian posts a [weekly market briefing](market-briefing.md); the payload names the bets it touches,
+and a routine on it is for the CEO Bot's weighing of those bets. Every bot already gets the new summary and active
 bets in its next run's context, and no bot gets a note, so a routine on this event is for work that should follow a change at
 once, not for reading the page. Each event opens one task per routine and per subject, titled `<routine title>:
 <meeting title>`; the body is the routine's text, then the event's facts, then the meeting's
 notes and transcript. Re-emitting the same event for the same subject does nothing. The event
-list is `clients/routines.py EVENTS`.
+list is the catalog in `backend/event_catalog.py`: `hub event-types` (`hub_event_types`, `GET /api/v2/event-types`) shows every
+name with its description, version and an example payload, and `--group` narrows it. A routine's `on` takes any catalog name
+or an old spelling of one (`release_published` is `release.published`, `recording.ready` is `meeting.ready`); both
+spellings fire the same routines once per event. `webhook.<trigger id>` is one incoming webhook's own event. `custom.<name>`
+is for sending only. A catalog event fires a routine only once something emits it, so a routine saved on a name nothing emits
+yet waits.
 
 ## Triggers
 
-A trigger starts routines from outside Tico. Today a trigger is a webhook: Settings > Triggers →
-*Add webhook* gives an address, and anything that can send an HTTP POST (a payment service, a form,
-a deploy, a script) calls it. A routine picks it under *Runs: On a trigger* (`--on webhook.<id>` in
-`hub routine set`; `hub trigger list` shows the ids). Each call opens one task per listening routine:
-the routine's text, then the trigger's name, then the request body, fenced as data the bot did not write.
+A trigger starts routines from outside Tico. Today a trigger is an incoming webhook: Settings → Webhooks → Incoming gives an
+address, and anything that can send an HTTP POST (a payment service, a form, a deploy, a script) calls it. A routine picks it under
+*Runs: On an event* (`--on webhook.<id>` in `hub routine set`; `hub trigger list` shows the ids). Each call opens one task per
+listening routine: the routine's text, then the trigger's name and the call's type, then the request body, fenced as data the bot
+did not write. A routine has no filter on the type, so every call opens a task; to act on one type only, use a rule on
+`webhook.received`.
 
-- The address is `/api/v2/hooks/<id>/<secret>`; `POST /api/v2/hooks/<id>` with `Authorization:
-  Bearer <secret>` works too. Tico keeps only a hash of the secret, so the full address is shown once,
-  when the webhook is made or given *New secret*, which also stops the old address at once.
-- A wrong id or secret is 404. The body may be up to 256 KB; the task shows the first 20,000 characters.
-- A sender's `Idempotency-Key` (or `Webhook-Id`, `X-Request-Id`, `X-GitHub-Delivery`) makes a retry
-  open nothing new.
-- Each webhook takes 60 calls an hour; past that the sender gets 429 and retries later, so a noisy
-  sender cannot wake a bot without end.
-- *Require signature* gives a webhook a signing secret, shown once (paste it as the GitHub webhook's
-  *Secret*). Then each call must carry the HMAC-SHA256 of its exact body under that secret, as GitHub's
-  `X-Hub-Signature-256: sha256=<hex>` or a generic `X-Signature` (`sha256=<hex>` or bare hex). A call
-  without a matching signature gets 401 and opens nothing. Tico keeps the signing secret sealed with the
-  credential key, because checking a signature needs the secret itself. *Stop signing* turns it off.
-- *Recent calls* under each webhook lists the last 50 calls, accepted and refused (bad or missing
-  signature, over the hourly limit), with the sender's delivery id. Only calls to the right address are
-  logged, and at most 60 refusals an hour, so a stranger cannot fill the log.
-- Any person may add a webhook; the owner, the person who added it and BotOps may replace its secret,
-  set or stop its signing secret, or delete it. A routine may name only a webhook that exists. Deleting one leaves its routines in place,
-  silent, until a webhook with the same id is added again.
-- The API: `GET /api/v2/triggers` (no secrets), `POST /api/v2/triggers` (`name`, optional `id`),
-  `POST /api/v2/triggers/<id>/rotate`, `POST /api/v2/triggers/<id>/signing` (`{}` makes a secret,
-  `secret` sets one of 16+ characters, `off: true` stops checking), `GET /api/v2/triggers/<id>/deliveries`,
-  `POST /api/v2/triggers/<id>/delete`.
+Making the address, signature checks and presets, types, the hourly limit, the kept calls, Run again, the address through Tico
+Gateway that holds calls while the server is off, and rules are all on [Webhooks](webhooks.md). Recipes:
+[GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
+
+Deleting a trigger removes its kept calls and leaves its routines in place, silent, until a trigger with the same id is added
+again. A routine may name only a trigger that exists.
 
 ## What happens when one is due
 

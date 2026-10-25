@@ -118,6 +118,8 @@ services:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
+      # Letting Tico support in from a request (docs/support.md); off unless this is on.
+      TICO_SUPPORT_ACCESS:
       TICO_TELEMETRY:
       DO_NOT_TRACK:
       TICO_TELEMETRY_DEBUG:

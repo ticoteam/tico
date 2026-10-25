@@ -305,6 +305,11 @@ gets OpenRouter's and the provider's normal retention, and Tico's bots do not as
 US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
 a route confirmed to stay in the US exists.
 
+**A server Tico hosts** (`TICO_HOSTED`) also tells Tico HQ, with the same gateway key, the release it runs, every 15
+minutes (`POST <Gateway URL>/servers/update {"version"}`), and after an update Tico support scheduled for it, how that
+went (`updated`, `failed`, `rolled_back` or `timed_out`, with the updater's message). HQ answers with the release
+support scheduled, if any (`backend/hosted_updates.py`). A self-run server never sends it.
+
 ## The AI accounts your computers are signed in to
 
 This stays on your own server; nothing here is sent to HQ or added to a support ticket's diagnostics.

@@ -162,7 +162,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
     hub strategy diff --from N --to N      what changed between two versions
-    hub strategy guides                    the question guides the CEO Bot drafts with
+    hub strategy guides                    deprecated: the CEO Bot's drafting questions; the exercises are lenses
     hub strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
     hub strategy publish [--note "..."] [--revision N]
     hub strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
@@ -172,6 +172,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy bet retire <id>
                                            draft, publish and bets: the owner only; a bot proposes with
                                            proposal create --kind strategy_draft
+    hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
+    hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
+                                           run one (the owner, the CEO Bot; a market lens also the Librarian); waits up
+                                           to 60 s and prints the run with its summary; --draft: the owner's draft
+    hub lens show <run-id>                 one run: answers, result, changes
+    hub lens runs [--lens ID]              runs, newest first, with their summaries
     hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
@@ -216,7 +222,35 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--timezone Z] [--enable|--disable] [--bot X]
                                            --enable / --disable turn it on or off; another bot's, as the requester (BotOps)
     hub routine delete <id>
-    hub trigger list                       webhooks people made; a routine runs --on webhook.<id>
+    hub trigger list                       webhooks people and bots made; a routine runs --on webhook.<id>
+    hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
+    hub trigger show <id>                  address, settings, 24-hour counts, routines
+    hub trigger update <id> [--name N] [--preset none|hmac|github|standard|stripe|slack] [--type-from H|/pointer]
+                    [--hourly 1-600] [--keep-days 1-30] [--unheard log|note]
+    hub trigger rotate <id>                a new secret; the old address stops
+    hub trigger sign <id> [--preset P] [--secret S] [--off]
+                                           verify each call (preset default hmac); the secret is shown once
+    hub trigger delete <id>
+    hub trigger deliveries <id>            the latest calls: delivery id, type, outcome, stored
+    hub trigger delivery <id> <delivery> [--part N]
+                                           one stored call, headers redacted; long bodies read in parts
+    hub trigger replay <id> <delivery>     run a stored call again as a new occurrence
+    hub trigger recover <id> [--since HOURS]
+                                           run again the calls refused in the last hours (a fixed secret) whose body is kept
+    hub event-types [--group task]         every event Tico names, with an example payload (routines, rules, webhooks)
+    hub trigger relay create|rotate|delete <trigger>
+                                           a second address through Tico Gateway (shown once); hub relay status
+    hub relay set <trigger> --wake on|off  whether a delivery to that address starts a sleeping server
+    hub relay wake-url show|off|set <url>  the https address Tico Gateway knocks on to start a server you run when a webhook
+                                           waits for it; the owner (set shows the signing secret once)
+    hub webhook list|create|show|update|rotate|pause|resume|delete|send|sends|retry|example
+    hub webhook recover|replay <id> --since DATE|enable <id>
+                                           send again what gave up / what was never sent since a date; turn an endpoint back on
+                                           outgoing webhooks: endpoints Tico posts events to (hub webhook create --help)
+    hub sleep status                       stop this hosted server after quiet hours; show the setting
+    hub sleep set --hours N [--runners on|off]
+                                           1-24 quiet hours, 0 = off; bot computers stop with it unless --runners off
+    hub notice list                        notices from Tico Team, newest first (tico.notice in rules)
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -276,6 +310,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision outcome --ref R --verdict V --action A [--label L]
                                            after acting on a decision ask or hub classify answer (its `ref`):
                                            what you did with it, once per call
+    hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
+    hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
+    hub gateway fetch URL [--max-tokens N] read a web page or PDF through the Gateway: title, content, cost
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -583,6 +620,24 @@ def cmd_task_dry_run(args, who):
 
 
 # ----------------------------------------------------------------------------- parser
+def quiet_hours(word):
+    """0 to 24, whole hours."""
+    try:
+        hours = int(word)
+    except ValueError:
+        hours = -1
+    if not 0 <= hours <= 24:
+        raise argparse.ArgumentTypeError("use a whole number of hours from 0 to 24")
+    return hours
+
+
+def on_off(word):
+    """`on` or `off` as the boolean the tool takes."""
+    if word not in ("on", "off"):
+        raise argparse.ArgumentTypeError("use on or off")
+    return word == "on"
+
+
 def parser():
     p = argparse.ArgumentParser(prog="hub", description="the company hub: messages, tasks, status")
     sub = p.add_subparsers(dest="cmd")
@@ -1372,7 +1427,7 @@ def parser():
     s.add_argument("--from", dest="from_n", type=int, required=True)
     s.add_argument("--to", dest="to_n", type=int, required=True)
     s.set_defaults(fn="strategy diff")
-    s = strategy.add_parser("guides", help="the guides: their questions and the words for bets")
+    s = strategy.add_parser("guides", help="deprecated: the CEO Bot's drafting questions; the exercises are lenses")
     s.set_defaults(fn="strategy guides")
     bet = strategy.add_parser("bet", help="owner only: add, change or retire a bet").add_subparsers(dest="subsub")
 
@@ -1400,6 +1455,24 @@ def parser():
     s = bet.add_parser("retire", help="its goals keep their link")
     s.add_argument("id")
     s.set_defaults(fn="strategy bet retire")
+
+    lens = sub.add_parser("lens", help="thought exercises run against the strategy or the market").add_subparsers(dest="sub")
+    s = lens.add_parser("list", help="the lenses, with their steps")
+    s.add_argument("--market", action="store_true", help="only the market lenses")
+    s.set_defaults(fn="lens list")
+    s = lens.add_parser("run", help="run a lens; prints the run, waiting up to 60 seconds for its summary")
+    s.add_argument("id")
+    s.add_argument("--answers-file", dest="answers_file", help='JSON {"step key": answer}; a step left out is assumed')
+    s.add_argument("--draft", action="store_true", help="owner only: run on the draft instead of the published version")
+    s.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the running run and return")
+    s.set_defaults(fn="lens run")
+    s = lens.add_parser("show", help="one run: answers, result and changes")
+    s.add_argument("id")
+    s.set_defaults(fn="lens show")
+    s = lens.add_parser("runs", help="runs, newest first")
+    s.add_argument("--lens", dest="lens")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="lens runs")
 
     market = sub.add_parser("market", help="the shared market graph: read it, report into it, curate it").add_subparsers(dest="sub")
     s = market.add_parser("show", help="one entity, its edges both ways, the evidence, the last ten events")
@@ -1466,9 +1539,111 @@ def parser():
     s.set_defaults(fn="market refresh")
     s = market.add_parser("page", help="read one market page (overview, coverage-universe, ...), or rewrite it from a Markdown file")
     s.add_argument("name", help="overview, structure-and-size, coverage-universe, people-who-matter, channels, "
-                                "regulation-and-catalysts, theses or open-questions")
+                                "regulation-and-catalysts, theses, open-questions or customer-themes")
     s.add_argument("--body-file", dest="body_file", help="the whole page in Markdown; - reads stdin; omit to read the page")
     s.set_defaults(fn="market page")
+    watch = market.add_parser("watch", help="watch a competitor's public page; the server reads it daily and files an insight on a change").add_subparsers(dest="subsub")
+    s = watch.add_parser("add", help="watch one page of an entity")
+    s.add_argument("entity_id")
+    s.add_argument("url")
+    s.add_argument("--kind", default="other", choices=["pricing", "careers", "changelog", "docs", "home", "other"])
+    s.set_defaults(fn="market watch add")
+    s = watch.add_parser("list", help="the watched pages and when each was last read")
+    s.add_argument("--entity", dest="entity_id")
+    s.set_defaults(fn="market watch list")
+    s = watch.add_parser("stop", help="stop watching a page (the row is kept)")
+    s.add_argument("id")
+    s.set_defaults(fn="market watch stop")
+    s = watch.add_parser("check", help="read the watched pages now (the longest unchecked first, at most 50)")
+    s.set_defaults(fn="market watch check")
+    briefing = market.add_parser("briefing", help="the weekly market briefing").add_subparsers(dest="subsub")
+    s = briefing.add_parser("post", help="post the week's briefing; the same week again replaces it")
+    s.add_argument("--week", required=True, help="ISO week, like 2026-W44")
+    s.add_argument("--title", required=True)
+    s.add_argument("--body-file", dest="body_file", required=True, help="the briefing in Markdown; - reads stdin")
+    s.add_argument("--items-file", dest="items_file", help="JSON list of {text, kind: change|signal|theme|size, entity_ids}")
+    s.set_defaults(fn="market briefing post")
+    s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
+    s.set_defaults(fn="market briefing latest")
+    s = market.add_parser("define", help="Librarian or owner: define the market (what it is, what is in and out, how to count)")
+    s.add_argument("--description")
+    s.add_argument("--root-name", dest="root_name", help="the root segment's name, the first time")
+    s.add_argument("--include", action="append", dest="includes", metavar="TEXT", help="what is in; repeatable, replaces the list")
+    s.add_argument("--exclude", action="append", dest="excludes", metavar="TEXT", help="what is out; repeatable, replaces the list")
+    s.add_argument("--rule", action="append", dest="counting_rules", metavar="TEXT", help="a counting rule; repeatable, replaces the list")
+    s.add_argument("--year", type=int)
+    s.add_argument("--geography")
+    s.add_argument("--param", action="append", dest="params", metavar="NAME=NUMBER", help="a shared parameter formulas read as $NAME; repeatable")
+    s.set_defaults(fn="market define")
+    s = market.add_parser("segment", help="the market's segments: add one, or print the tree").add_subparsers(dest="subsub")
+    s2 = s.add_parser("add", help="Librarian or owner: a segment under the root, or under --parent")
+    s2.add_argument("name")
+    s2.add_argument("--parent", dest="parent_id", metavar="SEGMENT_ID")
+    s2.add_argument("--summary")
+    s2.set_defaults(fn="market segment add")
+    s2 = s.add_parser("tree", help="the segments, indented, with their sizes")
+    s2.set_defaults(fn="market segment tree")
+    s = market.add_parser("size", help="a segment's yearly spend: add an estimate, accept or reject one, list them").add_subparsers(dest="subsub")
+    s2 = s.add_parser("add", help="Librarian or owner: file an estimate, proposed unless --accept")
+    s2.add_argument("--segment", dest="segment_id", required=True, metavar="SEGMENT_ID")
+    s2.add_argument("--method", required=True, choices=["top_down", "bottom_up", "player_sum", "owner"])
+    s2.add_argument("--spend", dest="spend_usd", type=float, metavar="USD", help="omit when --formula gives it")
+    s2.add_argument("--low", dest="low_usd", type=float, required=True, metavar="USD")
+    s2.add_argument("--high", dest="high_usd", type=float, required=True, metavar="USD")
+    s2.add_argument("--formula", help="arithmetic over numbers, --param names and shared $names")
+    s2.add_argument("--param", action="append", dest="params", metavar="NAME=NUMBER")
+    s2.add_argument("--arithmetic", help="the working, in words")
+    s2.add_argument("--growth", dest="growth_pct", type=float, metavar="PERCENT")
+    s2.add_argument("--year", type=int)
+    s2.add_argument("--dimension", choices=["offering", "buyer"])
+    s2.add_argument("--basis", choices=["product", "platform"])
+    s2.add_argument("--confidence", choices=["high", "medium", "low"])
+    s2.add_argument("--overlaps")
+    s2.add_argument("--spread", help="analyst headline figures, as text")
+    s2.add_argument("--evidence", action="append", dest="evidence_ids", metavar="EVIDENCE_ID")
+    s2.add_argument("--evidence-url", dest="evidence_url")
+    s2.add_argument("--quote")
+    s2.add_argument("--source-kind", dest="source_kind")
+    s2.add_argument("--our-read", dest="our_read")
+    s2.add_argument("--accept", action="store_true", default=None)
+    s2.set_defaults(fn="market size add")
+    for word, help_text in (("accept", "the estimate becomes the segment's size"), ("reject", "the estimate is out")):
+        s2 = s.add_parser(word, help=help_text)
+        s2.add_argument("id")
+        s2.set_defaults(fn="market size decide", decision=word)
+    s2 = s.add_parser("params", help="owner only: change an estimate's parameter; files a new accepted owner estimate")
+    s2.add_argument("id")
+    s2.add_argument("--param", action="append", dest="params", required=True, metavar="NAME=NUMBER")
+    s2.set_defaults(fn="market size decide", decision="params")
+    s2 = s.add_parser("list", help="the estimates, optionally one segment's")
+    s2.add_argument("--segment", metavar="SEGMENT_ID")
+    s2.set_defaults(fn="market size list")
+    s = market.add_parser("figure", help="a player's revenue, ARR, customers or seats in a segment").add_subparsers(dest="subsub")
+    s2 = s.add_parser("add", help="Librarian or owner: one dated figure with its evidence")
+    s2.add_argument("--entity", dest="entity_id", required=True, metavar="ENTITY_ID")
+    s2.add_argument("--segment", dest="segment_id", required=True, metavar="SEGMENT_ID")
+    s2.add_argument("--metric", required=True, choices=["revenue", "arr", "customers", "seats"])
+    s2.add_argument("--value", type=float)
+    s2.add_argument("--text", help="when there is no number")
+    s2.add_argument("--kind", required=True, choices=["reported", "estimated", "claimed"])
+    s2.add_argument("--as-of", dest="as_of", required=True, metavar="YYYY-MM[-DD]")
+    s2.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID")
+    s2.add_argument("--evidence-url", dest="evidence_url")
+    s2.add_argument("--quote")
+    s2.add_argument("--source-kind", dest="source_kind")
+    s2.add_argument("--our-read", dest="our_read")
+    s2.set_defaults(fn="market figure add")
+    s = market.add_parser("sources", help="where to look when sizing the market: the catalog and the team's additions")
+    s.add_argument("--add-file", dest="add_file", help="a YAML file of sources to add (a list, or one)")
+    s.set_defaults(fn="market sources")
+    s = market.add_parser("spend", help="the market by spend: the tree with sizes (JSON has every estimate)")
+    s.add_argument("--dimension", choices=["offering", "buyer"])
+    s.add_argument("--basis", choices=["product", "platform"])
+    s.add_argument("--year", type=int)
+    s.set_defaults(fn="market spend")
+    s = market.add_parser("research", help="owner only: ask the Librarian to define and size the market")
+    s.add_argument("description")
+    s.set_defaults(fn="market research")
 
     listen = sub.add_parser("listening", help="Listening's saved posts: save a sweep, decide where each post goes, trace a post").add_subparsers(dest="sub")
     s = listen.add_parser("save", help="one sweep of one query and the posts it saw, from a JSON file")
@@ -1590,9 +1765,91 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="routine run")
 
-    trigger = sub.add_parser("trigger", help="webhooks that start routines (Settings > Triggers)").add_subparsers(dest="sub")
+    s = sub.add_parser("event-types", help="every event Tico names, with a one-line description and an example payload")
+    s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
+                                   "inbound, health, webhook, tico, custom")
+    s.set_defaults(fn="event-types")
+    trigger = sub.add_parser("trigger", help="webhooks that start routines (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
+    s = trigger.add_parser("create", help="make a webhook trigger; the address with its secret is shown once")
+    s.add_argument("name")
+    s.add_argument("--id", help="lowercase letters, digits and dashes; made from the name by default")
+    s.set_defaults(fn="trigger create")
+    s = trigger.add_parser("show")
+    s.add_argument("id")
+    s.set_defaults(fn="trigger show")
+    s = trigger.add_parser("update", help="change a trigger's name or settings")
+    s.add_argument("id")
+    s.add_argument("--name")
+    s.add_argument("--preset", choices=["none", "hmac", "github", "standard", "stripe", "slack"], help="how calls are verified (needs a signing secret)")
+    s.add_argument("--type-from", dest="type_from", help="a header name or a JSON pointer (/type); empty for the preset's default")
+    s.add_argument("--hourly", type=int, help="calls an hour, 1-600 (60 by default)")
+    s.add_argument("--keep-days", dest="keep_days", type=int, help="days calls stay readable and can run again, 1-30 (7 by default)")
+    s.add_argument("--unheard", choices=["log", "note"], help="note: tell the maker, at most hourly, when no routine or rule acted")
+    s.set_defaults(fn="trigger update")
+    s = trigger.add_parser("rotate", help="a new secret; the old address stops working")
+    s.add_argument("id")
+    s.set_defaults(fn="trigger rotate")
+    s = trigger.add_parser("sign", help="verify each call with a preset; the signing secret is shown once")
+    s.add_argument("id")
+    s.add_argument("--preset", choices=["hmac", "github", "standard", "stripe", "slack"], help="the current one, else hmac")
+    s.add_argument("--secret", help="the sender's own secret (16+ characters); a new one is made when left out")
+    s.add_argument("--off", action="store_true", help="stop checking signatures")
+    s.set_defaults(fn="trigger sign")
+    s = trigger.add_parser("delete")
+    s.add_argument("id")
+    s.set_defaults(fn="trigger delete")
+    s = trigger.add_parser("deliveries", help="the latest calls to a trigger")
+    s.add_argument("id")
+    s.set_defaults(fn="trigger deliveries")
+    s = trigger.add_parser("delivery", help="one stored call: redacted headers and the body (long bodies in parts)")
+    s.add_argument("id")
+    s.add_argument("delivery")
+    s.add_argument("--part", type=int, help="which 20,000-character part of a long body (from 1)")
+    s.set_defaults(fn="trigger delivery")
+    s = trigger.add_parser("replay", help="run a stored call again as a new occurrence")
+    s.add_argument("id")
+    s.add_argument("delivery")
+    s.set_defaults(fn="trigger replay")
+    s = trigger.add_parser("recover", help="run again, under the current secret and preset, every call refused in the last "
+                                           "hours whose body is kept; a sender's later retry of one is a duplicate")
+    s.add_argument("id")
+    s.add_argument("--since", type=int, default=24, help="hours back, 1-720 (24 by default)")
+    s.set_defaults(fn="trigger recover")
+    relay = trigger.add_parser("relay", help="a second address through Tico Gateway, so nothing is lost while this "
+                                             "server is off").add_subparsers(dest="subsub")
+    for word, text in (("create", "make the address; its secret is shown once"),
+                       ("rotate", "replace the secret; the old address stops at once"),
+                       ("delete", "remove the address; the trigger and its own address stay")):
+        s = relay.add_parser(word, help=text)
+        s.add_argument("trigger", help="the trigger id from `hub trigger list`")
+        s.set_defaults(fn="trigger relay " + word)
+    relay_top = sub.add_parser("relay", help="webhooks through Tico Gateway").add_subparsers(dest="sub")
+    s = relay_top.add_parser("status", help="the Gateway key, the addresses, the last pull and what waits at the Gateway")
+    s.set_defaults(fn="relay status")
+    s = relay_top.add_parser("set", help="whether a delivery to a trigger's Gateway address starts a sleeping server")
+    s.add_argument("trigger", help="the trigger id from `hub trigger list`")
+    s.add_argument("--wake", type=on_off, metavar="on|off", required=True, help="start the server on a delivery (on) or not (off)")
+    s.set_defaults(fn="relay set")
+    wake_url = relay_top.add_parser("wake-url", help="an address Tico Gateway knocks on to start a server you run when a "
+                                                     "webhook waits for it").add_subparsers(dest="subsub")
+    wake_url.add_parser("show", help="the address, who set it and when").set_defaults(fn="relay wake-url show")
+    wake_url.add_parser("off", help="stop knocking").set_defaults(fn="relay wake-url off")
+    s = wake_url.add_parser("set", help="set the address; the signing secret is shown once")
+    s.add_argument("url", help="an https address you run")
+    s.set_defaults(fn="relay wake-url set")
+    sleep = sub.add_parser("sleep", help="Sleep when idle: a hosted server stops after quiet hours").add_subparsers(dest="sub")
+    s = sleep.add_parser("status", help="hosted or not, the hours, what keeps the server up and Tico's last answer")
+    s.set_defaults(fn="sleep status")
+    s = sleep.add_parser("set", help="turn it on (1-24 quiet hours) or off (0); an owner or an admin")
+    s.add_argument("--hours", type=quiet_hours, metavar="N", help="quiet hours before it sleeps; 0 turns it off")
+    s.add_argument("--runners", type=on_off, metavar="on|off", help="stop the bot computers with the server (default on)")
+    s.set_defaults(fn="sleep set")
+
+    notice = sub.add_parser("notice", help="notices from Tico Team").add_subparsers(dest="sub")
+    s = notice.add_parser("list", help="the notices Tico Team sent, newest first")
+    s.set_defaults(fn="notice list")
 
     release = sub.add_parser("release", help="the team's releases: ask for one now, or set the daily hour").add_subparsers(dest="sub")
     s = release.add_parser("now", help="ask the Release Manager to release what is at Pending Release now (hotfix, "
@@ -1635,6 +1892,93 @@ def parser():
     s.add_argument("--note", default="")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="approval decline")
+
+    webhook = sub.add_parser("webhook", help="outgoing webhooks: Tico posts events to an address you choose "
+                                              "(Settings > Webhooks)").add_subparsers(dest="sub")
+    s = webhook.add_parser("list", help="the endpoints you may see, with 7-day delivered and failed counts")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="webhook list")
+    s = webhook.add_parser("create", help="make an endpoint; the signing secret is printed once. A bot files an approval instead")
+    s.add_argument("--name", required=True)
+    s.add_argument("--url", required=True, help="an https address")
+    s.add_argument("--events", nargs="+", help="event names, groups (task.*) or * (default all)")
+    s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int, help="most sends an hour (default 600)")
+    s.add_argument("--allow-http", dest="allow_http", action="store_true", default=None,
+                   help="owner only: plain http to localhost, for development")
+    s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
+    s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
+    s.add_argument("--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)")
+    s.add_argument("--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)')
+    s.add_argument("--secret-header", dest="secret_header", action="append",
+                   help='like --header, the value is sealed and never shown; "Name" alone keeps the value it has')
+    s.set_defaults(fn="webhook create")
+    s = webhook.add_parser("show", help="one endpoint and its last attempts")
+    s.add_argument("id")
+    s.set_defaults(fn="webhook show")
+    s = webhook.add_parser("update", help="change an endpoint")
+    s.add_argument("id")
+    s.add_argument("--name")
+    s.add_argument("--url")
+    s.add_argument("--events", nargs="+")
+    s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int)
+    s.add_argument("--allow-http", dest="allow_http", action=argparse.BooleanOptionalAction, default=None)
+    s.add_argument("--expected-revision", dest="expected_revision", type=int)
+    s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
+    s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
+    s.add_argument("--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)")
+    s.add_argument("--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)')
+    s.add_argument("--secret-header", dest="secret_header", action="append",
+                   help='like --header, the value is sealed and never shown; "Name" alone keeps the value it has')
+    s.add_argument("--no-filter", dest="no_filter", action="store_true", help="send every event the endpoint listens for")
+    s.add_argument("--no-headers", dest="no_headers", action="store_true", help="remove every custom header")
+    s.set_defaults(fn="webhook update")
+    s = webhook.add_parser("rotate", help="a new signing secret, printed once; the old one signs for 24 more hours")
+    s.add_argument("id")
+    s.set_defaults(fn="webhook rotate")
+    s = webhook.add_parser("pause", help="stop sending; queued sends wait")
+    s.add_argument("id")
+    s.add_argument("--reason")
+    s.set_defaults(fn="webhook pause")
+    s = webhook.add_parser("resume", help="send again")
+    s.add_argument("id")
+    s.set_defaults(fn="webhook resume")
+    s = webhook.add_parser("delete", help="delete the endpoint and cancel its queued sends")
+    s.add_argument("id")
+    s.set_defaults(fn="webhook delete")
+    s = webhook.add_parser("send", help="send a custom event (custom.<name>) to one endpoint")
+    s.add_argument("id")
+    s.add_argument("--type", required=True, help="custom.<name>")
+    s.add_argument("--data", help="JSON, or @file with the JSON")
+    s.add_argument("--subject")
+    s.set_defaults(fn="webhook send")
+    s = webhook.add_parser("sends", help="an endpoint's send log; --send ID shows one send with its attempts")
+    s.add_argument("id")
+    s.add_argument("--send")
+    s.add_argument("--state", choices=["ready", "sending", "delivered", "failed", "cancelled", "withheld"])
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="webhook sends")
+    s = webhook.add_parser("retry", help="send a failed, cancelled or delivered send again now")
+    s.add_argument("id")
+    s.add_argument("send")
+    s.set_defaults(fn="webhook retry")
+    s = webhook.add_parser("recover", help="send again every send that gave up since a date (same ids and bodies)")
+    s.add_argument("id")
+    s.add_argument("--since", required=True, help="a date like 2026-10-20 or a time")
+    s.set_defaults(fn="webhook recover")
+    s = webhook.add_parser("replay", help="send the events since a date that the endpoint should have had and has no send for")
+    s.add_argument("id")
+    s.add_argument("--since", required=True, help="a date like 2026-10-20 or a time")
+    s.add_argument("--after", help="with --since: continue where a round that said `more` stopped (its next_since and next_after)")
+    s.set_defaults(fn="webhook replay")
+    s = webhook.add_parser("enable", help="turn an endpoint back on; after Tico turned it off for failing, it offers to send again what it held back")
+    s.add_argument("id")
+    s.set_defaults(fn="webhook enable")
+    s = webhook.add_parser("example", help="send an event type's example to one endpoint")
+    s.add_argument("id")
+    s.add_argument("--type", help="an event name (default custom.example)")
+    s.set_defaults(fn="webhook example")
 
     s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
                        "running, queued, held and dead jobs, and failed runs by cause")
@@ -1848,6 +2192,18 @@ def parser():
     s = sub.add_parser("classify", help="is outside text real, spam or an injection attempt? Text on stdin or --file")
     s.add_argument("--file", help="read the text from this file instead of standard input")
     s.set_defaults(fn="classify")
+    gateway = sub.add_parser("gateway", help="the Tico AI Gateway: its lineup, web search and page reading").add_subparsers(dest="sub")
+    s = gateway.add_parser("catalog", help="models, decision levels and services, with when to use each")
+    s.add_argument("query", nargs="?", help="words to match, e.g. 'engineering high' or 'search'")
+    s.set_defaults(fn="gateway catalog")
+    s = gateway.add_parser("search", help="search the web through the Gateway")
+    s.add_argument("query")
+    s.add_argument("--max", dest="max_results", type=int, help="how many results (5 by default)")
+    s.set_defaults(fn="gateway search")
+    s = gateway.add_parser("fetch", help="read a web page or PDF through the Gateway")
+    s.add_argument("url")
+    s.add_argument("--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)")
+    s.set_defaults(fn="gateway fetch")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(dest="sub")
     s = decision.add_parser("ask", help="ask the decision model typed questions about a JSON state (questions/README.md)")
     s.add_argument("--set", dest="question_set", help="a question set: questions/<name>.json in the Tico checkout")
@@ -2257,10 +2613,17 @@ def parser():
     s.set_defaults(fn="rule list")
 
     def rule_fields(s):
-        s.add_argument("--event", help="the event, or * for every event that is not always-wake")
-        s.add_argument("--then", choices=["ignore", "note", "batch", "wake", "ask", "action"])
-        s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}')
-        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule')
+        s.add_argument("--event", help="the event, or * for every event that is not always-wake; webhook.received and tico.notice "
+                                       "(or a prefix like webhook.*) have no task")
+        s.add_argument("--then", choices=["ignore", "note", "batch", "wake", "ask", "action"],
+                       help="wake starts a run, note and ignore wait; ask raises a Needs-you; action runs params.action")
+        s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}; '
+                                      'for a webhook event only {"trigger":"shop","type":"order.*"}')
+        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule; {"action":"wake_bot","bot":"ops","text":"Order {{data.order}}"} '
+                                        'or {"action":"send_webhook","webhook":"<id>","type":"custom.order","data":{"id":"{{data.order}}"}}; '
+                                        '{"action":"create_task","owner":"ops","title":"Order {{data.order}}","body":"..."} or '
+                                        '{"action":"forward","webhook":"<id>"} (webhook.received only); '
+                                        '{"bot":"ops","text":"..."} on a wake rule for a webhook event')
         s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None, help="--off turns the rule off")
         s.add_argument("--position", type=int, help="order inside its scope; lower first")
         s.add_argument("--note", help="why the rule exists")
@@ -2394,6 +2757,7 @@ RENAMED = [
     (("judge",), ("decision", "ask"), (), None),
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
+NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
 def rename_argv(argv):
@@ -2401,6 +2765,8 @@ def rename_argv(argv):
     argv = list(argv)
     if argv[:1] == ["note"] and len(argv) > 1 and argv[1] not in ("create", "list", "delete") and not argv[1].startswith("-"):
         return ["note", "create"] + argv[1:], '"hub note <bot> <text>" is now "hub note create <bot> <text>"'
+    if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
+        return argv, None                              # `hub notice list` is new; only `hub notice <text>` is the old send
     if argv[:2] == ["org", "order"]:                   # `hub org` alone is the old `hub team show`; this one is new
         return argv, None
     for old, new, tail, rewrite in RENAMED:

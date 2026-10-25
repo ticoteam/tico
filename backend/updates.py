@@ -643,7 +643,7 @@ def writer_for(c, settings, store=None, vault=None):
             keys = vault or Vault(store)
             with store.read() as c:
                 return gateway_connection.key(c, keys, settings) if keys.configured or gateway_connection.env_key(settings) else ""
-        return J.gateway_writer(key_of, base, models_preset.WAITING_MODEL)
+        return J.gateway_writer(key_of, base, models_preset.pick())
     found = fallback_model(record)
     return J.llm_writer(*found) if found else None
 

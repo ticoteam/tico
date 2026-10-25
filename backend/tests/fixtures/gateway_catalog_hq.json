@@ -1,0 +1,1961 @@
+{
+ "schema": 1,
+ "as_of": "2026-10-25",
+ "models": [
+  {
+   "id": "tico-general-low",
+   "department": "general",
+   "level": "low",
+   "fast": false,
+   "name": "General · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-general-low-fast",
+   "department": "general",
+   "level": "low",
+   "fast": true,
+   "name": "General · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-general-medium",
+   "department": "general",
+   "level": "medium",
+   "fast": false,
+   "name": "General · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-general-medium-fast",
+   "department": "general",
+   "level": "medium",
+   "fast": true,
+   "name": "General · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-general-high",
+   "department": "general",
+   "level": "high",
+   "fast": false,
+   "name": "General · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-general-high-fast",
+   "department": "general",
+   "level": "high",
+   "fast": true,
+   "name": "General · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-general-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-low",
+   "department": "product",
+   "level": "low",
+   "fast": false,
+   "name": "Product · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-low-fast",
+   "department": "product",
+   "level": "low",
+   "fast": true,
+   "name": "Product · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-medium",
+   "department": "product",
+   "level": "medium",
+   "fast": false,
+   "name": "Product · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-medium-fast",
+   "department": "product",
+   "level": "medium",
+   "fast": true,
+   "name": "Product · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-high",
+   "department": "product",
+   "level": "high",
+   "fast": false,
+   "name": "Product · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-product-high-fast",
+   "department": "product",
+   "level": "high",
+   "fast": true,
+   "name": "Product · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-product-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-low",
+   "department": "engineering",
+   "level": "low",
+   "fast": false,
+   "name": "Engineering · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-low-fast",
+   "department": "engineering",
+   "level": "low",
+   "fast": true,
+   "name": "Engineering · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-medium",
+   "department": "engineering",
+   "level": "medium",
+   "fast": false,
+   "name": "Engineering · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-medium-fast",
+   "department": "engineering",
+   "level": "medium",
+   "fast": true,
+   "name": "Engineering · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-high",
+   "department": "engineering",
+   "level": "high",
+   "fast": false,
+   "name": "Engineering · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-engineering-high-fast",
+   "department": "engineering",
+   "level": "high",
+   "fast": true,
+   "name": "Engineering · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-engineering-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-low",
+   "department": "marketing",
+   "level": "low",
+   "fast": false,
+   "name": "Marketing · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-low-fast",
+   "department": "marketing",
+   "level": "low",
+   "fast": true,
+   "name": "Marketing · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-medium",
+   "department": "marketing",
+   "level": "medium",
+   "fast": false,
+   "name": "Marketing · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-medium-fast",
+   "department": "marketing",
+   "level": "medium",
+   "fast": true,
+   "name": "Marketing · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-high",
+   "department": "marketing",
+   "level": "high",
+   "fast": false,
+   "name": "Marketing · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-marketing-high-fast",
+   "department": "marketing",
+   "level": "high",
+   "fast": true,
+   "name": "Marketing · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-marketing-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-low",
+   "department": "sales",
+   "level": "low",
+   "fast": false,
+   "name": "Sales · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-low-fast",
+   "department": "sales",
+   "level": "low",
+   "fast": true,
+   "name": "Sales · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-medium",
+   "department": "sales",
+   "level": "medium",
+   "fast": false,
+   "name": "Sales · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-medium-fast",
+   "department": "sales",
+   "level": "medium",
+   "fast": true,
+   "name": "Sales · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-high",
+   "department": "sales",
+   "level": "high",
+   "fast": false,
+   "name": "Sales · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-sales-high-fast",
+   "department": "sales",
+   "level": "high",
+   "fast": true,
+   "name": "Sales · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-sales-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-low",
+   "department": "finance",
+   "level": "low",
+   "fast": false,
+   "name": "Finance · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-low-fast",
+   "department": "finance",
+   "level": "low",
+   "fast": true,
+   "name": "Finance · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-medium",
+   "department": "finance",
+   "level": "medium",
+   "fast": false,
+   "name": "Finance · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-medium-fast",
+   "department": "finance",
+   "level": "medium",
+   "fast": true,
+   "name": "Finance · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-high",
+   "department": "finance",
+   "level": "high",
+   "fast": false,
+   "name": "Finance · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-finance-high-fast",
+   "department": "finance",
+   "level": "high",
+   "fast": true,
+   "name": "Finance · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-finance-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-low",
+   "department": "legal",
+   "level": "low",
+   "fast": false,
+   "name": "Legal · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-low-fast",
+   "department": "legal",
+   "level": "low",
+   "fast": true,
+   "name": "Legal · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-medium",
+   "department": "legal",
+   "level": "medium",
+   "fast": false,
+   "name": "Legal · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-medium-fast",
+   "department": "legal",
+   "level": "medium",
+   "fast": true,
+   "name": "Legal · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-high",
+   "department": "legal",
+   "level": "high",
+   "fast": false,
+   "name": "Legal · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-legal-high-fast",
+   "department": "legal",
+   "level": "high",
+   "fast": true,
+   "name": "Legal · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-legal-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-low",
+   "department": "science",
+   "level": "low",
+   "fast": false,
+   "name": "Science · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-low-fast",
+   "department": "science",
+   "level": "low",
+   "fast": true,
+   "name": "Science · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-medium",
+   "department": "science",
+   "level": "medium",
+   "fast": false,
+   "name": "Science · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-medium-fast",
+   "department": "science",
+   "level": "medium",
+   "fast": true,
+   "name": "Science · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-high",
+   "department": "science",
+   "level": "high",
+   "fast": false,
+   "name": "Science · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-science-high-fast",
+   "department": "science",
+   "level": "high",
+   "fast": true,
+   "name": "Science · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-science-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-low",
+   "department": "operations",
+   "level": "low",
+   "fast": false,
+   "name": "Operations · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-low-fast",
+   "department": "operations",
+   "level": "low",
+   "fast": true,
+   "name": "Operations · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-medium",
+   "department": "operations",
+   "level": "medium",
+   "fast": false,
+   "name": "Operations · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-medium-fast",
+   "department": "operations",
+   "level": "medium",
+   "fast": true,
+   "name": "Operations · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-high",
+   "department": "operations",
+   "level": "high",
+   "fast": false,
+   "name": "Operations · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-operations-high-fast",
+   "department": "operations",
+   "level": "high",
+   "fast": true,
+   "name": "Operations · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-operations-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-low",
+   "department": "data",
+   "level": "low",
+   "fast": false,
+   "name": "Data · Low",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-low-1.0",
+     "model": "Claude Haiku 5.5",
+     "price": {
+      "input": 0.15,
+      "output": 0.75,
+      "cached_input": 0.015
+     },
+     "long_prompt": {
+      "from": 100000,
+      "input": 0.75,
+      "output": 3.75,
+      "cached_input": 0.075
+     },
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-low-fast",
+   "department": "data",
+   "level": "low",
+   "fast": true,
+   "name": "Data · Low · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-low-fast-1.0",
+     "model": "DeepSeek V4.1 Flash",
+     "price": {
+      "input": 0.45,
+      "output": 1.8,
+      "cached_input": 0.045
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text"
+     ],
+     "context": 1048576,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-medium",
+   "department": "data",
+   "level": "medium",
+   "fast": false,
+   "name": "Data · Medium",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-medium-fast",
+   "department": "data",
+   "level": "medium",
+   "fast": true,
+   "name": "Data · Medium · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-medium-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-high",
+   "department": "data",
+   "level": "high",
+   "fast": false,
+   "name": "Data · High",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  },
+  {
+   "id": "tico-data-high-fast",
+   "department": "data",
+   "level": "high",
+   "fast": true,
+   "name": "Data · High · Fast",
+   "current": "1.0",
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-data-high-fast-1.0",
+     "model": "Claude Opus 5.5 (fast mode)",
+     "price": {
+      "input": 10.0,
+      "output": 50.0,
+      "cached_input": 1.0
+     },
+     "long_prompt": null,
+     "inputs": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "context": 1000000,
+     "max_output": 128000,
+     "released": "2026-10-25"
+    }
+   ]
+  }
+ ],
+ "decisions": [
+  {
+   "id": "tico-decide-low",
+   "level": "low",
+   "name": "Decide · Low",
+   "current": "1.0",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-low-1.0",
+     "model": "Jev 1.13",
+     "price": {
+      "input": 0.06,
+      "output": 0.0,
+      "cached_input": 0.006
+     }
+    }
+   ]
+  },
+  {
+   "id": "tico-decide-medium",
+   "level": "medium",
+   "name": "Decide · Medium",
+   "current": "1.0",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-medium-1.0",
+     "model": "Claude Sonnet 5.5",
+     "price": {
+      "input": 2.5,
+      "output": 12.5,
+      "cached_input": 0.25
+     }
+    }
+   ]
+  },
+  {
+   "id": "tico-decide-high",
+   "level": "high",
+   "name": "Decide · High",
+   "current": "1.0",
+   "types": [
+    "noul",
+    "choice",
+    "score"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-decide-high-1.0",
+     "model": "Claude Opus 5.5",
+     "price": {
+      "input": 5.0,
+      "output": 25.0,
+      "cached_input": 0.5
+     }
+    }
+   ]
+  },
+  {
+   "id": "tico-classify-low",
+   "level": "low",
+   "name": "Classify · Low",
+   "current": "1.0",
+   "types": [
+    "choice"
+   ],
+   "versions": [
+    {
+     "version": "1.0",
+     "id": "tico-classify-low-1.0",
+     "model": "Jev 1.13",
+     "price": {
+      "input": 0.06,
+      "output": 0.0,
+      "cached_input": 0.006
+     }
+    }
+   ]
+  }
+ ],
+ "services": [
+  {
+   "id": "decide",
+   "name": "Decide",
+   "for": "Answer yes/no, choice and score questions about a state",
+   "price": "From $0.06 per 1M input tokens",
+   "status": "live",
+   "tools": []
+  },
+  {
+   "id": "classify",
+   "name": "Classify",
+   "for": "Pick one of your options for a state",
+   "price": "From $0.06 per 1M input tokens",
+   "status": "live",
+   "tools": []
+  },
+  {
+   "id": "inbox.email",
+   "name": "Inbox · Email",
+   "for": "Receive sign-in codes and notices",
+   "price": "Free addresses · $0.14 per 1,000 received",
+   "status": "live",
+   "tools": [
+    "hub_inbound_create_email",
+    "hub_inbound_wait"
+   ]
+  },
+  {
+   "id": "inbox.numbers",
+   "name": "Inbox · Numbers",
+   "for": "Receive texts and codes on a phone number",
+   "price": "From $14 per 30 days",
+   "status": "approval",
+   "tools": []
+  },
+  {
+   "id": "search",
+   "name": "Search",
+   "for": "Search the web and read what it finds",
+   "price": null,
+   "status": "next",
+   "tools": []
+  },
+  {
+   "id": "fetch",
+   "name": "Fetch",
+   "for": "Read a web page or PDF",
+   "price": "$1.25 per 1,000 pages + tokens",
+   "status": "live",
+   "tools": ["hub_gateway_fetch"]
+  },
+  {
+   "id": "transcribe",
+   "name": "Transcribe",
+   "for": "Turn a recording into text",
+   "price": null,
+   "status": "next",
+   "tools": []
+  },
+  {
+   "id": "email.send",
+   "name": "Send email",
+   "for": "Send a message from a Tico address",
+   "price": null,
+   "status": "later",
+   "tools": []
+  },
+  {
+   "id": "enrich",
+   "name": "Enrich",
+   "for": "Look up a company or a person",
+   "price": null,
+   "status": "later",
+   "tools": []
+  },
+  {
+   "id": "voice",
+   "name": "Voice",
+   "for": "Speak and listen on a call",
+   "price": null,
+   "status": "later",
+   "tools": []
+  },
+  {
+   "id": "mail.physical",
+   "name": "Physical mail and registered agent",
+   "for": "A street address and a registered agent for your company",
+   "price": null,
+   "status": "planned",
+   "tools": []
+  }
+ ]
+}

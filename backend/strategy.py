@@ -12,7 +12,8 @@ watched against the numbers and the market.
   market ids it rests on (`cites`), and a status (proposed, active, retired). An active bet has a `rules_out` and a
   `wrong_if`, and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
-- Guides (`strategy_guides/*.yaml`) change what the CEO Bot asks and the word for bets, never the stored shape.
+- The default guide (`strategy_guides/default.yaml`) is the questions the CEO Bot drafts a first strategy with. The
+  exercises run against a strategy are lenses (backend/lenses.py).
 - Every change is a `strategy_events` row with the old and new values, like `market_events`.
 - Publishing emits `strategy.published`, puts `/strategy/summary` in every run's context from the next run
   (backend/learned.py `for_turn`, runner-rs/src/prompt.rs), and files one Decide card for the owner when a bet with
@@ -72,6 +73,9 @@ SNAPSHOT = ("id", "statement", "why", "rules_out", "wrong_if", "cites", "status"
 EVENT = "strategy.published"
 REALIGN = "strategy_realign"
 TRIPPED = "bet_tripped"
+LENS = "lens"
+BRIEFING = "briefing"
+SOURCES = (TRIPPED, LENS, BRIEFING)       # what may prompt a strategy_draft proposal
 PLAYBOOK = "playbooks/bet-tripped.md"
 GUIDES_DIR = Path(__file__).resolve().parent / "strategy_guides"
 
@@ -627,14 +631,20 @@ def update_bet(c, actor, bet_id, statement=None, why=None, rules_out=None, wrong
 def proposal_error(c, payload):
     """What is wrong with a `strategy_draft` goal proposal (backend/goals.py), in a sentence, or None. The payload is
     partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
-    source?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet without one is
-    new and needs its statement. `source` says what prompted it (bet_tripped: a wrong-if tripped)."""
+    source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet without one is
+    new and needs its statement. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens run,
+    named by `lens`; briefing: the week's market briefing touched the bet)."""
     if not isinstance(payload, dict) or not any(payload.get(k) not in (None, "", [], {}) for k in
                                                 ("summary", "vision", "sections", "bets")):
         return "propose a summary, a vision, sections or bets"
-    unknown = set(payload) - {"summary", "vision", "sections", "bets", "source"}
+    unknown = set(payload) - {"summary", "vision", "sections", "bets", "source", "lens"}
     if unknown:
-        return f"a strategy proposal has summary, vision, sections, bets and source, not {', '.join(sorted(unknown))}"
+        return f"a strategy proposal has summary, vision, sections, bets, source and lens, not {', '.join(sorted(unknown))}"
+    if payload.get("source") is not None and payload["source"] not in SOURCES:
+        return f"a source is {', '.join(SOURCES)}"
+    if payload.get("lens") and (payload.get("source") != LENS or not isinstance(payload["lens"], str)
+                                or len(payload["lens"]) > 60):
+        return "lens is the id of the lens a proposal came from (source lens)"
     if len(" ".join(str(payload.get("summary") or "").split())) > SUMMARY_MAX:
         return f"keep the summary under {SUMMARY_MAX} characters"
     if len(" ".join(str(payload.get("vision") or "").split())) > VISION_MAX:
@@ -730,6 +740,7 @@ def publish(c, actor, note="", revision=None):
     from . import routines
     routines.emit(c, EVENT, f"v{n}", {"n": n, "note": note, "published_by": actor}, title=f"Strategy v{n}",
                   content=summary_text(c, published))
+    H.hook(c, "strategy.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor, revision=0)
     if last:
         realign(c, actor, last, published)
     return published
@@ -1048,6 +1059,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/strategy/guides")
     def strategy_guides(request: Request):
-        """The guides the page offers: their questions, suggested sections and the words for bets."""
+        """Deprecated: the CEO Bot's drafting questions, the default guide only. The exercises run against a strategy
+        are lenses (GET /lenses)."""
         reader(request.state.identity)
         return listed_guides()

@@ -16,7 +16,8 @@ The words Tico uses, and what each replaces.
 - **Strategy**: the section (`#/strategy`) where the team writes down its bets: a **summary** every bot reads on every run, a **vision**, three to five **bets**, and four sections (Who we serve, What we sell, What we know that others don't, What we won't do). The owner writes and publishes it; the CEO Bot proposes; **Market** is a tab under it ([Strategy](strategy.md)).
 - **Bet**: one of the short decisions on the Strategy page that could turn out wrong, with a why, what it rules out, a **wrong-if**, and a status (proposed, active, retired). At most seven are active. Goals link to the bet they serve, and a bet's health comes only from its goals that have a KPI.
 - **Wrong-if**: the observation that would retire a bet: a KPI crossing a threshold, a change to a market entity it cites, or a sentence with a check-by date ("not yet measurable"). Every active bet has one; when it trips, the CEO Bot puts a card in front of the owner.
-- **Guide**: the interview questions the CEO Bot works from when it proposes a strategy, and the word for bets. Only the Default guide, in the style of YC and a16z, is offered today. A guide never changes what the page stores.
+- **Guide**: the interview questions the CEO Bot works from when it proposes a strategy, and the word for bets. Only the Default guide, in the style of YC and a16z, is offered. A guide never changes what the page stores. The other frameworks are lenses now.
+- **Lens**: a short set of questions from a known framework (Blue Ocean, Scenarios, Pre-mortem, Where to Play...), answered once and run against the published strategy or the market in one model call. The result is read, never published; its changes are added to the draft one at a time by the owner ([Lenses](lenses.md)).
 - **Version**: a published strategy, numbered, with a note. There is one draft at a time, the owner's; publishing stamps it and opens the next draft. Also a Tico release.
 - **Company section**: the old Vision and Description at the top of Goals; both now live on the Strategy page, and Goals shows one line linking there ([Goals](goals-and-kpis.md#the-company-section)).
 - **Why**: one line on a goal tying it to the team's vision. The CEO Bot proposes it and a person accepts it; a goal tied to a bet needs none ([Goals](goals-and-kpis.md#a-goals-why)).
@@ -64,6 +65,13 @@ The words Tico uses, and what each replaces.
 ## Knowledge
 
 Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), Listening, Goals, KPIs, Check-ins, Usage.
+
+## Webhooks
+
+- **Incoming webhook** (also **trigger** in the CLI and API): an address outside senders post to. Tico keeps each call, starts the routines and rules that listen, and can wake a bot. Settings → Webhooks → Incoming ([Webhooks](webhooks.md#incoming)).
+- **Outgoing webhook** (also **endpoint**): an address Tico posts events to when something happens in Tico, signed as Standard Webhooks. Settings → Webhooks → Outgoing ([Webhooks](webhooks.md#outgoing)).
+- **Relay address**: a second address for an incoming webhook, held at Tico Gateway, that keeps what is sent while the server is off or asleep. Settings → Webhooks → Through Tico Gateway ([Webhooks](webhooks.md#through-tico-gateway)).
+- **Sleep when idle**: on a server Tico hosts, stop the server after quiet hours and start it again on a Gateway webhook, a routine, or a sign-in ([Account](account.md#sleep-when-idle)).
 
 ## Instead of
 

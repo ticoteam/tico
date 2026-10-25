@@ -698,6 +698,9 @@ def scan(c, auth, settings):
                                f"{item['title']}. It wakes nothing while this task is open.", wake=False)
                 continue
             # back after its task was finished: new again
+        H.hook(c, "health.finding", item["key"], lambda: {"key": item["key"], "check": item["check_id"], "kind": item["kind"],
+                                                           "severity": item["severity"], "title": item["title"]},
+               H.KEEPER, revision=f"{item['signature']}:{now}")
         if deliver(c, auth, SLUG, _event(item, occurrences, was)):
             c.execute("UPDATE health_findings SET last_woke=? WHERE key=?", (now, item["key"]))
             woke.append(item["key"])

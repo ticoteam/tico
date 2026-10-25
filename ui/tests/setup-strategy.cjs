@@ -42,6 +42,9 @@ const FOUND = {
     {statement: 'Weekly cleans only.', why: 'Every plan on your pricing page is weekly.', rules_out: '', wrong_if: 'One-off requests pass 30%'},
   ],
 };
+// The rest of what the shared prompt drafts (backend/strategy_prompt.py), offered by hand when a run gave up.
+const FOUND_MORE = {summary: 'Half-price weekly cleans for Austin homes and offices.', vision: 'Every home in Austin clean every week.',
+  know: 'Bots do the scheduling and invoicing, so a visit costs less.', not: 'No one-off deep cleans.'};
 const marked = text => `_Unconfirmed: drafted from acme.example._\n\n${text}`;
 
 // mode: model (runs, then writes the draft), no_model, failed, gave_up, refuse (an internal address).
@@ -62,7 +65,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
     // The first poll is still drafting; the second has the answer.
     if (job.state !== 'running' || mode === 'hang' || ++polls < 2) { if (job.state === 'running') job.step = 'thinking'; return; }
     if (mode === 'failed') Object.assign(job, {state: 'failed', step: null, error: {code: 'timeout', message: 'The site did not answer in time.'}});
-    else if (mode === 'gave_up') Object.assign(job, {state: 'gave_up', step: null, found: {...FOUND, bets: FOUND.bets.slice(0, 1)}, error: {code: 'edited', message: 'The draft changed'}});
+    else if (mode === 'gave_up') Object.assign(job, {state: 'gave_up', step: null, found: {...FOUND, ...FOUND_MORE, bets: FOUND.bets.slice(0, 1)}, error: {code: 'edited', message: 'The draft changed'}});
     else {
       st.draft = {...st.draft, sections: {...st.draft.sections, serve: marked(FOUND.serve), sell: marked(FOUND.sell)}, revision: st.draft.revision + 4};
       st.bets = FOUND.bets.map((b, i) => ({id: 'b-' + (i + 1), statement: b.statement, why: b.why, rules_out: b.rules_out,
@@ -119,7 +122,8 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
       sent.push([method, p.slice('/api/v2/strategy'.length), body]);
       if (p === '/api/v2/strategy/draft') {
         if (body.revision !== st.draft.revision) return json({error: {code: 'conflict', detail: 'The draft changed'}}, 409);
-        st.draft = {...st.draft, sections: {...st.draft.sections, ...body.sections}, revision: st.draft.revision + 1};
+        const {sections = {}, revision: _, ...lines} = body;
+        st.draft = {...st.draft, ...lines, sections: {...st.draft.sections, ...sections}, revision: st.draft.revision + 1};
         return json({draft: st.draft});
       }
       // The server's rule (strategy._wrong_if): a sentence wrong-if has a Check by.
@@ -268,7 +272,9 @@ async function building(page, website, text) {
       const found = page.locator('#ss-found');
       await found.waitFor();
       assert.match(await found.innerText(), /^The draft changed while this ran, so nothing was written\. It found:/);
-      assert.equal(await found.locator('.ss-found-row').count(), 3);
+      // Summary, vision, the four sections and the one bet, in that order.
+      assert.deepEqual(await found.locator('.ss-found-row .strat-bet-k').allTextContents(), ['Summary', 'Vision', 'Who we serve',
+        'What we sell, and for how much', "What we know that others don't", "What we won't do", 'Bet']);
       await shot(page, '6-bets-found');
       await found.locator('[data-ss-take="0"]').click();
       await page.locator('li[data-ss-bet]').first().waitFor();
@@ -280,7 +286,14 @@ async function building(page, website, text) {
       await found.locator('[data-ss-use="serve"]').click();
       await page.locator('#ss-side').getByText(FOUND.serve).waitFor();
       assert.deepEqual(posts(sent, '/draft')[0][2], {sections: {serve: FOUND.serve}, revision});
-      assert.equal(await found.locator('.ss-found-row').count(), 1);
+      await found.locator('[data-ss-use="summary"]').click();
+      await page.waitForFunction(() => !document.querySelector('[data-ss-use="summary"]'));
+      assert.deepEqual(posts(sent, '/draft')[1][2], {summary: FOUND_MORE.summary, revision: revision + 1});
+      await found.locator('[data-ss-use="know"]').click();
+      await page.waitForFunction(() => !document.querySelector('[data-ss-use="know"]'));
+      assert.deepEqual(posts(sent, '/draft')[2][2], {sections: {know: FOUND_MORE.know}, revision: revision + 2});
+      assert.equal(st.draft.summary, FOUND_MORE.summary);
+      assert.equal(await found.locator('.ss-found-row').count(), 3);                 // the vision, sell and not are left
       assert.deepEqual(errors, []);
       await page.close();
     }

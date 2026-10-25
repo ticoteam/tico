@@ -833,7 +833,7 @@ function renderTree() {
       (a.dataset.nav === 'settings' && S.route === SETTINGS) ||
       (a.dataset.nav === 'credentials' && S.route === CREDENTIALS) ||
       (a.dataset.nav === 'docs' && (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?'))) ||
-      (a.dataset.nav === 'strategy' && (isStrategyRoute(S.route) || isMarketRoute(S.route))) ||
+      (a.dataset.nav === 'strategy' && (isStrategyRoute(S.route) || isLensesRoute(S.route) || isMarketRoute(S.route))) ||
       (a.dataset.nav === 'integrations' && (S.route === INTEGRATIONS || S.route.startsWith(INTEGRATIONS + '/'))) ||
       (a.dataset.nav === 'changelog' && S.route === '#/changelog') ||
       (a.dataset.nav === 'learnings' && (S.route === LEARNINGS || S.route.startsWith(LEARNINGS + '?'))) ||

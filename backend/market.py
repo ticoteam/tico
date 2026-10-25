@@ -38,7 +38,7 @@ TIERS = ("core", "lookalike", "phrase-stealer", "secondary")
 CONFIDENCE = ("high", "medium", "low")
 INSIGHT_KINDS = ("new-entity", "edge", "property-change", "correction", "question", "other")
 INSIGHT_STATUSES = ("applied", "merged", "rejected", "needs-human")
-SOURCE_KINDS = ("reddit", "x", "linkedin", "news", "filing", "site", "sales-call", "meeting", "peec", "syften", "other")
+SOURCE_KINDS = ("reddit", "x", "linkedin", "news", "filing", "site", "sales-call", "meeting", "peec", "syften", "page-change", "other")
 # An update needs evidence when it changes one of these. Aliases and last_verified do not.
 EVIDENCE_FIELDS = frozenset({"summary", "properties", "since", "until", "tier"})
 CORE_STALE_DAYS = 30
@@ -65,6 +65,8 @@ PAGES = (
      "What the graph cannot answer yet."),
     ("market/weekly-delta", "Weekly delta", "Market / Delta",
      "What changed in the market graph this week. Refreshed on Mondays from market_events."),
+    ("market/customer-themes", "Customer themes", "Market / Customers",
+     "What customers keep asking for, complaining about and objecting to, from team meetings and calls. Each theme is a thesis with evidence."),
 )
 
 LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
@@ -116,14 +118,16 @@ def require_writer(who):
     raise Problem("forbidden", "Only the Librarian and the company owner can change the market graph", 403)
 
 
-def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""):
+def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note="", trip=True):
+    """One `market_events` row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
+    a change to what a bet rests on."""
     eid = H.new_id()
     conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, ts, actor, field, old, new, insight_id, note) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                  (eid, kind, subject, H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new),
                   insight_id, note or ""))
-    if actor != SEED_ACTOR:
+    if actor != SEED_ACTOR and trip:
         # The strategy's fit check: a change to an entity or page a bet cites may show the bet is wrong.
         from . import strategy
         from .batch_work import isolated
@@ -813,6 +817,8 @@ def report(conn, actor, *, kind, about, claim, source_url="", quote="", confiden
         routines.emit(conn, "market.insight.urgent", row["id"],
                       {"about": row["about"], "claim": row["claim"], "reported_by": actor},
                       title=row["about"] or row["claim"][:80])
+        H.hook(conn, "market.insight.urgent", row["id"], lambda: {"id": row["id"], "about": row["about"],
+                                                                  "reported_by": actor}, actor, revision=0)
     return insight(conn, row["id"])
 
 
@@ -1180,7 +1186,7 @@ def delta_body(conn, today):
 
 
 def narrative(conn, today):
-    """The nine market pages, from the rows the seed just wrote. Not a standing placeholder."""
+    """The market pages, from the rows the seed just wrote. Not a standing placeholder."""
     companies = _listed(conn, "company")
     segments = _listed(conn, "segment")
     channels = _listed(conn, "channel")
@@ -1226,6 +1232,7 @@ def narrative(conn, today):
         ]),
         "market/open-questions": "\n".join(["# Open questions", "", asked]),
         "market/weekly-delta": delta_body(conn, today),
+        "market/customer-themes": "\n".join(["# Customer themes", "", "No themes yet. The Librarian adds one when customers raise it in team meetings."]),
     }
 
 
@@ -1576,7 +1583,7 @@ def nothing_to_curate(conn, settings, local):
     if local.weekday() == 0 or conn.execute("SELECT 1 FROM market_insights WHERE status='new' LIMIT 1").fetchone():
         return None
     from . import listening
-    mine = listening.destinations_of(CURATOR, listening.destinations(settings, check_questions=False))
+    mine = listening.destinations_of(CURATOR, listening.destinations(settings, conn, check_questions=False))
     if not mine:
         return "no market insight is new, and Listening sends the Librarian nothing"
     if conn.execute(f"SELECT 1 FROM intake_items WHERE status='new' AND destination IN ({','.join('?' * len(mine))}) "

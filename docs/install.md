@@ -32,6 +32,10 @@ any option, or piped without a terminal, it asks nothing and installs as before.
 prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
 Computers > Server computer > Sign in**, to Claude and to ChatGPT.
 
+A local install has no public address, and it can still link to your Tico company (**Settings > General > Tico company**,
+with a server code from app.tico.dev Hosting > **Connect your own server**) for Tico models and billing. It shows there as
+a local server, with no Open link.
+
 - `--support off` turns Tico Support off (`TICO_SUPPORT=off`: the **?** chat sends nothing; [PRIVACY.md](../PRIVACY.md)).
   With Support on, its tickets are tied to this install. On an installed Tico, `sh install.sh --local --support off`
   (or `on`) saves the switch and restarts; every other setting stays as it is.
@@ -92,7 +96,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
    to run; until then each bot says "Add an AI provider", and **Settings > Computers > Models** adds it.
-   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0.
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (department, level, Fast, version).
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
@@ -561,6 +565,48 @@ curl -fsSL https://github.com/ticoteam/tico/releases/download/vX.Y.Z/install.sh 
   repositories (20 GiB and up). When bots queue, add another runner computer rather than a bigger one. More in
   [sizing](sizing.md).
 
+### Wake on webhook
+
+A server you run yourself may be off or asleep when a webhook arrives. An address [through Tico Gateway](webhooks.md#through-tico-gateway)
+keeps the call at Tico HQ until the server is back, but nothing starts the server. A **wake address** does: an https address
+you run that turns the server on, such as a cloud function that starts your VM or a script on your home router.
+
+It is for servers you run. A server Tico hosts is woken by Tico already.
+
+When a call has waited at the Gateway for more than a minute, Tico HQ posts `tico.wake` to your address, at most once every 10
+minutes:
+
+```json
+{"type": "tico.wake", "install": "acme", "pending": 3, "oldest_received_at": "2026-10-25T10:00:00Z"}
+```
+
+Set it as the owner, with the Tico Gateway connected in Settings → Gateway:
+
+```
+hub relay wake-url set https://wake.acme.example/start-tico
+```
+
+The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `hub relay wake-url show` shows the address, who set
+it and when; `hub relay wake-url off` stops the calls. The address must be public https with no user or password.
+
+The call is signed as [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id`, `webhook-timestamp`,
+`webhook-signature`) with that secret. Check it before you start anything, so a stranger who finds the address cannot start your
+server:
+
+```python
+import os
+from standardwebhooks import Webhook
+
+wh = Webhook(os.environ["TICO_WAKE_SECRET"])      # the whsec_... from the answer
+
+def handle(raw_body: bytes, headers: dict):
+    wh.verify(raw_body, headers)                  # raises if the signature or timestamp is wrong
+    start_acme_server()                           # your own code: power on the VM, send wake-on-LAN, ...
+```
+
+Answer with any 2xx quickly (HQ waits 5 seconds). A failure is not retried before the 10 minutes are up, and the calls that
+waited are collected as soon as the server is back.
+
 ## Add computers to run your bots
 
 In the app open **Settings > Computers > Add computer** (or step 4 of the Finish setup wizard, "Add the computer that
@@ -925,6 +971,12 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 Use **Update now**, or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 Pulling an unchanged pinned tag does not upgrade Tico. See [Updates](updates.md) for manual updates, self-update and rollback.
 Data lives in named volumes and survives updates. Computers follow the server's release.
+
+A server Tico hosts (`TICO_HOSTED`) never follows new releases by itself either. Tico support can schedule a release
+for it: the server reads it from Tico HQ with its Gateway key every 15 minutes, waits until no bot turn runs (two hours
+at most), and updates through the same updater as **Update now**. Settings and Health say "Tico will update this server
+to vX when idle" meanwhile. A failed or rolled-back update is reported to support and is not tried again until they
+schedule it again. A self-run server never asks.
 
 ### One-click updates
 

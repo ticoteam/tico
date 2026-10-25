@@ -152,7 +152,8 @@ def view(c, settings=None, *, manage=False):
             "updated": record.get("updated", ""), "updated_by": record.get("updated_by", ""),
             "state": state, "working": state not in G.REFUSED,
             "message": fresh.get("message") or ("Not checked yet." if where else "No gateway key saved."),
-            "used": fresh.get("used"), "checked": fresh.get("at", "")}
+            "used": fresh.get("used"), "spent_usd": fresh.get("spent_usd"), "cap_usd": fresh.get("cap_usd"),
+            "checked": fresh.get("at", "")}
 
 
 def _fingerprint(c, settings=None):
@@ -275,6 +276,7 @@ def record_check(c, result, fingerprint, now, settings=None):
     if result["state"] in G.TRANSIENT and known.get("for") == fingerprint and known.get("state") not in G.TRANSIENT:
         return False                                  # a Gateway that was down or busy says nothing new about the key
     record["check"] = {"state": result["state"], "message": result["message"], "used": result.get("used"),
+                       "spent_usd": result.get("spent_usd"), "cap_usd": result.get("cap_usd"),
                        "at": now, "for": fingerprint}
     _write(c, record)
     return True

@@ -31,6 +31,11 @@ routines:
     "on": market.insight.urgent    # quoted: YAML reads a bare `on` as true
     timezone: America/Los_Angeles
     template: playbooks/urgent-market-insight.md
+  - id: customer-themes
+    title: Customer themes
+    "on": meeting.ready            # live, non-private team meetings only (docs/meetings.md)
+    timezone: America/Los_Angeles
+    template: playbooks/customer-themes.md
 
 # What this bot may touch. It reads the docs through `hub doc` and public links through `hub doc fetch`,
 # and needs no Credential of its own. A GitHub token stored in Credentials and granted to it lets it read private

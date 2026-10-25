@@ -64,9 +64,10 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
         if (p.startsWith('/api/v2/support/')) {
           const rest = p.slice('/api/v2/support/'.length), body = req.postData() ? JSON.parse(req.postData()) : null;
           calls.push(req.method() + ' ' + rest + (body ? ' ' + JSON.stringify(body) : ''));
-          if (rest === 'access' && req.method() === 'GET') return json(hq.access || {available: false, off_reason: 'TICO_SUPPORT_ACCESS', active: null, last: null});
+          if (rest === 'access' && req.method() === 'GET') return json(hq.access || {available: false, off_reason: 'TICO_SUPPORT_ACCESS', active: null, last: null, sessions: []});
           if (rest === 'access') {
             hq.access.active = hq.access.last = {id: 'sa_1', ticket_id: body.ticket_id, tier: body.tier, started_by: 'human:ana', seconds_left: body.hours * 3600 - 48 * 60};
+            hq.access.sessions = [hq.access.active, ...(hq.access.sessions || [])];
             return json(hq.access.active);
           }
           if (rest === 'access/sa_1/stop') { hq.access.active = null; return json({}); }
@@ -316,6 +317,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await vpop.locator('[data-status]').innerText(), 'Answered');
     await v.page.waitForFunction(() => document.querySelector('#help-open')?.getAttribute('data-support-unread') === '1');
     assert.equal(await vpop.locator('[data-mine]').innerText(), 'Your requests (4)', 'every request in the list');
+    // Access off on the server says so in words, under the open request.
+    assert.equal(await vpop.locator('[data-view] [data-access]').innerText(), 'Support access is turned off on this server.');
     assert.deepEqual(v.calls.filter(c => c.endsWith('/read')), ['POST tickets/sup_c/read'], 'the request shown is read');
     await vpop.locator('[data-mine]').click();
     const rows = await vpop.locator('[data-requests] .support-item').evaluateAll(els => els.map(el =>
@@ -324,11 +327,11 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     // The first line is the title; the lines after it are a muted preview. Access off on the server says so in words.
     assert.equal(await vpop.locator('.support-item', {hasText: 'Waiting question'}).locator('.support-item-body').innerText(), 'It still fails after a restart.');
     assert.equal(await vpop.locator('.support-item-body').count(), 1);
-    assert.equal(await vpop.locator('[data-access]').innerText(), 'Support access is turned off on this server.');
-    // A closed request opens to read, with no box.
+    // A closed request opens to read, with no box (and nothing about support access).
     await vpop.locator('[data-requests] .support-item').first().click();
     assert.equal(await vpop.locator('[data-title]').innerText(), 'Old question');
     assert.equal(await vpop.locator('[data-compose]').isVisible(), false);
+    assert.equal(await vpop.locator('[data-access]').isVisible(), false);
     assert.match(await vpop.locator('[data-closed]').innerText(), /This request is closed/);
     // New request starts an empty one, even with open requests about.
     await vpop.getByRole('button', {name: 'New request'}).click();
@@ -513,33 +516,44 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // Letting Tico support in, at the foot of Your requests: the dialog offers only what this person may give, the
-    // banner shows on the page with the time left and opens Your requests, the log lists what support did (as text),
-    // and Stop ends it.
-    v = await visit({seed: [{id: 'sup_9', created: new Date().toISOString(), status: 'open', message: 'Bots stopped', messages: [], sent: {}}],
-                     access: {available: true, off_reason: '', active: null, last: null, can_start: true, can_full: false}});
+    // Letting Tico support in, under the open request: the dialog offers only what this person may give, the banner
+    // and the request show the tier and the time left in the same words, the banner opens the request it started from,
+    // the log under that request lists what support did (as text, its time as the app's event times read), another
+    // request shows none of it, and Stop ends it.
+    v = await visit({seed: [{id: 'sup_9', created: new Date().toISOString(), status: 'open', message: 'Bots stopped', messages: [], sent: {}},
+                            {id: 'sup_8', created: at(600), status: 'closed', message: 'Old question', messages: [], sent: {}}],
+                     access: {available: true, off_reason: '', active: null, last: null, sessions: [], can_start: true, can_full: false}});
     await openSupport(v.page);
-    assert.equal(await v.page.getByRole('button', {name: 'Let Tico support in'}).count(), 0, 'not in the chat');
+    const strip = v.page.locator('#support-pop [data-view] [data-access]');
+    await strip.getByRole('button', {name: 'Let Tico support in'}).waitFor();
+    assert.equal(await strip.innerText(), 'Let Tico support in');
+    assert.ok(await strip.evaluate(el => el.getBoundingClientRect().top >= document.querySelector('#support-pop [data-thread]').getBoundingClientRect().bottom
+      && el.getBoundingClientRect().bottom <= document.querySelector('#support-pop [data-compose]').getBoundingClientRect().top), 'under the conversation, over the box');
     await v.page.locator('#support-pop [data-mine]').click();
-    const foot = v.page.locator('#support-pop [data-list] [data-access]');
-    await foot.getByRole('button', {name: 'Let Tico support in'}).waitFor();
-    assert.match(await foot.innerText(), /^For Bots stopped\n+Let Tico support in$/);
-    assert.ok(await foot.evaluate(el => el.getBoundingClientRect().top >= document.querySelector('#support-pop [data-requests]').getBoundingClientRect().bottom), 'at the foot, under the list');
-    await foot.getByRole('button', {name: 'Let Tico support in'}).click();
+    await v.page.locator('#support-pop [data-list]:not([hidden])').waitFor();
+    assert.equal(await v.page.locator('#support-pop [data-list] [data-access]').count(), 0, 'not in Your requests');
+    await v.page.locator('#support-pop [data-back]').click();
+    await strip.getByRole('button', {name: 'Let Tico support in'}).click();
     assert.equal(await v.page.locator('dialog[aria-label="Let Tico support in"] [name=tier][value=full]').isDisabled(), true, 'full access is the owner\'s to give');
     await v.page.locator('dialog[aria-label="Let Tico support in"] [name=hours]').selectOption('4');
     await v.page.locator('dialog[aria-label="Let Tico support in"] [type=submit]').click();
     await v.page.locator('#support-access-banner:not([hidden])').waitFor();
     assert.ok(v.calls.includes('POST access {"ticket_id":"sup_9","tier":"app","hours":4}'));
-    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico support has access, 3 h 12 min left');
-    await foot.locator('.support-access-log li').waitFor();
-    assert.match(await foot.locator('.support-access-on').innerText(), /Tico support has access \(App only\), 3 h 1\d min left · Stop/);
-    assert.match(await foot.locator('.support-access-log li').innerText(), /Support Agent · GET \/api\/v2\/health<img src=x/);
+    assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico support has access (App only), 3 h 12 min left');
+    await strip.locator('.support-access-log li').waitFor();
+    assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico support has access (App only), 3 h 12 min left · Stop');
+    assert.match(await strip.locator('.support-access-log li').innerText(), /^just now Support Agent · GET \/api\/v2\/health<img src=x/);
+    assert.ok(await strip.locator('.support-access-log li time').getAttribute('title'), 'the full time on hover');
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-pop').waitFor({state: 'hidden'});
+    // From a closed request, the banner opens the one the session started from.
+    await v.page.evaluate(() => window.supportOpen({ticket: 'sup_8'}));
+    await v.page.waitForFunction(() => document.querySelector('#support-pop [data-title]')?.textContent === 'Old question');
+    assert.equal(await strip.isVisible(), false, 'another request shows none of it');
+    await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-left]').click();
-    await v.page.locator('#support-pop[open] [data-list]:not([hidden])').waitFor();
-    assert.equal(await foot.locator('.support-access-log li').count(), 1);
+    await v.page.waitForFunction(() => document.querySelector('#support-pop[open] [data-title]')?.textContent === 'Bots stopped');
+    assert.equal(await strip.locator('.support-access-log li').count(), 1);
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-stop]').click();
     await v.page.locator('#support-access-banner').waitFor({state: 'hidden'});

@@ -162,6 +162,37 @@ Create product repositories is a wider reach than bot repositories, so:
 
 Connecting, disconnecting and replacing the GitHub App stay the Owner's alone, as does deleting a repository.
 
+## Incoming webhooks
+
+An incoming webhook (a trigger) is an address outside senders post to ([Webhooks](webhooks.md#incoming)).
+
+- **Anyone**, person or bot, may add one. The address and its secret are shown once, to whoever added it.
+- **Managing one** (a new secret, its settings, signing, running a call again, deleting it, its Tico Gateway address) belongs to the
+  owner, an admin, whoever added it and BotOps (acting for a person, with that person's rights).
+- **Reading a call.** People who manage the webhook read the whole body. A bot reads it in parts, and only for a call that opened
+  one of its tasks or that a notice from Tico to it names, or if it manages the webhook. A body is always handed over fenced as
+  data from outside Tico.
+- **Rules on a call** (`webhook.received`): the owner and admins write team rules; a bot's owners, its operator and BotOps write
+  that bot's rules. Waking a bot needs rights over that bot. A rule that sends to an outgoing endpoint is written by a person, or by
+  a bot with its outbound send switch on, never the CEO Bot. The endpoint must exist and its maker must own it or be an admin: Tico checks
+  that when the rule is saved, and again when it runs.
+- **Tico Team** is a built-in webhook. Nobody deletes it; only its keep days change.
+
+## Outgoing webhooks
+
+An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks)).
+
+- **People** make and manage their own endpoints; the owner and admins manage every one. BotOps acting for a person has that
+  person's rights.
+- **A bot** cannot make one on its own. Its request files a `send` approval, and the endpoint is made, owned by the person who
+  approves it, when the bot repeats the call. A bot sees every endpoint without its full address, and changes none.
+- **Custom events** (`hub webhook send`, names `custom.*`) are sent by people, and by a bot only while its outbound send switch is on.
+  The CEO Bot never sends one and never causes a webhook.
+- **Privacy.** An endpoint hears of a task, approval, ask or bot only when its owner could read it themselves; the event body is built
+  from what that person sees. Health, inbound and webhook events go to owner and admin endpoints only.
+- Plain `http://` is for `localhost` only, and only the owner switches it on for an endpoint. Every other address is `https://`
+  and must resolve to a public address.
+
 ## Bot owners
 
 Each bot has owners: its **creator** (added automatically) and any others added. Whoever the bot reports up to on
@@ -281,7 +312,7 @@ samples are retained for 48 hours. Six consecutive readings spanning five minute
 set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
 turning diagnostics off clears it and hides `latest_sample`.
 
-**Unreleased:** this sustained-load flag holds new starts on that computer, including reservations that have not
+This sustained-load flag holds new starts on that computer, including reservations that have not
 started yet. Running turns continue, and new starts resume when the flag clears
 ([Turn counts](computers.md#turn-counts)).
 

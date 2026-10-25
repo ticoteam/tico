@@ -23,7 +23,7 @@ class FakeAccessHQ(FakeHQ):
 
     def __init__(self):
         super().__init__()
-        self.queued, self.replies, self.ended, self.say_ended, self.reply_calls = [], [], [], False, 0
+        self.queued, self.replies, self.ended, self.say_ended, self.reply_calls, self.opened = [], [], [], False, 0, 0
 
     def __call__(self, request):
         parts = request.url.path.strip("/").split("/")
@@ -46,7 +46,8 @@ class FakeAccessHQ(FakeHQ):
         return super().__call__(request)
 
     def new_session_id(self):
-        return "sa_" + "0" * 23 + str(len(self.seen) % 10)
+        self.opened += 1
+        return f"sa_{self.opened:024x}"
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +104,29 @@ def test_a_session_starts_shows_everyone_the_banner_and_stops_at_once(environmen
         row = c.execute("SELECT * FROM support_access").fetchone()
         assert row["token_hash"] is None and row["ended_by"] == "human:riley"
         assert c.execute("SELECT count(*) FROM events WHERE action IN ('support_access.started','support_access.stopped')").fetchone()[0] == 2
+
+
+def test_a_session_keeps_hqs_ids_and_each_request_lists_its_own(environment, hq):
+    """One session has one id: HQ's, here as there, and its events name the ticket's HQ id, so ops can match this
+    install's log to admin. Each person's requests list the sessions started from them, for the log under each."""
+    api = environment()
+    riley = as_person(api, "riley")
+    first = start(api, hours=1).json()
+    assert first["id"] == first["hq_session"] == "sa_" + "0" * 23 + "1"
+    with api.app.state.store.read() as c:
+        hq_id = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (first["ticket_id"],)).fetchone()[0]
+    assert first["hq_ticket"] == hq_id and hq_id in hq.tickets
+    assert api.post(f"/api/v2/support/access/{first['id']}/stop", headers=signed_in()).status_code == 200
+    second = start(api, riley).json()
+    assert second["id"] == "sa_" + "0" * 23 + "2" and hq.ended == [first["id"]]
+    with api.app.state.store.read() as c:
+        events = c.execute("SELECT action, target, detail_json FROM events WHERE action LIKE 'support_access.%' "
+                           "ORDER BY rowid").fetchall()
+    assert [(e["action"], e["target"], json.loads(e["detail_json"])["hq_ticket"]) for e in events][:2] == [
+        ("support_access.started", first["id"], hq_id), ("support_access.stopped", first["id"], hq_id)]
+    mine = api.get("/api/v2/support/access", headers=signed_in()).json()["sessions"]
+    assert [(x["id"], x["ticket_id"], x["end_reason"]) for x in mine] == [(first["id"], first["ticket_id"], "stopped")]
+    assert [x["id"] for x in api.get("/api/v2/support/access", headers=riley).json()["sessions"]] == [second["id"]]
 
 
 def test_an_expired_session_lets_nothing_in_and_the_worker_ends_it(environment, hq):

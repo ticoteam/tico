@@ -18,8 +18,8 @@ first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHAN
 Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs, on pull requests to main, the tests a measured static dependency map (imports, plus files run or read by path) says use the change, and skips the Caddy image job unless the change reaches it; workflow, dependency, conftest, pytest.ini, docs and deleted or unparsable files fall back to the full default Python and core browser suites. Every push to main still runs those full suites to completion (a newer push cancels only a pull request's superseded run). Checks run on RunsOn Spot VMs (4 vCPU) in Tico's own AWS account; fork PRs use GitHub-hosted runners. Python and browser groups are sized from the last successful main run's per-file and per-script timings (collected counts until timings exist) so each VM finishes in about 3 minutes (`TICO_CI_JOB_SECONDS`), and an interrupted Spot job is rerun automatically. Browser and system-package caches avoid apt downloads on warm PR runs; each Install attempt is limited to five minutes, with one retry. The PR job timings check links the per-job timing receipt. Runner/harness changes also run conformance, including slow tests; unclassified UI changes run all browser scripts. The manually dispatched Release validation workflow runs the full release gate across isolated
-RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the Release Manager starts each release. The default Python suite stays under about 60 seconds and the whole
-default run (pytest plus core UI) under 2 minutes; `python scripts/release_checks.py` runs both and records time and
+RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the Release Manager starts each release. The default Python suite runs in parallel in about a minute and the whole
+default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
 `scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py` and `ui-tests.cjs` do it
 themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
@@ -27,10 +27,10 @@ themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low pr
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
 `heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code.
 It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
-whole-product checks before a tag (docs/releasing.md). The suite is deliberately small: keep only tests that guard a
-privacy or permission boundary, migrations and data safety, or a core task/run flow, one or two per rule; no tests
-of wording or docs, no exhaustive parametrizations. Write tests freely while building, then keep only the highest-value ones. Real git, Docker, servers or long timers go behind
-`@pytest.mark.slow`. Adding a test that slows the default run means cutting another. `evals/botops/run.py` scores a real BotOps
+whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one
+guards a real failure (a privacy or permission boundary, migrations and data safety, a core task/run flow, a
+regression, an edge case that would lose or duplicate work). No tests of wording, copy or docs, trivial getters or
+exhaustive parametrizations of one path. Real git, Docker, servers or long timers go behind `@pytest.mark.slow`. `evals/botops/run.py` scores a real BotOps
 against a dev install with a real model, on demand only; `backend/tests/test_botops_evals.py` is its scripted layer.
 `evals/replay/run.py` replays signed real tasks on a candidate at release preparation (docs/releasing.md); its cases
 hold customer text and never enter this repository.

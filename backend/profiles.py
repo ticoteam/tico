@@ -15,8 +15,9 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 The numbers are the batch window and scope, the sweep gap (least time between two runs of the same sweep) and, for a
 lead, the hour of the digest. They are the profile's own and a bot may carry its own values (`profile_options`): the
 one a former Token saver bot keeps is a 30-minute window. `pulls`, `sweeps` and `takes` are fixed by the profile
-except on `custom`, which reads them from its options. Nothing here grants a right: a profile only decides what
-wakes a bot and which tasks it is given.
+except on `custom`, which reads them from its options. `pulls` limits only what Tico starts by itself when nothing woke
+the bot; a task a wake rule woke it for (a lead's assignment) always runs. Nothing here grants a right: a profile
+only decides what wakes a bot and which tasks it is given.
 
 `wake_preset` is read from the profile: setting a profile writes the matching `token_saver` or `performance` into
 `config_json.wake_preset` (30 minutes or more is Token saver), which is what the job queue's hold trigger and every
@@ -218,8 +219,9 @@ def refusal(name, config, actor, title=None, parent=None, routine=False):
 
 
 def pull_refusal(c, row, config):
-    """'auto_start_off' when the owner's profile does not pull this open task by itself, else None
-    (backend/auto_tasks.py refusal)."""
+    """'auto_start_off' when the owner's profile does not pull this open task by itself, else None. Only
+    auto_tasks.missing (the idle claim's own start) asks: a job a wake rule queued is claimed and started whatever the
+    profile pulls (auto_tasks.refusal with `woken`)."""
     spec = spec_of(config)
     if spec is None or spec["pulls"] == "all":
         return None

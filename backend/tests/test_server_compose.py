@@ -35,6 +35,12 @@ def test_server_forwards_private_settings_only_to_server_in_checkout_and_release
         assert not SERVER_ONLY_KEYS.intersection(service.get("environment", {}))
 
 
+def test_server_gets_the_support_switches_set_in_env():
+    import yaml
+    environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
+    assert {"TICO_SUPPORT", "TICO_SUPPORT_ACCESS"} <= set(environment)
+
+
 def test_a_server_update_recreates_only_the_server_never_the_updater(monkeypatch, tmp_path):
     for key, value in {"TICO_UPDATER_MODE": "", "TICO_PROJECT_DIR": str(tmp_path), "TICO_COMPOSE_FILE": "", "TICO_UPDATER_BUNDLE": "never"}.items():
         monkeypatch.setenv(key, value)

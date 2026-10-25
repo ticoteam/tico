@@ -1,8 +1,9 @@
 {
- "about": "The company file's edit actions (tico.company.yaml, format 0.2). Each action's input_schema is a strict JSON schema; `limits` and `vocabulary` are what backend/company_file checks besides the schema. A tool-use model gets `actions` as its tools.",
+ "about": "The company file's edit actions (tico.company.yaml, format 0.2, or 0.3 with a strategy). Each action's input_schema is a strict JSON schema; `limits` and `vocabulary` are what backend/company_file checks besides the schema. A tool-use model gets `actions` as its tools.",
  "format": "0.2",
  "vocabulary": {
   "steps": [
+   "strategy",
    "chart",
    "goals",
    "team",
@@ -172,6 +173,31 @@
    "up",
    "down",
    "range"
+  ],
+  "sections": [
+   "summary",
+   "vision",
+   "serve",
+   "sell",
+   "know",
+   "not"
+  ],
+  "methods": [
+   "top_down",
+   "bottom_up",
+   "player_sum",
+   "owner"
+  ],
+  "post_sources": [
+   "hn",
+   "web",
+   "news"
+  ],
+  "post_tags": [
+   "hot",
+   "lead",
+   "market",
+   "rival"
   ]
  },
  "limits": {
@@ -196,7 +222,25 @@
   "chat_text": 4000,
   "number": 1000000000000,
   "seq": 1000000,
-  "draft_bytes": 1000000
+  "draft_bytes": 1000000,
+  "bets": 5,
+  "segments": 16,
+  "players": 10,
+  "requests": 8,
+  "posts": 20,
+  "evidence": 5,
+  "strategy_line": 400,
+  "section": 2000,
+  "statement": 200,
+  "bet_text": 400,
+  "market_root": 200,
+  "market_scope": 400,
+  "segment_name": 80,
+  "arithmetic": 400,
+  "player_name": 80,
+  "request": 300,
+  "post_title": 200,
+  "url": 1000
  },
  "actions": [
   {
@@ -802,14 +846,182 @@
    }
   },
   {
+   "name": "set_strategy_text",
+   "description": "Rewrite one part of the strategy memo in the visitor's words: the summary (one sentence), the vision, or one of the four sections (serve: who we serve; sell: what we sell, and for how much; know: what we know that others don't; not: what we won't do). Never invent a number: a price, count or share appears only when the visitor or a source states it. \"\" clears it.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "field": {
+      "type": "string",
+      "enum": [
+       "summary",
+       "vision",
+       "serve",
+       "sell",
+       "know",
+       "not"
+      ],
+      "description": "The part to rewrite"
+     },
+     "text": {
+      "type": "string",
+      "description": "The whole new text of that part"
+     }
+    },
+    "required": [
+     "field",
+     "text"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "set_bet",
+   "description": "Change a bet: only the fields given. A statement is one sentence that could turn out wrong; rules_out says what it refuses; wrong_if says what would show it wrong.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The bet's id, b1 to b5"
+     },
+     "statement": {
+      "type": "string",
+      "description": "The bet in one sentence"
+     },
+     "why": {
+      "type": "string",
+      "description": "The reasoning, one or two sentences"
+     },
+     "rules_out": {
+      "type": "string",
+      "description": "What the bet refuses"
+     },
+     "wrong_if": {
+      "type": "string",
+      "description": "What would show it wrong, in one sentence"
+     },
+     "check_by": {
+      "type": "string",
+      "description": "When to look again: a date (2027-01-23) or words like \"in 90 days\"; \"\" clears it"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_bet",
+   "description": "Add a bet (at most five): a statement that could turn out wrong, why, what it rules out and what would show it wrong. It is checked again in 90 days.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "statement": {
+      "type": "string",
+      "description": "The bet in one sentence"
+     },
+     "why": {
+      "type": "string",
+      "description": "The reasoning, one or two sentences"
+     },
+     "rules_out": {
+      "type": "string",
+      "description": "What the bet refuses"
+     },
+     "wrong_if": {
+      "type": "string",
+      "description": "What would show it wrong, in one sentence"
+     }
+    },
+    "required": [
+     "statement",
+     "why",
+     "rules_out",
+     "wrong_if"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "drop_bet",
+   "description": "Remove a bet. Goals tied to it are kept, no longer tied to a bet.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The bet's id, b1 to b5"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_listening_request",
+   "description": "Add something to watch for (at most eight), in plain words: \"competitor changelogs: Trestle, FieldCraft\", \"supers asking for a better schedule app\".",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "What to watch for"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "drop_listening_request",
+   "description": "Stop watching for something.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "The request as it is listed"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "resize_market",
+   "description": "Size the market again with what the visitor said about it (\"we sell to architects too\"). Changes nothing now; the market map is redrawn when the new sizes are in.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "note": {
+      "type": "string",
+      "description": "What the visitor said about the market, in their words"
+     }
+    },
+    "required": [
+     "note"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
    "name": "step_go",
-   "description": "Move to one of the five tabs.",
+   "description": "Move to one of the six tabs.",
    "input_schema": {
     "type": "object",
     "properties": {
      "step": {
       "type": "string",
       "enum": [
+       "strategy",
        "chart",
        "goals",
        "team",

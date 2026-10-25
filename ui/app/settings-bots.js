@@ -8,7 +8,7 @@ const settingsPersonName = id => settingsPerson(id)?.name || id || 'Unassigned';
 let SETTINGS_KEEP_MODEL = '';
 const settingsModel = id => SETTINGS_DATA.models.find(model => model.id === id);
 const settingsHarness = id => (SETTINGS_DATA.harnesses || []).find(row => row.id === id);
-const settingsModelName = id => settingsModel(id)?.label || id || 'Not set';
+const settingsModelName = id => settingsModel(id)?.label || settingsTierName(id) || id || 'Not set';
 const settingsHarnessName = id => settingsHarness(id)?.label || id || '';
 const settingsEffortName = effort => ({low:'low', medium:'medium', high:'high', xhigh:'xhigh', max:'max', ultra:'ultra'})[effort] || effort || '';
 const settingsChoiceValue = (harness, model, effort) => [harness || '', model || '', effort || ''].join('::');
@@ -22,6 +22,30 @@ const settingsChoiceLabel = (harness, model, effort) => {
   const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
   return modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
 };
+// ----------------------------------------------------------------- Tico AI Gateway picks
+// A Gateway bot's model is a pick, not a name: Department · Level · Fast · Version (GET /v2/models `gateway`, backend/gateway_tiers.py).
+// The stored model is the id they make: tico-{department}-{level}[-fast][-{version}], no version meaning always the latest.
+const settingsIsTico = id => /^tico-/.test(id || '');
+const settingsGateway = () => SETTINGS_DATA.gateway?.tiers && Object.keys(SETTINGS_DATA.gateway.tiers).length ? SETTINGS_DATA.gateway : null;
+// {tier, department, level, fast, version ('auto' when none)} for a tier id, or null for an old-lineup id or any other.
+function settingsTierParse(id) {
+  const gw = settingsGateway(), m = /^(tico-[a-z0-9-]+?)(?:-(\d+\.\d+))?$/.exec(String(id || ''));
+  const tier = m && gw?.tiers[m[1]];
+  return tier ? {tier: m[1], department: tier.department, level: tier.level, fast: tier.fast, version: m[2] || 'auto'} : null;
+}
+const settingsTierId = t => `${t.tier}${t.version === 'auto' ? '' : '-' + t.version}`;
+const settingsTierKey = (department, level, fast) => `tico-${department}-${level}${fast ? '-fast' : ''}`;
+function settingsTierName(id) {
+  const t = settingsTierParse(id);
+  return t ? `${SETTINGS_DATA.gateway.tiers[t.tier].name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
+}
+// "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (an old id from the model row).
+function settingsTierLine(id) {
+  const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway.tiers[t.tier];
+  const now = tier && tier.versions.find(v => v.version === (t.version === 'auto' ? tier.current : t.version));
+  if (now) return `${now.model} · $${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`;
+  return settingsModel(id)?.description?.replace(/ underneath$/, '') || '';
+}
 // In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
 const settingsModelPickName = id => {
   const row = settingsModel(id);
@@ -98,7 +122,8 @@ document.addEventListener('click', event => {
 function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings') {
   return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? `data-allow-none="${esc(none === true ? 'None' : none)}"` : ''}>
     <label>Harness / provider<select data-choice-harness aria-label="Harness / provider" ${disabled ? 'disabled' : ''}></select></label>
-    <label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
+    <label data-choice-model-label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
+    <div class="settings-tier" data-choice-tier hidden></div>
     <label>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
     <div class="settings-choice-blocks" data-choice-blocks></div>
   </div>`;
@@ -107,52 +132,111 @@ function settingsWireChoiceFields(fields, onChange = () => {}) {
   const harness = fields.querySelector('[data-choice-harness]');
   const model = fields.querySelector('[data-choice-model]');
   const effort = fields.querySelector('[data-choice-effort]');
-  const choices = settingsAllChoices(), readonly = fields.hasAttribute('data-readonly');
+  const tierBox = fields.querySelector('[data-choice-tier]');
+  const modelLabel = fields.querySelector('[data-choice-model-label]');
+  const all = settingsAllChoices(), readonly = fields.hasAttribute('data-readonly');
+  // The Gateway's picks are made in the tier controls; its 60 rows stay out of the Model list (and one virtual
+  // harness, "Tico AI Gateway", stands for them). `real` maps it back to the pi harness the bot runs them on.
+  const gw = settingsGateway(), viaTier = !!gw && all.some(row => settingsIsTico(row.model));
+  const choices = viaTier ? all.filter(row => !settingsIsTico(row.model)) : all;
+  const tierRows = viaTier ? all.filter(row => settingsIsTico(row.model)) : [];
   // A bot's own Model control greys out what its computer cannot run; bulk change checks each bot on Apply.
   const box = fields.closest('[data-bot-choice]');
-  const bot = box?.dataset.kind === 'model' ? S.emps.find(row => row.name === box.dataset.botChoice) : null;
-  const block = id => bot ? settingsRuntimeBlock(bot, id) : null;
+  const bot = box?.dataset.botChoice ? S.emps.find(row => row.name === box.dataset.botChoice) : null;
+  const guard = box?.dataset.kind === 'model' ? bot : null;
+  const block = id => guard ? settingsRuntimeBlock(guard, id) : null;
   const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
   let picked = settingsChoiceFromValue(fields.dataset.current);
+  if (viaTier && settingsIsTico(picked.model)) picked.harness = 'tico';
+  let legacy = viaTier && picked.harness === 'tico' && !settingsTierParse(picked.model);   // an old-lineup id, until a control changes it
+  const inTier = () => viaTier && picked.harness === 'tico';
+  const real = () => inTier() ? {...picked, harness: 'pi'} : picked;
+  const own = bot?.gateway_department || 'general';
+  // The tier the controls show: the model's own, or (old lineup, nothing chosen yet) the bot's department at Medium.
+  const shown = () => settingsTierParse(picked.model) || {tier: settingsTierKey(own, 'medium', false), department: own, level: 'medium', fast: false,
+    version: gw.tiers[settingsTierKey(own, 'medium', false)]?.current || '1.0'};
+  const tierEfforts = t => { const row = settingsModel(`${t.tier}-${gw.tiers[t.tier]?.current}`) || settingsModel(picked.model);
+    return {list: row?.efforts?.length ? [...row.efforts] : ['low', 'high', 'max'], def: row?.default_effort || 'high'}; };
+  const setTier = t => {
+    const key = settingsTierKey(t.department, t.level, t.fast);
+    if (!gw.tiers[key]) return;
+    legacy = false;
+    // Auto stays Auto; a pinned version stays only where the destination tier has it, else that tier's current one.
+    const has = version => (gw.tiers[key].versions || []).some(v => v.version === version);
+    const next = {...t, tier: key, version: t.version === 'auto' || has(t.version) ? t.version : gw.tiers[key].current};
+    const efforts = tierEfforts(next);
+    picked = {harness: 'tico', model: settingsTierId(next), effort: efforts.list.includes(picked.effort) ? picked.effort : efforts.def};
+  };
+  const paintTier = () => {
+    const t = shown(), tier = gw.tiers[t.tier];
+    const now = tier?.current;
+    const versions = [...(tier?.versions || [])];   // newest first
+    tierBox.innerHTML = `<div class="settings-tier-row">
+        <label>Department<select data-tier-department aria-label="Department" ${readonly ? 'disabled' : ''}>${gw.departments.map(d =>
+          option(d.id, d.name + (bot?.gateway_department === d.id ? ' (from group)' : ''), d.id === t.department)).join('')}</select></label>
+        <div class="settings-tier-seg" role="radiogroup" aria-label="Level">${gw.levels.map(l =>
+          `<button type="button" role="radio" aria-checked="${l.id === t.level && !legacy}" data-tier-level="${esc(l.id)}" ${readonly ? 'disabled' : ''}>${esc(l.name)}</button>`).join('')}</div>
+        <label class="settings-tier-fast"><input type="checkbox" data-tier-fast ${t.fast ? 'checked' : ''} ${readonly ? 'disabled' : ''}>Fast</label>
+        <label>Version<select data-tier-version aria-label="Version" ${readonly ? 'disabled' : ''}>
+          ${legacy ? option('', `${settingsModelName(picked.model)}`, true, true) : ''}
+          ${versions.map(v => option(v.version, v.version + (v.version === now ? ' (current)' : ''), !legacy && t.version === v.version)).join('')}
+          ${option('auto', 'Auto (always latest)', !legacy && t.version === 'auto')}</select></label></div>
+      <p class="settings-tier-line" data-tier-line>${esc(settingsTierLine(picked.model))}</p>`;
+    tierBox.querySelector('[data-tier-department]').onchange = ev => { setTier({...t, department: ev.target.value}); paint(); onChange(value(), valid()); };
+    tierBox.querySelectorAll('[data-tier-level]').forEach(b => b.onclick = () => { setTier({...t, level: b.dataset.tierLevel}); paint(); onChange(value(), valid()); });
+    tierBox.querySelector('[data-tier-fast]').onchange = ev => { setTier({...t, fast: ev.target.checked}); paint(); onChange(value(), valid()); };
+    tierBox.querySelector('[data-tier-version]').onchange = ev => { setTier({...t, version: ev.target.value}); paint(); onChange(value(), valid()); };
+  };
   const paint = () => {
     const harnesses = [...new Set(choices.map(row => row.harness))];
     const off = settingsOffHarnesses(choices);
     harness.innerHTML = option('', fields.hasAttribute('data-allow-none') ? fields.getAttribute('data-allow-none') || 'None' : 'Choose harness', !picked.harness)
-      + (picked.harness && !harnesses.includes(picked.harness) ? option(picked.harness, settingsHarnessName(picked.harness) || picked.harness, true, true) : '')
+      + (picked.harness && picked.harness !== 'tico' && !harnesses.includes(picked.harness) ? option(picked.harness, settingsHarnessName(picked.harness) || picked.harness, true, true) : '')
       + harnesses.map(id => { const why = block(id);
         // Short, so a narrow select does not cut it off: "Claude Code (sign in)".
         return option(id, why ? `${harnessWords(why.runtime)} (${why.short})` : settingsHarnessName(id) || id, id === picked.harness, !!why && id !== picked.harness); }).join('')
+      + (viaTier ? (() => { const why = block('tico');
+        return option('tico', why ? `Tico AI Gateway (${why.short})` : 'Tico AI Gateway', picked.harness === 'tico', !!why && picked.harness !== 'tico'); })() : '')
       + off.filter(row => row.id !== picked.harness)
         .map(row => option(row.id, `${harnessWords(row.id)} (off)`, false, true)).join('');
-    harness.title = block(picked.harness)?.reason || '';
+    harness.title = block(picked.harness === 'tico' ? 'tico' : picked.harness)?.reason || '';
     // The reason and its Sign in / Move line only in the open bot editor: the table already marks the bot's row,
     // and every bot on that computer would repeat it. The provider-off line shows wherever the picker is, since
     // it is about the team, not the bot.
     const notes = fields.querySelector('[data-choice-blocks]');
-    if (notes) notes.innerHTML = (bot && !readonly && fields.closest('#bot-editor') ? settingsBlockedNote(bot, harnesses) : '')
+    if (notes) notes.innerHTML = (guard && !readonly && fields.closest('#bot-editor') ? settingsBlockedNote(guard, harnesses) : '')
       + (!readonly ? settingsOffNote(off) : '');
     const models = [...new Set(choices.filter(row => row.harness === picked.harness).map(row => row.model))];
+    modelLabel.hidden = inTier(); tierBox.hidden = !inTier();
     model.innerHTML = option('', 'Choose model', !picked.model, true)
-      + (picked.model && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
-      // A Tico model on a computer that cannot run Gateway work (backend/views.py `runnable_choices`, under its model id).
-      + models.map(id => { const why = /^tico-/.test(id) ? block(id) : null;
-        return option(id, why ? `${settingsModelName(id)} (${why.short})` : settingsModelPickName(id), id === picked.model, !!why && id !== picked.model); }).join('');
-    const efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
-    effort.innerHTML = (!picked.effort && efforts.length ? option('', 'Choose effort', true, true) : '')
-      + (!efforts.length ? option(picked.effort, settingsEffortName(picked.effort) || 'Choose effort', true, true) : '')
-      + (picked.effort && efforts.length && !efforts.includes(picked.effort) ? option(picked.effort, `${settingsEffortName(picked.effort)} (current)`, true, true) : '')
-      + efforts.map(id => option(id, id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), id === picked.effort)).join('');
+      + (picked.model && !inTier() && !models.includes(picked.model) ? option(picked.model, `${settingsModelName(picked.model)} (current)`, true, true) : '')
+      + models.map(id => option(id, settingsModelPickName(id), id === picked.model)).join('');
+    let efforts, current = picked.effort;
+    if (inTier()) { efforts = tierEfforts(shown()).list; paintTier(); }
+    else efforts = choices.filter(row => row.harness === picked.harness && row.model === picked.model).map(row => row.effort);
+    effort.innerHTML = (!current && efforts.length ? option('', 'Choose effort', true, true) : '')
+      + (!efforts.length ? option(current, settingsEffortName(current) || 'Choose effort', true, true) : '')
+      + (current && efforts.length && !efforts.includes(current) ? option(current, `${settingsEffortName(current)} (current)`, true, true) : '')
+      + efforts.map(id => option(id, id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), id === current)).join('');
     harness.disabled = readonly;
     model.disabled = readonly || !picked.harness || !models.length;
     effort.disabled = readonly || efforts.length <= 1;
   };
-  const value = () => picked.model ? settingsChoiceValue(picked.harness, picked.model, picked.effort) : '';
-  const valid = () => (choices.some(row => row.value === value()) && !block(picked.harness) && !(/^tico-/.test(picked.model) && block(picked.model))) || (!picked.harness && fields.hasAttribute('data-allow-none'));
+  const value = () => picked.model ? settingsChoiceValue(real().harness, picked.model, picked.effort) : '';
+  const tierValid = () => { const t = settingsTierParse(picked.model);
+    return !!t && (t.version === 'auto' || gw.tiers[t.tier].versions.some(v => v.version === t.version)) && tierEfforts(t).list.includes(picked.effort) && !block('tico'); };
+  const valid = () => (inTier() ? tierValid() : (choices.some(row => row.value === value()) && !block(picked.harness)))
+    || (!picked.harness && fields.hasAttribute('data-allow-none'));
   // Whether the three fields show something other than what the bot has, finished or not.
-  const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current);
-    return picked.harness !== was.harness || picked.model !== was.model || picked.effort !== was.effort; };
+  const changed = () => { const was = settingsChoiceFromValue(fields.dataset.current), now = real();
+    return now.harness !== was.harness || now.model !== was.model || now.effort !== was.effort; };
   harness.onchange = () => {
     picked = {harness: harness.value, model: '', effort: ''};
+    if (picked.harness === 'tico') {   // the bot's department at Medium, pinned to the current version
+      legacy = false;
+      const t = {tier: settingsTierKey(own, 'medium', false), department: own, level: 'medium', fast: false};
+      setTier({...t, version: gw.tiers[t.tier]?.current || '1.0'});
+    }
     paint(); onChange(value(), valid());
   };
   model.onchange = () => {

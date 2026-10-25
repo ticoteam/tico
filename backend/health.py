@@ -12,8 +12,8 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, billing_check, blob_s3, gateway_connection, inbox_isolation, model_login, providers, releases, roadmaps, runner_versions,
-               setup_stuck, watchers)
+from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login, providers,
+               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -363,7 +363,7 @@ def _listening_questions_lost(c, settings, qset):
 def _listening(c, settings):
     from . import listening
     from clients.judge import JudgeError
-    dests = listening.destinations(settings, check_questions=False)
+    dests = listening.destinations(settings, c, check_questions=False)
     if not dests:
         return _listening_lost(c, settings)
     try:
@@ -1391,7 +1391,11 @@ def view(c, who, settings, auth, github, config):
 
     if full:
         notice = config.get("update") or {}
-        if notice.get("available"):
+        if notice.get("scheduled"):           # Tico support's update of this hosted server (backend/hosted_updates.py)
+            checks.append(_check("version", "Version", "info",
+                                 f"Tico will update this server to {_v(notice['scheduled'])} when idle.",
+                                 [_fix("What is new", "#/changelog")]))
+        elif notice.get("available"):
             checks.append(_check("version", "Version", "warn",
                                  f"{_v(notice.get('latest'))} is available. You are on {_v(releases.version())}.",
                                  [_fix("Update", click="#new-version"), _fix("What is new", "#/changelog")]))
@@ -1452,6 +1456,21 @@ def view(c, who, settings, auth, github, config):
                              "; ".join(f"{bot}: {DENIED_WARNING}{rest}" for bot, rest in denied[:3])
                              + ("." if len(denied) <= 3 else f"; and {len(denied) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots")]))
+    if full:
+        from . import webhooks
+        hooks = webhooks.health_summary(c)
+        said = []
+        if hooks["failed"]:
+            said.append("gave up on events for " + ", ".join(hooks["failed"][:3]) + (f" and {len(hooks['failed']) - 3} more" if len(hooks["failed"]) > 3 else ""))
+        if hooks["flaky"]:
+            said.append("more than half of the attempts to " + ", ".join(hooks["flaky"][:3]) + " failed")
+        if hooks["disabled"]:
+            said.append("turned off " + ", ".join(hooks["disabled"][:3]) + " after five days of failed attempts")
+        if hooks["skipped"]:
+            said.append(f"{hooks['skipped']} events skipped endpoints past the limit of {webhooks.MAX_PER_EVENT} per event")
+        if said:
+            checks.append(_check("webhooks", "Outgoing webhooks", "warn", "In the last 24 hours Tico " + "; ".join(said) + ".",
+                                 [_fix("Open webhooks", "#/settings", "webhooks")]))
     if full and (denies := _harness_denies_check(c, settings)):
         checks.append(denies)
     if full:
@@ -1649,6 +1668,14 @@ def view(c, who, settings, auth, github, config):
     if kind == "owner" and (gateway := gateway_connection.health(c, settings)):
         checks.append(_check("gateway", "Tico AI Gateway", gateway["status"], gateway["summary"],
                              [_fix("Open Models", "#/settings", "models")]))
+    # Webhooks waiting at Tico Gateway that this server is not collecting (backend/hook_relay.py).
+    if kind == "owner" and (relay := hook_relay.health(c, settings)):
+        checks.append(_check("hook_relay", "Webhooks through Tico Gateway", relay["status"], relay["summary"],
+                             [_fix("Open Webhooks", "#/settings", "webhooks")]))
+    # Sleep when idle is on but Tico could not be asked to stop this server (backend/sleep_idle.py).
+    if kind == "owner" and (sleep := sleep_idle.health(c, settings)):
+        checks.append(_check("sleep_idle", "Sleep when idle", sleep["status"], sleep["summary"],
+                             [_fix("Open Computers", "#/settings", "devices")]))
     # Tico HQ's nightly billing check, on the Tico team's own install only (the one server holding HQ's read-only staff
     # key): each mismatch, and a check that missed a night or cannot be read, red (backend/billing_check.py).
     if kind == "owner":
@@ -1853,4 +1880,5 @@ def install(app, store, auth, settings):
         github = getattr(request.app.state, "github_app", None)
         with store.read_transaction() as c:
             # Health reads only these two parts of the config; building all of it cost a changelog parse per poll.
-            return view(c, who, settings, auth, github, {"update": releases.notice(), "backup": replication.status()})
+            return view(c, who, settings, auth, github, {"update": hosted_updates.notice(c, settings),
+                                                     "backup": replication.status()})

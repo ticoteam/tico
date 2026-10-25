@@ -68,13 +68,16 @@ def counts(c, bot, who=None, tasks=None):
     return {'going': going, 'waiting': queued}
 
 
-def refusal(c, row, config):
+def refusal(c, row, config, woken=False):
+    """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
+    or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
+    that, while waits, the off switch and the task cap still do."""
     if not startable(c, row):
         return None
     if waiting(c, row, starting=True):
         return 'task_wait'
     from . import profiles
-    if why := profiles.pull_refusal(c, row, config):
+    if not woken and (why := profiles.pull_refusal(c, row, config)):
         return why                  # the profile does not pull open tasks by itself (backend/profiles.py)
     cap = of(config)
     if cap == 0:

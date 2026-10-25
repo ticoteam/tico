@@ -1,0 +1,34 @@
+# OGSM: one objective, a few goals, the strategies that reach them, and the measures that say whether they are working.
+# A planning format rather than an exercise, so it is not listed.
+id: ogsm
+name: OGSM
+applies_to: strategy
+description: 'In the style of OGSM: one objective, a few goals, the strategies that reach them, and their measures.'
+minutes: 10
+listed: false
+steps:
+  - key: q1
+    ask: In one sentence, where is the team going over the next year or two?
+    input: text
+  - key: q2
+    ask: Which three to five numbers would prove you got there, and what are their targets and dates?
+    input: text
+  - key: q3
+    ask: For each number, what is the main approach you are betting on to move it?
+    input: text
+  - key: q4
+    ask: Which of those approaches is unproven, and what early signal would tell you it is working?
+    input: text
+  - key: q5
+    ask: Where do two of your strategies compete for the same people or budget?
+    input: text
+  - key: q6
+    ask: Which measure do you look at today that does not predict any of your goals, and should you stop tracking it?
+    input: text
+  - key: q7
+    ask: What would you cut first if the budget were halved, and what does that say about which strategies matter?
+    input: text
+output:
+  chart: none
+  sections: [Objective, Goals, Strategies, Measures]
+sharpen: []

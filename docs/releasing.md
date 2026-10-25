@@ -123,7 +123,7 @@ select it. A file that makes a computed import or lists the repository with `git
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
 Write unit
-tests while you build and run them as you go; once the change passes, keep only the highest-value ones. Before merging,
+tests while you build and run them as you go; keep every one that guards a real failure, as many as the change needs, and drop the trivial ones. Before merging,
 run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
 suite once on its frozen candidate.
 
@@ -139,9 +139,9 @@ python scripts/release_checks.py
 ```
 
 That is the default suite: pytest in parallel without the tests marked `@pytest.mark.slow` (about a minute), then the
-core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load and fails
-if the combined run reaches 300 seconds; it should take about two minutes. This is a hard budget for any suite that runs on merge or on a schedule. Keep it by keeping few tests, the ones
-that guard security and privacy boundaries, data safety and core contracts, and by cutting one when you add one. Release validation builds the three images and the Release workflow publishes them with the
+core browser scripts (`CORE` in `scripts/ui-tests.cjs`) with the load-aware concurrency described below. The check records wall time and load; it
+takes about two minutes, and a run over 300 seconds still passes and says it is slow. There is no budget on the
+number of tests: keep every test that guards a real failure, and none of wording or copy. Release validation builds the three images and the Release workflow publishes them with the
 GitHub release. The PR checks workflow runs this full default suite on main and on uncertain PR selections; known PR mappings run the affected tests above. Release validation runs the full gate for an explicitly dispatched immutable candidate. `--release` runs this suite too, along with the
 slow tests and every browser script, and release candidate validation covers that full suite.
 
@@ -282,8 +282,7 @@ at the same time, each with its own Docker names; the journey proceeds once thos
 It prints a phase table with each check's start offset, duration and exit code, plus total time and starting/ending
 load. It keeps the logs in a temporary directory and prints the end of any failed log. If any build fails, the
 Docker-dependent checks are reported as not run and the release check fails. The release target is under 8 minutes
-(480 seconds); a run over budget still passes its assertions but reports that it is over budget. The default suite's
-300-second hard budget is unchanged. Do not run two at once: the journey's candidate tags are fixed.
+(480 seconds); a run over budget still passes its assertions but reports that it is over budget. Do not run two at once: the journey's candidate tags are fixed.
 
 The full journey stays available on demand (about ten minutes), for a release that changes enrollment, the runner's
 restart behavior, Litestream or backups:

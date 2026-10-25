@@ -31,6 +31,12 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
     return max(default, wait + 10)
 
 
+# Routes the server answers only after a chain of model calls (backend/judge.py SLOW_CHAIN_SECONDS, 35 s with Decisions
+# at Medium or High): their callers wait past it.
+SLOW_POSTS = frozenset({"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch"})
+SLOW_WAIT = 45
+
+
 class APIError(Exception):
     def __init__(self, code, detail, status=0, retryable=False, operation_id=None, extra=None):
         super().__init__(detail)
@@ -101,6 +107,8 @@ class Client:
             headers["Content-Length"] = str(data.size)
         path = path.replace("#", "%23")     # a task number ("tasks/#18945") is in the path, not a fragment
         timeout = inbound_wait_timeout(method, path, body, self.timeout)
+        if method == "POST" and path in SLOW_POSTS:
+            timeout = max(timeout, SLOW_WAIT)
         for attempt in range(self.retries + 1):
             if hasattr(data, "seek"):
                 data.seek(0)

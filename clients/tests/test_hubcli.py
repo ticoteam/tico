@@ -23,8 +23,8 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "strategy", "market", "listening", "tool", "routine", "trigger", "release", "approval", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
-               "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
+               "proposal", "strategy", "lens", "market", "listening", "tool", "routine", "event-types", "trigger", "relay", "sleep", "notice", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+               "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "rule", "service-key"]
 
 
@@ -36,6 +36,27 @@ def run_hub(*args, env=None):
         return done.returncode, json.loads(done.stdout)
     except ValueError:
         return done.returncode, {"_stdout": done.stdout, "_stderr": done.stderr}
+
+
+def test_wake_url_commands_reach_the_tools_that_put_the_owners_address(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            calls.append(("GET", path))
+            return {"url": None, "set_at": None, "set_by": None}
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body))
+            return {"url": body["url"], "secret": None}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    for words in (["show"], ["set", "https://wake.acme.example/start"], ["off"]):
+        remotecli.run(hubcli.parser().parse_args(["relay", "wake-url", *words]))
+    assert calls == [("GET", "hooks/wake-url"), ("PUT", "hooks/wake-url", {"url": "https://wake.acme.example/start"}),
+                     ("PUT", "hooks/wake-url", {"url": None})]
+    assert {"hub_relay_wake_url_show", "hub_relay_wake_url_set", "hub_relay_wake_url_off"} <= set(hubtools.BY_NAME)
 
 
 def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, monkeypatch):
@@ -59,6 +80,23 @@ def test_review_command_and_mcp_preserve_head_body_and_retry_identity(tmp_path, 
     assert calls[0][:2] == ("github/reviews", expected)
     hubtools.repo_review(Api(), expected)
     assert calls[1] == calls[0]  # CLI and MCP retries identify the same exact review.
+
+
+def test_gateway_fetch_command_asks_the_route_with_the_url_and_size(monkeypatch):
+    from clients import remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            pass
+        def post(self, path, body, key=None):
+            calls.append((path, body))
+            return {"content": "C"}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    assert remotecli.run(hubcli.parser().parse_args(["gateway", "fetch", "https://example.test/a"])) == {"content": "C"}
+    remotecli.run(hubcli.parser().parse_args(["gateway", "fetch", "https://example.test/b", "--max-tokens", "2000"]))
+    assert calls == [("gateway/fetch", {"url": "https://example.test/a", "max_tokens": 10000}),
+                     ("gateway/fetch", {"url": "https://example.test/b", "max_tokens": 2000})]
 
 
 def test_product_repository_cli_previews_and_requires_the_exact_typed_confirmation(monkeypatch):
@@ -530,3 +568,101 @@ def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
         remotecli.via_tool(None, hubcli.parser().parse_args(argv))
     assert 'limit' not in sent[0]
     assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
+
+
+def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, **kw):
+            if path == 'me':
+                return {'actor': 'bot:librarian'}
+            calls.append(('GET', path, kw))
+            return {}
+
+        def post(self, path, body, **kw):
+            calls.append(('POST', path, body))
+            return {}
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
+    (tmp_path / 'b.md').write_text('# Week 44\n')
+    (tmp_path / 'items.json').write_text('[{"text": "Example Co raised prices.", "kind": "change", "entity_ids": ["company/example-co"]}]')
+    for argv in (['market', 'watch', 'add', 'company/example-co', 'https://example.test/pricing', '--kind', 'pricing'],
+                 ['market', 'watch', 'stop', 'w1'], ['market', 'watch', 'list'], ['market', 'watch', 'check'],
+                 ['market', 'briefing', 'latest'],
+                 ['market', 'briefing', 'post', '--week', '2026-W44', '--title', 'Week 44',
+                  '--body-file', str(tmp_path / 'b.md'), '--items-file', str(tmp_path / 'items.json')]):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert [(c[0], c[1]) for c in calls] == [
+        ('POST', 'market/watches'), ('POST', 'market/watches/w1/stop'), ('GET', 'market/watches'),
+        ('POST', 'market/watches/check'), ('GET', 'market/briefings/latest'), ('POST', 'market/briefings')]
+    assert calls[0][2] == {'entity_id': 'company/example-co', 'url': 'https://example.test/pricing', 'kind': 'pricing'}
+    assert calls[-1][2] == {'week': '2026-W44', 'title': 'Week 44', 'body': '# Week 44\n',
+                            'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}]}
+
+
+WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with the arguments it needs
+    ["event-types", "--group", "webhook"],
+    ["trigger", "list"], ["trigger", "create", "Orders"], ["trigger", "show", "orders"],
+    ["trigger", "update", "orders", "--preset", "github", "--type-from", "X-GitHub-Event"],
+    ["trigger", "rotate", "orders"], ["trigger", "sign", "orders", "--off"], ["trigger", "delete", "orders"],
+    ["trigger", "deliveries", "orders"], ["trigger", "delivery", "orders", "d1", "--part", "2"],
+    ["trigger", "replay", "orders", "d1"], ["trigger", "recover", "orders", "--since", "6"],
+    ["trigger", "relay", "create", "orders"], ["trigger", "relay", "rotate", "orders"], ["trigger", "relay", "delete", "orders"],
+    ["relay", "status"], ["relay", "set", "orders", "--wake", "off"],
+    ["rule", "list", "--scope-kind", "team"],
+    ["rule", "set", "--scope-kind", "team", "--event", "webhook.received", "--then", "wake",
+     "--params", '{"bot":"ops","text":"x"}'],
+    ["rule", "update", "rul_1", "--then", "note", "--expected-revision", "2"], ["rule", "delete", "rul_1"],
+    ["rule", "suggestions"], ["rule", "apply", "sug_1"], ["rule", "dismiss", "sug_1"],
+    ["webhook", "list"], ["webhook", "create", "--name", "A", "--url", "https://hooks.example.com/x"],
+    ["webhook", "show", "a"], ["webhook", "update", "a", "--name", "B"], ["webhook", "rotate", "a"],
+    ["webhook", "pause", "a"], ["webhook", "resume", "a"], ["webhook", "delete", "a"],
+    ["webhook", "send", "a", "--type", "custom.x", "--data", "{}"], ["webhook", "sends", "a"],
+    ["webhook", "retry", "a", "s1"], ["webhook", "example", "a"], ["webhook", "enable", "a"],
+    ["webhook", "recover", "a", "--since", "2026-10-20"], ["webhook", "replay", "a", "--since", "2026-10-20"],
+    ["sleep", "status"], ["sleep", "set", "--hours", "4"], ["notice", "list"],
+]
+
+
+@pytest.mark.parametrize("argv", WEBHOOK_LEAVES, ids=lambda argv: " ".join(argv[:3]))
+def test_every_webhook_command_runs_against_a_remote_server(argv, monkeypatch):
+    """`hub` against HUB_API_URL + HUB_TOKEN reaches the same /api/v2 route as the server's own shell: no leaf of
+    docs/webhooks.md answers "unsupported"."""
+    from clients import remotecli
+    seen = []
+
+    class Anything(dict):
+        def __missing__(self, key):
+            return Anything()
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get(self, path, **params):
+            seen.append(("GET", path))
+            return Anything(actor="human:ana", kind="owner")
+
+        def call(self, method, path, body=None, key=None, **kwargs):
+            seen.append((method, path))
+            return Anything()
+
+        def post(self, path, body, key=None, **kwargs):
+            seen.append(("POST", path))
+            return Anything()
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+    args = hubcli.parser().parse_args(argv)
+    assert remotecli.tool_name(args.fn) in __import__("clients.hubtools", fromlist=["BY_NAME"]).BY_NAME or args.cmd == "sleep"
+    remotecli.run(args)
+    assert [p for m, p in seen if p != "me"], "no request was made"
+
+
+def test_hub_notice_list_is_not_the_renamed_notice_send():
+    """Only the old `hub notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
+    assert hubcli.rename_argv(["notice", "list"]) == (["notice", "list"], None)
+    assert hubcli.rename_argv(["notice", "--help"]) == (["notice", "--help"], None)
+    argv, said = hubcli.rename_argv(["notice", "Deploy done"])
+    assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said

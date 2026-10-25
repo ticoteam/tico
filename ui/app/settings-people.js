@@ -103,7 +103,7 @@ async function renderSettingsPeople() {
         <ul class="people-list">${active.map(p => peopleRow(p, view)).join('')}</ul>
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
-          <div class="people-cell-more"><button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
+          <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
         <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
         ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
           <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label></div>` : ''}
@@ -198,6 +198,9 @@ async function renderSettingsPeople() {
         else if (act === 'add_people') void change(() => post(path, {add_people: !p.add_people}), `${p.name} ${p.add_people ? 'can no longer' : 'can'} add humans`);
         else if (act === 'left') confirmDialog(`Mark ${p.name} as left?`, 'Ends their sign-in and API tokens. Their history stays.', 'Mark as left',
           async () => { await post(`/v2/humans/${encodeURIComponent(p.id)}`, {left: true}); await again(`${p.name} marked as left`); });
+        // Only a left person with no history (backend/people_remove.py); anyone else stays as left.
+        else if (act === 'remove') confirmDialog(`Remove ${p.name}?`, "This can't be undone.", 'Remove',
+          async () => { await writeRequest('DELETE', `/v2/humans/${encodeURIComponent(p.id)}`); await again(`${p.name} removed`); });
         else if (act === 'owner') peopleOwnerDialog(p, view);
         else if (act === 'invite') void change(() => post(`${path}/invite`, {}), `Invite sent to ${p.email}`);
         else if (act === 'password') void post(`${path}/password`, {}).then(peoplePasswordDialog, error => toast(error.message, true));

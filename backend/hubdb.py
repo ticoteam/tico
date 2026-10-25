@@ -65,6 +65,7 @@ withdrawn text in the audit trail.
 import contextvars
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -85,6 +86,17 @@ from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
 from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA, SIGNING_SCHEMA as TRIGGER_SIGNING_SCHEMA
+from backend.rules_schema import SCHEMA as RULE_EVENTS_SCHEMA
+from backend.triggers_incoming_schema import SCHEMA as TRIGGERS_INCOMING_SCHEMA
+from backend.hook_relay_schema import SCHEMA as HOOK_RELAY_SCHEMA
+from backend.webhooks_schema import SCHEMA as WEBHOOKS_SCHEMA
+from backend.sleep_idle_schema import SCHEMA as SLEEP_IDLE_SCHEMA
+from backend.tico_notices_schema import SCHEMA as TICO_NOTICES_SCHEMA
+from backend.webhooks_v2_schema import SCHEMA as WEBHOOKS_V2_SCHEMA
+from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
+from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
+from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
+from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 
 HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
@@ -739,6 +751,60 @@ ONE_LOGIN_PER_COMPUTER_SCHEMA = """
 DELETE FROM subscription_assignments WHERE scope='bot';
 """
 
+# The market by spend (backend/market_spend.py): sized segments, player figures and the team's own sources. Rows are
+# retired or rejected, never deleted. A size's evidence is a list of market_evidence ids.
+MARKET_SPEND_SCHEMA = """
+CREATE TABLE IF NOT EXISTS market_sizes (
+  id TEXT PRIMARY KEY,
+  segment_id TEXT NOT NULL,
+  dimension TEXT NOT NULL DEFAULT 'offering',
+  basis TEXT NOT NULL DEFAULT 'product',
+  year INTEGER NOT NULL,
+  spend_usd REAL NOT NULL,
+  low_usd REAL NOT NULL,
+  high_usd REAL NOT NULL,
+  growth_pct REAL,
+  method TEXT NOT NULL,
+  arithmetic TEXT NOT NULL DEFAULT '',
+  formula TEXT,
+  params TEXT NOT NULL DEFAULT '{}',
+  evidence_ids TEXT NOT NULL DEFAULT '[]',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  overlaps TEXT NOT NULL DEFAULT '',
+  spread TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS market_sizes_segment ON market_sizes(segment_id, dimension, year, status);
+
+CREATE TABLE IF NOT EXISTS market_figures (
+  id TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  segment_id TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL,
+  text TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  as_of TEXT NOT NULL,
+  evidence_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS market_figures_segment ON market_figures(segment_id, entity_id);
+
+CREATE TABLE IF NOT EXISTS market_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  covers TEXT NOT NULL DEFAULT '[]',
+  access TEXT NOT NULL,
+  reliability TEXT NOT NULL,
+  how TEXT NOT NULL DEFAULT '',
+  url TEXT,
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL);
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -750,7 +816,12 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, CEO_ACTIONS_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, CEO_ACTIONS_SCHEMA,
+              MARKET_SPEND_SCHEMA, RULE_EVENTS_SCHEMA,
+              TRIGGERS_INCOMING_SCHEMA, HOOK_RELAY_SCHEMA,
+              WEBHOOKS_SCHEMA, SLEEP_IDLE_SCHEMA,
+              TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
+              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA]
 
 
 class Refused(Exception):
@@ -1262,6 +1333,33 @@ def event(conn, actor, action, target="", detail=None):
     if RUN.get() and RT.counts(action):
         conn.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (RUN.get(),))
     return row
+
+
+def _building(conn, task_id):
+    """Mark the task being made on this connection. A plain sqlite3 connection (an upgrade script's) takes no
+    attributes; there the mark is skipped, and the only cost is a state-change event beside task.created."""
+    try:
+        conn.building = task_id
+    except AttributeError:
+        pass
+
+
+def hook(conn, type, subject, data, actor, revision=None):
+    """Tell the outgoing webhooks (backend/webhooks.py) that `type` happened to `subject`, in the caller's write. `data`
+    is a function that makes the event's thin payload, called only when some endpoint is listening. Never raises: a
+    webhook problem must not undo or refuse the change that caused it."""
+    try:
+        from . import webhooks
+        if webhooks.listening(conn):
+            webhooks.publish(conn, type, subject, data(), actor, revision=revision)
+    except Exception:
+        logging.getLogger(__name__).warning("webhook event %s was not queued", type, exc_info=True)
+
+
+def _task_facts(conn, task_id, actor, **more):
+    row = task(conn, task_id) or {}
+    return {"id": task_id, "title": row.get("title"), "status": row.get("status"), "step": row.get("step_id"),
+            "owner": row.get("owner"), "requester": row.get("requester"), "actor": actor, **more}
 
 
 def writing_refusal(rule, detail):
@@ -2533,6 +2631,8 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         about = message_task_id({"refs": refs}, conv)
         if about and supersede_asks(conn, about, from_actor=actor, to_actor=target, keep=msg["id"]):
             _recount(conn, actor)
+        hook(conn, "needs_you.created", msg["id"], lambda: {"id": msg["id"], "to": target, "from": actor, "task_id": about},
+             actor, revision=0)
     if warnings:
         event(conn, actor, "message.lint", msg["id"], {"problems": warnings})
         return {**msg, "warnings": warnings}
@@ -2863,6 +2963,9 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about:                               # an answered question on a task changes the task
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), about))
     _recount(conn, asked["from_actor"])     # it no longer waits on whoever answered
+    if is_human(actor) and asked.get("kind") == "ask":
+        hook(conn, "needs_you.answered", message_id, lambda: {"id": message_id, "to": actor, "from": asked["from_actor"],
+                                                              "task_id": about}, actor, revision=0)
     if about and asked["from_actor"] == "bot:goal-manager" and is_human(actor):
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
@@ -4588,6 +4691,7 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
         msg = say(conn, actor, target, text, conversation_id=conv["id"], refs=refs)
     from . import wake_rules
     wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
+    hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     if row["status"] == "waiting" and row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their
@@ -5148,6 +5252,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                  "(:id, :title, :body, :requester, :owner, :due, "
                  ":conversation_id, :created, :updated, :done_at, :closed_at, :closed_by, :note, "
                  ":lane, :rank, :goal_id, :next_run, :number, :private)", row)
+    _building(conn, row["id"])     # its first status and step are part of task.created, not changes (_task_changed)
     if parent:
         # Filed under its parent as it is made: _task_parent above checked the parent.
         TR._insert(conn, actor, row["id"], parent["id"], "parent", ts)
@@ -5190,6 +5295,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
+    _building(conn, None)
+    hook(conn, "task.created", row["id"], lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id), actor, revision=0)
     # Give a bot the rest of this relationship's active work with the new task. The runner puts
     # current-message refs in its prompt, so the bot can reuse or reconcile overlapping work
     # without making the human-facing notice noisy or merging distinct deliverables automatically.
@@ -6063,7 +6170,30 @@ def task_ask(conn, actor, task_id, body):
     return msg
 
 
+def _task_changed(conn, task_id, actor, field, old, new, revision):
+    """One outgoing-webhook event for a status, owner or step change: the specific one when the status has a name
+    (done, declined, closed, blocked, reopened), else task.state_changed."""
+    if getattr(conn, "building", None) == task_id:
+        return
+    if field == "owner":
+        name = "task.assigned"
+    elif field == "step":
+        name = "task.step_changed"
+    elif new in ("done", "declined", "closed"):
+        name = f"task.{new}"
+    elif new == "waiting":
+        name = "task.blocked"
+    elif old in TASK_ENDED and new in ACTIVE_STATUSES:
+        name = "task.reopened"
+    else:
+        name = "task.state_changed"
+    # The owner column is written just after its event, so a new owner is said from `new`.
+    hook(conn, name, task_id, lambda: {**_task_facts(conn, task_id, actor, change={"field": field, "from": old, "to": new}),
+                                       **({"owner": new} if field == "owner" else {})}, actor, revision=revision)
+
+
 def _task_event(conn, task_id, actor, field, old, new, note=""):
+    event_id = new_id()
     via = VIA.get()
     if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
         conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
@@ -6073,9 +6203,11 @@ def _task_event(conn, task_id, actor, field, old, new, note=""):
     extra = (("via", via),) * bool(via) + (("action_id", action),) * bool(action)
     conn.execute("INSERT INTO task_events (id, task_id, ts, actor, field, old, new, note"
                  + "".join(", " + k for k, _ in extra) + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?" + ", ?" * len(extra) + ")",
-                 (new_id(), task_id, now(), actor, field,
+                 (event_id, task_id, now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note,
                   *(v for _, v in extra)))
+    if field in ("status", "owner", "step"):
+        _task_changed(conn, task_id, actor, field, old, new, event_id)
 
 
 def _ceo_changed(conn, task_id):
@@ -7142,6 +7274,7 @@ def approval_withdraw(conn, approval_id, note):
         _write_message(conn, KEEPER, row["requested_by"], f"Withdrawn: your {row['kind']} approval. {note}",
                        conv, "notice", {"approval": approval_id, "quiet": True}, None, None)
     _recount(conn, row["requested_by"])
+    hook(conn, "approval.withdrawn", approval_id, lambda: _approval_facts(row), KEEPER, revision=0)
     return approval(conn, approval_id)
 
 
@@ -7150,6 +7283,12 @@ def withdraw_task_approvals(conn, task_id, note):
     return [aid for (aid,) in conn.execute("SELECT id FROM approvals WHERE task_id=? AND decision IS NULL "
                                            "ORDER BY created", (task_id,)).fetchall()
             if approval_withdraw(conn, aid, note)]
+
+
+def _approval_facts(row):
+    """What an outgoing webhook says of an approval: who asked, what kind, which task. Never the payload."""
+    return {"id": row["id"], "kind": row["kind"], "task_id": row.get("task_id"), "requested_by": row["requested_by"],
+            "decision_owner": row.get("decision_owner")}
 
 
 def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
@@ -7224,6 +7363,7 @@ def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None):
     for aid in sorted(replaced):
         approval_withdraw(conn, aid, f"Replaced by {row['id']}.")
     _recount(conn, actor)
+    hook(conn, "approval.requested", row["id"], lambda: _approval_facts(row), actor, revision=0)
     return approval(conn, row["id"])
 
 
@@ -7255,6 +7395,8 @@ def approval_decide(conn, actor, approval_id, decision, note=""):
                        f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
                        conv, "notice", {"approval": approval_id}, None, None)
     _recount(conn, row["requested_by"])
+    hook(conn, "approval.decided", approval_id, lambda: {**_approval_facts(row), "decision": decision, "decided_by": actor},
+         actor, revision=decision)
     return after
 
 

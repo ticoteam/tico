@@ -61,14 +61,14 @@ input.people-switch:disabled{opacity:.45;cursor:not-allowed}
 .people-role{font-size:var(--t-base)}.people-role[data-role=owner]{font-weight:600}
 .people-cell-signin{display:flex;align-items:center;gap:8px}
 .people-switch-label{display:none;font-size:var(--t-base);color:var(--muted)}
-.people-cell-more{position:relative;display:flex;justify-content:flex-end}
+.people-cell-more{position:relative;display:flex;justify-content:flex-end;gap:var(--s1)}
 .people-more{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .people-more:hover,.people-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .people-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:30;min-width:180px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 8px 24px rgba(0,0,0,.16)}
 .people-menu[hidden]{display:none}
 .people-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:5px;background:none;color:var(--ink);font-size:var(--t-base);text-align:left;cursor:pointer;white-space:nowrap}
 .people-menu button:hover,.people-menu button:focus-visible{background:var(--surface2)}
-.people-menu .danger-text{color:var(--fail)}
+.people-menu .danger-text,.people-row.is-left .danger-text{color:var(--fail)}
 .people-check{width:14px;color:var(--accent);font-weight:600}
 .people-left{margin-top:var(--s2);padding-top:var(--s2);border-top:1px solid var(--line)}
 .people-left summary{padding:4px 0;color:var(--muted);font-size:var(--t-base);cursor:pointer}
@@ -623,23 +623,77 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .settings-version{margin:0;color:var(--muted);font-size:var(--t-xs)}
 .settings-log{background:none;border:0;padding:0;color:inherit;font:inherit;text-decoration:underline;cursor:pointer}
 
-/* Settings > Triggers (ui/app/settings-triggers.js) */
 .storage-form{display:grid;gap:8px;max-width:520px;margin:12px 0}.storage-form label{display:grid;gap:4px}
 .storage-earlier{margin:6px 0 0;padding-left:18px}
 .storage-tico{margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:8px;max-width:640px}.storage-tico h4{margin:0 0 6px}.storage-tico .row{align-items:center;gap:12px}
-.trigger-new{margin-bottom:12px}.trigger-new input{flex:1 1 220px;min-width:0}
+/* Settings > Webhooks (ui/app/settings-webhooks.js) */
+#settings-webhooks>.card>header{flex-wrap:wrap;gap:8px}
+#settings-webhooks .sb-narrow{display:none}
 .trigger-secret{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
-.trigger-secret p{margin:0 0 6px}.trigger-secret .row{flex-wrap:nowrap}
+.trigger-secret p{margin:0 0 6px}.trigger-secret .row{flex-wrap:nowrap;align-items:center}
 .trigger-url{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;user-select:all}
-.trigger-list{list-style:none;margin:0;padding:0}
-.trigger-list li{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
-.trigger-list li:last-child{border-bottom:0}
-.trigger-main{display:flex;flex-direction:column;gap:2px;min-width:0}.trigger-main code{overflow-wrap:anywhere}
-.trigger-actions{display:flex;gap:6px;white-space:nowrap}
-.trigger-log summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}.trigger-log>div{margin-top:6px}
-.trigger-deliveries{list-style:none;margin:0;padding:0;font-size:var(--t-sm)}
-.trigger-deliveries li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;padding:3px 0}.trigger-deliveries code{overflow-wrap:anywhere}
-@media (max-width:640px){.trigger-list li{grid-template-columns:1fr}.trigger-actions{justify-content:flex-start}}
+.wh-list{display:grid}
+.wh-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,auto);gap:4px 12px;align-items:center;width:100%;min-width:0;padding:9px 0;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:inherit;font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.wh-row:hover{background:var(--surface2)}
+.wh-row.wh-gw{cursor:default}.wh-row.wh-gw:hover{background:none}
+.wh-name{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0;overflow-wrap:anywhere;font-size:var(--t-base)}
+.wh-meta{min-width:0;overflow-wrap:anywhere}
+.wh-meta code{overflow-wrap:anywhere}
+.wh-bad{color:var(--fail)}
+.wh-head{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:10px}
+.wh-head h3{margin:0;font-size:var(--t-base);overflow-wrap:anywhere;min-width:0}
+.wh-actions,.wh-call-ctl{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.wh-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 16px;margin:0 0 4px;font-size:var(--t-sm)}
+.wh-facts dt{color:var(--muted)}.wh-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.wh-facts code{overflow-wrap:anywhere}
+.wh-warn{margin:4px 0;padding:6px 10px;border-radius:6px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
+.wh-listeners{display:grid;gap:2px;font-size:var(--t-sm)}
+.wh-li{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:4px 0;min-width:0}
+.wh-li.wr-off .wr-text{color:var(--muted)}
+.wh-li-add{margin-top:4px}
+.wh-calls{display:grid}
+.wh-call{display:grid;grid-template-columns:5.5em minmax(0,1fr) minmax(0,1.4fr) 5em 4.5em auto;gap:4px 10px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
+.wh-call:first-child{border-top:0}
+.wh-type,.wh-outcome{min-width:0;overflow-wrap:anywhere}
+.wh-call-ctl{justify-content:flex-end}
+.wh-sends .wh-call{grid-template-columns:5.5em minmax(0,1fr) minmax(0,1.4fr) 4em 4em auto}
+.wh-events{display:grid;gap:8px;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;min-width:0}
+.wh-events legend{padding:0 4px;color:var(--muted);font-size:var(--t-sm)}
+.wh-ev-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 14px}
+.wh-ev-group{display:grid;gap:2px;align-content:start;min-width:0;font-size:var(--t-sm)}
+.wh-ev-group label{gap:6px!important;flex-wrap:nowrap!important;overflow-wrap:anywhere}
+.wh-ev-group label:not(:first-child){padding-left:4px}
+.wh-pre{margin:0;padding:8px 10px;max-height:40vh;overflow:auto;border-radius:6px;background:var(--surface2);font-size:var(--t-xs);white-space:pre-wrap;overflow-wrap:anywhere}
+.wh-payload-meta{margin:0}
+.wh-dialog .wr-sub{margin:0}
+.wh-filter-head{color:var(--muted)}
+.wh-filter-items{display:grid;gap:2px;max-height:180px;overflow:auto}.wh-ev-group .wh-filter-items label{padding-left:0}
+.wh-hdrs{display:grid;gap:6px}.wh-hdrs:empty{display:none}
+.wh-hdr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto auto;gap:6px 8px;align-items:center}
+.wh-hdr input:not([type=checkbox]){width:100%}
+.wh-hdr .wh-hdr-secret{gap:6px;font-size:var(--t-sm);white-space:nowrap}
+.wh-wake{font-size:var(--t-sm);white-space:nowrap}
+.wh-wake-url{margin-bottom:12px}.wh-wake-url input{width:100%;min-width:0}
+.wh-wake-url .err{margin:0;font-size:var(--t-sm)}
+@media (max-width:640px){
+  .wh-hdr{grid-template-columns:minmax(0,1fr) auto auto}.wh-hdr [data-hdr-value]{grid-column:1/-1;grid-row:2}
+  #settings-webhooks .sb-wide{display:none}#settings-webhooks .sb-narrow{display:inline}
+  .wh-row{grid-template-columns:minmax(0,1fr) auto}.wh-row .wh-name{grid-column:1/-1}
+  .wh-call,.wh-sends .wh-call{grid-template-columns:auto minmax(0,1fr) auto}
+  .wh-call .wh-outcome{grid-column:1/-1}
+  .wh-call-ctl{grid-column:1/-1;justify-content:flex-start}
+  .wh-call-ctl:empty{display:none}
+}
+/* Settings > Listening (ui/app/settings-listening.js) */
+.listen-list{list-style:none;margin:0 0 12px;padding:0}
+.listen-list li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
+.listen-list li:last-child{border-bottom:0}
+.listen-main{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
+.listen-actions{display:flex;gap:6px;white-space:nowrap}
+.listen-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;max-width:720px}
+.listen-form label{display:grid;gap:4px;min-width:0}.listen-form input,.listen-form select{min-width:0;width:100%}
+.listen-wide{grid-column:1/-1}
+@media (max-width:640px){.listen-list li{grid-template-columns:1fr}.listen-actions{justify-content:flex-start}}
 /* Settings > CEO Bot (ui/app/settings-ceo-bot.js): three levels, one sentence each, a Confirm before a change. */
 .ceo-levels{display:grid;gap:8px;margin:10px 0}
 .ceo-level{display:grid;gap:4px;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
@@ -758,3 +812,37 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .task-rule-form input:not([type=checkbox]),.task-rule-form select{max-width:100%;min-width:0}
 .task-rule-form input[name=ruleName]{flex:1 1 100%}
 .task-rule-form input[type=number]{width:90px}
+/* Settings > Gateway (ui/app/settings-gateway.js) and the Gateway pick in a bot's Model picker (settings-bots.js) */
+.gw-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.gw-table td,.gw-table th{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
+.gw-table .gw-bots-word{display:none}
+.gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
+.gw-status-cell[data-status=live]{color:var(--ok)}
+.gw-status-cell:not([data-status=live]){color:var(--muted)}
+@media (max-width:640px){
+  .gw-table thead{display:none}
+  .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .gw-table td{padding:0;border:0}
+  .gw-table .gw-name{font-weight:600}
+  .gw-table .gw-bots-word{display:inline}
+  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price{grid-column:1 / -1;color:var(--muted)}
+}
+.settings-tier{display:grid;gap:8px;min-width:0}
+.settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
+.settings-tier-row label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
+.settings-tier-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.settings-tier-seg button{border:0;border-radius:0;background:var(--surface);color:var(--ink);padding:7px 12px;font-size:var(--t-base);cursor:pointer}
+.settings-tier-seg button+button{border-left:1px solid var(--line)}
+.settings-tier-seg button[aria-checked=true]{background:var(--ink);color:var(--surface)}
+.settings-tier-seg button:disabled{opacity:.6;cursor:default}
+.settings-tier-row label.settings-tier-fast{flex-direction:row;align-items:center;gap:6px;padding-bottom:7px;color:var(--ink)}
+.settings-tier-line{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.wr-when .wr-wide{grid-column:1/-1}
+.task-rule-form textarea{flex:1 1 100%;min-width:0;width:100%;font-family:var(--mono,ui-monospace,monospace);font-size:var(--t-sm)}
+/* Settings > Computers: Sleep when idle (ui/app/settings-hosted.js) */
+.sleep-row{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+.sleep-row .settings-inline-select{width:auto;max-width:100%}
+#set-sleep .settings-cell-note{margin:6px 0 0}
+.wh-since{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
+.wh-since input{width:auto}

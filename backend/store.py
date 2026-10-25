@@ -1,6 +1,7 @@
 """Transactions and additive cloud schema over the existing Hub domain layer."""
 
 import hashlib
+import logging
 import json
 import os
 import sqlite3
@@ -857,6 +858,9 @@ class Store:
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
+            # Destinations saved in Settings > Listening (backend/listening.py).
+            from . import listening as _listening
+            _listening.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -1382,6 +1386,15 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
+                # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
+                from .lenses import ensure as ensure_lenses
+                ensure_lenses(c)
+                # Page monitors and the weekly market briefing (backend/market_watch.py, backend/market_briefing.py).
+                # Unversioned the same way: an older release never reads the tables.
+                from .market_briefing import ensure as ensure_market_briefing
+                from .market_watch import ensure as ensure_market_watch
+                ensure_market_watch(c)
+                ensure_market_briefing(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
@@ -1619,6 +1632,7 @@ class Store:
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
         c.write_transaction = False
+        c.after_commit = []
         c.provenance_changes = c.total_changes
         c.provenance_start = None
         return c
@@ -1657,8 +1671,16 @@ class Store:
                 yield c
                 message_links.refresh_dirty(c)
                 c.commit()
+                # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
+                for after in c.after_commit:
+                    try:
+                        after()
+                    except Exception:
+                        logging.getLogger(__name__).exception("after-commit callback failed")
+                c.after_commit.clear()
             except BaseException:
                 c.rollback()
+                c.after_commit.clear()
                 raise
             finally:
                 done()

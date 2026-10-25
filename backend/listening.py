@@ -1,11 +1,13 @@
 """Listening's observation store and the shared intake: save, score, route, resolve.
 
-Four tables in the hub database (hubdb `LISTENING_SCHEMA`):
+Four tables in the hub database (hubdb `LISTENING_SCHEMA`), and a fifth, `listening_destinations`,
+that Settings > Listening writes (`ensure`):
 
     listen_runs        one sweep of one query on one site; `status` tells "no results" from "blocked"
     listen_items       what the agent saw, one row per platform post, unique on (source, native_id)
     listen_judgments   the decision model's scores, one noul per category; a new row on reclassification
     intake_items       the shared inbox, unique on (destination, item_id); the receiver resolves it
+    listening_destinations   destinations set in Settings; merged over the registry file's, the table wins
 
 Flow: Listening reads pages signed in and posts a run with the items it saw (`POST
 /listening/runs`). The decision model scores each item against every category in one call (`POST
@@ -27,6 +29,7 @@ import hashlib
 import json
 import logging
 import re
+import sqlite3
 import threading
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
@@ -102,26 +105,39 @@ def category_problems(dests, qset):
     return problems
 
 
-def destinations(settings, *, qset=None, check_questions=True):
-    """The company's destinations, from its registry; a malformed entry is skipped and logged."""
+def _finish(settings, out, source, qset, check_questions, problems=None):
+    """Log the destination problems once, and check the categories of what is configured."""
+    if problems is not None:
+        _warn_configuration(settings, "destinations", source, problems)
+    if out and check_questions:
+        try:
+            loaded = qset or question_set(settings)
+            found = category_problems(out, loaded)
+        except J.JudgeError as exc:
+            loaded = getattr(exc, "config_revision", exc.code)
+            found = [f"{QUESTION_SET} question set could not be loaded; check registry/questions"]
+        _warn_configuration(settings, "questions", source, found, loaded)
+    elif check_questions:
+        _warn_configuration(settings, "questions", source, [])
+    return out
+
+
+def destinations(settings, conn=None, *, qset=None, check_questions=True):
+    """The company's destinations: the registry file's, with the ones saved in Settings over them (the table
+    wins on the same key; pass `conn` to include it). A malformed file entry is skipped and logged."""
+    extra = stored(conn) if conn is not None else {}
     try:
         source = (settings.registry_dir / LISTENING_FILE).read_text()
     except OSError:
-        _warn_configuration(settings, "destinations", None, [])
-        if check_questions:
-            _warn_configuration(settings, "questions", None, [])
-        return {}
+        return _finish(settings, dict(extra), None, qset, check_questions, [])
     try:
         document = yaml.safe_load(source) or {}
     except yaml.YAMLError:
-        _warn_configuration(settings, "destinations", source, [])
-        if check_questions:
-            _warn_configuration(settings, "questions", source, [])
-        return {}
+        return _finish(settings, dict(extra), source, qset, check_questions, [])
     found = document.get("destinations") if isinstance(document, dict) else None
     if found is not None and not isinstance(found, dict):
         _warn_configuration(settings, "destinations", source, ["destinations must be a map"])
-        return {}
+        return dict(extra)
     out, problems = {}, []
     for name, cfg in (found or {}).items():
         try:
@@ -137,18 +153,174 @@ def destinations(settings, *, qset=None, check_questions=True):
             problems.append(f"destination {name!r} skipped (invalid destination configuration)")
             continue
         out[str(name)] = entry
-    _warn_configuration(settings, "destinations", source, problems)
-    if out and check_questions:
-        try:
-            loaded = qset or question_set(settings)
-            problems = category_problems(out, loaded)
-        except J.JudgeError as exc:
-            loaded = getattr(exc, "config_revision", exc.code)
-            problems = [f"{QUESTION_SET} question set could not be loaded; check registry/questions"]
-        _warn_configuration(settings, "questions", source, problems, loaded)
-    elif check_questions:
-        _warn_configuration(settings, "questions", source, [])
+    out.update(extra)
+    return _finish(settings, out, source, qset, check_questions, problems)
+
+
+# ----------------------------------------------------------------------------- destinations saved in Settings
+DESTINATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS listening_destinations (
+  key TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  threshold REAL NOT NULL,
+  receiver TEXT NOT NULL,
+  readers TEXT,
+  unless TEXT,
+  what TEXT,
+  updated_by TEXT,
+  updated TEXT)
+"""
+DESTINATION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+MARKET_SEEDED = "listening.market_seeded"    # registry_metadata: the market destination was offered once
+MARKET_DESTINATION = {"category": "market", "threshold": 0.70, "receiver": "bot:librarian",
+                      "what": "a post about the market: competitors, buyers, prices, regulation"}
+
+
+def ensure(c):
+    c.execute(DESTINATIONS_SCHEMA)
+
+
+def stored(conn):
+    """The destinations saved in Settings, shaped like the file's."""
+    try:
+        rows = H._rows(conn.execute("SELECT * FROM listening_destinations ORDER BY key"))
+    except sqlite3.OperationalError:       # a database from before the table
+        return {}
+    out = {}
+    for row in rows:
+        entry = {"category": row["category"], "threshold": float(row["threshold"]),
+                 "receiver": row["receiver"], "what": row["what"] or ""}
+        readers = _loads(row["readers"], [])
+        if readers:
+            entry["readers"] = [str(r) for r in readers]
+        unless = _loads(row["unless"], None)
+        if isinstance(unless, dict) and unless.get("category"):
+            entry["unless"] = {"category": str(unless["category"]), "threshold": float(unless.get("threshold") or 0)}
+        out[row["key"]] = entry
     return out
+
+
+def _noul_category(qset, category, field):
+    if (qset["questions"].get(category) or {}).get("type") != "noul":
+        raise Problem("invalid", f"{field} {category!r} is not a yes-or-no question in {QUESTION_SET}", 422)
+
+
+def _threshold(value, field="threshold"):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < float(value) <= 1:
+        raise Problem("invalid", f"{field} is a number above 0 and up to 1", 422)
+    return float(value)
+
+
+def check_destination(conn, settings, key, body):
+    """A destination as the file would be read: the key, a noul category, a threshold in (0, 1], a receiver that
+    is a bot that exists, readers that exist and an optional `unless`. Refused with 422 before it is saved."""
+    key = str(key or "").strip().lower()
+    if not DESTINATION_KEY.match(key):
+        raise Problem("invalid", "a destination key is a short lowercase name like market or leads", 422)
+    try:
+        qset = question_set(settings)
+    except J.JudgeError:
+        raise Problem("judge_questions", "The listening-item question set could not be loaded. "
+                      "Check registry/questions/listening-item.json.", 422) from None
+    category = str(body.category or "").strip()
+    _noul_category(qset, category, "category")
+    receiver = H.resolve_actor(conn, _actor(body.receiver))
+    if not receiver or not receiver.startswith("bot:") or (H.bot(conn, receiver[4:]) or {}).get("state") == "archived":
+        raise Problem("invalid", f"receiver {body.receiver!r} is not a bot on this team", 422)
+    readers = []
+    for reader in body.readers:
+        actor = H.resolve_actor(conn, _actor(reader))
+        if not actor or actor.startswith("bot:") and (H.bot(conn, actor[4:]) or {}).get("state") == "archived":
+            raise Problem("invalid", f"reader {reader!r} is not on this team", 422)
+        if actor not in readers and actor != receiver:
+            readers.append(actor)
+    entry = {"category": category, "threshold": _threshold(body.threshold), "receiver": receiver,
+             "what": str(body.what or "").strip()}
+    if readers:
+        entry["readers"] = readers
+    if body.unless:
+        unless = str(body.unless.category or "").strip()
+        _noul_category(qset, unless, "unless category")
+        entry["unless"] = {"category": unless, "threshold": _threshold(body.unless.threshold, "unless threshold")}
+    return key, entry
+
+
+def save_destination(conn, settings, who, key, body):
+    key, entry = check_destination(conn, settings, key, body)
+    now = H.now()
+    conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
+                 "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                 "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
+                 "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
+                 "updated_by=excluded.updated_by, updated=excluded.updated",
+                 (key, entry["category"], entry["threshold"], entry["receiver"],
+                  json.dumps(entry.get("readers") or []), json.dumps(entry.get("unless")), entry["what"], who.actor, now))
+    H.event(conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]})
+    return key
+
+
+def remove_destination(conn, settings, who, key):
+    """A saved destination goes; one only the file has is the file's to change."""
+    if not conn.execute("SELECT 1 FROM listening_destinations WHERE key=?", (key,)).fetchone():
+        if key in destinations(settings, None, check_questions=False):
+            raise Problem("yaml", f"{key} comes from listening.yaml; edit that file to remove it", 409)
+        raise Problem("not_found", f"no destination {key}", 404)
+    conn.execute("DELETE FROM listening_destinations WHERE key=?", (key,))
+    H.event(conn, who.actor, "listening.destination_removed", key, {})
+    return key
+
+
+def seed_market(conn, settings):
+    """Once, when the Librarian exists and nothing routes `market`: offer it the market posts. The marker is
+    set either way, so an owner who removes the destination later keeps it removed."""
+    if conn.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MARKET_SEEDED,)).fetchone():
+        return False
+    librarian = H.bot(conn, MARKET_DESTINATION["receiver"][4:])
+    if not librarian or librarian.get("state") == "archived":
+        return False
+    try:
+        qset = question_set(settings)
+    except J.JudgeError:
+        return False                       # try again once the questions load
+    added = False
+    if (qset["questions"].get("market") or {}).get("type") == "noul" and not any(
+            d["category"] == "market" for d in destinations(settings, conn, check_questions=False).values()):
+        key = "market"
+        while conn.execute("SELECT 1 FROM listening_destinations WHERE key=?", (key,)).fetchone() \
+                or key in destinations(settings, None, check_questions=False):
+            key += "-2"
+        conn.execute("INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
+                     "updated_by, updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (key, "market", MARKET_DESTINATION["threshold"], MARKET_DESTINATION["receiver"], "[]", "null",
+                      MARKET_DESTINATION["what"], H.KEEPER, H.now()))
+        H.event(conn, H.KEEPER, "listening.destination", key, {"category": "market", "receiver": "bot:librarian", "seeded": True})
+        added = True
+    conn.execute("INSERT INTO registry_metadata VALUES(?,?)", (MARKET_SEEDED, json.dumps({"at": H.now(), "added": added})))
+    return added
+
+
+def destination_list(conn, settings):
+    """Every destination with where it comes from, the categories to choose and the bots that can receive."""
+    from_file = destinations(settings, None, check_questions=False)
+    saved = stored(conn)
+    rows = []
+    for key, cfg in sorted({**from_file, **saved}.items()):
+        meta = {}
+        if key in saved:
+            meta = H._one(conn, "SELECT updated_by, updated FROM listening_destinations WHERE key=?", (key,)) or {}
+        rows.append({"key": key, "category": cfg["category"], "threshold": cfg["threshold"], "receiver": cfg["receiver"],
+                     "readers": cfg.get("readers", []), "unless": cfg.get("unless"), "what": cfg.get("what", ""),
+                     "source": "settings" if key in saved else "yaml", "overrides_yaml": key in saved and key in from_file,
+                     **meta})
+    try:
+        qset = question_set(settings)
+        categories = [{"id": qid, "label": qid.replace("_", " ")} for qid, q in qset["questions"].items()
+                      if q.get("type") == "noul"]
+    except J.JudgeError:
+        categories = []
+    bots = [{"actor": "bot:" + r["slug"], "name": r["display_name"] or r["slug"]} for r in H._rows(conn.execute(
+        "SELECT slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug"))]
+    return {"destinations": rows, "categories": categories, "receivers": bots}
 
 
 def receivers(dests):
@@ -478,7 +650,8 @@ def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
     except J.JudgeError:
         raise Problem("judge_questions", "The listening-item question set could not be loaded. "
                       "Check registry/questions/listening-item.json.", 422) from None
-    dests = destinations(store.settings, qset=qset)
+    with store.read() as c:
+        dests = destinations(store.settings, c, qset=qset)
     questions = qset["questions"]
     with store.read() as c:
         if item_ids:
@@ -557,7 +730,57 @@ class IntakeResolve(Contract):
     reason: str = Field(default="", max_length=2000)
 
 
+class DestinationUnless(Contract):
+    category: str = Field(min_length=1, max_length=80)
+    threshold: float
+
+
+class DestinationBody(Contract):
+    category: str = Field(min_length=1, max_length=80)
+    threshold: float
+    receiver: str = Field(min_length=1, max_length=120)
+    readers: list[str] = Field(default_factory=list, max_length=20)
+    unless: DestinationUnless | None = None
+    what: str = Field(default="", max_length=300)
+
+
 def install(app, store, auth, mutate):
+    def settings_reader(who):
+        auth.domain(who)
+        if who.role != "owner" and not auth.bot_admin(who):
+            raise Problem("forbidden", "Listening destinations are for the owner and the admins", 403)
+
+    @app.get("/api/v2/listening/destinations")
+    def destination_index(request: Request):
+        settings_reader(request.state.identity)
+        with store.read() as c:
+            return destination_list(c, store.settings)
+
+    @app.put("/api/v2/listening/destinations/{key}")
+    def destination_put(request: Request, key: str, body: DestinationBody):
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            if who.role != "owner":
+                raise Problem("forbidden", "Only the owner changes Listening destinations", 403)
+            saved = save_destination(c, store.settings, who, key, body)
+            return {"destination": next(d for d in destination_list(c, store.settings)["destinations"] if d["key"] == saved)}
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/listening/destinations/{key}/remove")
+    def destination_remove(request: Request, key: str, body: Contract):
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            if who.role != "owner":
+                raise Problem("forbidden", "Only the owner changes Listening destinations", 403)
+            return {"removed": remove_destination(c, store.settings, who, key.strip().lower())}
+
+        return mutate(request, body, work)
+
     @app.post("/api/v2/listening/runs")
     def run_create(request: Request, body: ListenRun):
         who = request.state.identity
@@ -584,7 +807,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             require_listener(who)
-            dests = destinations(store.settings)
+            dests = destinations(store.settings, c)
             return {"results": [add_judgment(c, who.actor, j.item_id, j.question_set, j.scores, dests)
                                 for j in body.judgments]}
 
@@ -610,9 +833,9 @@ def install(app, store, auth, mutate):
     def item_trace(request: Request, item_id: str):
         who = request.state.identity
         auth.domain(who)
-        dests = destinations(store.settings)
-        require_reader(who, dests)
         with store.read() as c:
+            dests = destinations(store.settings, c)
+            require_reader(who, dests)
             found = trace(c, item_id)
         if not sees_everything(who):
             mine = set(destinations_of(who.actor, dests))
@@ -625,17 +848,17 @@ def install(app, store, auth, mutate):
     def stats_route(request: Request, since: str | None = None):
         who = request.state.identity
         auth.domain(who)
-        require_reader(who, destinations(store.settings))
         with store.read() as c:
+            require_reader(who, destinations(store.settings, c))
             return stats(c, since)
 
     @app.get("/api/v2/intake")
     def intake_list(request: Request, destination: str | None = None, status: str | None = "new", limit: int = 100):
         who = request.state.identity
         auth.domain(who)
-        dests = destinations(store.settings)
-        require_reader(who, dests)
         with store.read() as c:
+            dests = destinations(store.settings, c)
+            require_reader(who, dests)
             return {"items": inbox(c, who, dests, destination, status or None, limit),
                     "destinations": dests}
 
@@ -645,6 +868,6 @@ def install(app, store, auth, mutate):
 
         def work(c):
             auth.domain(who)
-            return {"intake": resolve(c, who, intake_id, body.status, destinations(store.settings), body.receiver_ref, body.reason)}
+            return {"intake": resolve(c, who, intake_id, body.status, destinations(store.settings, c), body.receiver_ref, body.reason)}
 
         return mutate(request, body, work)

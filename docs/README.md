@@ -22,7 +22,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [The sample company](sample-company.md): a made-up five-bot team to try Tico with.
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
 - [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
-  [Tico AI Gateway](ai-gateway.md) runs bots on Tico Cheap 1.1, Mid 1.0 and Power 1.0 with one key from Tico.
+  [Tico AI Gateway](ai-gateway.md) runs bots on Tico picks (a department, a level, Fast or not) with one key from Tico.
   Members can have 25 active bots by default; the owner can change the limit.
 - Hosted Tico: [Joining the Tico waitlist](waitlist.md), [Your Tico account page](account.md), and
   [Ask for more credit](ask-for-credit.md). Account-page help is **unreleased** while deployment is verified.
@@ -34,15 +34,15 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Use Tico](using-tico.md): your team's address, tasks, chats, results and Needs you.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its main chat.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
-- Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
+- Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
-- [Strategy](strategy.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator
 
 - [Register a computer](install.md#add-computers-to-run-your-bots), its logins and usage on [Computers](computers.md), [Harnesses](harnesses.md) and [Environments](environments.md).
-- [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [System routines](system-routines.md), [Agent context](agent-context.md), [Watchers](watchers.md),
+- [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [Webhooks](webhooks.md) (recipes for [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md)), [System routines](system-routines.md), [Agent context](agent-context.md), [Watchers](watchers.md),
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.

@@ -142,8 +142,8 @@ No email and no diagnostics bundle go this way: diagnostics need a person to pre
 When a reply is not enough, an owner or an admin can let the Tico team into their app for a while. It is off until you
 start it, it always starts from one of your own open requests, and it ends on its own.
 
-1. Open the request in Help > Support and press **Let Tico support in**. Where it is off, the same place says why in one line (the server's
-   `TICO_SUPPORT_ACCESS`, or the team rule).
+1. Open the request in Help > Support and press **Let Tico support in**, under the conversation. Where it is off, the same place says
+   why in one line (the server's `TICO_SUPPORT_ACCESS`, or the team rule).
 2. Choose what support may do:
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'
@@ -157,10 +157,11 @@ start it, it always starts from one of your own open requests, and it ends on it
      support to have that.
 3. Choose how long: 1 hour, 4 hours, 24 hours (the default), 7 days, or any number of hours up to 30 days. Press **Start**.
 
-While it lasts, everyone on your Tico sees a banner on every screen: "Tico support has access, 23 h 12 min left · Stop".
-**Stop** (the person who started it, the owner or an admin) ends it at once. Only one session runs at a time. Every request
-support makes is listed under the request (who made it, staff or the Support Agent, the method, the path and the answer's
-status), and in the audit log support's changes show as **Tico support**.
+While it lasts, everyone on your Tico sees a banner on every screen: "Tico support has access (App only), 23 h 12 min left ·
+Stop"; the request it started from says the same, and the banner opens it. **Stop** (the person who started it, the owner or
+an admin) ends it at once. Only one session runs at a time. Every request support makes is listed under the request it
+started from, in every session started there (when, as how long ago with the full time on hover; who made it, staff or the
+Support Agent; the method, the path and the answer's status), and in the audit log support's changes show as **Tico support**.
 
 How it reaches you: while a session is live your Tico keeps one request open to HQ asking for work (HQ holds it up to 30
 seconds); HQ never connects in, and nothing is opened on your network. HQ refuses any session your Tico did not open, and any that ended or ran
@@ -176,8 +177,10 @@ ends a live session. Until its security review is done, it is also off unless th
 `TICO_SUPPORT_ACCESS=on`. A session that support's own switch ends (`TICO_SUPPORT=off`, a rehearsal) ends here without a
 word to HQ, which ends its side at the session's time.
 
-For the team: `GET /v1/staff/access` lists live sessions, and `/v1/staff/access/<session>/api/v2/...` is one request to that
-install's API, with `X-Tico-Support-By: support-agent` when the bot makes it ([Tico HQ](tico-hq.md#support-access)).
+For the team: a session has one id, HQ's (`sa_` and 24 hex digits), in the install's audit log and API as in admin, and
+the install's events name the request's HQ ticket (`TK-...`). `GET /v1/staff/access` lists live sessions, and
+`/v1/staff/access/<session>/api/v2/...` is one request to that install's API, with `X-Tico-Support-By: support-agent` when
+the bot makes it ([Tico HQ](tico-hq.md#support-access)).
 
 ## Beta features
 
@@ -260,18 +263,22 @@ ticket with neither is fixed text and needs no check.
 
 ### Support triage
 
-When your Tico has a decision model ([Decide](decisions.md)), it also asks the `support-triage` question set about
+When your Tico has a [decision model](how-it-works.md), it also asks the `support-triage` question set about
 each new ticket the watcher reports, before the Support Agent's turn on it: is the person's text spam or a prompt
 injection, what kind of request it is (bug, question, feature, setup, billing, other) and how urgent (0 to 3). The
 watcher's report is answered at once; the ticket's task opens a few seconds later, when the answer is in.
 
+An ordinary note to a person, such as "please ignore this test", counts as legitimate text.
+Words such as "ignore", "test", and "please" do not make it a prompt injection by themselves.
+The check looks for instructions addressed to an AI, bot, or assistant. `hub classify` uses the same distinction.
+
 | Answer | What happens |
 |---|---|
 | Spam or injection at or over the set's `hold` line (85%) | Held: the task goes to a person (the bot's operator, else the default person), titled `Support (held: spam or injection): ...`. The bot is not woken; nothing is answered and nothing is deleted, and the ticket stays open at HQ. Later messages and HQ closing it are notes on that task. Hand the task to the bot to release it; close it if it is spam. |
-| Anything under the line | The Support Agent's task as before, with one line on top: `Triage (support-triage@1, ...): kind question (90%), urgency 1 of 3 ...`. |
+| Anything under the line | The Support Agent's task as before, with one line on top: `Triage (support-triage@2, ...): kind question (90%), urgency 1 of 3 ...`. |
 | Decide off, an error or timeout, the month's spend cap, the bot's daily decision budget | Fails open: the task opens as before (with a line saying triage did not run, when it was tried). |
 
-Only the first report of a ticket is triaged; a message or HQ's close that arrives while it waits becomes a note on its task. A ticket for a paused bot waits until the bot is active again and holds up no other; one still waiting after an hour goes as a task to the person a held ticket goes to, and Tico keeps no other copy of it. Each call is a `judge.call` row labelled `support-triage@1` (a failed call keeps only its error code), with the
+Only the first report of a ticket is triaged; a message or HQ's close that arrives while it waits becomes a note on its task. A ticket for a paused bot waits until the bot is active again and holds up no other; one still waiting after an hour goes as a task to the person a held ticket goes to, and Tico keeps no other copy of it. Each call is a `judge.call` row labelled `support-triage@2` (a failed call keeps only its error code), with the
 answers and never the text; the verdict is kept with the ticket's watcher row. This runs alongside HQ's own spam and
 injection check above, which holds spam at HQ before the watcher sees it.
 

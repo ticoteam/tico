@@ -114,9 +114,11 @@ function pageSettings() {
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
         <button type="button" data-settings-tab="recurring" role="tab">Rules</button>
-        <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
+        <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
+        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="listening" role="tab">Listening</button>' : ''}
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
         <button type="button" data-settings-tab="history" role="tab">History</button>
+        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="gateway" role="tab">Gateway</button>' : ''}
         ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
       </div></details>
     </div>
@@ -146,6 +148,7 @@ function pageSettings() {
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>' : ''}
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
+      <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
@@ -157,6 +160,7 @@ function pageSettings() {
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-gateway" role="tabpanel" hidden><div id="set-gateway-page">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-billing" role="tabpanel" hidden><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
@@ -166,9 +170,14 @@ function pageSettings() {
       <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
       <section class="card"><header><h2>Bot routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
-    <div class="settings-pane" id="settings-triggers" role="tabpanel" hidden>
-      <section class="card"><header><h2>Triggers</h2></header><div id="set-triggers">${skelRows(2, {card: true, dot: false})}</div></section>
+    <div class="settings-pane" id="settings-webhooks" role="tabpanel" hidden>
+      <section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
+        `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
+        <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-listening" role="tabpanel" hidden>
+      <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
+    </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
@@ -202,10 +211,12 @@ function pageSettings() {
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
-// The server's version, and the desktop app's own when the page runs inside it (app/src/main.rs bridge_script), with
+// The server's version (and the release Tico support will update a hosted one to), and the desktop app's own when the page runs inside it (app/src/main.rs bridge_script), with
 // a way to the app's log file (app/src/applog.rs) when the shell keeps one (it says so in ticoNativeFeatures).
 function settingsVersionHTML() {
   const parts = [S.config.version && `Version ${esc(nvVersion(S.config.version))}`,
+    // Tico support's scheduled update of a hosted server (backend/hosted_updates.py).
+    S.config.update?.scheduled && `Tico will update this server to ${esc(nvVersion(S.config.update.scheduled))} when idle`,
     window.ticoNativeVersion && `App ${esc(nvVersion(window.ticoNativeVersion))}`,
     (window.ticoNativeFeatures || []).includes('showLog') && '<button class="settings-log" type="button" id="settings-app-log">Show the app\'s log</button>'].filter(Boolean);
   return parts.length ? `<p class="settings-version" id="settings-version">${parts.join(' · ')}</p>` : '';
@@ -229,6 +240,7 @@ function pageSettingsThemeBind() {
 function settingsShow(tab) {
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
+  if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
   // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
   if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
@@ -236,10 +248,10 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), listening: settingsIsAdmin(), gateway: settingsIsAdmin(), ceo: settingsCeoBotShown()};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
-  if (['health', 'history', 'recurring', 'triggers', 'inbound', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'recurring', 'webhooks', 'listening', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -279,6 +291,8 @@ function settingsShow(tab) {
   if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
   const billingPane = $('#settings-billing');
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
+  const gatewayPane = $('#settings-gateway');
+  if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
   const ceoPane = $('#settings-ceo');
   if (ceoPane) { ceoPane.hidden = SETTINGS_TAB !== 'ceo'; if (SETTINGS_TAB === 'ceo') void renderSettingsCeoBot(); }
   const healthPane = $('#settings-health');
@@ -291,8 +305,10 @@ function settingsShow(tab) {
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const recurring = $('#settings-recurring');
   if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); void renderSettingsRules(); void renderReleaseCard(); void renderTaskManagerCard(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
-  const triggersPane = $('#settings-triggers');
-  if (triggersPane) { triggersPane.hidden = SETTINGS_TAB !== 'triggers'; if (SETTINGS_TAB === 'triggers' && !formBusy(triggersPane)) void renderSettingsTriggers(); }
+  const webhooksPane = $('#settings-webhooks');
+  if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
+  const listeningPane = $('#settings-listening');
+  if (listeningPane) { listeningPane.hidden = SETTINGS_TAB !== 'listening'; if (SETTINGS_TAB === 'listening' && !formBusy(listeningPane)) void renderSettingsListening(); }
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
 // Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.
@@ -437,7 +453,7 @@ async function loadSettings() {
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],
-      harnesses: catalog.harnesses || [],
+      harnesses: catalog.harnesses || [], gateway: catalog.gateway || null,
       enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '',
       issues: operations.issues || [], history, limits,
       schedulerEnabled: operations.scheduler_enabled, loaded: true};
@@ -448,6 +464,7 @@ async function loadSettings() {
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
     void renderSettingsHosted();
+    void renderSettingsSleep();
     void renderSettingsTurnLevels();
     if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
     const add = $('#settings-add-bot');

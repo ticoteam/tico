@@ -17,7 +17,12 @@ const RULE_SCOPES = [['builtin', 'Built-in'], ['team', 'Team'], ['type', 'Type']
 const RULE_BUILTIN_GROUPS = {always: 'Always wakes', awaited: 'Awaited', filter: 'Waits', note: 'Notes', batch: 'Batched', wake: 'Wakes',
   pr_checks: 'Pull requests', system: 'System'};
 const RULE_OUTCOMES = {wake: 'wake the bot', note: 'leave a note for its next run', batch: 'batch it', ignore: 'drop it', ask: 'ask a person', action: 'do an action'};
-const RULE_ACTIONS = {close: 'close the task', move_step: 'move the step', set_wait: 'set a wait', relate: 'relate tasks', note: 'add a note'};
+const RULE_ACTIONS = {close: 'close the task', move_step: 'move the step', set_wait: 'set a wait', relate: 'relate tasks', note: 'add a note',
+  wake_bot: 'wake a bot', send_webhook: 'send a webhook', create_task: 'make a task', forward: 'forward the call'};
+// The actions that need no task (backend/rules.py EVENT_ACTIONS): the only ones an event with no task can run. The
+// last two (ONCE_ACTIONS) run only on such an event, and forward only on webhook.received.
+const RULE_EVENT_ACTIONS = ['wake_bot', 'send_webhook', 'create_task', 'forward'];
+const RULE_ONCE_ACTIONS = ['create_task', 'forward'];
 const RULE_ACTORS = {human: 'a person', bot: 'a bot', keeper: 'Tico'};
 const RULE_ROLES = {owner: 'owns the task', requester: 'requested the task', qa: "is the task's QA", release_manager: 'is the Release Manager',
   other: 'neither owns nor requested it'};
@@ -28,12 +33,17 @@ const RULE_FLOOR = new Set(['person_message', 'ask', 'answer', 'approval', 'need
 // An event's words come from its built-in row, so a new event the backend adds reads right with no UI change.
 function ruleEventWords(event) {
   if (event === '*') return 'anything else';
+  if (ruleSourceless(event)) { const w = catalogWords(event); if (w) return w[0].toLowerCase() + w.slice(1); }
   const rank = {always: 0, wake: 1, batch: 2, awaited: 3, note: 4, pr_checks: 5};
   const found = (RULES?.rules || []).filter(r => r.built_in && r.event === event && r.group in rank)
     .sort((a, b) => rank[a.group] - rank[b.group])[0];
   return found?.words || event.replace(/_/g, ' ');
 }
 const ruleList = v => (Array.isArray(v) ? v : [v]).filter(Boolean);
+// An event with no task (webhook.received, tico.notice): the listing's own list, else the catalog's flag.
+const ruleSourceless = event => (RULES?.sourceless_events || []).includes(event) || !!EVENT_TYPES.find(t => t.name === event)?.sourceless;
+const ruleTriggerName = id => (ROUTINE_TRIGGERS || []).find(t => t.id === id)?.name || id;
+const ruleHookName = id => (WH_HOOKS || []).find(h => h.id === id)?.name || id;
 function ruleWhenWords(when) {
   const out = [];
   if (when.actor) out.push('it comes from ' + ruleList(when.actor).map(a => RULE_ACTORS[a] || a).join(' or '));
@@ -41,11 +51,20 @@ function ruleWhenWords(when) {
   if (when.step) out.push('the task is at ' + ruleList(when.step).join(' or '));
   if (when.state) out.push('the task is ' + ruleList(when.state).join(' or '));
   if (when.tag) out.push('the task is tagged ' + ruleList(when.tag).join(' and '));
+  if (when.trigger) out.push('it came to ' + ruleList(when.trigger).map(ruleTriggerName).join(' or '));
+  if (when.type) out.push('its type is ' + ruleList(when.type).join(' or '));
   return out;
 }
 function ruleThenWords(r) {
+  const p = r.params || {};
+  if (r.then === 'wake' && p.bot) return 'wake ' + empName(p.bot);
+  if (r.then === 'note' && p.bot) return `leave ${empName(p.bot)} a note`;
   if (r.then !== 'action') return RULE_OUTCOMES[r.then] || r.then;
-  const p = r.params || {}, what = RULE_ACTIONS[p.action] || 'do an action';
+  if (p.action === 'wake_bot' && p.bot) return 'wake ' + empName(p.bot);
+  if (p.action === 'send_webhook' && p.webhook) return `send ${p.type || 'an event'} to ${ruleHookName(p.webhook)}`;
+  if (p.action === 'create_task' && p.owner) return `give ${empName(p.owner)} a task`;
+  if (p.action === 'forward' && p.webhook) return `forward it to ${ruleHookName(p.webhook)}`;
+  const what = RULE_ACTIONS[p.action] || 'do an action';
   return p.action === 'move_step' && p.step ? `move it to ${p.step}` : p.action === 'set_wait' && p.waiting_on ? `set it waiting on ${p.waiting_on}` : what;
 }
 function ruleScopeWords(r) {
@@ -302,45 +321,105 @@ function ruleStepHTML(field, label, value, steps, extra = '') {
 function ruleParams(v, before) {
   const action = String(v.get('action')), out = before.action === action ? {...before} : {};
   out.action = action;
-  for (const [field, key] of [['param_step', 'step'], ['param_waiting_on', 'waiting_on'], ['param_task', 'task'], ['param_note', 'note']]) {
+  for (const [field, key] of [['param_step', 'step'], ['param_waiting_on', 'waiting_on'], ['param_task', 'task'], ['param_note', 'note'],
+    ['param_bot', 'bot'], ['param_text', 'text'], ['param_webhook', 'webhook'], ['param_type', 'type'], ['param_owner', 'owner'],
+    ['param_title', 'title'], ['param_body', 'body']]) {
     const text = String(v.get(field) || '').trim();
     if (text) out[key] = text; else delete out[key];
   }
   if (action !== 'move_step') delete out.step;
   if (action !== 'set_wait') delete out.waiting_on;
   if (action !== 'relate') delete out.task;
+  if (action !== 'wake_bot') { delete out.bot; delete out.text; }
+  if (action !== 'send_webhook' && action !== 'forward') delete out.webhook;
+  if (action !== 'send_webhook') { delete out.type; delete out.data; }
+  else out.data = ruleDataParse(v.get('param_data'));
+  if (action !== 'create_task') { delete out.owner; delete out.title; delete out.body; }
+  if (RULE_EVENT_ACTIONS.includes(action)) delete out.note;
   return out;
 }
-function ruleEditor(rule) {
+// send_webhook's data: a JSON object whose strings may hold {{path}}, filled in when it runs. It must parse with
+// each {{…}} taken out, so a placeholder sits inside a string.
+function ruleDataParse(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return {};
+  let probe;
+  try { probe = JSON.parse(raw.replace(/\{\{[^{}]*\}\}/g, '')); } catch { throw new Error('Data is not valid JSON'); }
+  if (!probe || typeof probe !== 'object' || Array.isArray(probe)) throw new Error('Data is a JSON object: {…}');
+  return JSON.parse(raw);
+}
+// The rule form. `preset` starts a new rule on an event and conditions (Settings > Webhooks' Add rule).
+// An event with no task (webhook.received and the others the catalog marks) has its own WHEN (which webhook, the
+// call's type), its own scopes (team, department, bot), and acts only with wake_bot or send_webhook; a wake or note
+// on it at a team or department names the bot to tell.
+async function ruleEditor(rule, preset = null) {
+  const [listing] = await Promise.all([RULES || get('/v2/rules?scope_kind=builtin').catch(() => ({})), eventTypesLoad().catch(() => []),
+    ROUTINE_TRIGGERS || routineTriggersLoad(), WH_HOOKS || whHooksLoad()]);
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal task-rule-dialog';
-  const when = rule?.when || {}, first = v => ruleList(v)[0] || '';
+  const base = rule || preset || {};
+  const when = base.when || {}, first = v => ruleList(v)[0] || '';
   const opt = (v, label, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(label)}</option>`;
+  const cap = w => w ? w[0].toUpperCase() + w.slice(1) : w;
   const scopes = ruleScopeChoices();
   const f = rulesFor();
-  const kind = rule?.scope_kind || f.kind || scopes[0]?.[0] || 'task';
-  const params = rule?.params || {};
+  const event0 = base.event || 'comment';
+  const sourceless = [...new Set([...(listing.sourceless_events || []), ...EVENT_TYPES.filter(t => t.sourceless).map(t => t.name)])];
+  const isSrc = e => sourceless.includes(e);
+  const srcScope = k => ['team', 'department', 'bot'].includes(k);
+  let kind = rule?.scope_kind || f.kind || scopes[0]?.[0] || 'task';
+  if (!rule && isSrc(event0) && !srcScope(kind)) kind = scopes.find(([k]) => srcScope(k))?.[0] || kind;
+  const params = base.params || {};
   // Until the form exists, the steps come from the rule's own scope (or the filtered one a new rule starts in).
   let steps = () => ruleStepsFor(rule?.scope_kind || kind, rule?.scope_id ?? (kind === f.kind ? f.id : ''));
-  const events = ['*', ...(RULES?.events || [])].map(e => opt(e, (RULE_FLOOR.has(e) ? 'Always: ' : '') + ruleEventWords(e), rule?.event || 'comment')).join('');
+  const message = ['*', ...(listing.events || [])];
+  if (!message.includes(event0) && !isSrc(event0)) message.push(event0);
+  const events = message.map(e => opt(e, (RULE_FLOOR.has(e) ? 'Always: ' : '') + ruleEventWords(e), event0)).join('')
+    + (sourceless.length ? `<optgroup label="No task">${sourceless.map(e => opt(e, cap(ruleEventWords(e)), event0)).join('')}</optgroup>` : '');
+  const bots = cur => {
+    const mine = (S.emps || []).filter(e => e.status !== 'archived' && settingsCanManageBot(e)).map(e => e.name);
+    if (cur && !mine.includes(cur)) mine.push(cur);
+    return `<option value="">Choose</option>${mine.map(n => [n, empName(n)]).sort((a, b) => a[1].localeCompare(b[1])).map(([n, w]) => opt(n, w, cur)).join('')}`;
+  };
+  const triggers = (ROUTINE_TRIGGERS || []).map(t => opt(t.id, t.name, first(when.trigger))).join('');
+  const hooks = (WH_HOOKS || []).map(h => opt(h.id, h.name, params.webhook || '')).join('');
+  const sendTypes = EVENT_TYPES.filter(t => t.outbound !== false && !t.name.includes('*')).map(t => `<option value="${esc(t.name)}">`).join('');
+  const data = params.data && Object.keys(params.data).length ? JSON.stringify(params.data, null, 2) : '';
   dialog.innerHTML = `<form class="task-rule-form" data-rule-form><header><h2>${rule ? 'Edit rule' : 'Add rule'}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
     ${rule ? `<p class="muted">${esc(ruleScopeWords(rule))}</p>` : `<label>Scope<select name="scope_kind" data-rule-kind>${scopes.map(([k, v]) => opt(k, v, kind)).join('')}</select></label>
     <div data-rule-target>${ruleTargetHTML(kind, kind === f.kind ? f.id : '')}</div>`}
     <label>WHEN<select name="event">${events}</select></label>
-    <div class="wr-when">
+    <div class="wr-when" data-rule-when-msg>
       <label>From<select name="actor">${opt('', 'Anyone', first(when.actor))}${Object.entries(RULE_ACTORS).map(([k, v]) => opt(k, v, first(when.actor))).join('')}</select></label>
       <label>Bot's role<select name="role">${opt('', 'Any', first(when.role))}${Object.entries(RULE_ROLE_LABELS).map(([k, v]) => opt(k, v, first(when.role))).join('')}</select></label>
       <label>Status<select name="state">${opt('', 'Any', first(when.state))}${PIPELINE_STATUSES.map(s => opt(s, s[0].toUpperCase() + s.slice(1), first(when.state))).join('')}</select></label>
       <span class="wr-field" data-rule-step>${ruleStepHTML('step', 'Step', first(when.step), steps())}</span>
       <label>Tag<input name="tag" maxlength="80" value="${esc(first(when.tag))}"></label>
     </div>
-    <label>THEN<select name="then" data-rule-then>${Object.entries(RULE_OUTCOMES).map(([k, v]) => opt(k, v[0].toUpperCase() + v.slice(1), rule?.then || 'note')).join('')}</select></label>
-    <div class="wr-when" data-rule-action${(rule?.then || 'note') === 'action' ? '' : ' hidden'}>
+    <div class="wr-when" data-rule-when-src>
+      <label data-rule-src-trigger>Webhook<select name="when_trigger">${opt('', 'Any', first(when.trigger))}${triggers}</select></label>
+      <label>Type<input name="when_type" maxlength="80" spellcheck="false" placeholder="*" value="${esc(first(when.type))}"></label>
+    </div>
+    <label>THEN<select name="then" data-rule-then>${Object.entries(RULE_OUTCOMES).map(([k, v]) => opt(k, v[0].toUpperCase() + v.slice(1), base.then || 'note')).join('')}</select></label>
+    <div class="wr-when" data-rule-tell>
+      <label data-rule-tell-bot>Bot<select name="tell_bot" required>${bots(base.then !== 'action' ? params.bot || '' : '')}</select></label>
+      <label>Text<input name="tell_text" maxlength="1000" value="${esc(base.then !== 'action' ? params.text || '' : '')}"></label>
+    </div>
+    <div class="wr-when" data-rule-action${(base.then || 'note') === 'action' ? '' : ' hidden'}>
       <label>Action<select name="action">${Object.entries(RULE_ACTIONS).map(([k, v]) => opt(k, v[0].toUpperCase() + v.slice(1), params.action || 'close')).join('')}</select></label>
       <span class="wr-field" data-rule-param="move_step">${ruleStepHTML('param_step', 'To step', params.step || '', steps(), ' required')}</span>
       <label data-rule-param="set_wait">Waits on<input name="param_waiting_on" maxlength="120" ${params.blocked_by ? '' : ' required'} value="${esc(params.waiting_on || '')}"></label>
       <label data-rule-param="relate">Task ID<input name="param_task" maxlength="120" required value="${esc(params.task || '')}"></label>
-      <label>Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
+      <label data-rule-param="close move_step set_wait relate note">Task note<input name="param_note" maxlength="1000" value="${esc(params.note || '')}"></label>
+      <label data-rule-param="wake_bot">Bot<select name="param_bot" required>${bots(params.action === 'wake_bot' ? params.bot || '' : '')}</select></label>
+      <label data-rule-param="wake_bot">Text<input name="param_text" maxlength="1000" value="${esc(params.action === 'wake_bot' ? params.text || '' : '')}"></label>
+      <label data-rule-param="create_task">Bot<select name="param_owner" required>${bots(params.action === 'create_task' ? params.owner || '' : '')}</select></label>
+      <label data-rule-param="create_task">Title<input name="param_title" maxlength="300" required placeholder="{{type}} from {{trigger.name}}" value="${esc(params.action === 'create_task' ? params.title || '' : '')}"></label>
+      <label class="wr-wide" data-rule-param="create_task">Body<textarea name="param_body" rows="3" maxlength="4000">${esc(params.action === 'create_task' ? params.body || '' : '')}</textarea></label>
+      <label data-rule-param="send_webhook forward">Endpoint<select name="param_webhook" required><option value="">Choose</option>${hooks}</select></label>
+      <label data-rule-param="send_webhook">Type<input name="param_type" list="rule-send-types" maxlength="64" required spellcheck="false" placeholder="custom.name" value="${esc(params.type || '')}"></label>
+      <label class="wr-wide" data-rule-param="send_webhook">Data<textarea name="param_data" rows="4" spellcheck="false" placeholder='{"id": "{{payload.id}}"}'>${esc(data)}</textarea></label>
+      <datalist id="rule-send-types">${sendTypes}</datalist>
     </div>
     <label>Note<input name="note" maxlength="500" value="${esc(rule?.note || '')}"></label>
     <label><input type="checkbox" name="on"${rule?.enabled === false ? '' : ' checked'}> On</label>
@@ -349,13 +428,40 @@ function ruleEditor(rule) {
   const form = dialog.querySelector('form'), error = dialog.querySelector('[data-rule-error]');
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
-  // Only the chosen action's own fields show; a hidden one is disabled too, so its `required` does not block Save.
+  // A hidden block's fields are disabled too, so its `required` does not block Save and FormData leaves them out.
+  const toggle = (el, on) => { el.hidden = !on; el.querySelectorAll('input, select, textarea').forEach(input => { input.disabled = !on; }); };
+  const scopeNow = () => rule ? rule.scope_kind : form.elements.scope_kind?.value || kind;
+  // Only the fields that suit the event, outcome and action show.
   const shown = () => {
-    const action = form.elements.then.value === 'action';
+    const src = isSrc(form.elements.event.value);
+    toggle(dialog.querySelector('[data-rule-when-msg]'), !src);
+    toggle(dialog.querySelector('[data-rule-when-src]'), src);
+    if (src) toggle(dialog.querySelector('[data-rule-src-trigger]'), form.elements.event.value === 'webhook.received');
+    const then = form.elements.then, batch = then.querySelector('option[value="batch"]');
+    batch.disabled = src; if (src && then.value === 'batch') then.value = 'wake';
+    const pick = form.elements.action;
+    [...pick.options].forEach(o => {
+      o.disabled = src ? !RULE_EVENT_ACTIONS.includes(o.value) || (o.value === 'forward' && form.elements.event.value !== 'webhook.received')
+        : RULE_ONCE_ACTIONS.includes(o.value);
+    });
+    if (pick.selectedOptions[0]?.disabled) pick.value = src ? 'wake_bot' : 'close';
+    const scope = form.elements.scope_kind;
+    if (scope) {
+      [...scope.options].forEach(o => { o.disabled = src && !srcScope(o.value); });
+      if (scope.selectedOptions[0]?.disabled) {
+        const ok = [...scope.options].find(o => !o.disabled);
+        if (ok) { scope.value = ok.value; dialog.querySelector('[data-rule-target]').innerHTML = ruleTargetHTML(ok.value, ''); }
+      }
+    }
+    const tell = src && ['wake', 'note'].includes(then.value);
+    toggle(dialog.querySelector('[data-rule-tell]'), tell);
+    if (tell) toggle(dialog.querySelector('[data-rule-tell-bot]'), scopeNow() !== 'bot');
+    const action = then.value === 'action';
     dialog.querySelector('[data-rule-action]').hidden = !action;
+    pick.disabled = !action;
     dialog.querySelectorAll('[data-rule-param]').forEach(el => {
-      const on = action && el.dataset.ruleParam === form.elements.action.value;
-      el.hidden = !on; el.querySelectorAll('input, select').forEach(input => { input.disabled = !on; });
+      const on = action && el.dataset.ruleParam.split(' ').includes(pick.value);
+      el.hidden = !on; el.querySelectorAll('input, select, textarea').forEach(input => { input.disabled = !on; });
     });
   };
   // A new rule's scope or type changes which steps there are to pick.
@@ -367,7 +473,7 @@ function ruleEditor(rule) {
     dialog.querySelector('[data-rule-param="move_step"]').innerHTML = ruleStepHTML('param_step', 'To step', keep('param_step'), steps(), ' required');
     shown();
   };
-  form.elements.then.onchange = shown; form.elements.action.onchange = shown; shown();
+  form.elements.then.onchange = shown; form.elements.action.onchange = shown; form.elements.event.onchange = shown; shown();
   if (form.elements.scope_kind) {
     form.elements.scope_kind.onchange = () => { dialog.querySelector('[data-rule-target]').innerHTML = ruleTargetHTML(form.elements.scope_kind.value, ''); restep(); };
     dialog.querySelector('[data-rule-target]').onchange = restep;
@@ -376,11 +482,17 @@ function ruleEditor(rule) {
   const done = () => { dialog.close(); rulesPaint(); };
   form.onsubmit = async ev => {
     ev.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true; error.textContent = '';
-    const v = new FormData(form), cond = {};
-    for (const key of ['actor', 'role', 'state', 'step', 'tag']) if (String(v.get(key) || '').trim()) cond[key] = String(v.get(key)).trim();
-    const then = v.get('then');
-    const body = {event: v.get('event'), then, when: cond, params: then === 'action' ? ruleParams(v, params) : {}, note: v.get('note') || '', on: v.has('on')};
     try {
+      const v = new FormData(form), cond = {}, event = String(v.get('event')), src = isSrc(event), then = String(v.get('then'));
+      const keys = src ? [['when_trigger', 'trigger'], ['when_type', 'type']] : ['actor', 'role', 'state', 'step', 'tag'].map(k => [k, k]);
+      for (const [field, key] of keys) if (String(v.get(field) || '').trim()) cond[key] = String(v.get(field)).trim();
+      let out = {};
+      if (then === 'action') out = ruleParams(v, params);
+      else if (src && ['wake', 'note'].includes(then)) {
+        if (v.get('tell_bot')) out.bot = String(v.get('tell_bot'));
+        if (String(v.get('tell_text') || '').trim()) out.text = String(v.get('tell_text')).trim();
+      }
+      const body = {event, then, when: cond, params: out, note: v.get('note') || '', on: v.has('on')};
       if (rule) ruleReplace((await post('/v2/rules/' + encodeURIComponent(rule.id), {...body, expected_revision: rule.revision})).rule);
       else {
         const scope_kind = v.get('scope_kind') || 'task';
@@ -400,4 +512,5 @@ function ruleEditor(rule) {
     } catch (e) { error.textContent = e.message || 'Could not delete the rule'; del.disabled = false; }
   };
   document.body.appendChild(dialog); dialog.showModal(); form.elements.event.focus();
+  return dialog;
 }

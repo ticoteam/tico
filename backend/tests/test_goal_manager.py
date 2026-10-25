@@ -41,14 +41,15 @@ def built(environment):
     return api, record
 
 
-def test_it_is_built_for_every_company_with_both_routines_paused(environment):
+def test_it_is_built_for_every_company_with_its_two_pass_routines_paused(environment):
     api, record = built(environment)
     assert sorted(row["slug"] for row in record["bots"]) == ["botops", "coo", "goal-manager"]
     assert all(row["setup_task_id"] is None for row in record["bots"])          # the runner sets it up, not BotOps
     assert states(api)["goal-manager"] == "active"
-    assert {k: v["enabled"] for k, v in routines(api).items()} == {"goal-manager:kpi-pass": 0, "goal-manager:goals-review": 0}
+    assert {k: v["enabled"] for k, v in routines(api).items()} == {"goal-manager:kpi-pass": 0, "goal-manager:goals-review": 0,
+                                                                         "goal-manager:market-briefing": 1}
     api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    assert len(routines(api)) == 2                                              # twice is still two
+    assert len(routines(api)) == 3                                              # twice is still three
 
 
 def test_a_company_from_before_gets_it_on_update_once_a_computer_and_model_exist(environment):
@@ -60,7 +61,7 @@ def test_a_company_from_before_gets_it_on_update_once_a_computer_and_model_exist
     with_goal_manager(api)
     with TestClient(create_app(api.app.state.store.settings)):                  # a restart is an update
         pass
-    assert states(api)["goal-manager"] == "active" and len(routines(api)) == 2
+    assert states(api)["goal-manager"] == "active" and len(routines(api)) == 3
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='goal-manager'")
     with TestClient(create_app(api.app.state.store.settings)):

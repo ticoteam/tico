@@ -18,8 +18,13 @@
 #support-access-banner[hidden],#support-access-banner [hidden]{display:none}
 #usage-notice{position:fixed;left:16px;bottom:16px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
 #usage-notice[hidden]{display:none}
-#version-message{position:fixed;left:16px;bottom:72px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
+#version-message{position:fixed;left:16px;bottom:72px;z-index:3000;display:flex;flex-direction:column;gap:8px;max-width:min(560px,calc(100vw - 32px))}
 #version-message[hidden],#version-message a[hidden]{display:none}
+.vm-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
+.vm-item .vm-text{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.vm-item a,.vm-item button{flex:none}
+.vm-item[data-kind=security]{background:var(--wait-bg);color:var(--wait-ink);border-color:var(--wait-ink)}
+.vm-item[data-kind=info]{color:var(--muted);box-shadow:none}
 /* Fixed over the bottom-left of every page, which is where a bot's composer sits: a click on the box must reach the box, so only the bar's own link and button take clicks. */
 #usage-notice{pointer-events:none}
 #usage-notice a,#usage-notice button{pointer-events:auto}

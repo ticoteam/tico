@@ -1,0 +1,23 @@
+# A pre-mortem: assume it failed, then work out why. The three likeliest causes are mapped to the bets, each with a
+# wrong-if to watch.
+id: pre-mortem
+name: Pre-mortem
+applies_to: strategy
+description: 'A pre-mortem: it is two years from now and the strategy failed. Why?'
+minutes: 6
+listed: true
+steps:
+  - key: failure
+    ask: It is two years from now and the team failed. What happened?
+    input: text
+  - key: early
+    ask: What would you have seen first, months before it was obvious?
+    input: text
+  - key: unsaid
+    ask: What is the thing nobody on the team likes to talk about?
+    input: text
+output:
+  chart: table
+  sections: [The likeliest causes, What to watch, What it means for the bets]
+sharpen:
+  - Cases of similar teams that failed the way the answers describe

@@ -10,8 +10,8 @@ You have a second model that cannot write: a decision model. It takes a JSON sta
 questions (`noul` for yes/no, `choice`, `score`; the same format as OpenRouter's Decisions API)
 and answers each one with a probability, in one round trip of about two hundred milliseconds.
 It invents nothing, because it produces nothing but numbers. Tico holds the key; you call it
-with the credential you already have. The server asks the Tico AI Gateway first (Tico Decide 1.0,
-`tico-decide-1.0`), then the owner's own TypeSafe key if they set one, then the team's own model
+with the credential you already have. The server asks the Tico AI Gateway first (Decide at the company's level: Low, the default, is `tico-decide-1.0`;
+Medium and High are `tico-decide-medium-1.0` and `tico-decide-high-1.0`, slower and dearer), then the owner's own TypeSafe key if they set one, then the team's own model
 provider; a provider that fails hands the question to the next. With none of them Decide is off,
 and you carry on without it.
 

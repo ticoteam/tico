@@ -10,7 +10,7 @@ from backend import profiles as P
 from backend import rules as R
 from backend import wake_presets as W
 from backend.store import encode
-from backend.tests.test_api import api, get, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.test_wake_rules import jobs, news
 
 
@@ -347,3 +347,26 @@ def test_a_lead_wakes_for_a_task_given_to_it_a_reviewer_for_a_review_handed_back
             mine = news(c, H.task(c, review["id"]) | {"status": "doing"})
         # Its own move is never a wake, whatever a profile row says.
         assert jobs(c, "checker") == 0
+
+
+def test_a_lead_runs_the_task_given_to_it_but_does_not_pull_its_other_open_tasks(api):
+    # `pulls: none` limits what Tico starts by itself; a task handed to the lead is a wake, claimed and started.
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "boss")
+        put(c, "boss", P.LEAD)
+        idle = H.task_create(c, "bot:ops", "Someday plan", "x", "bot:boss")
+        c.execute("UPDATE jobs SET state='cancelled'")
+        given = H.task_create(c, "bot:ops", "Decide the export plan", "x", "bot:boss")
+        assert last_to(c, "boss")["rule"] == "profile_lead_assignment"
+    machine = runner(api)
+    assign(api, machine, "boss")
+    ready(api, machine, ["boss"])
+    attempt = claim(api, machine, "boss")
+    assert attempt and attempt["task"]["id"] == given["id"]
+    assert get(api, "tasks/" + given["id"])["task"]["status"] == "doing"
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": attempt["lane"]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
+         machine["token"])
+    # Nothing woke it for the other task, so the lead's own pull stays off.
+    assert claim(api, machine, "boss") is None
+    assert get(api, "tasks/" + idle["id"])["task"]["status"] == "open"

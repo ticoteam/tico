@@ -4,7 +4,8 @@
 An install is behind NAT or on loopback, so nothing dials in: while a session is live this server long-polls HQ
 (`POST <TICO_HQ_URL>/v1/support/<ticket>/access/<session>/pull`, docs/tico-hq.md, with the ticket's secret), runs
 each request it is handed against itself in-process with the session's own token, and posts the answer back. Every
-request is logged on the session, and the person who started it reads the log beside the ticket.
+request is logged on the session, and the person who started it reads the log under the ticket. A session's id is the one
+HQ gave it, and its events name the ticket's HQ id (`TK-...`) too, so what this install keeps matches HQ and admin.
 
 Two tiers. `app` is the Support role: an admin's reads, and writes only on the short setup list below (`APP_WRITES`).
 `full` is the owner's reach in the app. Neither tier makes or sees tokens and keys, reveals a credential's value,
@@ -58,6 +59,7 @@ DISPATCH_WAIT = 25           # one request run against this app; HQ gives up on 
 MAX_BODY = 2 * 1024 * 1024   # bytes of one answer carried back
 MAX_BATCH = 20               # requests taken from one pull
 LOGGED = 500
+LISTED = 50                  # sessions listed under a person's requests
 WORKER = True                # tests drive `pull_once` themselves
 HQ_SESSION = re.compile(r"sa_[0-9a-f]{24}")
 METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")
@@ -135,8 +137,17 @@ def seconds_left(row):
     return max(0, int((ends - datetime.now(timezone.utc)).total_seconds())) if ends else 0
 
 
-def view(row):
-    return {"id": row["id"], "ticket_id": row["ticket_id"], "tier": row["tier"], "started_by": row["started_by"],
+def hq_ticket(c, ticket_id):
+    """The ticket's id at HQ (`TK-...`), or "" once it is gone here."""
+    row = c.execute("SELECT hq_id FROM support_tickets WHERE id=?", (ticket_id,)).fetchone()
+    return row["hq_id"] if row else ""
+
+
+def view(c, row):
+    """`id` is HQ's session id (a session from before it was kept as the id has HQ's in `hq_session`); `ticket_id` is
+    the ticket here and `hq_ticket` the same ticket at HQ."""
+    return {"id": row["id"], "hq_session": row["hq_session"], "ticket_id": row["ticket_id"],
+            "hq_ticket": hq_ticket(c, row["ticket_id"]), "tier": row["tier"], "started_by": row["started_by"],
             "started_at": row["started_at"], "expires_at": row["expires_at"], "seconds_left": seconds_left(row),
             "ended_at": row["ended_at"], "end_reason": row["end_reason"]}
 
@@ -201,19 +212,21 @@ def end(store, row, by, reason):
                          "WHERE id=? AND ended_at IS NULL", (H.now(), by or None, reason, row["id"])).rowcount
         if done:
             H.event(c, by or "system", "support_access.ended" if reason != "stopped" else "support_access.stopped",
-                    row["id"], {"reason": reason, "ticket_id": row["ticket_id"], "tier": row["tier"]})
+                    row["id"], {"reason": reason, "ticket_id": row["ticket_id"], "hq_ticket": hq_ticket(c, row["ticket_id"]),
+                                "tier": row["tier"]})
     return bool(done)
 
 
 def end_all(c, actor, reason):
     """End every live session in this transaction (the owner turned the team rule off). The link worker sees no live
     session on its next round and stops; HQ ends its side at the session's time."""
-    rows = c.execute("SELECT id FROM support_access WHERE ended_at IS NULL").fetchall()
+    rows = c.execute("SELECT id, ticket_id FROM support_access WHERE ended_at IS NULL").fetchall()
     for row in rows:
         _tokens.pop(row["id"], None)
         c.execute("UPDATE support_access SET ended_at=?, ended_by=?, end_reason=?, token_hash=NULL WHERE id=?",
                   (H.now(), actor, reason, row["id"]))
-        H.event(c, actor, "support_access.ended", row["id"], {"reason": reason})
+        H.event(c, actor, "support_access.ended", row["id"],
+                {"reason": reason, "ticket_id": row["ticket_id"], "hq_ticket": hq_ticket(c, row["ticket_id"])})
     return len(rows)
 
 
@@ -380,14 +393,18 @@ class Access:
         with self.store.read() as c:
             reason = off_reason(self.settings, c)
             row = None if reason else live(c)
-            last = None
+            last = mine = None
             if not reason and self.may_manage(who):
                 last = c.execute("SELECT * FROM support_access ORDER BY started_at DESC LIMIT 1").fetchone()
-        person = not who.via_token and not who.via
-        return {"available": not reason, "off_reason": reason, "active": view(row) if row else None,
-                "last": view(last) if last else None,
-                "can_start": bool(not reason and person and self.may_manage(who)),
-                "can_full": bool(not reason and person and who.role == "owner")}
+            # The sessions started from this person's own requests: each request lists its own sessions' logs.
+            if not reason:
+                mine = c.execute("SELECT a.* FROM support_access a JOIN support_tickets t ON t.id=a.ticket_id "
+                                 "WHERE t.actor=? ORDER BY a.started_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+            person = not who.via_token and not who.via
+            return {"available": not reason, "off_reason": reason, "active": view(c, row) if row else None,
+                    "last": view(c, last) if last else None, "sessions": [view(c, x) for x in mine or ()],
+                    "can_start": bool(not reason and person and self.may_manage(who)),
+                    "can_full": bool(not reason and person and who.role == "owner")}
 
     def start(self, who, body):
         support.require_person(who)
@@ -416,18 +433,22 @@ class Access:
             if not HQ_SESSION.fullmatch(session):
                 raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502,
                               retryable=True)
-            sid = "sa_" + secrets.token_hex(8)
+            # HQ's session id is the id here too, so this install's log and events match HQ and admin.
+            sid = session
             token = TOKEN_PREFIX + secrets.token_urlsafe(32)
             with self.store.transaction() as c:
+                if c.execute("SELECT 1 FROM support_access WHERE id=?", (sid,)).fetchone():
+                    raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502,
+                                  retryable=True)
                 c.execute("INSERT INTO support_access(id,ticket_id,tier,started_by,started_at,expires_at,token_hash,"
                           "hq_session) VALUES(?,?,?,?,?,?,?,?)",
                           (sid, ticket["id"], body.tier, who.actor, now, expires, digest(token), session))
                 H.event(c, who.actor, "support_access.started", sid,
-                        {"ticket_id": ticket["id"], "tier": body.tier, "hours": body.hours})
-                row = c.execute("SELECT * FROM support_access WHERE id=?", (sid,)).fetchone()
+                        {"ticket_id": ticket["id"], "hq_ticket": ticket["hq_id"], "tier": body.tier, "hours": body.hours})
+                made = view(c, c.execute("SELECT * FROM support_access WHERE id=?", (sid,)).fetchone())
             _tokens[sid] = token
         wake(self.app)
-        return view(row)
+        return made
 
     def _session(self, who, sid):
         support.require_person(who)
@@ -446,7 +467,7 @@ class Access:
         if end(self.store, row, who.actor, "stopped"):
             _tell_hq_ended(self.app, row)
         with self.store.read() as c:
-            return view(c.execute("SELECT * FROM support_access WHERE id=?", (sid,)).fetchone())
+            return view(c, c.execute("SELECT * FROM support_access WHERE id=?", (sid,)).fetchone())
 
     def log(self, who, sid):
         with self.store.read() as c:
@@ -455,7 +476,7 @@ class Access:
         with self.store.read() as c:
             rows = c.execute("SELECT ts,by,method,path,status FROM support_access_log WHERE session_id=? "
                              "ORDER BY id DESC LIMIT ?", (sid, LOGGED)).fetchall()
-        return {"session": view(row), "log": [dict(r) for r in rows]}
+            return {"session": view(c, row), "log": [dict(r) for r in rows]}
 
 
 def install(app, store, settings, auth):
@@ -465,7 +486,8 @@ def install(app, store, settings, auth):
 
     @app.get("/api/v2/support/access")
     def support_access_status(request: Request):
-        """Whether Tico support has access now: the banner every person sees, and the Help page's button."""
+        """Whether Tico support has access now (the banner every person sees), the button under a request, and the
+        sessions started from this person's requests (each request's log)."""
         return access.status(request.state.identity)
 
     @app.post("/api/v2/support/access")

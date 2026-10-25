@@ -224,7 +224,7 @@ def guarded(c, auth, who, inner, function, columns=None):
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
     listener = L.sees_everything(who)
-    mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings))
+    mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
     hidden = sorted(auth.unreadable_bots(c, who))
 
     def bots_visible(column):
@@ -354,13 +354,22 @@ def guarded(c, auth, who, inner, function, columns=None):
         "strategy_versions": "id IS NOT NULL" if owner else "status='published'",
         "strategy_bets": "id IS NOT NULL" if owner else "id IS NULL",
         "strategy_events": "id IS NOT NULL" if owner else "id IS NULL",
+        # A lens run (backend/lenses.py) on the draft carries the unpublished strategy's words: the owner's. Every other
+        # run only discusses what is published.
+        "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
         "market_citations": "1", "market_insights": "1", "market_events": "1",
+        # Page monitors and the weekly briefings (backend/market_watch.py, backend/market_briefing.py): public pages the
+        # team watches and what the Librarian wrote about them, the market's to read.
+        "market_watches": "1", "market_briefings": "1",
+        "market_sizes": "1", "market_figures": "1", "market_sources": "1",
         # Listening's saved posts carry third parties' names and handles (backend/listening.py):
         # Listening and the owner read them all, a receiving bot only what was routed to it.
         # Which runs happened, and whether they were blocked, is anyone's to read.
         "listen_runs": "1",
+        # The destinations saved in Settings > Listening: the owner's and the admins'.
+        "listening_destinations": "key IS NOT NULL" if admin and not bot else "key IS NULL",
         # Never a bare "1" for these three: SQLite would answer count(*) from the base table,
         # which the authorizer rightly refuses, since for everyone else the rows are filtered.
         "intake_items": ("id IS NOT NULL" if listener else f"destination IN {qlist(mine_inboxes)}"
@@ -369,8 +378,10 @@ def guarded(c, auth, who, inner, function, columns=None):
         "listen_judgments": "id IS NOT NULL" if listener else "item_id IN (SELECT id FROM listen_items)",
         # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
         # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
-        # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft: the owner's.
-        "registry_metadata": ("key!='roadmap_ip_secret'" + ("" if owner else " AND key!='strategy.draft_from'"))
+        # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
+        # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
+        "registry_metadata": ("key!='roadmap_ip_secret'" + ("" if owner else
+                                                           " AND key NOT IN ('strategy.draft_from','onboarding.company_file')"))
         if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
@@ -683,7 +694,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {"market_entities", "market_edges", "market_evidence", "market_citations",
-                         "market_insights", "market_events", "listen_runs", "task_types", "task_steps"}:
+                         "market_insights", "market_events", "market_watches", "market_briefings", "market_sizes",
+                         "market_figures", "market_sources", "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
             if (table in tables or table in sources) and context == prefix + table:

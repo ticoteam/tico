@@ -241,6 +241,37 @@ class SettingsAdmin:
         mode, access = manifest.get("repo_access_mode"), manifest.get("repo_all_access", "read")
         return {"repo_access_mode": mode, "repo_all_access": access} if mode in ("own", "all") and access in ("read", "write") else {}
 
+    def template_gateway(self, template):
+        """The template's bot.yaml `gateway:` block ({level, fast}, docs/creating-bots.md), kept in the new bot's settings
+        so a Gateway bot with no model of its own starts on that level; {} when it names none."""
+        from pathlib import Path
+        import yaml
+        from . import gateway_tiers
+        if not template:
+            return {}
+        try:
+            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "bot.yaml").read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            return {}
+        block = gateway_tiers.clean_block(manifest.get("gateway") if isinstance(manifest, dict) else None)
+        return {"gateway": block} if block else {}
+
+    def _template_gateway_model(self, c, slug, config):
+        """A new bot that got the company's Gateway default only because it named no model of its own: its template's
+        `gateway:` block (level, fast) and its group's department pick the tier, as for any Gateway bot with no model."""
+        from . import models_preset
+        from .gateway_connection import is_tico
+        if not is_tico(config.get("model")):
+            return
+        model = models_preset.model_for_bot(c, self.settings, slug, config)
+        choice = providers.MODEL_BY_ID.get(model)
+        if not choice or model == config["model"]:
+            return
+        effort = self._effort(choice, None, config.get("reasoning_effort"))
+        config.update(model=model, reasoning_effort=effort)
+        c.execute("UPDATE bots SET model=?,effort=? WHERE slug=?", (model, effort, slug))
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+
     def pick_slug(self, c, name, fallback="bot"):
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
         return free_slug(name, lambda slug: bool(H.bot(c, slug)) or self.auth.system_bot(slug) or slug == "coo",
@@ -333,6 +364,7 @@ class SettingsAdmin:
         profiles.apply(config, profiles.DOER, {})
         if body.template:
             config["template"] = body.template
+            config.update(self.template_gateway(body.template))
             if privileged:
                 config.update(self.template_repo_defaults(body.template))
         team = self._team(c, body.slug, config)
@@ -347,6 +379,8 @@ class SettingsAdmin:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (body.slug, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        if not body.model and config.get("gateway"):
+            self._template_gateway_model(c, body.slug, config)
         from .report_order import arrive
         arrive(c, "bot:" + body.slug, body.reports_to)     # a new bot goes last among its manager's reports
         assignment = None
@@ -361,6 +395,9 @@ class SettingsAdmin:
                         "admin to open one to members' bots (Settings > Computers); it starts on its own when one can take it")
         H.event(c, who.actor, "bot.definition_created", body.slug,
                 {"operator": operator, "owners": owners, "runner": body.runner_id})
+        if body.slug == "librarian":
+            from . import listening
+            listening.seed_market(c, self.settings)      # once: its market posts (Settings > Listening)
         visible = self.auth.bot_accesses(c, who)
         same_name = [r["slug"] for r in c.execute(
             "SELECT slug FROM bots WHERE display_name=? COLLATE NOCASE AND slug<>? AND state<>'archived' ORDER BY slug",

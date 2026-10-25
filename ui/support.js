@@ -204,7 +204,6 @@
       <span class="support-item-body">${escape(preview(t))}</span>` : ''}
       <span class="support-item-meta">${badge(t.status)}<time datetime="${escape(last(t))}" title="${escape(when(last(t)))}">${escape(short(last(t)))}</time></span></button></li>`).join('');
     pop.querySelector('[data-none]').hidden = !!items.length;
-    renderAccess();
   }
   function renderThread(pin = false) {
     const host = pop.querySelector('[data-thread]'), t = current();
@@ -233,12 +232,13 @@
     const closed = t && ended(t);
     pop.querySelector('[data-compose]').hidden = !!closed;
     pop.querySelector('[data-closed]').hidden = !closed;
+    renderAccess();
     lockSending();
   }
-  // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; at the foot of Your
-  // requests, the button that starts one on the request in the chat (or the latest open one), for an owner or admin,
-  // and the list of every request support made.
-  let access = {available: false, active: null, last: null, at: 0}, accessTimer = 0;
+  // Letting Tico support in (docs/support.md): a banner on every screen while a session lasts; under an open request,
+  // the button that starts one from it, for an owner or admin; and under each request, every request support made in
+  // the sessions started from it.
+  let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0;
   const accessLogs = new Map();
   const TIERS = {app: 'App only', full: 'Full access'};
   // Why the backend says support access is off (backend/support_access.py off_reason).
@@ -250,13 +250,15 @@
     return h ? `${h} h ${m % 60} min` : `${m} min`;
   };
   const canStop = () => !!access.active && (!!access.can_start || access.active.started_by === 'human:' + (typeof S === 'undefined' ? '' : S.me?.id || ''));
-  const accessFor = () => { const t = current(); return t && !ended(t) ? t : latest(); };
+  // The same words on the banner and under the request: the tier and the time left.
+  const accessWords = live => `Tico support has access (${TIERS[live.tier] || live.tier}), ${timeLeft()} left`;
+  const liveAccess = () => access.active && remaining() > 0 ? access.active : null;
   function renderBanner() {
-    const bar = document.getElementById('support-access-banner');
+    const bar = document.getElementById('support-access-banner'), live = liveAccess();
     if (!bar) return;
-    bar.hidden = !(access.active && remaining() > 0);
-    if (bar.hidden) return;
-    bar.querySelector('[data-access-left]').textContent = `Tico support has access, ${timeLeft()} left`;
+    bar.hidden = !live;
+    if (!live) return;
+    bar.querySelector('[data-access-left]').textContent = accessWords(live);
     bar.querySelector('[data-access-stop]').hidden = !canStop();
   }
   async function loadLog(id) {
@@ -267,28 +269,31 @@
     catch (_) { accessLogs.set(id, {at: Date.now(), items: held?.items || []}); }
     renderAccess();
   }
+  // Under the request in the chat: its live session with Stop, else the start button (an open request, an owner or
+  // admin, no session live), or why it is off; then the log of every session started from it, newest first. Log times
+  // read as the app's event times do: how long ago, the full time on hover (ui/app/format.js).
   function renderAccess() {
-    const host = pop?.querySelector('[data-access]'), t = accessFor();
+    const host = pop?.querySelector('[data-access]'), t = current();
     if (!host) return;
-    const live = access.active && remaining() > 0 ? access.active : null;
-    const shown = live || access.last;
+    const live = liveAccess(), here = live && t && live.ticket_id === t.id ? live : null;
     let html = '';
-    if (live) html = `<p class="support-access-on">Tico support has access (${escape(TIERS[live.tier] || live.tier)}), ${escape(timeLeft())} left${canStop() ? ' · <button type="button" class="ghost" data-access-stop>Stop</button>' : ''}</p>`;
-    else if (t && access.available && access.can_start && !access.active)
-      html = `<p class="support-sent">For ${escape(title(t))}</p><button type="button" class="ghost" data-access-start>Let Tico support in</button>`;
-    else if (t && !access.available && access.off_reason) html = `<p class="support-sent">${escape(ACCESS_OFF[access.off_reason] || ACCESS_OFF.other)}</p>`;
-    if (shown && access.can_start) {
-      const items = accessLogs.get(shown.id)?.items;
-      if (!items) void loadLog(shown.id);
-      else if (live) void loadLog(shown.id);
-      html += `<details class="support-access-log"${live ? ' open' : ''}><summary>Requests Tico support made</summary>${items?.length
-        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.ts)}">${escape(when(x.ts))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
+    if (here) html = `<p class="support-access-on">${escape(accessWords(here))}${canStop() ? ' · <button type="button" class="ghost" data-access-stop>Stop</button>' : ''}</p>`;
+    else if (t && !ended(t) && access.available && access.can_start && !access.active)
+      html = '<button type="button" class="ghost" data-access-start>Let Tico support in</button>';
+    else if (t && !ended(t) && !access.available && access.off_reason) html = `<p class="support-sent">${escape(ACCESS_OFF[access.off_reason] || ACCESS_OFF.other)}</p>`;
+    const sessions = t ? (access.sessions || []).filter(x => x.ticket_id === t.id) : [];
+    if (sessions.length) {
+      for (const x of sessions) if (!accessLogs.has(x.id) || x.id === here?.id) void loadLog(x.id);
+      const items = sessions.flatMap(x => accessLogs.get(x.id)?.items || []).sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
+      html += `<details class="support-access-log"${here ? ' open' : ''}><summary>Requests Tico support made</summary>${items.length
+        ? `<ol>${items.map(x => `<li><time datetime="${escape(x.ts)}" data-ago="${escape(x.ts)}" title="${escape(fmt(x.ts))}">${escape(ago(x.ts))}</time> ${escape(x.by === 'support-agent' ? 'Support Agent' : 'Staff')} · ${escape(x.method)} ${escape(x.path)} · ${escape(x.status)}</li>`).join('')}</ol>`
         : '<p class="support-sent">None yet.</p>'}</details>`;
     }
     host.hidden = !html;
     if (host.dataset.shown !== html) {
-      const open = host.querySelector('details')?.open;
-      host.innerHTML = html; host.dataset.shown = html;
+      // Opened or closed by hand, the log stays so while the same request is in view.
+      const open = host.dataset.ticket === (t?.id || '') ? host.querySelector('details')?.open : undefined;
+      host.innerHTML = html; host.dataset.shown = html; host.dataset.ticket = t?.id || '';
       if (open !== undefined && host.querySelector('details')) host.querySelector('details').open = open;
     }
   }
@@ -342,9 +347,13 @@
   }
   document.addEventListener('click', e => {
     if (e.target.closest('#support-access-banner [data-access-stop], [data-access] [data-access-stop]')) void stopAccess();
-    else if (e.target.closest('[data-access] [data-access-start]') && accessFor()) openAccess(accessFor());
-    // The banner itself opens the pop-up on Your requests, where the controls and the log are.
-    else if (e.target.closest('#support-access-banner [data-access-left]')) void open({list: true});
+    else if (e.target.closest('[data-access] [data-access-start]') && current() && !ended(current())) openAccess(current());
+    // The banner itself opens the request the session started from, where Stop and the log are; someone else's
+    // request is not theirs to open, so Your requests.
+    else if (e.target.closest('#support-access-banner [data-access-left]')) {
+      const from = state.tickets.find(t => t.id === access.active?.ticket_id);
+      void open(from ? {ticket: from.id} : {list: true});
+    }
   });
   // The message box grows to what it holds, so a "Want help setting up?" snapshot reads whole, up to the CSS cap and
   // never past the room the sheet has left: the thread keeps its minimum and Send stays on screen, which matters on a
@@ -603,12 +612,12 @@
         <div class="support-list-head"><button type="button" class="ghost support-icon" data-back aria-label="Back to the chat" title="Back to the chat">${ICON.back}</button><strong>Your requests</strong></div>
         <ul class="support-list" data-requests aria-label="Your requests"></ul>
         <p class="support-sent support-none" data-none hidden>No requests yet.</p>
-        <div class="support-access" data-access hidden></div>
       </div>
       <div class="support-view" data-view hidden>
         <div class="support-thread-head" data-head hidden><div class="support-thread-title"><strong data-title></strong><span data-status></span></div>
           <button type="button" class="ghost support-icon support-trash" data-delete aria-label="Delete request" title="Delete request">${ICON.trash}</button></div>
         <div class="support-thread" data-thread aria-label="Support conversation"></div>
+        <div class="support-access" data-access hidden></div>
         <p class="support-sent support-closed" data-closed hidden>This request is closed. Start a new request if you need more help.</p>
         <form class="support-write" data-compose novalidate></form>
       </div></div>`;

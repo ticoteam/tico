@@ -1,0 +1,27 @@
+# In the style of Rumelt's Good Strategy / Bad Strategy: a diagnosis, a guiding policy and coherent actions. The check
+# flags fluff, goals posing as strategy, and missing trade-offs.
+id: good-strategy
+name: Good strategy check
+applies_to: strategy
+description: 'In the style of Rumelt''s kernel: a diagnosis, a guiding policy, and actions that fit together.'
+minutes: 6
+listed: true
+steps:
+  - key: obstacle
+    ask: What is the single biggest obstacle between the team and where it wants to be in two years?
+    input: text
+  - key: advantage
+    ask: What advantage do you have that the obstacle does not neutralise?
+    input: text
+    hint: A relationship, a cost position, a piece of knowledge, a place in a channel.
+  - key: actions
+    ask: What are the handful of things you are doing about it?
+    input: list
+  - key: stop
+    ask: What would you stop doing this quarter if you took that diagnosis seriously?
+    input: text
+output:
+  chart: table
+  sections: [The kernel as written, Where it is fluff, What is missing]
+sharpen:
+  - What the closest rivals are doing about the same obstacle

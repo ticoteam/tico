@@ -636,6 +636,18 @@ class StrategyDraftFrom(Contract):
     text: str = Field(default="", max_length=4000)
 
 
+class LensRun(Contract):
+    """Start a lens run (backend/lenses.py): the answers by step key, on the published version or the owner's draft."""
+    answers: dict[str, Any] = Field(default_factory=dict)
+    on: Literal["published", "draft"] = "published"
+
+
+class LensApply(Contract):
+    """Add one change of a lens run to the draft, against the draft revision the page showed."""
+    index: Annotated[int, Field(strict=True, ge=0, le=100)]
+    revision: Annotated[int, Field(strict=True, ge=0)]
+
+
 class StrategyBetCreate(Contract):
     statement: str = Field(min_length=1, max_length=2000)
     why: str = Field(default="", max_length=20_000)
@@ -1793,6 +1805,18 @@ class ProvidersUpdate(Contract):
     check_models: list[Annotated[str, Field(min_length=1, max_length=140)]] | None = Field(default=None, max_length=10)
     # The models choice (backend/models_preset.py): one of its four, '' for none; None keeps the saved one.
     preset: str | None = Field(default=None, max_length=40)
+    # How hard the Tico AI Gateway thinks on a decision (low, medium, high); None keeps the saved one.
+    decide_level: str | None = Field(default=None, max_length=10)
+
+
+class GatewaySearch(Contract):
+    query: str = Field(min_length=1, max_length=500)
+    max_results: int = Field(default=5, ge=1, le=10)
+
+
+class GatewayFetch(Contract):
+    url: str = Field(min_length=1, max_length=2000, pattern=r"^https?://")
+    max_tokens: int = Field(default=10000, ge=1000, le=50000)
 
 
 class SystemUpdate(Contract):

@@ -158,6 +158,9 @@ pub struct Settings {
     #[allow(dead_code)] // the hub MCP server and Codex read the bot from the environment
     pub slug: String,
     pub compact_at: Value,
+    /// What each Gateway model of the turn reads, `{model id: ["text", "image", "pdf"]}` from the server's
+    /// `gateway_inputs`; Null from an older server (hosts/pi.rs `gateway_models_json_for`).
+    pub gateway_inputs: Value,
     /// The task's worktrees in other repos the session may work in (Claude `--add-dir`; others ignore it).
     pub add_dirs: Vec<String>,
     /// A bot with branches: Claude reads only the project's settings and MCP servers (hosts/claude.py).

@@ -1,7 +1,8 @@
 """The setup draft: its shape, its limits, and the rules every draft must keep.
 
 A draft is the object the tico.team/setup page keeps (setup.js `blankDraft()`): step, company, people, bots, goals,
-rules, tools and seq. The server adds four fields the page passes back untouched and the company file never holds:
+rules, tools and seq, and `strategy` once the Strategy step has drafted one (optional: a draft without it is still
+valid). The server adds four fields the page passes back untouched and the company file never holds:
 `undo` (the draft before BotOps's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
 so they are not added back unasked) and `pending` (teams BotOps has suggested removing). Anything else is refused.
 """
@@ -11,6 +12,7 @@ import json
 import math
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 
@@ -41,11 +43,20 @@ REVIEW = {row["id"]: row["label"] for row in VOCAB["review"]}
 TOOLS = {row["id"]: row["label"] for row in VOCAB["tools"]}
 HARNESSES = {row["id"]: row["name"] for row in VOCAB["harnesses"]}
 DIRECTIONS = tuple(VOCAB["directions"])
+SECTIONS = tuple(VOCAB["sections"][2:])        # serve, sell, know, not: the strategy's four sections
+METHODS = tuple(VOCAB["methods"])              # how a segment was sized (tico backend/market_spend.py METHODS)
+POST_SOURCES = tuple(VOCAB["post_sources"])
+POST_TAGS = tuple(VOCAB["post_tags"])
 
 ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SERVER_FIELDS = ("undo", "chat", "removed", "pending")
 TOP = ("step", "company", "people", "bots", "goals", "rules", "tools", "seq")
+# Parts of the plan a draft may leave out: an older page, and a plan made before the Strategy step, has none.
+OPTIONAL = ("strategy",)
+BET_ID = re.compile(r"b[1-9]")
+URL = re.compile(r"https?://\S+", re.I)
+YEARS = (1990, 2100)
 BOT_FIELDS = ("id", "template", "title", "dept", "lead", "core", "reason", "start", "routine", "tools", "about", "runtime",
               "existing")
 BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person")
@@ -287,7 +298,7 @@ def aim(raw, field):
 def _goal(raw, at):
     field = "goals[%d]" % at
     _keys(raw, field, ("id", "title", "owner", "measure"),
-          GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew") + GOAL_LAYER)
+          GOAL_FIELDS + ("target", "baseline", "deadline", "min", "max", "isNew", "bet") + GOAL_LAYER)
     goal = {"id": _id(raw["id"], field + ".id"), "title": _text(raw["title"], field + ".title", LIMITS["goal_title"]),
             "owner": _id(raw["owner"], field + ".owner"), **aim(raw, field)}
     if raw.get("level") is not None:
@@ -301,9 +312,169 @@ def _goal(raw, at):
         if raw["dept"] is not None and raw["dept"] not in DEPARTMENTS:
             raise DraftError(field + ".dept is not a department")
         goal["dept"] = raw["dept"]
+    if raw.get("bet") is not None:
+        # A bet that is no longer among the strategy's is let go in check().
+        if not isinstance(raw["bet"], str) or not BET_ID.fullmatch(raw["bet"]):
+            raise DraftError(field + ".bet must be a bet id like b2")
+        goal["bet"] = raw["bet"]
     if raw.get("isNew") is True:
         goal["isNew"] = True
     return goal
+
+
+# ---------------------------------------------------------------------------------------------------- the strategy
+def _url(value, field, empty=True):
+    """An http(s) address with a host and no user name or password in it (a credential never lands in the plan)."""
+    value = _text(value, field, LIMITS["url"]).strip()
+    if not value and empty:
+        return value
+    try:
+        parts = urlsplit(value) if URL.fullmatch(value) else None
+        good = parts is not None and bool(parts.hostname) and "@" not in parts.netloc
+        parts and parts.port                    # "https://host:abc" raises here
+    except ValueError:                          # "https://[" and other addresses urlsplit can't read
+        good = False
+    if not good:
+        raise DraftError(field + " must be an http or https address, with no user name or password")
+    return value
+
+
+def _day(value, field):
+    """A date, or "" for none."""
+    return "" if value in ("", None) else date(value, field)
+
+
+def _bet_row(raw, at):
+    field = "strategy.bets[%d]" % at
+    _keys(raw, field, ("id",), ("statement", "why", "rules_out", "wrong_if", "check_by"))
+    if not isinstance(raw["id"], str) or not BET_ID.fullmatch(raw["id"]) or int(raw["id"][1:]) > LIMITS["bets"]:
+        raise DraftError(field + ".id must be b1 to b%d" % LIMITS["bets"])
+    out = {"id": raw["id"], "statement": _text(raw.get("statement", ""), field + ".statement", LIMITS["statement"])}
+    for key in ("why", "rules_out", "wrong_if"):
+        out[key] = _text(raw.get(key, ""), "%s.%s" % (field, key), LIMITS["bet_text"])
+    out["check_by"] = _day(raw.get("check_by", ""), field + ".check_by")
+    return out
+
+
+def _usd(value, field):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or not float(value).is_integer() or not 0 <= value <= 1e15:
+        raise DraftError(field + " must be a whole number of dollars or null")
+    return int(value)
+
+
+def _segment(raw, at):
+    field = "strategy.market.segments[%d]" % at
+    _keys(raw, field, ("key",), ("name", "parent", "usd", "method", "arithmetic", "evidence", "ours", "next"))
+    method = raw.get("method") or "top_down"
+    if method not in METHODS:
+        raise DraftError(field + ".method is not a sizing method")
+    out = {"key": _id(raw["key"], field + ".key"), "name": _text(raw.get("name", ""), field + ".name", LIMITS["segment_name"]),
+           "parent": None if raw.get("parent") is None else _id(raw["parent"], field + ".parent"),
+           "usd": _usd(raw.get("usd"), field + ".usd"), "method": method,
+           "arithmetic": _text(raw.get("arithmetic", ""), field + ".arithmetic", LIMITS["arithmetic"]),
+           "evidence": [_url(u, field + ".evidence", empty=False)
+                        for u in _list(raw.get("evidence", []), field + ".evidence", LIMITS["evidence"])],
+           "ours": _bool(raw.get("ours", False), field + ".ours"), "next": _bool(raw.get("next", False), field + ".next")}
+    if not out["evidence"]:
+        out["usd"] = None       # a size stands only on its evidence: never an invented number
+    return out
+
+
+def _player(raw, at):
+    field = "strategy.market.players[%d]" % at
+    _keys(raw, field, ("name",), ("url", "segments"))
+    return {"name": _text(raw["name"], field + ".name", LIMITS["player_name"]), "url": _url(raw.get("url", ""), field + ".url"),
+            "segments": [_id(s, field + ".segments") for s in _list(raw.get("segments", []), field + ".segments",
+                                                                    LIMITS["segments"])]}
+
+
+def _post(raw, at):
+    field = "strategy.listening.posts[%d]" % at
+    _keys(raw, field, ("url",), ("source", "title", "when", "tag"))
+    out = {"source": raw.get("source") or "web", "url": _url(raw["url"], field + ".url", empty=False),
+           "title": _text(raw.get("title", ""), field + ".title", LIMITS["post_title"]),
+           "when": _day(raw.get("when", ""), field + ".when"), "tag": raw.get("tag") or "market"}
+    if out["source"] not in POST_SOURCES or out["tag"] not in POST_TAGS:
+        raise DraftError(field + " has an unknown source or tag")
+    return out
+
+
+def _strategy(raw):
+    """The strategy block (the setup page's Strategy step), every part present: a part not drafted yet is empty. Two
+    quiet repairs, like a goal's gone parent: a segment's parent that is not among the segments (or would make a loop)
+    is let go, and so is a player's segment that is gone."""
+    _keys(raw, "strategy", (), ("summary", "vision", "sections", "bets", "market", "listening"))
+    sections = _keys(raw.get("sections") or {}, "strategy.sections", (), SECTIONS)
+    market = _keys(raw.get("market") or {}, "strategy.market", (), ("definition", "segments", "players"))
+    definition = _keys(market.get("definition") or {}, "strategy.market.definition", (), ("root", "in", "out", "year"))
+    listening = _keys(raw.get("listening") or {}, "strategy.listening", (), ("requests", "posts"))
+    year = definition.get("year")
+    if year is not None and (isinstance(year, bool) or not isinstance(year, int) or not YEARS[0] <= year <= YEARS[1]):
+        raise DraftError("strategy.market.definition.year must be a year")
+    out = {"summary": _text(raw.get("summary", ""), "strategy.summary", LIMITS["strategy_line"]),
+           "vision": _text(raw.get("vision", ""), "strategy.vision", LIMITS["strategy_line"]),
+           "sections": {k: _text(sections.get(k, ""), "strategy.sections." + k, LIMITS["section"]) for k in SECTIONS},
+           "bets": [_bet_row(b, i) for i, b in enumerate(_list(raw.get("bets", []), "strategy.bets", LIMITS["bets"]))],
+           "market": {"definition": {"root": _text(definition.get("root", ""), "strategy.market.definition.root",
+                                                   LIMITS["market_root"]),
+                                     "in": _text(definition.get("in", ""), "strategy.market.definition.in",
+                                                 LIMITS["market_scope"]),
+                                     "out": _text(definition.get("out", ""), "strategy.market.definition.out",
+                                                  LIMITS["market_scope"]),
+                                     "year": year},
+                      "segments": [_segment(s, i) for i, s in enumerate(_list(market.get("segments", []),
+                                                                             "strategy.market.segments", LIMITS["segments"]))],
+                      "players": [_player(p, i) for i, p in enumerate(_list(market.get("players", []),
+                                                                           "strategy.market.players", LIMITS["players"]))]},
+           "listening": {"requests": [_text(r, "strategy.listening.requests", LIMITS["request"]) for r in
+                                      _list(listening.get("requests", []), "strategy.listening.requests", LIMITS["requests"])],
+                         "posts": [_post(p, i) for i, p in enumerate(_list(listening.get("posts", []),
+                                                                          "strategy.listening.posts", LIMITS["posts"]))]}}
+    _unique(out["bets"], "strategy.bets")
+    segments = out["market"]["segments"]
+    keys = [s["key"] for s in segments]
+    if len(set(keys)) != len(keys):
+        raise DraftError("strategy.market.segments has two entries with the same key")
+    for flag in ("ours", "next"):
+        if sum(1 for s in segments if s[flag]) > 1:
+            raise DraftError("only one segment is marked %s" % flag)
+    parents = {s["key"]: s["parent"] for s in segments}
+    for segment in segments:
+        seen, at = {segment["key"]}, segment["parent"]
+        while at is not None and at in parents and at not in seen:
+            seen.add(at)
+            at = parents[at]
+        if segment["parent"] is not None and (segment["parent"] not in parents or at is not None and at in seen):
+            segment["parent"] = parents[segment["key"]] = None
+    for player in out["market"]["players"]:
+        player["segments"] = [s for s in dict.fromkeys(player["segments"]) if s in parents]
+    return out
+
+
+def blank_strategy():
+    """setup.js `blankStrategy()`: the block before anything is drafted."""
+    return {"summary": "", "vision": "", "sections": {k: "" for k in SECTIONS}, "bets": [],
+            "market": {"definition": {"root": "", "in": "", "out": "", "year": None}, "segments": [], "players": []},
+            "listening": {"requests": [], "posts": []}}
+
+
+def has_strategy(draft):
+    """Whether a draft holds a strategy worth writing down: some text, a bet, a segment or a request in its block."""
+    def filled(value):
+        if isinstance(value, dict):
+            return any(filled(v) for k, v in value.items() if k != "year")
+        if isinstance(value, list):
+            return bool(value)
+        return value not in ("", None, False)
+    return filled(draft.get("strategy") or {})
+
+
+def plan_of(draft):
+    """The plan a company file holds: the top-level parts, and the optional ones the draft has."""
+    return {key: draft[key] for key in TOP + OPTIONAL if key in draft}
 
 
 def _unique(rows, field):
@@ -317,7 +488,7 @@ def check(raw, snapshot=False):
     `removed`. Two quiet repairs keep the file well formed whatever the page did: with people but no owner the first
     person owns the company (as setup.js `owner()` reads it), and a goal whose owner has gone falls to the owner."""
     allowed = ("removed",) if snapshot else SERVER_FIELDS
-    _keys(raw, "draft", TOP, allowed)
+    _keys(raw, "draft", TOP, allowed + OPTIONAL)
     if raw["step"] not in ("company",) + STEPS:
         raise DraftError("draft.step is not a step")
     company = _keys(raw["company"], "company", ("name", "about", "signals"))
@@ -343,6 +514,8 @@ def check(raw, snapshot=False):
         "tools": {"mode": tools["mode"], "connect": [t for t in TOOLS if t in _choices(tools["connect"], "tools.connect", TOOLS)]},
         "seq": seq,
     }
+    if raw.get("strategy") is not None:
+        draft["strategy"] = _strategy(raw["strategy"])
     for field in ("people", "bots", "goals"):
         _unique(draft[field], field)
     if draft["people"] and not any(p["owner"] for p in draft["people"]):
@@ -373,6 +546,8 @@ def check(raw, snapshot=False):
             goal["owner"] = owner_id(draft)
         if goal.get("parent") is not None and (goal["parent"] not in goal_ids or goal["parent"] == goal["id"]):
             goal["parent"] = None
+        if "bet" in goal and goal["bet"] not in {b["id"] for b in (draft.get("strategy") or {}).get("bets", [])}:
+            del goal["bet"]
     if "removed" in raw:
         draft["removed"] = []
         for i, row in enumerate(_list(raw["removed"], "removed", LIMITS["removed"])):
@@ -406,7 +581,7 @@ def check(raw, snapshot=False):
 def content(draft):
     """What an undo snapshot holds: the draft without `undo`, `chat` and `pending`, and without the page's new-card
     flags."""
-    out = copy.deepcopy({key: value for key, value in draft.items() if key in TOP or key == "removed"})
+    out = copy.deepcopy({key: value for key, value in draft.items() if key in TOP + OPTIONAL or key == "removed"})
     for rows in (out["bots"], out["people"], out["goals"]):
         for row in rows:
             row.pop("isNew", None)

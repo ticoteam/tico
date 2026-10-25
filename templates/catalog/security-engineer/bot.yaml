@@ -7,6 +7,10 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: high
 max_run_minutes: 60
 
+# What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
+gateway:
+  level: high
+
 # Nothing addressed to anyone outside the team leaves until an owner turns this on. Until then
 # the bot puts every plan on the task and a human acts on it.
 outbound_send: false

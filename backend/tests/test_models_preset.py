@@ -62,7 +62,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
         with api.app.state.store.read() as c:
             assert c.execute("SELECT state FROM jobs WHERE bot='ops'").fetchone()[0] == "queued"
         return
-    assert (got["config"]["model"], got["config"]["runtime"]) == ("tico-mid-1.0", "pi")
+    assert (got["config"]["model"], got["config"]["runtime"]) == ("tico-general-medium-1.0", "pi")
     assert got["config"]["waiting_for_sign_in"] == "claude" and got["gateway"] is True
     assert "TICOAI_GATEWAY_KEY" in handed_to(api, machine, got)
     # Once signed in, the next turn runs on the subscription with no restart, and the bot's own choice was kept.
@@ -123,12 +123,14 @@ def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api
         record = providers.load(c, api.app.state.store.settings)
     rows = providers.default_fallbacks(record)
     spends = preset in ("subscriptions-gateway", "gateway")
-    assert (rows[-1]["model"] == "tico-mid-1.0") is spends
+    assert (rows[-1]["model"] == "tico-general-medium-1.0") is spends
     assert sum(1 for row in rows if row["model"].startswith("tico-")) == (1 if spends else 0)
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
     assert attempt["config"]["model"] == CLAUDE["model"]
     assert attempt["gateway"] is spends
+    # The runner is told what the Gateway fallback reads, for pi's models.json; no Gateway model, nothing.
+    assert attempt["config"].get("gateway_inputs") == ({"tico-general-medium-1.0": ["text", "image", "pdf"]} if spends else None)
     # A choice without the Gateway never hands the computer the key for a bot that names no Tico model.
     assert ("TICOAI_GATEWAY_KEY" in handed_to(api, machine, attempt)) is spends
 
@@ -141,6 +143,35 @@ def test_a_bot_that_names_its_own_fallback_keeps_it(api, monkeypatch):
     own = {**CLAUDE, "fallback": {"harness": "codex", "model": "gpt-5.5"}}
     assert models_preset.with_gateway_fallback(record, {"isolated": True}, own) == own
     assert "gateway_fallback" not in models_preset.with_gateway_fallback(record, {"isolated": False}, CLAUDE)
+
+
+def test_the_turn_carries_what_each_gateway_model_reads():
+    """`gateway_inputs` (runner-rs/src/hosts/pi.rs): the catalog's `inputs` for a pinned tier, an Auto tier and an old id;
+    Low Fast reads text only; a model that is not the Gateway's, or a catalog that names none, adds nothing."""
+    from backend import gateway_tiers
+    full = ["text", "image", "pdf"]
+    for model in ("tico-sales-medium-1.0", "tico-sales-high", "tico-cheap-1.1", "tico-cheap-1.0", "tico-mid-1.0", "tico-power-1.0",
+                  "tico-general-high-fast-1.0"):
+        assert models_preset.with_gateway_inputs({"model": model})["gateway_inputs"] == {model: full}, model
+    for model in ("tico-general-low-fast-1.0", "tico-sales-low-fast"):
+        assert models_preset.with_gateway_inputs({"model": model})["gateway_inputs"] == {model: ["text"]}, model
+    # The model, the fallback it names and the company's Gateway fallback each get their entry.
+    config = {"model": "tico-sales-medium-1.0", "fallback": {"harness": "pi", "model": "tico-sales-low-fast-1.0"},
+              "gateway_fallback": "tico-sales-high"}
+    assert models_preset.with_gateway_inputs(config)["gateway_inputs"] == {
+        "tico-sales-medium-1.0": full, "tico-sales-low-fast-1.0": ["text"], "tico-sales-high": full}
+    for plain in ({"model": "claude-opus-5-5"}, {"model": "tico-nowhere-low-1.0"}, {"model": "tico-decide-low-1.0"}, {}):
+        assert models_preset.with_gateway_inputs(plain) == plain
+    # A refreshed catalog from a Gateway that names no inputs: text only, never a claim of images.
+    old = {**gateway_tiers.SNAPSHOT, "models": [
+        {**row, "versions": [{k: v for k, v in version.items() if k != "inputs"} for version in row["versions"]]}
+        for row in gateway_tiers.SNAPSHOT["models"]]}
+    gateway_tiers._state.update(catalog=old, at=1e18)
+    try:
+        assert models_preset.with_gateway_inputs({"model": "tico-sales-medium-1.0"})["gateway_inputs"] == {
+            "tico-sales-medium-1.0": ["text"]}
+    finally:
+        gateway_tiers.reset()
 
 
 def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_refused(api):
@@ -203,10 +234,10 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=isolated)
     with api.app.state.store.read() as c:
-        verdict = readiness.can_run(c, "ops", "pi", model="tico-mid-1.0")
+        verdict = readiness.can_run(c, "ops", "pi", model="tico-general-medium-1.0")
     marked = get(api, "operations", "ana-test")["runnable"].get("ops", {})
     if isolated:
-        assert verdict["can_run"] is True and "tico-mid-1.0" not in marked
+        assert verdict["can_run"] is True and "tico-general-medium-1.0" not in marked
         return
     assert verdict["can_run"] is False
     if isolated is False:
@@ -214,7 +245,7 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
     else:
         # A runner from before it said: only an explicit yes runs Gateway work, and the fix is to update it.
         assert "hasn't said it can run Tico Gateway work" in verdict["problem"] and "Update" in verdict["fix"]
-    assert marked["tico-mid-1.0"]["short"] == "not on this computer"
+    assert marked["tico-general-medium-1.0"]["short"] == "not on this computer"
     # The harness itself stays offered: pi on the bot's own key still runs here.
     assert "pi" not in marked or marked["pi"]["short"] != "not on this computer"
 
@@ -222,9 +253,9 @@ def test_a_computer_that_cannot_run_gateway_work_says_so_and_the_picker_marks_ti
 def on_tico(api, machine, isolated):
     """ops on Tico Mid 1.0 itself, ready on `machine`, which says (or does not say) it runs bots as their own user."""
     from backend.tests.test_gateway_connection import put_bot_on
-    put_bot_on(api, "ops", "tico-mid-1.0")
+    put_bot_on(api, "ops", "tico-general-medium-1.0")
     readiness = {"schema_version": 1, "runtimes": {"pi": {"installed": True, "authenticated": "missing"}},
-                 "bots": {"ops": {"ready": True, "runtime": "pi", "model": "tico-mid-1.0",
+                 "bots": {"ops": {"ready": True, "runtime": "pi", "model": "tico-general-medium-1.0",
                                   "repository_present": True, "configuration_valid": True}}}
     if isolated is not None:
         readiness["isolated"] = isolated
@@ -248,7 +279,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     if isolated:
         attempt = claim(api, machine, "ops")
-        assert attempt["config"]["model"] == "tico-mid-1.0" and attempt["gateway"] is True
+        assert attempt["config"]["model"] == "tico-general-medium-1.0" and attempt["gateway"] is True
         return
     rows, found = held(api, machine)
     reason = "not_isolated" if isolated is False else "isolation_unknown"
@@ -260,7 +291,7 @@ def test_a_bot_on_a_tico_model_waits_where_the_computer_does_not_say_it_runs_bot
     assert "Tico Gateway work" in row["why"], row
     # Once the computer says it can, the same work starts.
     on_tico(api, machine, True)
-    assert claim(api, machine, "ops")["config"]["model"] == "tico-mid-1.0"
+    assert claim(api, machine, "ops")["config"]["model"] == "tico-general-medium-1.0"
 
 
 def waiting_heartbeat(api, machine, change):
@@ -295,7 +326,7 @@ def test_waiting_for_a_sign_in_lets_through_only_the_missing_sign_in(api, monkey
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     if change == "only the sign-in":
         attempt = claim(api, machine, "ops")
-        assert (attempt["config"]["model"], attempt["config"]["waiting_for_sign_in"]) == ("tico-mid-1.0", "claude")
+        assert (attempt["config"]["model"], attempt["config"]["waiting_for_sign_in"]) == ("tico-general-medium-1.0", "claude")
         return
     rows, found = held(api, machine)
     assert [r["reason"] for r in rows] == ["readiness_unknown" if change == "no report" else "not_ready"], rows
@@ -327,10 +358,10 @@ def test_drafts_are_written_on_the_gateway_only_under_the_two_gateway_choices(ap
     monkeypatch.setattr(J, "gateway_open", opener)
     with store.read() as c:
         write = updates.writer_for(c, store.settings, store, api.app.state.vault)
-    assert write.model == "tico-mid-1.0" and write("system", "facts") == {"text": "ok"}
+    assert write.model == "tico-general-medium-1.0" and write("system", "facts") == {"text": "ok"}
     [request] = sent
     assert request.full_url.endswith("/chat/completions") and request.get_header("Authorization") == "Bearer " + KEY
-    assert json.loads(request.data)["model"] == "tico-mid-1.0"
+    assert json.loads(request.data)["model"] == "tico-general-medium-1.0"
 
 
 @pytest.mark.parametrize("change", ["none", "rotated", "cleared"])
@@ -361,7 +392,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     with api.app.state.store.read() as c:
         assert (gateway_connection.key_id(c, api.app.state.store.settings) == paid) is (change == "none")
     claude = {"model": CLAUDE["model"], "runtime": "claude", "harness": "claude-code", "billing": "subscription"}
-    tico = {"model": "tico-mid-1.0", "runtime": "pi", "harness": "pi", "billing": "api"}
+    tico = {"model": "tico-general-medium-1.0", "runtime": "pi", "harness": "pi", "billing": "api"}
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done.", "fallback": "pi",
          "usage": {**tico, "input_tokens": 60, "output_tokens": 60, "segments": [
              {**claude, "input_tokens": 30, "output_tokens": 30}, {**tico, "input_tokens": 30, "output_tokens": 30}]}},
@@ -369,8 +400,8 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     with api.app.state.store.read() as c:
         rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM turn_usage_segments")}
         install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
-    assert rows["tico-mid-1.0"]["gateway_key_id"] == paid
-    assert rows["tico-mid-1.0"]["install_id"] == install["install_id"]
+    assert rows["tico-general-medium-1.0"]["gateway_key_id"] == paid
+    assert rows["tico-general-medium-1.0"]["install_id"] == install["install_id"]
     assert rows[CLAUDE["model"]]["gateway_key_id"] is None and rows[CLAUDE["model"]]["install_id"] is None
     assert KEY not in json.dumps(rows) and KEY[3:-3] not in json.dumps(rows)
 

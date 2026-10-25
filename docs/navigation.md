@@ -10,6 +10,9 @@ Controls appear when your rights allow the action.
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
 | Add or edit a Routine | Settings → Rules → New routine, or the bot's Routines card |
 | See what Tico runs on its own | Settings → Rules → What Tico runs on its own ([System routines](system-routines.md)) |
+| Receive a webhook, or send events out | Settings → Webhooks → Incoming or Outgoing ([Webhooks](webhooks.md)) |
+| Keep webhooks while the server is off | Settings → Webhooks → Through Tico Gateway |
+| Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
 | See or change what wakes a bot | Settings → Rules → What wakes a bot, or a task's **Wake rules** line |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
@@ -25,7 +28,7 @@ Controls appear when your rights allow the action.
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)) |
+| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | Contact support or continue a support conversation | Help (?) → Support rail |

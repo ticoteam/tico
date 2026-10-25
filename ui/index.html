@@ -50,6 +50,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
 <link rel="stylesheet" href="/tico/ui/styles/goals.css">
 <link rel="stylesheet" href="/tico/ui/styles/strategy.css">
+<link rel="stylesheet" href="/tico/ui/styles/lenses.css">
 <link rel="stylesheet" href="/tico/ui/styles/tasks.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-pipelines.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-code.css">
@@ -58,6 +59,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/decide.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-stats.css">
 <link rel="stylesheet" href="/tico/ui/styles/hub-v2.css">
+<link rel="stylesheet" href="/tico/ui/styles/market-spend.css">
 <link rel="stylesheet" href="/tico/ui/styles/first-run.css">
 <link rel="stylesheet" href="/tico/ui/styles/getting-started.css">
 <link rel="stylesheet" href="/tico/ui/styles/brand.css">
@@ -75,10 +77,10 @@
 <div id="side-backdrop" hidden></div>
 <div id="stale-banner" role="status" hidden><span>New version ·</span><button class="primary" type="button" id="stale-reload">Reload</button></div>
 <div id="app-update" role="status" hidden><span id="app-update-text"></span><button class="primary" type="button" id="app-update-go" hidden>Update</button><a class="primary" id="app-update-dl" target="_blank" rel="noopener noreferrer" hidden>Download</a><button class="ghost" type="button" id="app-update-later">Later</button></div>
-<div id="version-message" role="note" hidden><span id="version-message-text"></span><a id="version-message-link" target="_blank" rel="noopener noreferrer" hidden>Read more</a><button class="ghost" type="button" id="version-message-x">Dismiss</button></div>
+<div id="version-message" role="note" aria-label="Notices from Tico" hidden></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
 <div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
-<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open Your requests in Support"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
+<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open in Support"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
 <div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing leaves this computer.</span></div>
 <aside id="side" aria-label="Primary navigation">
   <header class="side-head">
@@ -186,8 +188,11 @@
 <script src="/tico/ui/docs-editor.js"></script>
 <script src="/tico/ui/docs-ask.js"></script>
 <script src="/tico/ui/docs-page.js"></script>
+<script src="/tico/ui/market-briefing.js"></script>
 <script src="/tico/ui/market-page.js"></script>
+<script src="/tico/ui/market-spend.js"></script>
 <script src="/tico/ui/strategy-page.js"></script>
+<script src="/tico/ui/lenses-page.js"></script>
 <script src="/tico/ui/changelog.js"></script>
 <script src="/tico/ui/observability.js"></script>
 <script src="/tico/ui/github-connect.js"></script>
@@ -274,7 +279,8 @@
 <script src="/tico/ui/app/settings-recurring.js"></script>
 <script src="/tico/ui/app/settings-rules.js"></script>
 <script src="/tico/ui/app/settings-release.js"></script>
-<script src="/tico/ui/app/settings-triggers.js"></script>
+<script src="/tico/ui/app/settings-webhooks.js"></script>
+<script src="/tico/ui/app/settings-listening.js"></script>
 <script src="/tico/ui/app/vault.js"></script>
 <script src="/tico/ui/app/settings-devices.js"></script>
 <script src="/tico/ui/app/settings-bots.js"></script>
@@ -283,6 +289,7 @@
 <script src="/tico/ui/app/settings-storage.js"></script>
 <script src="/tico/ui/app/settings-company.js"></script>
 <script src="/tico/ui/app/settings-billing.js"></script>
+<script src="/tico/ui/app/settings-gateway.js"></script>
 <script src="/tico/ui/app/settings-hosted.js"></script>
 <script src="/tico/ui/app/settings-ceo-bot.js"></script>
 <script src="/tico/ui/app/settings-bot-editor.js"></script>

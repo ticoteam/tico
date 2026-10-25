@@ -62,6 +62,13 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     assert.equal(await v.page.locator('#new-version-wrap').isVisible(), false, 'no notice without update data');
     await v.ctx.close();
 
+    // A hosted server Tico support scheduled an update for says so in Settings and in the notice.
+    v = await visit({update: {...UPDATE, scheduled: '0.2.0'}});
+    assert.equal(await v.page.locator('#settings-version').innerText(), 'Version v0.1.0 · Tico will update this server to v0.2.0 when idle');
+    await v.page.locator('#new-version').click();
+    assert.equal(await v.page.locator('#nv-scheduled').innerText(), 'Tico will update this server to v0.2.0 when idle.');
+    await v.ctx.close();
+
     // A non-owner reads the changelog and cannot update.
     v = await visit({role: 'viewer'});
     await v.page.locator('#new-version').click();

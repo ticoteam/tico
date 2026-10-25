@@ -52,10 +52,12 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
-from . import company_billing, company_server, gateway_connection
+from clients import gateway as gateway_client
+from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
 from . import access as Access
-from . import releases, runner_versions, ui_bundle
+from . import people_remove
+from . import hosted_updates, releases, runner_versions, ui_bundle
 from .bot_rows import BotRows
 from .census import Census
 from .harnesses import HARNESS_CATALOG, resolve_harness, runtime_of
@@ -168,6 +170,13 @@ def create_app(settings=None):
                 onboarding.ensure_task_manager(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # The Librarian gets the market posts from Listening, once (Settings > Listening).
+        try:
+            from . import listening
+            with store.transaction() as c:
+                listening.seed_market(c, settings)
+        except Exception as exc:
+            telemetry.capture("listening", exc)
         # A strategy research run the last process was doing has no thread now: it stops, and setup shows the form.
         try:
             from . import strategy_setup
@@ -175,6 +184,13 @@ def create_app(settings=None):
                 strategy_setup.stop_running(c)
         except Exception as exc:
             telemetry.capture("strategy_setup", exc)
+        # A lens run the last process was making has no thread now: it fails, and the run page says so.
+        try:
+            from . import lenses
+            with store.transaction() as c:
+                lenses.stop_running(c)
+        except Exception as exc:
+            telemetry.capture("lenses", exc)
         # An assistant still named after the company becomes "Assistant" (idempotent).
         try:
             with store.transaction() as c:
@@ -284,6 +300,16 @@ def create_app(settings=None):
                     pass
         # A rehearsal never runs them, whatever else says so (docs/install.md, "Rehearse a migration").
         timers = settings.scheduler_enabled and not settings.rehearsal
+        # Outgoing webhooks (backend/webhook_delivery.py): a rehearsal copy runs the workers too, only to mark what is
+        # due as withheld, so nothing queued there ever waits for a send that cannot happen.
+        webhooks_on = timers or settings.rehearsal
+        if webhooks_on:
+            from . import webhook_delivery
+            webhook_delivery.start(store, app.state.vault, rehearsal=settings.rehearsal)
+        # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
+        hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
+        # Sleep when idle (backend/sleep_idle.py): looks every five minutes, and only on a hosted server that asked for it.
+        sleep_idle_task = asyncio.create_task(app.state.sleep_idle.loop(stop)) if timers else None
         scheduler_task = asyncio.create_task(schedule_loop()) if timers else None
         directory_task = asyncio.create_task(directory_loop()) if timers else None
         granola_task = asyncio.create_task(app.state.granola.loop(stop)) if timers else None
@@ -307,6 +333,10 @@ def create_app(settings=None):
             stop.set()
             if inbound_task:
                 await inbound_task
+            if hook_relay_task:
+                await hook_relay_task
+            if sleep_idle_task:
+                await sleep_idle_task
             if screen_relay_task:
                 await screen_relay_task
             else:
@@ -343,6 +373,8 @@ def create_app(settings=None):
             await asyncio.to_thread(stop_sync, app.state.github_app)
             if recorder_thread:
                 await asyncio.to_thread(recorder_thread.stop)
+            if webhooks_on:
+                await asyncio.to_thread(webhook_delivery.stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,
@@ -554,6 +586,7 @@ def create_app(settings=None):
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
                 request.state.identity = who
+                app.state.sleep_idle.seen(who, request.url.path)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -1456,14 +1489,7 @@ def create_app(settings=None):
     # sees a final state after a start; a marker row keeps it to one event per update.
     def record_update_outcome(result):
         with store.transaction() as c:
-            row = c.execute("SELECT value_json FROM registry_metadata WHERE key='update-pending'").fetchone()
-            if not row:
-                return
-            pending = json.loads(row[0])
-            c.execute("DELETE FROM registry_metadata WHERE key='update-pending'")
-            H.event(c, pending["actor"], "system.update.finished", pending["to"],
-                    {"outcome": result["state"], "from": pending["from"], "to": pending["to"],
-                     "message": result.get("message", "")})
+            hosted_updates.record_outcome(c, result)
 
     @app.post("/api/v2/system/update")
     def system_update(request: Request, body: M.SystemUpdate):
@@ -1497,8 +1523,8 @@ def create_app(settings=None):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
             model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
-                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")},
-                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")}})
+                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")},
+                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")}})
             return Providers.view(after)
         return mutate(request, body, work)
 
@@ -1512,6 +1538,70 @@ def create_app(settings=None):
             gateway_connection.check_soon(store, app.state.vault, settings)   # the page's answer is the last check's
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=who.role == "owner")
+
+    @app.get("/api/v2/gateway")
+    def gateway_overview(request: Request):
+        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use and the
+        services."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role == "owner":
+            gateway_connection.check_soon(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_page.overview(c, settings, owner=who.role == "owner")
+
+    @app.get("/api/v2/gateway/catalog")
+    def gateway_catalog(request: Request, query: str = ""):
+        """The Gateway's lineup as an agent reads it: models, decisions and services, each with when to use it, its
+        price and its ids (`hub_gateway_catalog`). `query` keeps the entries it matches."""
+        auth.domain(request.state.identity)
+        with store.read() as c:
+            gateway_page.catalog(c, settings)
+        return gateway_tiers.lineup(query[:200])
+
+    @app.post("/api/v2/gateway/search")
+    def gateway_search(request: Request, body: M.GatewaySearch):
+        """Web search through the Tico AI Gateway (`hub_gateway_search`), asked with the company's gateway key and, for a
+        bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Search is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
+            base = gateway_connection.url(c, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.search(base, key, body.query, body.max_results, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_search_unavailable", "The Tico AI Gateway does not offer search yet", 503)
+            raise Problem("gateway_search_failed", f"Search failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
+
+    @app.post("/api/v2/gateway/fetch")
+    def gateway_fetch(request: Request, body: M.GatewayFetch):
+        """Read a web page or PDF through the Tico AI Gateway (`hub_gateway_fetch`), asked with the company's gateway key
+        and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Fetch is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
+            base = gateway_connection.url(c, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.fetch(base, key, body.url, body.max_tokens, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_fetch_unavailable", "The Tico AI Gateway does not offer fetch yet", 503)
+            raise Problem("gateway_fetch_failed", f"Fetch failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
 
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):
@@ -2366,6 +2456,34 @@ def create_app(settings=None):
             raise Problem("not_found", "Person not found", 404)
         return mutate(request, body, work)
 
+    @app.delete("/api/v2/people/{pid}")
+    def person_remove(request: Request, pid: str):
+        """The owner removes a left person who has no history, such as one added by mistake, for good
+        (backend/people_remove.py). Anyone with history stays as left."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role != "owner":
+            raise Problem("forbidden", "Only the owner removes someone", 403)
+
+        def person(c):
+            found = P.person(pid, views.roster(c))
+            if not found:
+                raise Problem("not_found", "Person not found", 404)
+            return found
+        with store.read_transaction() as c:          # every table is read once, outside the write lock
+            found = P.person(pid, views.roster(c))     # gone already: a retry's replay, or the 404 below
+            if found and not people_remove.check(found) and people_remove.history(c, pid):
+                raise Problem("has_history", people_remove.KEEPS, 409)
+
+        def work(c):
+            roster = views.roster(c)
+            people_remove.remove(c, who.actor, roster, person(c))
+            return {"person": pid, "removed": True}
+        result = mutate(request, M.Empty(), work)
+        with store.read() as c:
+            auth.sync_access(c)
+        return result
+
     @app.get("/api/v2/people/{pid}/slack")
     def person_slack(request: Request, pid: str):
         """Slack DMs between this person and Tico bots (one Tico app; each bot has its own hub thread)."""
@@ -2428,8 +2546,9 @@ def create_app(settings=None):
         auth.domain(request.state.identity)
         with store.read() as c:
             choice = Providers.load(c, settings)
+            cat = gateway_page.catalog(c, settings)
         return {"models": list(MODEL_CATALOG), "harnesses": list(HARNESS_CATALOG),
-                "enabled_providers": choice["enabled"],
+                "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
     @app.get("/api/v2/conversations")
@@ -6071,10 +6190,18 @@ def create_app(settings=None):
     install_context_search(app, store, auth)
     from .market import install as install_market
     install_market(app, store, auth, mutate)
+    from .market_watch import install as install_market_watch
+    install_market_watch(app, store, auth, mutate)
+    from .market_briefing import install as install_market_briefing
+    install_market_briefing(app, store, auth, mutate)
+    from .market_spend import install as install_market_spend
+    install_market_spend(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
+    from .lenses import install as install_lenses
+    install_lenses(app, store, auth, mutate)
     from .listening import install as install_listening
     install_listening(app, store, auth, mutate)
     from .archive import install_archives
@@ -6140,6 +6267,8 @@ def create_app(settings=None):
     install_github(app, settings, store)
     from . import triggers
     triggers.install(app, settings, store, auth, mutate)
+    from . import webhooks
+    webhooks.install(app, settings, store, auth, mutate)
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)
@@ -6200,6 +6329,10 @@ def create_app(settings=None):
     install_support(app, store, settings, census)
     from .inbound import install as install_inbound
     install_inbound(app, store, settings, auth)
+    from .hook_relay import install as install_hook_relay
+    install_hook_relay(app, settings, store, auth)
+    from .sleep_idle import install as install_sleep_idle
+    install_sleep_idle(app, settings, store, auth)
     company_server.install(app, store, settings, auth)
     from .support_access import install as install_support_access
     install_support_access(app, store, settings, auth)

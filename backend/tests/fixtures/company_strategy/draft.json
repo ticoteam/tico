@@ -1,0 +1,232 @@
+{
+  "step": "strategy",
+  "company": {
+    "name": "Acme Build",
+    "about": "Phone-first scheduling for construction field crews.",
+    "signals": [
+      "sells_software",
+      "sells_to_businesses"
+    ]
+  },
+  "people": [
+    {
+      "id": "you",
+      "name": "Sam Rivera",
+      "role": "Founder",
+      "dept": null,
+      "owner": true
+    }
+  ],
+  "bots": [
+    {
+      "id": "marketer",
+      "template": "brand",
+      "title": "Marketing Lead",
+      "dept": "marketing",
+      "lead": false,
+      "core": false,
+      "reason": "Fixture",
+      "start": true,
+      "routine": "",
+      "tools": [],
+      "about": "",
+      "runtime": null,
+      "existing": false
+    },
+    {
+      "id": "seller",
+      "template": "account-manager",
+      "title": "Account Manager",
+      "dept": "sales",
+      "lead": false,
+      "core": false,
+      "reason": "Fixture",
+      "start": true,
+      "routine": "",
+      "tools": [],
+      "about": "",
+      "runtime": null,
+      "existing": false
+    }
+  ],
+  "goals": [
+    {
+      "id": "g1",
+      "title": "Daily active supers",
+      "owner": "you",
+      "measure": "Supers who open the schedule daily",
+      "unit": "supers",
+      "direction": "up",
+      "target": 300,
+      "baseline": 40,
+      "deadline": "2027-01-23",
+      "level": "company",
+      "bet": "b1"
+    },
+    {
+      "id": "g2",
+      "title": "Mid-size deals closed",
+      "owner": "seller",
+      "measure": "Mid-size builders signed",
+      "unit": "deals",
+      "direction": "up",
+      "target": 12,
+      "baseline": 0,
+      "deadline": "2027-01-23",
+      "level": "company",
+      "bet": "b2"
+    }
+  ],
+  "rules": {
+    "mode": "defaults",
+    "never": [
+      "send",
+      "publish",
+      "spend",
+      "delete",
+      "access",
+      "sign"
+    ],
+    "review": "one"
+  },
+  "tools": {
+    "mode": "defaults",
+    "connect": []
+  },
+  "seq": 3,
+  "strategy": {
+    "summary": "Win field crews at mid-size builders with the fastest schedule on a phone.",
+    "vision": "Every crew on a mid-size job site knows tomorrow's plan before they leave tonight.",
+    "sections": {
+      "serve": "Superintendents and foremen at general contractors with 50 to 500 staff.",
+      "sell": "A phone-first schedule app at $40 per user per month; pricing isn't on the site yet.",
+      "know": "Supers already text photos all day. We turn those photos into the schedule.",
+      "not": "No desktop reporting suite, no enterprise security reviews this year."
+    },
+    "bets": [
+      {
+        "id": "b1",
+        "statement": "Win the superintendent's phone",
+        "why": "Supers decide what the crew opens every morning.",
+        "rules_out": "Deep desktop reporting",
+        "wrong_if": "Fewer than 3 in 10 supers open it daily after 60 days",
+        "check_by": "2027-01-23"
+      },
+      {
+        "id": "b2",
+        "statement": "Mid-size before enterprise",
+        "why": "Mid-size builders buy in weeks, not quarters.",
+        "rules_out": "Long security reviews",
+        "wrong_if": "Mid-size sales cycles run past 45 days",
+        "check_by": "2027-01-23"
+      },
+      {
+        "id": "b3",
+        "statement": "Photos are the input",
+        "why": "Crews won't type; they already take photos.",
+        "rules_out": "Form-heavy daily logs",
+        "wrong_if": "Under half of schedule updates come from photos",
+        "check_by": ""
+      }
+    ],
+    "market": {
+      "definition": {
+        "root": "Construction management software",
+        "in": "Scheduling, field and project tools for builders",
+        "out": "Design and CAD tools",
+        "year": 2026
+      },
+      "segments": [
+        {
+          "key": "gc-suites",
+          "name": "GC suites",
+          "parent": null,
+          "usd": 2600000000,
+          "method": "top_down",
+          "arithmetic": "Fictional fixture: 26,000 firms x $100k",
+          "evidence": [
+            "https://example.com/gc-suites"
+          ],
+          "ours": false,
+          "next": false
+        },
+        {
+          "key": "schedules",
+          "name": "Field schedules",
+          "parent": "gc-suites",
+          "usd": 400000000,
+          "method": "bottom_up",
+          "arithmetic": "Fictional fixture: 830k users x $40 x 12",
+          "evidence": [
+            "https://example.com/schedules"
+          ],
+          "ours": true,
+          "next": false
+        },
+        {
+          "key": "bim",
+          "name": "BIM",
+          "parent": null,
+          "usd": 1900000000,
+          "method": "top_down",
+          "arithmetic": "Fictional fixture",
+          "evidence": [
+            "https://example.com/bim"
+          ],
+          "ours": false,
+          "next": true
+        },
+        {
+          "key": "specialty-pm",
+          "name": "Specialty PM",
+          "parent": null,
+          "usd": null,
+          "method": "top_down",
+          "arithmetic": "",
+          "evidence": [],
+          "ours": false,
+          "next": false
+        }
+      ],
+      "players": [
+        {
+          "name": "Trestle",
+          "url": "https://example.com/trestle",
+          "segments": [
+            "gc-suites",
+            "schedules"
+          ]
+        },
+        {
+          "name": "FieldCraft",
+          "url": "https://example.com/fieldcraft",
+          "segments": [
+            "schedules"
+          ]
+        }
+      ]
+    },
+    "listening": {
+      "requests": [
+        "Competitor changelogs: Trestle, FieldCraft",
+        "Superintendents asking for a better schedule app"
+      ],
+      "posts": [
+        {
+          "source": "hn",
+          "url": "https://news.ycombinator.com/item?id=1",
+          "title": "Ask HN: How do construction crews plan the next day?",
+          "when": "2026-10-24",
+          "tag": "hot"
+        },
+        {
+          "source": "web",
+          "url": "https://example.com/post",
+          "title": "Mid-size builders move scheduling to phones",
+          "when": "2026-10-20",
+          "tag": "market"
+        }
+      ]
+    }
+  }
+}

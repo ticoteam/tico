@@ -1,5 +1,6 @@
 // Offline browser regression: Tico HQ's message for this version appears once per person (a reload does not bring it
-// back), and What's new lists the known issues in the running version, or says it could not check.
+// back), several notices stack with their kind's tone (backend/tico_notices.py via update.messages), and What's new
+// lists the known issues in the running version, or says it could not check.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,8 +45,8 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     // Shown once: on the first visit, not after a reload, and again for another person in the same browser.
     let v = await visit({update: {...base, message: MESSAGE, known_issues: ISSUES, known_issues_checked: true}});
     await v.page.locator('#version-message').waitFor({state: 'visible'});
-    assert.equal(await v.page.locator('#version-message-text').textContent(), MESSAGE.body);
-    assert.equal(await v.page.locator('#version-message-link').getAttribute('href'), MESSAGE.url);
+    assert.equal(await v.page.locator('#version-message .vm-text').textContent(), MESSAGE.body);
+    assert.equal(await v.page.locator('#version-message [data-vm-link]').getAttribute('href'), MESSAGE.url);
     // What's new: the known issues, the link only when it is https, the title as text.
     const ki = v.page.locator('#changelog-known-issues');
     await ki.waitFor({state: 'visible'});
@@ -55,7 +56,7 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     assert.match(await ki.locator('li').first().textContent(), /Fixed in v0\.3\.53/);
     assert.equal(await ki.locator('li').nth(1).locator('a').count(), 0);
     assert.equal(await ki.locator('li').nth(1).textContent(), ISSUES[1].title);
-    await v.page.locator('#version-message-x').click();
+    await v.page.locator('#version-message [data-vm-x]').click();
     assert.equal(await v.page.locator('#version-message').isVisible(), false);
     assert.deepEqual(v.errors, []);
     await v.page.close();
@@ -66,6 +67,28 @@ const ISSUES = [{id: 5, title: 'Board stays empty after a restart', since: '0.3.
     await again.page.close();
     again = await visit({ctx: v.ctx, me: 'riley', update: {...base, message: MESSAGE, known_issues_checked: true}});
     await again.page.locator('#version-message').waitFor({state: 'visible'});
+    await v.ctx.close();
+
+    // Relayed notices: each shows with its kind, a javascript: link is dropped, Dismiss closes one at a time.
+    const NOTICES = [{id: 'n-sec', versions: '', body: 'Rotate your GitHub token.', url: 'https://tico.dev/s', kind: 'security'},
+      {id: 'n-bill', versions: '', body: 'Your card expires soon.', url: 'javascript:alert(1)', kind: 'billing'},
+      {id: 'n-info', versions: '', body: 'New docs are up.', url: '', kind: 'info'}, MESSAGE];
+    v = await visit({me: 'kim', update: {...base, message: MESSAGE, messages: NOTICES, known_issues_checked: true}});
+    const items = v.page.locator('#version-message .vm-item');
+    await items.first().waitFor({state: 'visible'});
+    assert.equal(await items.count(), 3, 'at most three at once');
+    assert.deepEqual(await items.evaluateAll(els => els.map(e => e.dataset.kind)), ['security', 'billing', 'info']);
+    assert.equal(await items.nth(1).locator('a').count(), 0, 'only an https link is kept');
+    const tone = await items.first().evaluate(e => getComputedStyle(e).backgroundColor);
+    assert.notEqual(tone, await items.nth(1).evaluate(e => getComputedStyle(e).backgroundColor), 'security stands out');
+    await items.first().locator('[data-vm-x]').click();
+    assert.equal(await items.count(), 2);
+    assert.equal(await v.page.locator('#version-message').isVisible(), true);
+    assert.deepEqual(v.errors, []);
+    await v.page.close();
+    again = await visit({ctx: v.ctx, me: 'kim', update: {...base, message: MESSAGE, messages: NOTICES, known_issues_checked: true}});
+    await again.page.locator('#version-message .vm-item').first().waitFor({state: 'visible'});
+    assert.equal(await again.page.locator('#version-message .vm-text').textContent(), MESSAGE.body, 'the ones seen stay away; the fourth comes next');
     await v.ctx.close();
 
     // HQ not reached: no message, and What's new says it could not check rather than "none".

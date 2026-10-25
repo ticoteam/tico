@@ -1129,7 +1129,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     task = H.task(c, task_id) if task_id else None
     if (task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER
             and not (message.get("refs") or {}).get("run_now")):
-        if why := auto_tasks.refusal(c, task, followed):
+        if why := auto_tasks.refusal(c, task, followed, woken=True):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
@@ -2122,7 +2122,7 @@ class Execution:
         handed = providers.bot_choice(c, self.store.settings, followed)
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
-        if (task and task['owner'] == 'bot:' + row['bot'] and not auto_tasks.refusal(c, task, followed)
+        if (task and task['owner'] == 'bot:' + row['bot'] and not auto_tasks.refusal(c, task, followed, woken=True)
                 and not (msg.get("refs") or {}).get("run_now")):
             task = auto_tasks.started(c, task)
         roots, lanes = roots_on(runner), lanes_on(runner)
@@ -2181,7 +2181,10 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])
-        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config))
+        # Its department's tier (Medium by default) is looked up only when a turn would use it.
+        tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot"], followed)
+        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config, tier), tier)
+        config = models_preset.with_gateway_inputs(config)
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
         if held:
@@ -3078,6 +3081,10 @@ class Execution:
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
         # send starts the next run in a fresh session (backend/run_backoff.py).
         failure = run_backoff.classify(c, aid, body) if body.outcome == "failed" and not stopped else None
+        if body.outcome == "failed" and not stopped:
+            H.hook(c, "bot.run_failed", row["bot"], lambda: {"bot": row["bot"], "attempt_id": aid,
+                                                              "error_class": failure if isinstance(failure, str) else None},
+                   H.KEEPER, revision=aid)
         limited = body.outcome != "completed" and body.limited and not stopped
         # A model at capacity (backend/login_holds.py capacity) is a busy moment, not the login's quota: kept with the
         # run, so Health and a check's next model never count it as quota. Only a refusal before the bot did anything

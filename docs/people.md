@@ -32,6 +32,10 @@ The page answers three things: how humans get here, who is here, and what each h
   their profile, not here.
 - **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. **Restore** (under
   **Left**) brings them back (their old tokens stay revoked).
+- **Remove** (under **Left**, owner only) deletes someone added by mistake for good, with their unused tokens, sent invites
+  and allow-list address. Only a left human with no history can be removed: nothing they did (an event, a message, a task, an
+  approval, a used token) or that names them anywhere else, and not synced from a directory. Anyone else stays as left
+  (`Has history; stays as left`). The audit event `person.removed` keeps their name and email.
 - **Bot limit per member**: 25 active bots by default. A team still on the old default of 5 is moved to 25 once on upgrade;
   a 5 someone set by changing it from another number, and any other number, stays.
 
@@ -155,6 +159,7 @@ Anywhere else, and whenever the mail does not go, the page says so in words and 
 in with Tico accounts, so it can't email invites. Tell Dana to sign in at https://... with dana@...*, too many invites to
 that address today (3 a day per address, 50 a day per install), or the mail could not be delivered. A sent invite is
 recorded (`invites` in `GET /api/v2/access`, audit event `person.invited`) and the row says **Invited 2h ago**.
+The time updates while the page stays open and when you return to the tab. Hover over it for the full date.
 One click sends at most one email: a repeat of the same request (the page retrying a lost answer) never sends again,
 and if Tico can't tell whether it went, it says so instead of sending; clicking again sends a new one.
 
@@ -162,25 +167,44 @@ Inviting a person from setup adds them to the roster and the sign-in list with t
 the file put under them (which reported to the owner meanwhile) move under them, unless someone has moved a seat since. If
 the invite then does not go, they stay added and **Invite** sends again.
 
-**Create password** (owners and admins, in the same ⋯ menu) is the other way in: the issuer makes the person a Tico
-account with a generated password and the page shows it once, to copy and share. It is offered only when the issuer names
-`tico_accounts_endpoint` in its discovery (`POST /oauth2/accounts`, the same client id and secret), never in a rehearsal.
-Tico keeps no copy: not in the database, the request cache, an event (`person.account_created` says only that one was
-made), a log or a notification, and a repeat of the same request says the password can't be shown again. Someone who
-already has a Tico account is refused: *Dana already has a Tico account; use Invite.* The account signs in only at this
-install until its owner chooses **Forgot password?** on the sign-in page, which proves the email and sets their own.
+### Create a password for a new teammate
+
+Owners and admins can create a Tico account for someone who has no account yet.
+**Create password** appears only when your Tico account sign-in service supports it, and never in a rehearsal.
+
+1. Open **Settings > Humans**.
+2. Find the teammate's row, such as Casey at `casey@example.invalid`. They need an email address and **Can sign in** enabled.
+3. Open their ⋯ menu and choose **Create password**.
+4. In **Account created**, press **Copy** to copy the email and password, then share them privately with Casey.
+5. Press **Done** to close the dialog.
+
+![Synthetic Account created dialog showing a fictional email address, a DEMO-ONLY password, Copy, and Done.](images/people-account-created.png)
+
+*Synthetic example. The email and password are fictional; no account was created.*
+
+Casey can sign in to this Tico with that email and password. The password appears once; Tico keeps no copy to show again.
+Casey chooses **Forgot password?** on the sign-in page to prove the email address and set their own password.
+Until then, the account signs in only at this install.
+
+If the dialog closes or the answer is lost, ask Casey to use **Forgot password?**; repeating the same request cannot reveal the password again.
+If Casey already has a Tico account, use **Send invite** instead. A daily account limit means trying again tomorrow.
+If **Create password** is absent, use **Send invite** where offered, or your sign-in provider's own accounts.
 
 ## API
 
 `POST /api/v2/access/humans/{id}/invite` (owners and admins) and `POST /api/v2/setup/company/people/{key}/invite` with
 `email` (the owner) send an invite ([above](#invites)); `POST /api/v2/access/humans/{id}/password` (owners and admins)
 makes the account and answers its password once.
+The sign-in issuer advertises `tico_accounts_endpoint` in discovery (`POST /oauth2/accounts`);
+Tico uses the same client ID and secret as sign-in. The password stays out of the request cache, events, logs, and notifications.
+The audit event `person.account_created` records only that the account was made.
 `GET /api/v2/access` (owners and admins; it includes `home_domain`, `domain_sign_in` and `directory`, the saved sync
 source), `POST /api/v2/access/humans`, `POST /api/v2/access/humans/{id}` (`role` owner only; `sign_in`, `create_bots`,
 `add_people`, `left: false`), `PUT /api/v2/access/limits` (owners and admins), and owner only `PUT /api/v2/access/allow` (with
 `expected_revision`), `POST /api/v2/access/owner` (with `expected_revision` and `confirm: true`), `POST /api/v2/access/owner/email`
 (`email`, `confirm_email`, `expected_revision` and `confirm: true`; signed in as the owner, not with a token). Marking someone as left
-uses `POST /api/v2/humans/{id}` with `left: true` (owner only).
+uses `POST /api/v2/humans/{id}` with `left: true` (owner only); removing a left human with no history uses
+`DELETE /api/v2/humans/{id}` (owner only; `removable` in `GET /api/v2/access` says whether the People tab offers it).
 
 ## Directory sync
 

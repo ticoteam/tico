@@ -158,6 +158,8 @@ def _hold(c, settings, bot, window, runs, budget, now):
               "ON CONFLICT(bot) DO UPDATE SET held_at=excluded.held_at,window=excluded.window,runs=excluded.runs,"
               "budget=excluded.budget,task_id=excluded.task_id", (bot, now, window, runs, budget, task_id))
     H.event(c, H.KEEPER, "bot.budget_held", bot, {"window": window, "runs": runs, "budget": budget, "task": task_id})
+    H.hook(c, "bot.held", bot, lambda: {"bot": bot, "reason": "budget", "window": window, "runs": runs, "budget": budget,
+                                        "task": task_id}, H.KEEPER, revision=now)
 
 
 def _sentence(name, runs, window):
@@ -184,6 +186,7 @@ def release(c, actor, bot):
               (H.now(), actor, bot))
     bot_stops.close_item(c, state.get("task_id"), "Released.")
     H.event(c, actor, "bot.budget_released", bot, {"window": state.get("window"), "runs": state.get("runs")})
+    H.hook(c, "bot.released", bot, lambda: {"bot": bot, "reason": "budget", "released_by": actor}, actor, revision=H.now())
     return True
 
 

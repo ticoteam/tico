@@ -1751,6 +1751,9 @@ def install_views(app, store, auth, mutate, task_view):
         def helper(config):
             return str(config.get("template") or "") in helpers
         from .chat_goals import readable_active
+        from . import gateway_tiers
+        from .task_manager import Chart
+        departments = Chart(c, store.settings)         # the Gateway department a bot's model picker starts from
         for bot in bots:
             slug = bot["slug"]
             level = access.get(slug, auth.FULL)
@@ -1808,6 +1811,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "keep_tasks_going": auto_tasks.of(config),
                          "task_flow": auto_tasks.counts(c, slug, who),
                          "team": P.team_of(slug, configs, people),
+                         "gateway_department": gateway_tiers.department_of(departments.of("bot:" + slug)),
                          "org_parent": P.org_parent("bot", slug, people, chart, archived),
                          "report_position": places.get("bot:" + slug),
                          "operator": registry["operator"] if registry else None,
@@ -2463,5 +2467,6 @@ def runnable_choices(c, who, auth, settings):
         if tico:
             answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0])
             if answer.get("can_run") is False:
-                out.setdefault(bot, {}).update({model: answer for model in tico})
+                # `tico`: any pick of the Gateway's lineup, which the picker cannot list one by one.
+                out.setdefault(bot, {}).update({model: answer for model in tico} | {"tico": answer})
     return out

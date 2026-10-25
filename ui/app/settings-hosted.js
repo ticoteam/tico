@@ -54,3 +54,39 @@ async function settingsHostedStart(button) {
   } catch (e) { say(`<span class="err" role="alert">${esc(e.message)}</span>`); }
   button.disabled = false; button.textContent = 'Start';
 }
+
+// Sleep when idle (backend/sleep_idle.py): a server Tico hosts can stop itself after hours with nothing to do, and its
+// bot computers with it; Tico starts it again for the next routine or a visit. Shown only on a hosted server. Anyone
+// sees it; an owner or an admin changes it (the server says so too).
+const SLEEP_BLOCKERS = {run_queued: 'a run is waiting', run_in_progress: 'a run is going', task_session: 'a task session is waiting',
+  runner_job: 'a computer job is running', send_pending: 'a send is waiting', routine_due: 'a routine is due soon'};
+async function renderSettingsSleep() {
+  const card = $('#settings-sleep'), host = $('#set-sleep');
+  if (!card || !host || formBusy(host)) return;
+  let v;
+  try { v = (await get('/v2/sleep')).sleep; } catch { card.hidden = true; return; }
+  card.hidden = !v?.hosted;
+  if (card.hidden) return;
+  const admin = settingsIsAdmin(), off = admin ? '' : ' disabled';
+  const hours = [['0', 'Off'], ...Array.from({length: 24}, (_, i) => [String(i + 1), `After ${i + 1} h`])];
+  const status = !v.hours ? '' : v.blocker ? `Awake: ${esc(SLEEP_BLOCKERS[v.blocker] || v.blocker)}`
+    : v.idle_since ? `Quiet since ${esc(fmt(v.idle_since))}` : '';
+  const line = [status, v.wake_at && `Next wake ${esc(fmt(v.wake_at))}`].filter(Boolean).join(' · ');
+  host.innerHTML = `<div class="sleep-row">
+      <select class="settings-inline-select" data-sleep-hours aria-label="Sleep when idle"${off}>${hours.map(([k, w]) => `<option value="${k}"${+k === v.hours ? ' selected' : ''}>${w}</option>`).join('')}</select>
+      <label class="sysr-switch">${peopleSwitch('data-sleep-runners', v.runners, !admin, 'Stop bot computers too')}<span>Stop bot computers too</span></label>
+    </div>
+    ${line ? `<p class="settings-cell-note" data-sleep-status>${line}</p>` : ''}
+    ${v.last_error ? `<p class="settings-cell-note err" data-sleep-error>Last stop failed: ${esc(v.last_error)}</p>` : ''}
+    <p class="settings-cell-note err" role="status" data-sleep-note hidden></p>`;
+  if (!admin) return;
+  const save = async (body, input) => {
+    const note = host.querySelector('[data-sleep-note]');
+    input.disabled = true; note.hidden = true;
+    try { await post('/v2/sleep', body); await renderSettingsSleep(); }
+    catch (e) { note.textContent = e.message; note.hidden = false; input.disabled = false; }
+  };
+  const pick = host.querySelector('[data-sleep-hours]'), runners = host.querySelector('[data-sleep-runners]');
+  pick.onchange = () => void save({hours: Number(pick.value)}, pick);
+  runners.onchange = () => void save({runners: runners.checked}, runners);
+}

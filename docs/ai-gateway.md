@@ -1,20 +1,37 @@
 # Tico AI Gateway
 
-The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on **Tico Cheap 1.1**,
-**Tico Mid 1.0** and **Tico Power 1.0**, and Decide asks the Gateway with the same key. You connect it once, in
-**Settings → Computers → Models**. How runs reach the Gateway, for developers, is in
+The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
+department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
+connect it once, in **Settings → Computers → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
-| Model | What runs underneath |
-|---|---|
-| Tico Cheap 1.1 | Claude Haiku 5.5 |
-| Tico Mid 1.0 | Claude Sonnet 5.5 |
-| Tico Power 1.0 | Claude Opus 5.5 |
+## The picks
 
-Tico Cheap 1.1 costs the same as Cheap 1.0 for a request whose prompt is up to 100,000 tokens. Above that, the whole
-request costs $0.75 per 1M input tokens, $0.075 per 1M cached input tokens and $3.75 per 1M output tokens, and
-**Usage** estimates it that way. Cheap 1.1 replaced Cheap 1.0, which is retired: a bot already on Cheap 1.0, or a
-default model saved as Cheap 1.0, keeps it and keeps running at its old price, but nothing new can pick it.
+A pick is a name, not a model: Tico can change what runs underneath it. Every department has the same levels.
+
+| Level | Version 1.0 runs | Fast runs | For |
+|---|---|---|---|
+| Low | Claude Haiku 5.5 · $0.15 / $0.75 per 1M | DeepSeek V4.1 Flash · $0.45 / $1.80 | Sorting, triage, short replies, routine checks |
+| Medium | Claude Sonnet 5.5 · $2.50 / $12.50 | Claude Opus 5.5 in fast mode · $10 / $50 | Writing, analysis, most turns |
+| High | Claude Opus 5.5 · $5 / $25 | Claude Opus 5.5 in fast mode · $10 / $50 | Hard problems, long plans, careful work |
+
+Prices are input and output, USD per 1M tokens. A Low request whose prompt is over 100,000 tokens costs the whole request
+at $0.75 input, $0.075 cached input and $3.75 output, and **Usage** estimates it that way.
+
+Images a bot sends go to the models that read them: every pick except Low Fast.
+
+The ids are `tico-<department>-<level>` with `-fast` for Fast: `tico-sales-medium`, `tico-engineering-high-fast`. The
+departments are General, Product, Engineering, Marketing, Sales, Finance, Legal, Science, Operations and Data (the list
+is Tico's and can grow). A bot's department comes from its group on the org chart: Support and People bots use Operations,
+Leadership uses General. That id always means the tier's **current version**. Add the version to pin it:
+`tico-sales-medium-1.0` keeps its model and price when a newer version ships. Settings pins the current version by
+default and also offers older versions and **Auto (always latest)**. Tico publishes the list at
+`GET <gateway url>/catalog`; the server asks for it at most once an hour while the Gateway is connected, ignores an answer
+it cannot read, and otherwise uses the list shipped with its release.
+
+The first picks, **Tico Cheap 1.1**, **Mid 1.0** and **Power 1.0** (and Cheap 1.0), are the **old lineup**. A bot, a
+default or a fallback already on one keeps it, runs on it and pays its old price, shown as "Mid 1.0 (old lineup)". Nothing
+new can pick them.
 
 ## Choose how bots get their models
 
@@ -85,6 +102,37 @@ automatically**. Nobody types or sees the code or the key. The server replaces t
 itself. The invite is only needed for this first sign-up: after it, the server keeps its key with no invite in the
 environment.
 
+### Connect a self-run server through your Tico company
+
+A self-run server can get its Gateway key through its company on [app.tico.dev](https://app.tico.dev/), without an invite code or a pasted key.
+Sign in directly as an owner or admin to link the server:
+
+1. Get a server code from your company on app.tico.dev.
+2. Open **Settings → General → Tico company** in your Tico.
+3. Paste the code into **Server code** and press **Preview**.
+4. Check the company name, then press **Connect**.
+
+![Synthetic example of the Tico company card with a masked server code, company preview, and Connect button.](images/company-gateway-preview.png)
+
+*Synthetic example of the preview step. No server was connected.*
+
+The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
+With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
+Gateway use spends that company's credit.
+The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Computers → Models** once it has the key.
+
+If linking fails, check the error beside the form. Tico must be able to reach your server's
+[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
+the company Gateway endpoint also needs to be available at Tico HQ.
+
+An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
+To unlink the server, press **Disconnect** on the **Tico company** card and confirm.
+Disconnecting the company removes a key obtained through that link; a pasted key stays.
+Reconnecting lets the same install ask for its company key again.
+The server also reports its version daily and within an hour after an update, when HQ is reachable.
+
+### Automatic key maintenance
+
 When the key rotates, a running bot keeps its previous key for up to 24 hours, with the same install spending cap.
 Turning the install off still stops all its keys immediately. A run that could exceed that grace is limited to just
 under 24 hours, including any fallback; its run details explain the shorter limit.
@@ -102,9 +150,19 @@ your server can make, never the bot's name.
 
 ## Pick a Tico model for a bot
 
-While the Gateway is connected, pick **Tico Cheap 1.1**, **Tico Mid 1.0** or **Tico Power 1.0** in **Settings → Bots**
-like any other model ([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The
-model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+While the Gateway is connected, choose **Tico AI Gateway** as a bot's harness / provider in **Settings → Bots**
+([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The Model list then gives
+way to four controls: **Department** (the bot's group's, marked "(from group)"), **Level** (Low, Medium, High), **Fast**
+and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
+1M". Effort, Fallback and Tasks work as for any model. The same controls appear for a fallback or a task model.
+
+A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on its department's Medium
+pick at the current version. A template can start a bot on another level: its `bot.yaml` may hold
+`gateway: {level: low, fast: true}` ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
+
+**Settings → Computers → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
+`tico-decide-1.0`), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
+seconds per try instead of 8). Higher costs more per question and answers slower.
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
@@ -153,7 +211,7 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
-| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap 1.1, Mid 1.0 or Power 1.0. |
+| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in **Settings → Gateway**'s list, or in the bot's Model controls. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
 | The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
@@ -161,6 +219,25 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
+
+## Settings → Gateway
+
+One flat page for the owner and admins: a line saying whether the Gateway is connected and this month's spend against its
+cap; **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with each service's status
+(Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
+**Settings → Computers → Models**, one link away.
+
+Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
+(live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
+the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
+`hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+skill is `skills/gateway/SKILL.md`.
+
+## Webhooks through the Gateway
+
+With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Webhooks → Through Tico
+Gateway). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
+and wakes a server Tico hosts that is asleep. The same key brings notices from Tico Team. See [Webhooks](webhooks.md#through-tico-gateway).
 
 ## Credit and the minimum balance
 

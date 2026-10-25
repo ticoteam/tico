@@ -181,7 +181,8 @@ def market_text(answers):
     lines += ["What Market tracks: start the Coverage universe page with a section \"What Market tracks\": the "
               "competitors (core unless a source shows otherwise), the buyer segments, and the channels, topics, "
               "rules and people to watch, each with its entity id once it is in the graph. The daily curate "
-              "routine keeps these current."]
+              "routine keeps these current.", "",
+              "After the map, follow playbooks/size-the-market.md."]
     return "\n".join(lines)
 
 

@@ -80,7 +80,6 @@ FINAL = ("unknown_model", "unsupported_field", "bad_request", "upstream_refused"
 # (runner-rs/src/hosts/pi.rs `plain_error`).
 CODES = (CAP_REACHED, REVOKED_KEY, UNKNOWN_KEY, RATE_LIMITED, OUT_OF_CREDIT, "unknown_model", "unsupported_field",
          "bad_request", "upstream_refused", "no_route", UNAVAILABLE, NOT_ISOLATED)
-TICO_MODELS = "Tico Cheap 1.1, Tico Mid 1.0, Tico Power 1.0"
 # How an install gets its own key (the contract's "enroll" and "rotate"), and how it names a bot to the Gateway.
 ENROLL, ROTATE = "/enroll", "/rotate"
 BOT_HEADER = "X-Tico-Bot"
@@ -225,10 +224,14 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
     opener = opener or _send
     request = urllib.request.Request(base + "/key", method="GET", headers={
         "Authorization": "Bearer " + key, "Accept": "application/json"})
+    amounts = {}
     try:
         with opener(request, timeout=timeout) as response:
             payload = json.load(response)
         state, used = state_of(payload)
+        amounts = {k: round(float(payload[k]), 2) for k in ("spent_usd", "cap_usd")
+                   if isinstance(payload, dict) and isinstance(payload.get(k), (int, float))
+                   and not isinstance(payload.get(k), bool) and payload[k] >= 0}
     except urllib.error.HTTPError as exc:
         try:
             code = _code(exc.read())
@@ -238,7 +241,7 @@ def check(key, url="", timeout=TIMEOUT, opener=None):
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         state, used = "unreachable", None
     return {"state": state, "working": state not in REFUSED, "message": describe(state, used),
-            "used": round(used, 4) if used is not None else None}
+            "used": round(used, 4) if used is not None else None, **amounts}
 
 
 def month_after(moment):
@@ -273,7 +276,7 @@ def run_code(text):
 def run_status(code, text=""):
     """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
     if code == "unknown_model":
-        return f"The Tico AI Gateway doesn't offer this model. Tico models: {TICO_MODELS}"
+        return "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:
@@ -344,3 +347,34 @@ def enroll(url, install, secret, invite="", version="", timeout=TIMEOUT, opener=
 def rotate(url, key, timeout=TIMEOUT, opener=None):
     """Swap `key` for a new one: (status, {key, key_id, rotate_after, old_valid_until} or {}, error code)."""
     return _post(safe_base(url) + ROTATE, {}, {"Authorization": "Bearer " + key}, timeout, opener)
+
+
+def search(url, key, query, max_results=5, headers=None, timeout=25, opener=None):
+    """Tico HQ's web search (`POST <base>/search`, the gateway key): (status, {results: [{title, url, snippet}], answer,
+    usage: {cost_usd}} or {}, error code). Only the fields the Gateway documents are kept, each cut to a sensible
+    length, because the pages behind them are other people's text."""
+    status, payload, code = _post(safe_base(url) + "/search", {"query": str(query)[:500], "max_results": max(1, min(10, int(max_results)))},
+                                  {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener)
+    if status != 200:
+        return status, {}, code
+    results = [{"title": str(r.get("title") or "")[:200], "url": str(r.get("url") or "")[:500],
+                "snippet": str(r.get("snippet") or "")[:1000]}
+               for r in payload.get("results") or [] if isinstance(r, dict)][:20]
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return 200, {"results": results, "answer": str(payload.get("answer") or "")[:4000],
+                 "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
+
+
+def fetch(url, key, page, max_tokens=10000, headers=None, timeout=35, opener=None):
+    """Tico HQ's page reader (`POST <base>/fetch`, the gateway key): (status, {url, title, content, usage: {cost_usd}} or {},
+    error code). Only the fields the Gateway documents are kept; the content is another site's text."""
+    status, payload, code = _post(safe_base(url) + "/fetch", {"url": str(page)[:2000], "max_tokens": max(1000, min(50000, int(max_tokens)))},
+                                  {"Authorization": "Bearer " + key, **(headers or {})}, timeout, opener)
+    if status != 200:
+        return status, {}, code
+    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+    cost = usage.get("cost_usd")
+    return 200, {"url": str(payload.get("url") or page)[:2000], "title": str(payload.get("title") or "")[:300],
+                 "content": str(payload.get("content") or "")[:250000],
+                 "usage": {"cost_usd": cost if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None}}, ""
