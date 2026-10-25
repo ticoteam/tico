@@ -559,7 +559,9 @@ def fix(c, who, rule, items, readable):
                     raise Problem("not_found", "Task not found", 404)
                 from . import task_relations as TR
                 TR.relate(c, who.actor, task_id, other, "duplicate_of")
-                H.task_close(c, who.actor, task_id, note=f"Duplicate of {other[:8]}")
+                # The note goes into status history and the close wake to the owner and requester, who may not read
+                # the other task; the duplicate_of link names it, filtered per reader.
+                H.task_close(c, who.actor, task_id, note="Closed as a duplicate")
             elif key == "waiting_named":
                 H.task_comment(c, who.actor, task_id, "Name who or what this task waits on (`hub task update "
                                "--status waiting --on <person>`, a blocker or a subtask), or move it out of waiting.")
