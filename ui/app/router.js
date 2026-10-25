@@ -36,6 +36,7 @@ function route() {
   document.body.classList.remove('task-peek-open');
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
+  if (!isLensesRoute(S.route)) window.lensesStop?.();
   taskChatStop(); $('#task-modal')?.close();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
@@ -110,6 +111,7 @@ function route() {
   // Market is a tab of Strategy now: old links keep their query or note path.
   else if (S.route === '#/market' || S.route.startsWith('#/market?') || S.route.startsWith('#/market/')) { location.replace(MARKET_ROUTE + S.route.slice('#/market'.length)); return; }
   else if (isMarketRoute(S.route)) pageMarket();
+  else if (isLensesRoute(S.route)) pageLenses();
   else if (isStrategyRoute(S.route)) pageStrategy();
   else if ((S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?')) && new URLSearchParams(S.route.split('?')[1] || '').get('collection') === 'market') {
     const id = S.route.startsWith(DOCS + '/') ? S.route.slice(DOCS.length + 1).split('?')[0] : '';

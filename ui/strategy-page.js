@@ -1,7 +1,7 @@
 /* Strategy: how the team means to win (backend/strategy.py). A summary and a vision, the bets the team is making (each
    with what it rules out, what would prove it wrong, its goals and their colours), then four fixed sections and any
    the owner adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads
-   the latest published version. Market (ui/market-page.js) is the section's second tab. */
+   the latest published version. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's other tabs. */
 'use strict';
 let STRAT = null;          // the open page: {data, kpis, load, editBet, editSection, addSection, publishing}
 let STRAT_LOAD = 0;
@@ -20,11 +20,11 @@ const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
 const STRAT_CHECK_DAYS = 90;
 const stratCheckBy = () => new Date(Date.now() + STRAT_CHECK_DAYS * 864e5).toISOString().slice(0, 10);
 
-// The heading and the two tabs, the same on both, so switching tabs never moves them.
+// The heading and the tabs, the same on each, so switching tabs never moves them.
 window.strategyHeadHtml = function strategyHeadHtml(tab) {
   const link = (id, href, label) => `<a href="${href}" data-strat-tab="${id}"${tab === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`;
   return `<div class="strat-head"><h1>Strategy</h1>
-      <nav class="tabs slim strat-tabs" aria-label="Strategy">${link('strategy', '#/strategy', 'Strategy')}${link('market', MARKET_ROUTE, 'Market')}</nav>
+      <nav class="tabs slim strat-tabs" aria-label="Strategy">${link('strategy', '#/strategy', 'Strategy')}${link('lenses', LENSES_ROUTE, 'Lenses')}${link('market', MARKET_ROUTE, 'Market')}</nav>
       <span class="spacer"></span><div class="strat-actions" id="strat-actions"></div></div>`;
 };
 
