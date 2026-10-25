@@ -12,4 +12,5 @@ Pages are rows in `documents` with `collection = market`. You own them. A page c
 | Regulation and catalysts | Rules and outside events that would change who buys. |
 | Theses | Claims you will defend, each with evidence. |
 | Open questions | What the graph cannot answer yet. |
+| Customer themes | What customers keep asking for, complaining about and objecting to, from team meetings. Each theme has a count, a last-seen date and short quotes; three or more meetings make it a thesis. |
 | Weekly delta | Produced from `market_events`. Refresh it on Mondays. Leave it alone on other days. |

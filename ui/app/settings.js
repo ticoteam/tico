@@ -115,6 +115,7 @@ function pageSettings() {
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
         <button type="button" data-settings-tab="recurring" role="tab">Rules</button>
         <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
+        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="listening" role="tab">Listening</button>' : ''}
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
         <button type="button" data-settings-tab="history" role="tab">History</button>
         ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
@@ -169,6 +170,9 @@ function pageSettings() {
     <div class="settings-pane" id="settings-triggers" role="tabpanel" hidden>
       <section class="card"><header><h2>Triggers</h2></header><div id="set-triggers">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-listening" role="tabpanel" hidden>
+      <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
+    </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
@@ -236,10 +240,10 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), listening: settingsIsAdmin(), ceo: settingsCeoBotShown()};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
-  if (['health', 'history', 'recurring', 'triggers', 'inbound', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'recurring', 'triggers', 'listening', 'inbound', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -293,6 +297,8 @@ function settingsShow(tab) {
   if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); void renderSettingsRules(); void renderReleaseCard(); void renderTaskManagerCard(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
   const triggersPane = $('#settings-triggers');
   if (triggersPane) { triggersPane.hidden = SETTINGS_TAB !== 'triggers'; if (SETTINGS_TAB === 'triggers' && !formBusy(triggersPane)) void renderSettingsTriggers(); }
+  const listeningPane = $('#settings-listening');
+  if (listeningPane) { listeningPane.hidden = SETTINGS_TAB !== 'listening'; if (SETTINGS_TAB === 'listening' && !formBusy(listeningPane)) void renderSettingsListening(); }
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
 // Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.

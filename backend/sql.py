@@ -224,7 +224,7 @@ def guarded(c, auth, who, inner, function, columns=None):
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
     listener = L.sees_everything(who)
-    mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings))
+    mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
     hidden = sorted(auth.unreadable_bots(c, who))
 
     def bots_visible(column):
@@ -361,6 +361,8 @@ def guarded(c, auth, who, inner, function, columns=None):
         # Listening and the owner read them all, a receiving bot only what was routed to it.
         # Which runs happened, and whether they were blocked, is anyone's to read.
         "listen_runs": "1",
+        # The destinations saved in Settings > Listening: the owner's and the admins'.
+        "listening_destinations": "key IS NOT NULL" if admin and not bot else "key IS NULL",
         # Never a bare "1" for these three: SQLite would answer count(*) from the base table,
         # which the authorizer rightly refuses, since for everyone else the rows are filtered.
         "intake_items": ("id IS NOT NULL" if listener else f"destination IN {qlist(mine_inboxes)}"

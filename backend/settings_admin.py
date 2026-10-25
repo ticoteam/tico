@@ -361,6 +361,9 @@ class SettingsAdmin:
                         "admin to open one to members' bots (Settings > Computers); it starts on its own when one can take it")
         H.event(c, who.actor, "bot.definition_created", body.slug,
                 {"operator": operator, "owners": owners, "runner": body.runner_id})
+        if body.slug == "librarian":
+            from . import listening
+            listening.seed_market(c, self.settings)      # once: its market posts (Settings > Listening)
         visible = self.auth.bot_accesses(c, who)
         same_name = [r["slug"] for r in c.execute(
             "SELECT slug FROM bots WHERE display_name=? COLLATE NOCASE AND slug<>? AND state<>'archived' ORDER BY slug",

@@ -363,7 +363,7 @@ def _listening_questions_lost(c, settings, qset):
 def _listening(c, settings):
     from . import listening
     from clients.judge import JudgeError
-    dests = listening.destinations(settings, check_questions=False)
+    dests = listening.destinations(settings, c, check_questions=False)
     if not dests:
         return _listening_lost(c, settings)
     try:

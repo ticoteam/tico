@@ -1715,7 +1715,7 @@ def market_refresh(api, args):
 
 @tool("hub_market_page", "Librarian (the market curator): rewrite one market page from the graph, whole, in Markdown. `name` is "
       "overview, structure-and-size, coverage-universe, people-who-matter, channels, regulation-and-catalysts, "
-      "theses or open-questions; the weekly delta is hub_market_refresh's.",
+      "theses, open-questions or customer-themes; the weekly delta is hub_market_refresh's.",
       {"name": _s("The page, e.g. overview"), "body": _s("The whole page in Markdown")},
       required=("name", "body"), writes=True)
 def market_page(api, args):

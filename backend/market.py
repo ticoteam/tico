@@ -65,6 +65,8 @@ PAGES = (
      "What the graph cannot answer yet."),
     ("market/weekly-delta", "Weekly delta", "Market / Delta",
      "What changed in the market graph this week. Refreshed on Mondays from market_events."),
+    ("market/customer-themes", "Customer themes", "Market / Customers",
+     "What customers keep asking for, complaining about and objecting to, from team meetings and calls. Each theme is a thesis with evidence."),
 )
 
 LINK = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
@@ -1180,7 +1182,7 @@ def delta_body(conn, today):
 
 
 def narrative(conn, today):
-    """The nine market pages, from the rows the seed just wrote. Not a standing placeholder."""
+    """The market pages, from the rows the seed just wrote. Not a standing placeholder."""
     companies = _listed(conn, "company")
     segments = _listed(conn, "segment")
     channels = _listed(conn, "channel")
@@ -1226,6 +1228,7 @@ def narrative(conn, today):
         ]),
         "market/open-questions": "\n".join(["# Open questions", "", asked]),
         "market/weekly-delta": delta_body(conn, today),
+        "market/customer-themes": "\n".join(["# Customer themes", "", "No themes yet. The Librarian adds one when customers raise it in team meetings."]),
     }
 
 
@@ -1576,7 +1579,7 @@ def nothing_to_curate(conn, settings, local):
     if local.weekday() == 0 or conn.execute("SELECT 1 FROM market_insights WHERE status='new' LIMIT 1").fetchone():
         return None
     from . import listening
-    mine = listening.destinations_of(CURATOR, listening.destinations(settings, check_questions=False))
+    mine = listening.destinations_of(CURATOR, listening.destinations(settings, conn, check_questions=False))
     if not mine:
         return "no market insight is new, and Listening sends the Librarian nothing"
     if conn.execute(f"SELECT 1 FROM intake_items WHERE status='new' AND destination IN ({','.join('?' * len(mine))}) "

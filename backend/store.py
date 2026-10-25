@@ -857,6 +857,9 @@ class Store:
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
+            # Destinations saved in Settings > Listening (backend/listening.py).
+            from . import listening as _listening
+            _listening.ensure(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
