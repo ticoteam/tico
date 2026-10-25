@@ -74,6 +74,8 @@ EVENT = "strategy.published"
 REALIGN = "strategy_realign"
 TRIPPED = "bet_tripped"
 LENS = "lens"
+BRIEFING = "briefing"
+SOURCES = (TRIPPED, LENS, BRIEFING)       # what may prompt a strategy_draft proposal
 PLAYBOOK = "playbooks/bet-tripped.md"
 GUIDES_DIR = Path(__file__).resolve().parent / "strategy_guides"
 
@@ -631,15 +633,15 @@ def proposal_error(c, payload):
     partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
     source?, lens?}. A bet with an id is a partial change to it, so a retire is {id, status: retired}; a bet without one is
     new and needs its statement. `source` says what prompted it (bet_tripped: a wrong-if tripped; lens: a lens run,
-    named by `lens`)."""
+    named by `lens`; briefing: the week's market briefing touched the bet)."""
     if not isinstance(payload, dict) or not any(payload.get(k) not in (None, "", [], {}) for k in
                                                 ("summary", "vision", "sections", "bets")):
         return "propose a summary, a vision, sections or bets"
     unknown = set(payload) - {"summary", "vision", "sections", "bets", "source", "lens"}
     if unknown:
         return f"a strategy proposal has summary, vision, sections, bets, source and lens, not {', '.join(sorted(unknown))}"
-    if payload.get("source") is not None and not isinstance(payload["source"], str):
-        return f"a source is {TRIPPED} or {LENS}"
+    if payload.get("source") is not None and payload["source"] not in SOURCES:
+        return f"a source is {', '.join(SOURCES)}"
     if payload.get("lens") and (payload.get("source") != LENS or not isinstance(payload["lens"], str)
                                 or len(payload["lens"]) > 60):
         return "lens is the id of the lens a proposal came from (source lens)"
