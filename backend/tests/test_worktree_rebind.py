@@ -113,6 +113,11 @@ def test_rebind_owner_live_branch_and_path_boundaries(prepared):
     assert rebind(api, tid).json()['error']['code'] == 'worktree_live'
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE task_links SET state='merged' WHERE id=?", (pr['id'],))
+        foreign_pr = H.task_link(c, 'bot:cpo', prepared[2], 'https://github.com/Acme/product/pull/1440')
+        c.execute("UPDATE task_links SET branch=? WHERE id=?", (f'tico/{tid[:8]}-recovery', foreign_pr['id']))
+    assert rebind(api, tid).json()['error']['code'] == 'worktree_branch_linked'
+    with api.app_state.store.transaction() as c:
+        c.execute('DELETE FROM task_links WHERE id=?', (foreign_pr['id'],))
         c.execute("INSERT INTO task_links(id,task_id,kind,url,repo,branch,created) VALUES('other',?,'worktree','worktree:other','Acme/product',?,?)",
                   (prepared[2], f'tico/{tid[:8]}-recovery', H.now()))
     assert rebind(api, tid).json()['error']['code'] == 'worktree_branch_linked'

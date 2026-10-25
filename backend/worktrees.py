@@ -872,7 +872,7 @@ def install(app, store, auth, mutate):
                 raise Problem('worktree_live', 'Release the current worktree and finish its open pull request before rebinding', 409)
             if not old['repo']:
                 raise Problem('worktree_repo', 'The current link must identify its repository', 409)
-            if c.execute("SELECT 1 FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
+            if c.execute("SELECT 1 FROM task_links WHERE kind IN ('worktree','pr') AND lower(repo)=lower(?) AND branch=?",
                          (old['repo'], body.branch)).fetchone():
                 raise Problem('worktree_branch_linked', 'This branch is already linked to a task', 409)
             path = relative(body.path or f"tasks/{task['id'][:8]}/{git_repository.folder(old['repo'])}-recovery-{uuid.uuid4().hex[:8]}")
