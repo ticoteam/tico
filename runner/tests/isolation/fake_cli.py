@@ -178,6 +178,14 @@ def codex():
         if method in ("thread/start", "thread/resume"):
             assert authenticated
             thread = params.get("threadId") or str(uuid.uuid4())
+            if private:
+                sessions = Path(os.environ["CODEX_HOME"]) / "sessions"
+                sessions.mkdir(exist_ok=True)
+                saved = sessions / (thread + ".jsonl")
+                if method == "thread/resume":
+                    assert saved.is_file(), "private conversation snapshot was not restored"
+                else:
+                    saved.write_text("synthetic conversation\n")
             cwds[thread] = params.get("cwd")
             say({"id": rid, "result": {"thread": {"id": thread}}})
         elif method == "turn/start":
@@ -201,7 +209,16 @@ def claude():
     if "--help" in sys.argv:
         print("Usage: claude [options]")
         return
-    session = sys.argv[sys.argv.index("--session-id") + 1] if "--session-id" in sys.argv else str(uuid.uuid4())
+    flag = "--resume" if "--resume" in sys.argv else "--session-id"
+    session = sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else str(uuid.uuid4())
+    if os.geteuid() not in {0, 10002, 10003}:
+        folder = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "projects/acme"
+        folder.mkdir(parents=True, exist_ok=True)
+        saved = folder / (session + ".jsonl")
+        if flag == "--resume":
+            assert saved.is_file(), "private conversation snapshot was not restored"
+        else:
+            saved.write_text("synthetic conversation\n")
     for msg in lines():
         if msg.get("type") != "user":
             continue
