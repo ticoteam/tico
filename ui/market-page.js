@@ -6,6 +6,17 @@ let MARKET_VIEW = null;
 const MARKET_ROUTE = '#/strategy/market';
 const isMarketRoute = r => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
 
+// The tab's views (ui/market-spend.js draws all but the first). #/strategy/market/<key> opens one; a note id always
+// has a slash in it, so a bare key is never a note. A bare #/strategy/market opens Spend once anything is sized,
+// else the graph; a link to a note always opens the graph.
+const MARKET_VIEWS = [['players', 'Players'], ['spend', 'Spend'], ['buyers', 'Buyers'], ['value-chain', 'Value chain'], ['growth', 'Size vs growth']];
+function marketRouteView(route) {
+  if (!route.startsWith(MARKET_ROUTE + '/')) return '';
+  const key = route.slice(MARKET_ROUTE.length + 1).split('?')[0];
+  return MARKET_VIEWS.some(([k]) => k === key) ? key : '';
+}
+let MARKET_PAGE = 0;
+
 const MARKET_TYPES = [
   ['company', 'Organizations'],
   ['segment', 'Segments'],
@@ -62,6 +73,7 @@ document.head.appendChild(marketStyle);
 const marketSelfId = () => (typeof S !== 'undefined' && S.status && S.status.company_entity) || 'company/self';
 
 function marketNoteId() {
+  if (marketRouteView(S.route)) return MARKET_BRIEF;
   if (S.route.startsWith(MARKET_ROUTE + '/')) return decodeURIComponent(S.route.slice(MARKET_ROUTE.length + 1).split('?')[0]);
   return new URLSearchParams((S.route.split('?')[1] || '')).get('note') || MARKET_BRIEF;
 }
@@ -71,8 +83,17 @@ function marketHref(id) {
 }
 
 window.marketStop = function marketStop() {
+  MARKET_PAGE++;
   if (MARKET_VIEW) MARKET_VIEW.stop();
+  window.marketViewsStop?.();
 };
+
+// The view switch sits where the section's heading keeps its actions.
+function marketViewSwitch(view) {
+  const box = $('#strat-actions');
+  if (box) box.innerHTML = `<nav class="mkt-views" aria-label="Market views">${MARKET_VIEWS.map(([key, label]) =>
+    `<a href="${MARKET_ROUTE}/${key}" data-market-view="${key}"${key === view ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+}
 
 // Draws the page again from the server, when the research notice sees the market's first content.
 window.marketReload = function marketReload() {
@@ -83,14 +104,30 @@ window.marketReload = function marketReload() {
 };
 
 window.pageMarket = async function pageMarket() {
+  const page = ++MARKET_PAGE;
   $('#main').classList.add('market-layout');
+  let view = marketRouteView(S.route);
+  if (!view && S.route === MARKET_ROUTE && await window.marketSpendSized?.()) view = 'spend';
+  if (page !== MARKET_PAGE) return;
+  if (view && view !== 'players') {
+    if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
+    if (!$('#market-views')) $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-views" class="mkt-host"></div>';
+    marketViewSwitch(view);
+    window.marketViewsMount($('#market-views'), view);
+    window.syncLibrarianRail?.(true);
+    return;
+  }
+  window.marketViewsStop?.();
   const note = marketNoteId();
   if (!MARKET_VIEW || !document.body.contains(MARKET_VIEW.shell)) {
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-shell" class="market-shell"><p class="market-loading">Opening the market…</p></div>';
+    marketViewSwitch('players');
     const shell = $('#market-shell');
     try {
-      MARKET_VIEW = await mountMarket(shell);
+      const mounted = await mountMarket(shell);
+      if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another view or note was asked for meanwhile
+      MARKET_VIEW = mounted;
     } catch (error) {
       shell.innerHTML = `<p class="market-loading">${esc(error.message || 'The market graph did not load.')}</p>`;
       window.syncLibrarianRail?.(true);
