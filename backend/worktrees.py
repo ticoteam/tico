@@ -525,7 +525,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                  row['state'] if stale and report.state in ('pending', 'present') else
                  'pending' if row['state'] == 'pending' and report.state == 'present' and report.checkout_state not in ('ready', 'legacy_present') else
                  'pending' if row['state'] == 'pending' and row['repo'] and report.state == 'missing' else report.state)
-        if row['state'] == 'pending' and detail.get('rebind_from') and state == 'present':
+        if detail.get('rebind_from') and detail.get('confirmation_state') != 'confirmed' and state == 'present':
             state = 'pending'       # recovery registration needs the explicit PATCH receipt
         detail['current_branch'] = report.branch
         if not current_error(state, detail):
@@ -884,7 +884,8 @@ def install(app, store, auth, mutate):
                 raise Problem('worktree_path', 'Use a fresh recovery path, separate from historical worktrees', 409)
             new = provision(c, who, task, old['repo'], path, body.branch, default_org=store.settings.github_owner)
             row = c.execute('SELECT detail_json FROM task_links WHERE id=?', (new['link_id'],)).fetchone()
-            fresh = {**json.loads(row['detail_json']), 'rebind_from': old['id'], 'allocation_started': H.now()}
+            fresh = {**json.loads(row['detail_json']), 'rebind_from': old['id'],
+                     'confirmation_state': 'unconfirmed', 'allocation_started': H.now()}
             c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(fresh), new['link_id']))
             event = H.event(c, who.actor, 'worktree.rebound', task['id'],
                             {'old_link_id': old['id'], 'old_branch': old['branch'],
@@ -976,6 +977,8 @@ def install(app, store, auth, mutate):
                 detail['checkout_target'] = body.checkout_target
             if body.expected_base is not None:
                 detail['expected_base'] = body.expected_base
+            if detail.get('rebind_from') and body.state == 'present':
+                detail['confirmation_state'] = 'confirmed'
             if body.skipped_files is not None:
                 detail['skipped_files'] = [str(name)[:1000] for name in body.skipped_files]
             for key in ('snapshot_skipped', 'restore_source'):

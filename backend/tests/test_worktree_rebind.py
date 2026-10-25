@@ -66,6 +66,7 @@ def test_owner_rebind_keeps_history_and_requires_patch_before_presence(prepared,
     report = {'link_id': new, 'state': 'present', 'branch': receipt['branch'], 'checkout_state': 'ready',
               'expected_head': 'c' * 40, 'expected_base': 'd' * 64,
               'checkout_target': receipt['branch'], 'ahead': 0}
+    assert beat(api, [{'link_id': new, 'state': 'unknown', 'branch': receipt['branch']}]) == []
     assert beat(api, [report, {'link_id': old['link_id'], 'state': 'present', 'branch': old['branch']}]) == []
     with api.app_state.store.read() as c:
         assert c.execute('SELECT state FROM task_links WHERE id=?', (new,)).fetchone()[0] == 'pending'
