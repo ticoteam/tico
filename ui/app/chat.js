@@ -777,7 +777,7 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     let refs = {...extraRefs};
     const j = await cloudCompose(`/v2/chat/${encodeURIComponent(slug)}`, {text: text || 'Attached files.', refs, ...extra}, files,
       {timeout: P.unconfirmed ? Math.min(CHAT_SEND.timeout, CHAT_REPLAY_MS - (Date.now() - P.unconfirmed.at)) : CHAT_SEND.timeout,
-        onRetry: watch.retry, operationId: P.unconfirmed?.key});
+        onRetry: watch.retry, onResponse: watch.response, operationId: P.unconfirmed?.key});
     // A 200 that created nothing (a sign-in page in front of the API) is not a send: the draft stays.
     if (!j?.message?.id) throw new Error('the server did not confirm it');
     watch.end('sent');
@@ -798,9 +798,9 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     // A send with no answer in time ends here, with the draft still in the box and one press to try again. The page
     // cannot know whether it landed, so it says so; Retry of the same text keeps its request id, so it is not saved twice.
     if (chatReplayExpired(P)) toast(CHAT_REPLAY_EXPIRED, true);
-    else if (accessRefused) toast(`Not confirmed: This message may already have sent. ${e.message} Check the chat before resending.`, true, null, {keepWhenSignedOut: true});
+    else if (accessRefused) toast(`Not confirmed: This message may already have sent. ${chatSendReason(e)} Check the chat before resending.`, true, null, {keepWhenSignedOut: true});
     else if (e.timedOut) toast(`Not confirmed: ${e.message} It may still arrive. Your message is still here; Retry sends it without a duplicate.`, true, {label: 'Retry', run: () => pillSend(P)});
-    else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra); else toast(`Not sent: ${e.message}`, true);
+    else if (e.unconfirmed) chatRetryLater(P, text, slug, extraRefs, extra, e.status); else toast(`Not sent: ${chatSendReason(e)}`, true);
     return false;
   }
   finally {
@@ -813,24 +813,43 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
 // A message without files gives up after `timeout` ms, retries included (writeRequestOnce); an upload has no limit.
 // After `slow` ms a send says it is still going. One object, so the browser tests can shorten both.
 const CHAT_SEND = {timeout: 30000, slow: 5000};
+function chatSendReason(error) {
+  if (error.status === 413 || error.status === 422 && (error.body?.detail?.some?.(e => e.type === 'string_too_long')
+      || /(?:body\.)?text: String should have at most \d+ characters/.test(error.body?.error?.detail || '')))
+    return 'This message is too long. Shorten it and try again.';
+  if (error.status === 401 || error.signedOut) return "You've been signed out. Sign in again, then try again.";
+  if (error.status === 404) return 'This bot is unavailable. Refresh the page or choose another bot.';
+  if (error.status === 429 || error.status >= 500) return `The server is busy (HTTP ${error.status}). Try again shortly.`;
+  return error.message || 'The server refused this message. Try again.';
+}
 // What a send that is taking a while shows under the box, and the one line it leaves in the console when it was slow
 // or failed: how long, how many retries, the last HTTP status and how it ended. Never the message text.
 function chatSendWatch(P, fileCount) {
   const started = performance.now(), line = pq(P, '.p-slow');
-  let retries = 0, status = 0, slow = false;
+  let retries = 0, status = 0, slow = false, accessReported = false;
+  const report = window.TicoObservability?.chatSend?.();
+  const diagnostic = outcome => report?.({outcome, duration_ms: Math.round(performance.now() - started), retries, status});
   const say = () => {
     if (!line || !slow) return;
     line.hidden = false;
     line.textContent = fileCount ? `Still sending… uploading ${fileCount === 1 ? 'the file' : `${fileCount} files`}${retries ? ', trying again' : ''}.`
       : retries ? 'Still sending… the connection is slow, trying again.' : 'Still sending…';
   };
-  const timer = setTimeout(() => { slow = true; say(); }, CHAT_SEND.slow);
+  const timer = setTimeout(() => { slow = true; say(); diagnostic('slow'); }, CHAT_SEND.slow);
   return {
+    response(code) {
+      status = code;
+      // Auth failures retire telemetry immediately in api.js; report before that
+      // privacy boundary, never restore the retired identity to send an event.
+      if ((code === 401 || code === 403) && !accessReported) { diagnostic('unconfirmed'); accessReported = true; }
+    },
     retry(attempt, code) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
     end(outcome, code) {
       clearTimeout(timer); P.sendRetrying = false;
       if (line) { line.hidden = true; line.textContent = ''; }
       const ms = Math.round(performance.now() - started);
+      status = code || status;
+      if (!accessReported && (outcome !== 'sent' || slow)) diagnostic(outcome);
       if (outcome !== 'sent' || ms >= CHAT_SEND.slow)
         console.warn(`chat send ${outcome} after ${ms} ms, ${retries} retries, last status ${code || status || 'none'}, ${fileCount} files`);
     },
@@ -852,12 +871,14 @@ function chatForgetUnconfirmed(P) {
 // message that never reached the hub (the network dropped) sends itself when the connection is
 // back, or on a backoff up to a minute. It uses the same request id, so the hub never records it
 // twice. Editing or clearing the box hands it back to the person.
-function chatRetryLater(P, text, slug, extraRefs, extra) {
+function chatRetryLater(P, text, slug, extraRefs, extra, status) {
   clearTimeout(P.retryTimer);
   const pending = P.unconfirmed;
   const tries = P.retryTries = (P.retryTries || 0) + 1;
-  if (tries > 8) { P.retryTries = 0; toast('Still no connection. Your message is still here, so send it again once you are back online.', true); return; }
-  if (tries === 1) toast('No connection. Your message will send by itself when you are back online.');
+  const busy = status === 429 || status >= 500;
+  if (tries > 8) { P.retryTries = 0; toast(`${busy ? 'The server is still busy.' : 'Still offline or no connection.'} Your message may already have sent. Check the chat before resending.`, true); return; }
+  if (tries === 1) toast(busy ? `The server is busy (HTTP ${status}). Your message may still arrive; trying again automatically.`
+    : 'Offline or connection lost. Your message will send by itself when you are back online.');
   const again = () => {
     window.removeEventListener('online', again); clearTimeout(P.retryTimer);
     if (P.sending) return;

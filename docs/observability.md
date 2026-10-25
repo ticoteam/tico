@@ -117,6 +117,15 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
 exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
+Bot chat sends also report `source=chat_send` when they cross five seconds while still pending,
+then report their outcome when a slow send finishes or any send fails. The only send fields are
+`outcome` (a fixed label), `duration_ms`, `retries`, and `status` (the last HTTP status, or zero
+when no response arrived). No message text, bot name, attachment names, raw URL or error text is
+included. A quick successful send generates no Sentry event. Auth failures are reported before
+the identity reset; later callbacks from a retired account cannot report under a new identity.
+This uses the existing per-install `TICO_SENTRY_DSN` and required browser settings above. Leave
+them unset on installs outside an authorized rollout; adding this instrumentation does not enable
+reporting on stock installs. Team and Tidy activation remains a separate operator rollout.
 Defaults, request/context capture, logs, tracing, replay,
 breadcrumbs and local/source variables are disabled. Events are reconstructed before sending:
 fixed error labels, app/environment, status/source on the server and allowlisted stack

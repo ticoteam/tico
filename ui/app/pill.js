@@ -89,7 +89,7 @@ function makePill(cfg) {
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>
     </div>
     <div class="p-slow muted" role="status" hidden></div>
-    <div class="p-why muted" id="p-why-${++PILL_WHY_N}"></div>
+    <div class="p-why muted" id="p-why-${++PILL_WHY_N}" role="status"></div>
     <div class="p-chips"></div>
     <div class="p-cmd" hidden></div>`;
 
@@ -105,7 +105,7 @@ function makePill(cfg) {
     if (shrank) { box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px'; }
     else if (box.scrollHeight > box.clientHeight) box.style.height = box.scrollHeight + 'px';
   };
-  box.addEventListener('input', () => { grow(); pillButtons(P); chatDraftSave(P); if (P.unconfirmed) chatForgetUnconfirmed(P); });
+  box.addEventListener('input', () => { P.sendNotice = ''; grow(); pillButtons(P); chatDraftSave(P); if (P.unconfirmed) chatForgetUnconfirmed(P); });
   // "lets do the triple return behavior on mobile send, but on desktop, lets
   // make it enter send, and shift enter new line." On a computer Return sends and Shift+Return is
   // a new line; on a phone Return is a line and three in a row send (below). Cmd/Ctrl+Return and
@@ -161,6 +161,27 @@ function makePill(cfg) {
     }
   };
   q('.p-send').onclick = () => pillSend(P);
+  // Acknowledge the physical press before validation or any request. Keep the
+  // real button as the target, including its transparent border, and retain focus.
+  q('.p-send').addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    const btn = q('.p-send'), started = performance.now();
+    P.releasePress?.();
+    btn.classList.add('p-pressed');
+    const release = event => {
+      window.removeEventListener('pointerup', release);
+      window.removeEventListener('pointercancel', release);
+      window.removeEventListener('blur', release);
+      clearTimeout(P.pressTimer);
+      const clear = () => btn.classList.remove('p-pressed');
+      if (event?.type === 'pointerup') P.pressTimer = setTimeout(clear, Math.max(0, 120 - (performance.now() - started)));
+      else clear();
+    };
+    P.releasePress = release;
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('blur', release);
+  });
   if (goals) q('.p-stop').onclick = () => pillStop(P);
   // Safari does not focus buttons on tap. Keep the composer in place until its
   // control click runs; restoring navigation on blur can swallow that tap.
@@ -239,7 +260,9 @@ function pillWhy(P) {
   else if (btn.disabled && chatReplayExpired(P)) text = CHAT_REPLAY_EXPIRED;
   else if (btn.classList.contains('p-off'))
     text = pillGoalMode(P) ? 'Type a goal to set' : P.action === 'chat' ? 'Type a message or attach a file to send' : 'Type a message to send';
+  if (P.sendNotice && !busy && !stopping) text = P.sendNotice;
   why.textContent = text;
+  why.classList.toggle('p-why-notice', !!P.sendNotice && !busy && !stopping);
   why.classList.toggle('p-why-busy', !!(stopping || busy || btn.disabled && chatReplayExpired(P)));
   if (stop) {
     stop.title = stopping ? text : 'Stop';
@@ -385,7 +408,11 @@ async function pillReply(P, text) {
 async function pillSend(P) {
   if (!P.el) return;
   const box = pq(P, '.p-text'), text = box.value.trim();
-  if (!text && !(P.action === 'chat' && P.files.length)) { box.focus(); return; }
+  if (!text && !(P.action === 'chat' && P.files.length)) {
+    P.sendNotice = pillGoalMode(P) ? 'Type a goal to set' : P.action === 'chat' ? 'Type a message or attach a file to send' : 'Type a message to send';
+    pillWhy(P); box.focus(); return;
+  }
+  P.sendNotice = ''; pillWhy(P);
   // Goal mode keeps the familiar Send button and Enter shortcut; only the destination changes.
   // The Assistant's custom sender and explicit task/reply actions retain their own contracts.
   if (pillGoalMode(P)) return chatGoalSend(P, text);
