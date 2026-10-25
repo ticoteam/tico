@@ -1,9 +1,12 @@
-/* The Tasks page's right bar (ui/app/task-checks-bar.js): a thin strip collapsed, a column with the checks and the
-   Task Manager chat expanded. It is the grid's last column, after the list and the peek. */
-.tasks-page.has-checks{grid-template-columns:minmax(0,1fr) auto}
-.tasks-page.has-checks.peek-open{grid-template-columns:minmax(0,1fr) var(--peek-w) auto}
+/* The Tasks page's right bar (ui/app/task-checks-bar.js): collapsed, a thin strip floating on the right edge, so the
+   list keeps its width; expanded, the grid's last column, after the list and the peek, with the checks and the chat. */
+.tasks-page.has-checks{position:relative}
+.tasks-page.checks-open{grid-template-columns:minmax(0,1fr) auto}
+.tasks-page.checks-open.peek-open{grid-template-columns:minmax(0,1fr) var(--peek-w) auto}
 .tchk{grid-row:1;grid-column:-2;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface)}
 .tchk.open{width:clamp(280px,24vw,360px)}
+.tchk:not(.open){position:absolute;z-index:3;right:0;top:45%;border:1px solid var(--line);border-right:0;border-radius:10px 0 0 10px;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.tchk:not(.open) .tchk-strip{height:auto;padding:8px 0}
 .tchk-strip{display:flex;flex-direction:column;align-items:center;gap:8px;width:36px;height:100%;padding:12px 0;border:0;background:none;color:var(--muted);cursor:pointer}
 .tchk-strip:hover,.tchk-strip:focus-visible{color:var(--ink);background:var(--surface2)}
 .tchk-count{min-width:22px;padding:1px 6px;border-radius:999px;background:var(--surface2);color:var(--ink);font-weight:600;font-size:12px;text-align:center}
@@ -50,7 +53,6 @@
 /* a phone: the strip floats at the right edge above the nav; expanded, the bar is a sheet over the list */
 @media (max-width:760px){
   .tchk{position:fixed;z-index:16;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-left:0}
-  .tchk:not(.open){top:auto;border:1px solid var(--line);border-right:0;border-radius:10px 0 0 10px;margin-bottom:12px}
-  .tchk:not(.open) .tchk-strip{height:auto;padding:8px 0}
+  .tchk:not(.open){position:fixed;top:auto;margin-bottom:12px}
   .tchk.open{top:0;left:0;width:auto;border-top:1px solid var(--line)}
 }
