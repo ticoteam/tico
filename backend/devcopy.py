@@ -85,7 +85,7 @@ KEEP = frozenset((
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
-    "market_evidence", "market_insights", "media_assets", "media_control", "meeting_brain", "meeting_comments",
+    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",

@@ -357,6 +357,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
         "market_citations": "1", "market_insights": "1", "market_events": "1",
+        "market_sizes": "1", "market_figures": "1", "market_sources": "1",
         # Listening's saved posts carry third parties' names and handles (backend/listening.py):
         # Listening and the owner read them all, a receiving bot only what was routed to it.
         # Which runs happened, and whether they were blocked, is anyone's to read.
@@ -683,7 +684,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             # These are visible in full (predicate 1). SQLite answers count(*) by reading
             # the base table with no view context; that read is the same rows as the view.
             if table in {"market_entities", "market_edges", "market_evidence", "market_citations",
-                         "market_insights", "market_events", "listen_runs", "task_types", "task_steps"}:
+                         "market_insights", "market_events", "market_sizes", "market_figures", "market_sources",
+                         "listen_runs", "task_types", "task_steps"}:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
             if (table in tables or table in sources) and context == prefix + table:

@@ -116,14 +116,16 @@ def require_writer(who):
     raise Problem("forbidden", "Only the Librarian and the company owner can change the market graph", 403)
 
 
-def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""):
+def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note="", trip=True):
+    """One `market_events` row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
+    a change to what a bet rests on."""
     eid = H.new_id()
     conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, ts, actor, field, old, new, insight_id, note) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                  (eid, kind, subject, H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new),
                   insight_id, note or ""))
-    if actor != SEED_ACTOR:
+    if actor != SEED_ACTOR and trip:
         # The strategy's fit check: a change to an entity or page a bet cites may show the bet is wrong.
         from . import strategy
         from .batch_work import isolated

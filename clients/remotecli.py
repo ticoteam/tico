@@ -90,6 +90,20 @@ def chosen_grant(value):
     return {"full_name": name, "access": access, **({"run_workflows": workflows} if workflows is not None else {})}
 
 
+MARKET_SPEND = ("market define", "market segment add", "market segment tree", "market size add", "market size decide",
+                "market size list", "market figure add", "market sources", "market spend", "market research")
+
+
+def market_spend(client, args, tool):
+    """The spend commands run the MCP tool of the same name; `sources --add-file` reads its YAML here."""
+    fn = args.fn
+    if fn == "market sources" and args.add_file:
+        import yaml
+        loaded = yaml.safe_load(Path(args.add_file).read_text())
+        args.add = loaded if isinstance(loaded, list) else [loaded]
+    return tool(client, args)
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
@@ -568,6 +582,8 @@ def run(args, who=None):
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
+    if cmd == "market" and fn in MARKET_SPEND:
+        return market_spend(client, args, tool)
     if cmd == "market":
         if sub == "show":
             return client.get("market/entities/" + args.id)
