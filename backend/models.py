@@ -636,6 +636,18 @@ class StrategyDraftFrom(Contract):
     text: str = Field(default="", max_length=4000)
 
 
+class LensRun(Contract):
+    """Start a lens run (backend/lenses.py): the answers by step key, on the published version or the owner's draft."""
+    answers: dict[str, Any] = Field(default_factory=dict)
+    on: Literal["published", "draft"] = "published"
+
+
+class LensApply(Contract):
+    """Add one change of a lens run to the draft, against the draft revision the page showed."""
+    index: Annotated[int, Field(strict=True, ge=0, le=100)]
+    revision: Annotated[int, Field(strict=True, ge=0)]
+
+
 class StrategyBetCreate(Contract):
     statement: str = Field(min_length=1, max_length=2000)
     why: str = Field(default="", max_length=20_000)

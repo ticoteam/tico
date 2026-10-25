@@ -1,0 +1,33 @@
+# V2MOM: vision, values, methods, obstacles and measures. A planning format rather than an exercise, so it is not listed.
+id: v2mom
+name: V2MOM
+applies_to: strategy
+description: 'In the style of V2MOM: vision, values, methods, obstacles and measures.'
+minutes: 10
+listed: false
+steps:
+  - key: q1
+    ask: What does the team look like when the vision is reached, in a way an outsider could check?
+    input: text
+  - key: q2
+    ask: When two good options conflict, which value wins, and can you remember the last time it cost you something?
+    input: text
+  - key: q3
+    ask: What are the three to five things the team will actually do this year to reach the vision, in order?
+    input: text
+  - key: q4
+    ask: For your first method, what is most likely to stop it, and what are you doing about that?
+    input: text
+  - key: q5
+    ask: Which method has no number attached, and what would the number be?
+    input: text
+  - key: q6
+    ask: Which method is there because a person wants it rather than because the vision needs it?
+    input: text
+  - key: q7
+    ask: What are you no longer doing because it did not make the list?
+    input: text
+output:
+  chart: none
+  sections: [Values, Methods, Obstacles, Measures]
+sharpen: []

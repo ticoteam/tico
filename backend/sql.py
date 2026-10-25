@@ -354,6 +354,9 @@ def guarded(c, auth, who, inner, function, columns=None):
         "strategy_versions": "id IS NOT NULL" if owner else "status='published'",
         "strategy_bets": "id IS NOT NULL" if owner else "id IS NULL",
         "strategy_events": "id IS NOT NULL" if owner else "id IS NULL",
+        # A lens run (backend/lenses.py) on the draft carries the unpublished strategy's words: the owner's. Every other
+        # run only discusses what is published.
+        "lens_runs": "id IS NOT NULL" if owner else "on_draft=0",
         # The market graph is the company's, the same way goals are.
         "market_entities": "1", "market_edges": "1", "market_evidence": "1",
         "market_citations": "1", "market_insights": "1", "market_events": "1",

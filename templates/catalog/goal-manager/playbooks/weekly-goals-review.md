@@ -23,5 +23,8 @@ interpretation, labelled:
    a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
    can raise the level in Settings > CEO Bot if they want. Then record it with `hub goal ceo-bot-level3-offer`, so it
    is offered once. Never raise the level yourself, never ask again before it is due, and never press.
+   Also one line suggesting a lens (`hub lens list`; Scenarios, Pre-mortem or Blue Ocean) when no lens has run
+   against the current published version in the last 90 days (`hub lens runs`). It is a suggestion in the note; never
+   run one yourself from this routine.
 Say plainly when nothing needs attention. Send it with `hub message send <person> "<text>"`, and to the Chief of Staff
 the same text. Nothing goes outside the team.

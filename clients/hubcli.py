@@ -162,7 +162,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
     hub strategy diff --from N --to N      what changed between two versions
-    hub strategy guides                    the question guides the CEO Bot drafts with
+    hub strategy guides                    deprecated: the CEO Bot's drafting questions; the exercises are lenses
     hub strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
     hub strategy publish [--note "..."] [--revision N]
     hub strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
@@ -172,6 +172,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy bet retire <id>
                                            draft, publish and bets: the owner only; a bot proposes with
                                            proposal create --kind strategy_draft
+    hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
+    hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
+                                           run one (the owner, the CEO Bot; a market lens also the Librarian); waits up
+                                           to 60 s and prints the run with its summary; --draft: the owner's draft
+    hub lens show <run-id>                 one run: answers, result, changes
+    hub lens runs [--lens ID]              runs, newest first, with their summaries
     hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
@@ -1372,7 +1378,7 @@ def parser():
     s.add_argument("--from", dest="from_n", type=int, required=True)
     s.add_argument("--to", dest="to_n", type=int, required=True)
     s.set_defaults(fn="strategy diff")
-    s = strategy.add_parser("guides", help="the guides: their questions and the words for bets")
+    s = strategy.add_parser("guides", help="deprecated: the CEO Bot's drafting questions; the exercises are lenses")
     s.set_defaults(fn="strategy guides")
     bet = strategy.add_parser("bet", help="owner only: add, change or retire a bet").add_subparsers(dest="subsub")
 
@@ -1400,6 +1406,24 @@ def parser():
     s = bet.add_parser("retire", help="its goals keep their link")
     s.add_argument("id")
     s.set_defaults(fn="strategy bet retire")
+
+    lens = sub.add_parser("lens", help="thought exercises run against the strategy or the market").add_subparsers(dest="sub")
+    s = lens.add_parser("list", help="the lenses, with their steps")
+    s.add_argument("--market", action="store_true", help="only the market lenses")
+    s.set_defaults(fn="lens list")
+    s = lens.add_parser("run", help="run a lens; prints the run, waiting up to 60 seconds for its summary")
+    s.add_argument("id")
+    s.add_argument("--answers-file", dest="answers_file", help='JSON {"step key": answer}; a step left out is assumed')
+    s.add_argument("--draft", action="store_true", help="owner only: run on the draft instead of the published version")
+    s.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the running run and return")
+    s.set_defaults(fn="lens run")
+    s = lens.add_parser("show", help="one run: answers, result and changes")
+    s.add_argument("id")
+    s.set_defaults(fn="lens show")
+    s = lens.add_parser("runs", help="runs, newest first")
+    s.add_argument("--lens", dest="lens")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="lens runs")
 
     market = sub.add_parser("market", help="the shared market graph: read it, report into it, curate it").add_subparsers(dest="sub")
     s = market.add_parser("show", help="one entity, its edges both ways, the evidence, the last ten events")

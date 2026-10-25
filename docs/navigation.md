@@ -25,7 +25,7 @@ Controls appear when your rights allow the action.
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)) |
+| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | Contact support or continue a support conversation | Help (?) → Support rail |

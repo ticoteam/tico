@@ -1,0 +1,28 @@
+# In the style of 7 Powers: for each bet, which durable advantage it builds, how, and when it starts to show. A bet
+# that builds none is called out.
+id: seven-powers
+name: 7 Powers
+applies_to: strategy
+description: 'In the style of 7 Powers: which lasting advantage each bet builds, and which build none.'
+minutes: 8
+listed: true
+steps:
+  - key: copy
+    ask: What about you would take a rival the longest to copy, even with the same money?
+    input: text
+  - key: stay
+    ask: What makes a customer stay once they have started, even when something cheaper shows up?
+    input: text
+  - key: grow
+    ask: What gets cheaper, faster or better for you as you grow, in a way a smaller rival cannot match?
+    input: text
+  - key: horizon
+    ask: When do you expect those advantages to show?
+    input: choice
+    options: [Already, Within a year, Within three years]
+output:
+  chart: power_table
+  sections: [Power by bet, Bets that build none, What it means for the bets]
+sharpen:
+  - Switching cost evidence: how many customers moved away from a rival and what it took
+  - Unit cost trends for the rivals named in the strategy

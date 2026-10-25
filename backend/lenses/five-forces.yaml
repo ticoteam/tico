@@ -1,0 +1,34 @@
+# In the style of Porter's five forces, on one segment: rivals, new entrants, substitutes, buyer power and supplier
+# power, each scored 1-5 with evidence.
+id: five-forces
+name: Five forces
+applies_to: market
+description: 'In the style of Porter''s five forces: how hard it is to make money in one segment.'
+minutes: 8
+listed: true
+steps:
+  - key: segment
+    ask: Which segment are we looking at?
+    input: text
+  - key: rivals
+    ask: Who are the main rivals in it?
+    input: list
+  - key: entrants
+    ask: Who could enter it next, and what would stop them?
+    input: text
+  - key: substitutes
+    ask: What do buyers use instead of anything in this segment?
+    input: list
+    hint: Include doing it by hand.
+  - key: buyers
+    ask: How much power do buyers have? Can they switch easily, and do a few of them make up most of the spend?
+    input: text
+  - key: suppliers
+    ask: Who do you and your rivals depend on, and how easily could they raise prices?
+    input: text
+output:
+  chart: table
+  sections: [The five forces, The strongest force, What it means for the bets]
+sharpen:
+  - Switching costs and contract terms in the segment
+  - Funding and new entrants in the segment in the last year

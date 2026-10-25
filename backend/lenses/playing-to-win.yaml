@@ -1,0 +1,31 @@
+# In the style of Playing to Win: five linked choices, from what winning means to the systems that keep the other four
+# honest. The result is a cascade with the weakest link named.
+id: playing-to-win
+name: Playing to Win
+applies_to: strategy
+description: 'In the style of Playing to Win: where to play, how to win, and what it takes, as one chain of choices.'
+minutes: 8
+listed: true
+steps:
+  - key: aspiration
+    ask: In two years, what would have to be true for you to say the team won?
+    input: text
+  - key: where
+    ask: Which customers and which parts of the market are you choosing to serve, and which are you leaving alone?
+    input: text
+  - key: how
+    ask: In those places, do you win on cost or on being different, and what exactly is the difference a buyer notices?
+    input: text
+  - key: capabilities
+    ask: Which things must you do better than anyone for that to hold? Name three to five.
+    input: list
+    hint: Say which ones you already have.
+  - key: systems
+    ask: What do you review every week that tells you whether the choices are working?
+    input: text
+output:
+  chart: cascade
+  sections: [The five choices, The weakest link, What it means for the bets]
+sharpen:
+  - Who else serves the customers named in "where to play", and how they price
+  - Evidence that the buyers notice the difference named in "how to win"

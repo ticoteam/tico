@@ -36,7 +36,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
-- [Strategy](strategy.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator
