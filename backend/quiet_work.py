@@ -83,11 +83,18 @@ CARRIED_SQL = "SELECT ts, detail_json FROM events WHERE action=? AND target=? OR
 ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts WHERE id=?"
 
 
-def _own_job_sql():
+def _own_job_sql(claimable=False):
+    from .statuses import PARKED_SQL
+    # A parked bot cannot start ordinary bot messages. Already active jobs still count.
+    eligibility = ("AND (j.state!='queued' OR m.from_actor LIKE 'human:%' OR NOT EXISTS "
+                   "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot "
+                   f"AND pc.onboarding_state IN {PARKED_SQL} "
+                   "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) ") if claimable else ""
     return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
             f"AND {_H().MESSAGE_TASK_SQL}=? "
+            + eligibility +
             "ORDER BY j.created LIMIT 1")
 
 
@@ -96,12 +103,12 @@ def _last_sql(outcomes):
             f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY ts DESC LIMIT 1")
 
 
-def own_job(conn, row):
-    """The run of its own a task has waiting or going: (job id, attempt id or None, created), or None."""
+def own_job(conn, row, *, claimable=False):
+    """The task's queued or active run; `claimable` excludes queued work parked by onboarding."""
     from .read_cache import one
     H = _H()
     try:
-        return one(conn, _own_job_sql(), (H.actor_id(row["owner"]), row["id"]))
+        return one(conn, _own_job_sql(claimable), (H.actor_id(row["owner"]), row["id"]))
     except Exception:  # noqa: BLE001 - a local hub has no jobs table
         return None
 

@@ -48,7 +48,8 @@ def test_stalled_health_does_not_disclose_another_persons_private_task(environme
     assert 'stalled_tasks' not in health_of(api)[1]
 
 
-def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment):
+@pytest.mark.parametrize('hidden', [False, True])
+def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment, hidden):
     api = environment()
     add_bot(api, 'helper')
     with api.app.state.store.transaction() as c:
@@ -60,7 +61,16 @@ def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(envi
         c.execute("UPDATE tasks SET private=0, updated=? WHERE id IN (?,?)",
                   (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
         H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
-    assert health_of(api)[1]['stalled_tasks']['status'] == 'warn'
+        if hidden:
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (hold['id'],))
+    for status in ('open', 'review'):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET status=? WHERE id=?", (status, hold['id']))
+        check = health_of(api)[1].get('stalled_tasks')
+        if hidden or status == 'review':
+            assert check is None
+        else:
+            assert check['status'] == 'warn' and [item['task'] for item in check['items']] == [window['id']]
 
 
 def test_an_offline_computer_holds_its_bots(environment):

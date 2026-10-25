@@ -6385,7 +6385,7 @@ def own_stuck_blockers(conn, row, at=None):
                 or not TR.is_descendant(conn, row["id"], block["id"])
                 or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
                 or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")
-                or milestone_pending(conn, block["id"]) or own_job(conn, block)):
+                or milestone_pending(conn, block["id"]) or own_job(conn, block, claimable=True)):
             return []
     return [block["id"] for block in blockers]
 

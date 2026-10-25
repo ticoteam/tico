@@ -354,6 +354,19 @@ def test_a_parent_waiting_on_a_person_is_not_stalled_by_its_quiet_hold(api):
         assert flagged(c, window, hold) == (False, False)
 
 
+@pytest.mark.parametrize("sender", ["bot:ops", "human:ana", "bot:boss"])
+def test_a_parked_child_only_exempts_its_parent_for_a_job_the_runner_can_claim(api, sender):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup', reports_to='boss' WHERE bot='finance'")
+        c.execute("UPDATE messages SET from_actor=? WHERE id IN "
+                  "(SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                  "JOIN conversations cv ON cv.id=m.conversation_id "
+                  f"WHERE j.bot='finance' AND {H.MESSAGE_TASK_SQL}=?)", (sender, hold["id"]))
+        assert flagged(c, window, hold, keep_jobs_of="finance") == ((True, True) if sender == "bot:ops"
+                                                                  else (False, False))
+
+
 def test_botops_stuck_list_skips_an_own_blocked_parent_while_its_bot_is_busy_or_it_waits_for_the_next_run(api):
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c)

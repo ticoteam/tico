@@ -221,11 +221,14 @@ runs have escalated a public task without progress; an explicit run is still ava
 A task blocked by its own subtask is allowed (a question for a person in a subtask works that way),
 but relating it returns a warning: a subtask kept open until its parent finishes, such as a hold or
 an acknowledgement, never clears. When every blocker is such a subtask, owned by a bot, quiet five
-minutes and waiting on nothing of its own (not in review, no run of its own queued or going, no blocker,
+minutes and waiting on nothing of its own (not in review, no run of its own able to start or going, no blocker,
 no unanswered question, no future due date, snooze, stored resume or milestone wait), the task counts as
 stalled even while `waiting`, unless it is waiting on a person: its bot is woken with the way out, under
 the same limits, and BotOps's stuck list shows it with `own_blockers` while its bot is idle. Health's
-"Tasks not progressing" counts it once escalated.
+"Tasks not progressing" counts it once escalated, only when the viewer can read every live blocker.
+A queued message to a bot still in setup counts as able to start only when it comes from a person or
+that bot's manager. A blocker's review status exempts its parent until the blocker leaves review;
+this check sets no review deadline.
 
 Task worktrees have a separate lifecycle. The 100-worktree limit stays in effect, and cleanup
 waits until the owning bot is idle so it cannot remove a checkout in use. A supported cleanup
