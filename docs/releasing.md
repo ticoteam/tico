@@ -98,7 +98,8 @@ The initial backend leaf mapping is deliberately small (`backend/task_loops.py` 
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
 Write unit
-tests while you build and run them as you go; once the change passes, keep only the highest-value ones. Before merging,
+tests while you build and run them as you go; once the change passes, keep every test that would catch a real defect and drop the ones that only restate the
+code (CLAUDE.md, Tests). Before merging,
 run the test files for what you touched and the checks the change obviously affects, not the full suite. For each release, run the full
 suite once on its frozen candidate.
 

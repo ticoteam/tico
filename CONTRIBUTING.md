@@ -87,13 +87,12 @@ with unsigned commits will be asked to sign them before it is merged.
 ## Pull requests
 
 - Make the smallest change that fixes the problem, against `main`.
-- Few, high-value tests. Write tests while you build if they help, then keep only the ones that guard a
-  security or privacy boundary, data safety (migrations, backup, restore) or a core contract (the
-  updater and release path, job claim and lease, task writes, the API schema), plus at most one happy
-  path per feature. No tests of wording or docs prose, and one or two cases instead of an exhaustive
-  parametrization. Delete the rest before you open the pull request; the default Python suite has to run in about
-  a minute, so a new test that would slow it means cutting another, or marking it `@pytest.mark.slow` if it needs
-  real git, Docker or a server.
+- High-value tests, as many as the change needs; there is no count budget. A test earns its place by catching
+  a defect that could plausibly ship: a security or privacy boundary, data safety (migrations, backup, restore), a
+  core contract (the updater and release path, job claim and lease, task writes, the API schema), a feature's main
+  path, or a regression for a bug that actually happened. No tests of wording, docs prose or trivial plumbing, and no
+  exhaustive parametrization that repeats one case. Keep each test fast and deterministic; mark it
+  `@pytest.mark.slow` if it needs real git, Docker or a server.
 - Added or changed an icon in `ui/`? Run `python3 scripts/build-icon-font.py` to rebuild the icon font subset (a test fails until you do).
 - Keep the tests green, and do not add a dependency, a network call in the UI or a build step
   without saying why.
