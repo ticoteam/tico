@@ -76,7 +76,7 @@ def _task_name(row):
 
 
 # ------------------------------------------------------------------------------------------------ what it is now
-def _own_job(conn, row):
+def own_job(conn, row):
     """The run of its own a task has waiting or going: (job id, attempt id or None, created), or None."""
     H = _H()
     try:
@@ -131,7 +131,7 @@ def view(conn, row, history=True):
     quiet = bool(row.get("next_run"))
     if not quiet and not (history and was_quiet(conn, row["id"])):
         return None
-    job = _own_job(conn, row)
+    job = own_job(conn, row)
     if job:
         return {"state": "queued", "job": job["id"], "run": job["attempt_id"], "since": job["created"],
                 "words": "A run of its own is " + ("going" if job["state"] != "queued" else "waiting") + "."}
@@ -283,7 +283,7 @@ def resume(conn, row, why, trigger):
     conn.execute("UPDATE tasks SET resume_json=NULL, next_run=0, updated=? WHERE id=?", (H.now(), row["id"]))
     H._task_event(conn, row["id"], H.KEEPER, "next_run", "1", "0", "resume: " + why)
     after = H.task(conn, row["id"])
-    if not _own_job(conn, after):
+    if not own_job(conn, after):
         H._wake(conn, after, after["owner"], f"Resume: {after['title']}\n{why}",
                 {"wake": "resume", "resume": why}, trigger=trigger)
     return after

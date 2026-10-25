@@ -220,7 +220,7 @@ OWN_SUBTASK_BLOCKER = (
     "{blocker} is a subtask of {task}, and now blocks it. If the subtask stays open until {task} finishes "
     "(a hold, an acknowledgement, a window), neither can ever move. Say what {task} waits for with a comment or "
     "`waiting` and a reason instead, or finish the subtask once it has answered. If both go quiet, Tico wakes "
-    "{task}'s owner about it, and BotOps sees it as stuck.")
+    "the task's owner about it, and BotOps sees it as stuck.")
 
 
 def own_subtask_warning(conn, task_id, other_id, kind):

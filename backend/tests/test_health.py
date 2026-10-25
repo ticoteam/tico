@@ -48,6 +48,21 @@ def test_stalled_health_does_not_disclose_another_persons_private_task(environme
     assert 'stalled_tasks' not in health_of(api)[1]
 
 
+def test_an_escalated_task_waiting_on_its_own_quiet_hold_is_not_progressing(environment):
+    api = environment()
+    add_bot(api, 'helper')
+    with api.app.state.store.transaction() as c:
+        window = H.task_create(c, 'bot:helper', 'Open the deploy window', '', 'bot:helper')
+        hold = H.task_create(c, 'bot:helper', 'Hold merges until RELEASED', '', 'bot:helper', parent_id=window['id'])
+        H.TR.relate(c, 'bot:helper', window['id'], hold['id'], 'blocked_by')
+        H.task_update(c, 'bot:helper', window['id'], status='waiting', note="Waiting on the hold's ack.")
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET private=0, updated=? WHERE id IN (?,?)",
+                  (H.shift(H.now(), seconds=-3600), window['id'], hold['id']))
+        H.event(c, H.KEEPER, 'task.stall_escalated', window['id'], {'wakes': 3})
+    assert health_of(api)[1]['stalled_tasks']['status'] == 'warn'
+
+
 def test_an_offline_computer_holds_its_bots(environment):
     api = environment()
     runner = enrolled(api)

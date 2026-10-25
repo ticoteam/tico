@@ -1464,11 +1464,14 @@ def view(c, who, settings, auth, github, config):
 
     # Successful model turns can still make no task progress. Infrastructure and failed-run
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    stalled = list(c.execute(
-        "SELECT id,title FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
+    # A waiting task is escalated only when held by its own quiet subtasks (hubdb.own_stuck_blockers), so it counts
+    # while that still holds.
+    stalled = [row for row in c.execute(
+        "SELECT * FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
+        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated")
+        if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         checks.append(_check("stalled_tasks", "Tasks not progressing", "warn",
                              f"{_plural(len(stalled), 'task')} did not progress after repeated automatic runs. "

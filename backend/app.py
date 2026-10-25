@@ -3124,17 +3124,17 @@ def create_app(settings=None):
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
-        own_subtask = None
+        own_subtask = []
         for other, kind in others:
             changed = TR.relate(c, who.actor, row["id"], other, kind, mover=mover(c, who) or None)
             readback += TR.readback(c, row["id"], other, kind, changed=changed)
-            own_subtask = own_subtask or TR.own_subtask_warning(c, row["id"], other, kind)
+            own_subtask.append(TR.own_subtask_warning(c, row["id"], other, kind))
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
-        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), own_subtask)))
+        note = " ".join(filter(None, (usage_limits.warning(c, owner) or H.setup_hold(c, owner), *own_subtask)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
