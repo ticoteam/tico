@@ -9,10 +9,19 @@
 // with `WWW-Authenticate: Cloudflare-Access`. So a request that fails as a network error asks GET /v2/me once without
 // following redirects (sessionProbe): a redirect there, or a 401, is signed out; no answer at all is offline, and the
 // page keeps reconnecting as before.
-const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null};
+const SESSION = {out: false, seen: false, probe: null, probedAt: 0, login: '', bar: null, reopen: null, restoring: null, owner: null};
 // What the page had when it was signed out (where it was, the text in its boxes), kept for this tab while the
 // person signs in again on another site, and put back when they return (sessionReturn).
 const SESSION_RETURN = 'tico.signin.return';
+// Set only from the authenticated /me answer, before any draft is read or any page is drawn.
+// Names and browser origin cannot identify a person or a company (a different company may use this origin later).
+function sessionIdentity(me) {
+  const company = me?.config?.environment_id;
+  SESSION.owner = authenticatedConfigPerson(me) && typeof company === 'string' && company.trim()
+    ? {account: me.id, company} : null;
+}
+const sessionOwns = owner => !!(SESSION.owner && owner
+  && owner.account === SESSION.owner.account && owner.company === SESSION.owner.company);
 const signedOutError = write => Object.assign(new Error(write ? "Not saved: you've been signed out. Sign in again, then try again."
   : "You've been signed out. Sign in again to continue."), {signedOut: true});
 const sessionHere = () => location.pathname + location.search + location.hash;
@@ -114,7 +123,7 @@ const sessionBoxes = () => [...document.querySelectorAll('textarea, input[type="
   .filter(el => !el.readOnly && !el.disabled && !/search|filter/i.test(sessionKey(el)) && !chatBox(el));
 const sessionSave = kept => {
   try {
-    if (kept.fields.length || kept.task || kept.hash) sessionStorage.setItem(SESSION_RETURN, JSON.stringify(kept));
+    if (sessionOwns(kept.owner) && (kept.fields.length || kept.task || kept.hash)) sessionStorage.setItem(SESSION_RETURN, JSON.stringify(kept));
     else sessionStorage.removeItem(SESSION_RETURN);
   } catch {}
 };
@@ -138,7 +147,10 @@ function sessionKeep() {
     if (P) try { chatDraftSave(P); } catch {}
   const fields = new Map();
   // Texts from an earlier sign-in that have not found their box yet stay kept.
-  try { for (const f of JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []) fields.set(f.scope + '\n' + f.key, f); } catch {}
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null');
+    if (sessionOwns(kept?.owner)) for (const f of kept.fields || []) fields.set(f.scope + '\n' + f.key, f);
+  } catch {}
   // A task's comment box keeps its draft only while the page lives (task-modal.js TASK_DRAFTS), for tasks closed
   // since too.
   if (typeof TASK_DRAFTS !== 'undefined')
@@ -150,18 +162,21 @@ function sessionKeep() {
   // The task open in full, to open again on return (sessionResume).
   const d = document.getElementById('task-modal');
   const task = d?.open && d.dataset.task ? {id: d.dataset.task, thread: d.classList.contains('thread')} : null;
-  sessionSave({at: Date.now(), hash: location.hash, task, fields: [...fields.values()]});
+  sessionSave({owner: SESSION.owner, at: Date.now(), hash: location.hash, task, fields: [...fields.values()]});
 }
 // Back from signing in: the same place and the task that was open, and each text put back into its own empty box as
 // the page draws it, however late (a task opened an hour on). Each text stays kept for this tab until it is back in its box.
-(function sessionReturn() {
+function sessionReturn() {
   let kept = null;
   try { kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null'); } catch {}
-  if (!kept || !(Date.now() - kept.at < 86400000)) { try { sessionStorage.removeItem(SESSION_RETURN); } catch {} return; }
+  if (!sessionOwns(kept?.owner) || !(Date.now() - kept.at < 86400000)) { try { sessionStorage.removeItem(SESSION_RETURN); } catch {} return; }
   // A proxy's login sends the browser back to the address without its #, which never reached the server.
-  if (kept.hash && (!location.hash || location.hash === '#')) history.replaceState(null, '', location.pathname + location.search + kept.hash);
+  if (kept.hash && (BOOT_DEFAULT_ROUTE || !location.hash || location.hash === '#')) {
+    history.replaceState(null, '', location.pathname + location.search + kept.hash);
+    BOOT_DEFAULT_ROUTE = false;
+  }
   if (kept.task && typeof kept.task.id === 'string') SESSION.reopen = kept.task;
-  kept = {at: kept.at, hash: '', task: null,
+  kept = {owner: SESSION.owner, at: kept.at, hash: '', task: null,
     fields: (kept.fields || []).filter(f => f && typeof f.scope === 'string' && typeof f.key === 'string' && typeof f.value === 'string')};
   SESSION.restoring = kept;
   sessionSave(kept);
@@ -183,7 +198,7 @@ function sessionKeep() {
   const watch = new MutationObserver(() => { soon ||= requestAnimationFrame(() => { soon = 0; if (fill()) watch.disconnect(); }); });
   const start = () => { if (!fill()) watch.observe(document.body, {childList: true, subtree: true}); };
   if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, {once: true});
-})();
+}
 // Called once the first page is drawn (boot.js): the task that was open opens again over it.
 function sessionResume() {
   const t = SESSION.reopen;
@@ -196,3 +211,13 @@ function sessionResume() {
 document.addEventListener('click', e => { if (e.target.closest?.('#signed-out button')) signInAgain(); });
 // Reloading by hand while signed out keeps the text too.
 window.addEventListener('pagehide', () => { if (SESSION.out) sessionKeep(); });
+
+// Deliberate sign-out keeps the same person's drafts, just like session expiry. The identity stays
+// pinned to this loaded page so pagehide never relabels its text as the next person's.
+document.addEventListener('click', e => {
+  const link = e.target.closest?.('a[href]');
+  if (link && /\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(link.getAttribute('href'))) {
+    sessionKeep();
+    SESSION.out = true;
+  }
+}, true);

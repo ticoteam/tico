@@ -42,7 +42,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       if (p.endsWith('.js')) return reply('', 'application/javascript');
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
-      if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
+      if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config: {environment_id: 'fixture-company'}});
       if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: keeper ? 'keeper' : 'local', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/employees/botops/conversation') return json({runs: []});
@@ -106,7 +106,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     await page.goto(origin + '/#/bot/botops');
     await ready();
     await box.fill(text);
-    await page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'})));
+    await page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({owner: SESSION.owner, value: {...chatDrafts(), other: 'Another bot draft'}})));
     if (mode !== 'unsent') {
       if (mode === 'timeout') await page.evaluate(() => { CHAT_SEND.timeout = 250; });
       await send.click();

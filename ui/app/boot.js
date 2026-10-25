@@ -41,8 +41,12 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
       applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
     }
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    sessionIdentity(me);
+    chatIdentityRestore();
+    sessionReturn();
     renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {
+    if (!SESSION.owner) { chatIdentityRestore(); sessionReturn(); }
     if (SESSION.out || configVersion !== nativeVisualVersion()) return;
     const cleared = clearNativeVisualOrigin();
     configVersion = nativeVisualVersion();

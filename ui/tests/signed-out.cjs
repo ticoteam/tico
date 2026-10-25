@@ -60,7 +60,7 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
       if (state.mode === 'stream' && p !== '/api/v2/events' && p !== '/api/v2/me') return;
       if (state.mode !== 'ok') return down(route, state.mode);
     }
-    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
+    if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, config: {environment_id: 'fixture-company'}, registered: true});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);

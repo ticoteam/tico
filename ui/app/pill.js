@@ -18,27 +18,51 @@ let BOT_PILL = null;
 // kept for the session only. Sending clears it.
 const CHAT_DRAFTS = 'hub.chat.drafts', CHAT_FILES = new Map();
 const CHAT_PENDING_KEY = 'hub.chat.pending';
+// All persisted chat state has the same verified owner, including pending text/replay keys.
+// Legacy records are unknown and are discarded; no storage is read during script evaluation.
+function chatOwnedRead(storageName, key, empty) {
+  try {
+    const storage = window[storageName];
+    const saved = JSON.parse(storage.getItem(key) || 'null');
+    if (sessionOwns(saved?.owner)) return saved.value;
+    storage.removeItem(key);
+  } catch {}
+  return empty;
+}
 const chatPendingRead = () => {
   try {
-    return new Map(JSON.parse(sessionStorage.getItem(CHAT_PENDING_KEY) || '[]').filter(([slug, u]) =>
+    return new Map(chatOwnedRead('sessionStorage', CHAT_PENDING_KEY, []).filter(([slug, u]) =>
       typeof slug === 'string' && u && typeof u.text === 'string' && typeof u.signature === 'string'
       && typeof u.key === 'string' && u.key.length > 0 && u.key.length <= 200 && Number.isFinite(u.at)));
   } catch { return new Map(); }
 };
-const CHAT_PENDING = chatPendingRead();             // per tab, including reloads; no in-flight promises are persisted
+const CHAT_PENDING = new Map();             // per tab, including reloads; no in-flight promises are persisted
 function chatPendingSave() {
   try {
-    sessionStorage.setItem(CHAT_PENDING_KEY, JSON.stringify([...CHAT_PENDING].map(([slug, u]) =>
-      [slug, {text: u.text, signature: u.signature, key: u.key, at: u.at}])));
+    if (!SESSION.owner) { sessionStorage.removeItem(CHAT_PENDING_KEY); return; }
+    sessionStorage.setItem(CHAT_PENDING_KEY, JSON.stringify({owner: SESSION.owner,
+      value: [...CHAT_PENDING].map(([slug, u]) => [slug, {text: u.text, signature: u.signature, key: u.key, at: u.at}])}));
   } catch {}                                      // like draft storage, memory still works when storage is unavailable
 }
-const chatDrafts = () => { try { return JSON.parse(localStorage.getItem(CHAT_DRAFTS) || '{}') || {}; } catch { return {}; } };
+const chatDrafts = () => {
+  const value = chatOwnedRead('localStorage', CHAT_DRAFTS, {});
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+};
+function chatIdentityRestore() {
+  CHAT_FILES.clear();
+  CHAT_PENDING.clear();
+  for (const [slug, u] of chatPendingRead()) CHAT_PENDING.set(slug, u);
+  chatDrafts(); // discard an old or unknown owner's drafts even if no chat is opened
+}
 function chatDraftSave(P) {
   if (P?.mode !== 'chat' || !P.slug) return;
   const text = pq(P, '.p-text')?.value || '', all = chatDrafts();
   if (text.trim()) all[P.slug] = text; else delete all[P.slug];
   if (P.files.length) CHAT_FILES.set(P.slug, P.files.slice()); else CHAT_FILES.delete(P.slug);
-  try { localStorage.setItem(CHAT_DRAFTS, JSON.stringify(all)); } catch {}
+  try {
+    if (SESSION.owner) localStorage.setItem(CHAT_DRAFTS, JSON.stringify({owner: SESSION.owner, value: all}));
+    else localStorage.removeItem(CHAT_DRAFTS);
+  } catch {}
 }
 function botPill(slug) {
   if (BOT_PILL?.slug === slug) return BOT_PILL;
@@ -48,7 +72,7 @@ function botPill(slug) {
 // The draft (and files) last left in this bot's box come back.
 function pillRestore(P) {
   const draft = chatDrafts()[P.slug], files = CHAT_FILES.get(P.slug);
-  if (draft) pq(P, '.p-text').value = draft;
+  if (typeof draft === 'string') pq(P, '.p-text').value = draft;
   if (files?.length) { P.files.push(...files); pillChips(P); }
   P.unconfirmed = CHAT_PENDING.get(P.slug) || null;
   P.unconfirmed?.inFlight?.then(() => pillButtons(P));
