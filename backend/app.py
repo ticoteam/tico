@@ -1,6 +1,7 @@
 """Authenticated, deterministic API. No runtime launch or local-machine dependency."""
 
 import asyncio
+import contextvars
 import logging
 import time
 import json
@@ -3442,6 +3443,11 @@ def create_app(settings=None):
         try:
             with store.read() as c:
                 from .shared_bots import route
+                # BotOps filing for the person it acts for (request_id): the person, with BotOps as the second
+                # principal, exactly as task_create resolves it, before any candidate is read or sent to Decide.
+                handoff = who.role == "bot" and who.actor != "bot:" + BOTOPS and not who.via
+                if body.request_id and not handoff:
+                    who = contextvars.copy_context().run(delegated_identity, c, who, body.request_id, True)
                 owner = auth.target(c, who, route(c, who.actor, auth.target(c, who, body.owner, need="write")), need="write")
                 typ = H.type_get(c, body.type) if body.type else None
         except (Problem, H.Refused):
@@ -3453,9 +3459,14 @@ def create_app(settings=None):
     def check_readable(who):
         """A task check only sees what the caller may read: auth.task, with bot Read access and a run's or BotOps'
         second principal (`task_actor`)."""
+        second = Identity(who.task_actor, "bot") if who.task_actor and who.task_actor != who.actor else None
+
         def readable(c, row):
+            # Both readers: the person and the bot doing the work each need Read on it.
             try:
                 auth.task_row(c, who, row)
+                if second:
+                    auth.task_row(c, second, row)
                 return True
             except Problem:
                 return False

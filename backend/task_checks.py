@@ -384,7 +384,11 @@ def on_create(c, actor, check, reason, readable=None):
         return None
     rule, seen = dict(rule), describe(c, match)
     action = json.loads(rule["actions_json"])[0]
-    said = (f"task {match['id'][:8]} \"{seen['title']}\" ({seen['status']}, owner {seen['owner']}, {seen['age']})")
+    # A private match is never named: the refusal is also the audit row a company owner reads (hubdb.refuse), so it
+    # keeps no title or id of a task only its two parties may read, as hubdb's exact-duplicate guard does for BotOps.
+    hidden = H.task_private(c, match)
+    said = ("an existing private task you are on" if hidden else
+            f"task {match['id'][:8]} \"{seen['title']}\" ({seen['status']}, owner {seen['owner']}, {seen['age']})")
     if action == "block" and not str(reason or "").strip():
         detail = (f"Not created: the task check '{rule['name']}' found this already asked for in {said}. "
                   f"Comment on that task instead, or create it again with a reason (hub task create --reason \"...\"; "
@@ -392,16 +396,20 @@ def on_create(c, actor, check, reason, readable=None):
         try:
             H.refuse(c, actor, "task_check", detail)
         except H.Refused as exc:
-            raise tag(exc, rule, match["id"], {"match": seen})
+            raise tag(exc, rule, None if hidden else match["id"], {"match": {"private": True} if hidden else seen})
     if action == "warn" and not str(reason or "").strip():
         return f"Task check '{rule['name']}': this may already be asked for in {said}. Comment there if it is."
     return None
 
 
 def after_create(c, actor, check, task_id, reason):
-    """In the create's write, once the task is made: the override and its reason, or a skipped check, on the rule."""
+    """In the create's write, once the task is made: the override and its reason, or a skipped check, on the rule. A
+    private match's id stays out of the rule's history."""
     if not check:
         return
+    if check.get("match"):
+        match = H.task(c, check["match"]["id"])
+        check = {**check, "match": {"id": None if not match or H.task_private(c, match) else match["id"]}}
     if check.get("match") and str(reason or "").strip():
         record(c, "task_check.override", check["rule"]["id"],
                {"task": task_id, "match": check["match"]["id"], "by": actor, "reason": str(reason).strip()[:500]})
