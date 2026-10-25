@@ -576,3 +576,20 @@ def test_private_meeting_is_hidden_until_owner_adds_people_or_opens_it_to_the_te
     unknown = live.post(f"/api/v2/live-meetings/{mid}/access", json={"add": ["nobody-here"]},
                         headers=headers("ana-test"))
     assert unknown.status_code == 404
+
+
+def test_a_held_notice_does_not_make_an_idle_bot_miss_its_meeting_turn(live):
+    """A wake preset's held notice is queued but starts no run (backend/wake_presets.py): the bot is not busy."""
+    live.app.state.live_meeting_decider = lambda state, questions, label: {
+        "model": "synthetic-decider", "ms": 1,
+        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions}}
+    with live.app.state.store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Tidy the notes", "Please tidy them.", "bot:ops")
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
+        H.task_comment(c, H.KEEPER, task["id"], "Still waiting on review.", extra_refs={"stale_check": "s1"})
+        assert c.execute("SELECT held FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] == 1
+    meeting = connect(live)
+    attach(live, meeting["id"], "ops")
+    chunk(live, meeting["id"], 1, 0, 30_000, "The rollout needs a reliability review")
+    turns = {turn["bot"]: turn for turn in get(live, f"live-meetings/{meeting['id']}")["router"]["turns"]}
+    assert "ops" in turns and turns["ops"]["skip_reason"] != "busy"

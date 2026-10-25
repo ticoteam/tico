@@ -86,7 +86,8 @@ ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts W
 def _own_job_sql():
     return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().MESSAGE_TASK_SQL}=? "
+            f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
+            f"AND {_H().MESSAGE_TASK_SQL}=? "
             "ORDER BY j.created LIMIT 1")
 
 
@@ -148,7 +149,8 @@ def prime(conn, rows):
                     "SELECT j.id, j.attempt_id, j.created, j.state, j.bot AS own_bot, "
                     f"{H.MESSAGE_TASK_SQL} AS own_task FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot IN (%s) "
-                    "AND j.state IN ('queued','leased','running') ORDER BY j.created" % ",".join("?" * len(part)),
+                    f"AND j.state IN ('queued','leased','running') AND {H.unheld_sql()} ORDER BY j.created"
+                    % ",".join("?" * len(part)),
                     part):
                 jobs.setdefault((job["own_bot"], job["own_task"]), {k: job[k] for k in OWN_JOB_COLUMNS})
         seed(conn, _own_job_sql(), {(H.actor_id(row["owner"]), row["id"]):

@@ -8,6 +8,8 @@ from backend import github as G
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.test_api import api, claim, get, headers, post, ready, setup_attempt  # noqa: F401  (api is a fixture)
+from backend.tests.test_botops_parity import act
+from backend.tests.test_member_bots import botops, turn  # noqa: F401  (botops is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
 
 PR = "https://github.com/ticoteam/tico/pull/412"
@@ -372,3 +374,101 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
     assert token_saver["turns"] == 1 and token_saver["tokens"] == 900 and token_saver["accepted_tickets"] == 3
     assert token_saver["tokens_per_ticket"] == 300 and token_saver["turns_per_ticket"] == 0.33
     assert token_saver["pickup_seconds"]["held_p50"] >= 50 * 60          # from each event, not from the digest
+
+
+
+def stale_comments(api, task, n):
+    """Tico's reminders left as comments on the task: news, from neither a person nor the bot itself."""
+    with api.app.state.store.transaction() as c:
+        for i in range(n):
+            H.task_comment(c, H.KEEPER, task["id"], f"Still waiting on review {i}.", extra_refs={"stale_check": "s1"})
+
+
+def test_two_comments_inside_the_window_give_one_turn(api):
+    preset(api, "ops", "performance")
+    task = new_task(api, "tidy")
+    settled(api)
+    since, t0 = H.now(), H.shift(H.now(), hours=-1)
+    stale_comments(api, task, 2)
+    for n, job in enumerate(jobs(api, since=since)):
+        at(api, job["id"], H.shift(t0, seconds=20 * n))
+    tick(api, H.shift(t0, seconds=59))
+    assert [(j["held"], j["wake_class"]) for j in jobs(api, since=since)] == [(1, "notice")] * 2
+    tick(api, H.shift(t0, seconds=61))
+    assert [(j["state"], j["held"]) for j in jobs(api, since=since)] == [("completed", 0), ("queued", 0)]
+
+
+def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
+    preset(api, "ops", "token_saver")
+    task = new_task(api, "tidy")
+    settled(api)
+    since = H.now()
+    stale_comments(api, task, 1)
+    tick(api, H.now())
+    [held] = jobs(api, since=since)
+    assert held["held"] == 1 and held["hold_until"] > H.now()
+    post(api, f"tasks/{task['id']}/comments", {"text": "Please also tidy the README."})  # the person who filed it
+    post(api, "chat/ops", {"text": "And send me the link when it is up."})
+    tick(api, H.now())
+    assert [(j["state"], j["held"], j["hold_until"]) for j in jobs(api, since=since)[1:]] == [("queued", 0, None)] * 2
+
+
+
+def test_a_persons_act_through_botops_wakes_the_bot_at_once(api, botops):
+    """BotOps marking done, for the person, a task a bot asked them for: Tico's notice to that bot is the person's act,
+    as the same act from the app is, and no batch holds it."""
+    preset(api, "ops", "token_saver")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "bot:ops", "Approve the vendor list", "Please check it.", "human:ana")
+    attempt = turn(api, botops, person="ana-test", text="Mark the vendor list done")
+    since = H.now()
+    version = get(api, "tasks/" + task["id"])["task"]["version"]
+    done = act(api, attempt, "POST", "tasks/" + task["id"], {"status": "done", "version": version})
+    assert done.status_code == 200, done.text
+    [told] = jobs(api, since=since)
+    assert (told["state"], told["held"], told["wake_class"]) == ("queued", 0, None)
+
+
+# A held notice is queued but starts no run: every immediate wake that checks for a run already waiting still goes out.
+
+def held_notice(api, task):
+    stale_comments(api, task, 1)
+    [held] = [j for j in jobs(api) if j["wake_class"] == "notice"]
+    assert held["held"] == 1 and held["state"] == "queued"
+    return held
+
+
+def test_run_now_wakes_the_bot_while_a_notice_on_the_task_is_held(api):
+    preset(api, "ops", "token_saver")
+    task = new_task(api, "tidy")
+    settled(api)
+    held_notice(api, task)
+    assert post(api, f"tasks/{task['id']}/run-now", {})["queued"] is True
+    [run] = [j for j in jobs(api) if j["body"].startswith("Run now:")]
+    assert (run["state"], run["held"]) == ("queued", 0)
+
+
+def test_a_resumed_task_wakes_while_a_notice_on_it_is_held(api):
+    from backend import quiet_work
+    preset(api, "ops", "token_saver")
+    task = new_task(api, "tidy")
+    settled(api)
+    held_notice(api, task)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET next_run=1, resume_json=? WHERE id=?", (json.dumps({"until": H.now()}), task["id"]))
+        quiet_work.resume(c, H.task(c, task["id"]), "Its date came.", "schedule")
+    [resumed] = [j for j in jobs(api) if j["body"].startswith("Resume:")]
+    assert (resumed["state"], resumed["held"]) == ("queued", 0)
+
+
+def test_an_update_request_and_an_automatic_start_go_out_while_a_notice_is_held(api):
+    from backend import updates
+    from backend.tests.test_auto_tasks import deck, take
+    machine = task_bot(api, lanes=True)
+    preset(api, "ops", "token_saver")
+    [task] = deck(api, 1)
+    held_notice(api, task)
+    with api.app.state.store.read() as c:
+        assert not updates._busy(c, "ops")
+    started = take(api, machine)
+    assert started and started["task"]["id"] == task["id"] and started["message"]["body"].startswith("Start assigned task")

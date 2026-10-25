@@ -685,6 +685,11 @@ def create_app(settings=None):
                         via_reset = H.VIA.set("botops")
                     if getattr(request.state, "delegation", None):
                         delegation_reset = H.DELEGATION.set(request.state.delegation)
+                    lent = (getattr(request.state, "delegation", None) or {}).get("for")
+                    if H.is_human(lent) and cause_reset is not None:
+                        # What BotOps does with a person's rights is that person's act: its notices wake as the same
+                        # act from the app would (backend/wake_rules.py ALWAYS_WAKE "person", wake presets).
+                        wake_rules.CAUSE.set(lent)
             response = early or await call_next(request)
             if response.status_code >= 500:
                 from .diagnostics import request_failure

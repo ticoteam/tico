@@ -122,7 +122,8 @@ def missing(c, settings, runner, body):
                          "JOIN conversations cv ON cv.id=m.conversation_id "
                          "LEFT JOIN jobs carrier ON carrier.id=j.wake_carrier "
                          f"WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=? AND (j.state NOT IN ('completed','cancelled') "
-                         "OR carrier.state NOT IN ('completed','cancelled')) LIMIT 1",
+                         f"AND {H.unheld_sql()} OR carrier.state NOT IN ('completed','cancelled') "
+                         f"AND {H.unheld_sql('carrier')}) LIMIT 1",
                          (slug, row['id'])).fetchone():
                 continue
             return row

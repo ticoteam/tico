@@ -2755,6 +2755,10 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held)
+    elif is_bot(target) and not (refs or {}).get("quiet"):
+        # Token saving 4/9: other news waits for the wake preset's batch; an immediate wake carries its room's batch.
+        from . import wake_presets
+        wake_presets.hold_news(conn, {**row, "refs": refs or {}}, wake_rules.CAUSE.get())
     return message(conn, row["id"])
 
 
@@ -4361,7 +4365,7 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
         return bot if by_worker else None
     if not by_worker and _has_table(conn, "jobs") and _one(
             conn, "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? AND j.state='queued' "
-            "AND json_extract(m.refs_json,'$.subtask')=? LIMIT 1", (actor_id(bot), row["id"])):
+            f"AND {unheld_sql()} AND json_extract(m.refs_json,'$.subtask')=? LIMIT 1", (actor_id(bot), row["id"])):
         return bot
     # Turns on a check run on its model; one marked done from another turn before any ran there did not.
     ran = by_checker and _one(conn, "SELECT 1 FROM turns WHERE task_id=? AND bot=? LIMIT 1",
@@ -5959,6 +5963,12 @@ def _task_ref_sql(path):
 
 
 # Job/status SQL: the queued message names the task; a dedicated task thread still has task_id.
+# A job a wake preset holds (backend/wake_presets.py) is queued but starts no run until its batch is let go: a check
+# for a run already waiting, before it writes an immediate wake, counts only the jobs that are not held.
+def unheld_sql(alias="j"):
+    return f"coalesce({alias}.held,0)=0"
+
+
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
 
 
@@ -6746,7 +6756,8 @@ def task_run_now(conn, actor, task_id):
     try:
         waiting = _one(conn,
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot=? AND j.state='queued' AND {MESSAGE_TASK_SQL}=? LIMIT 1", (actor_id(row["owner"]), task_id))
+            f"WHERE j.bot=? AND j.state='queued' AND {unheld_sql()} AND {MESSAGE_TASK_SQL}=? LIMIT 1",
+            (actor_id(row["owner"]), task_id))
     except sqlite3.OperationalError:     # a local hub has no jobs table
         waiting = None
     after = task(conn, task_id)

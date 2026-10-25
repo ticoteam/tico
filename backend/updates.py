@@ -317,7 +317,8 @@ def person_depths(c, authors):
 
 
 def _busy(c, bot):
-    return c.execute("SELECT 1 FROM jobs WHERE bot=? AND state IN ('queued','leased','running','input') LIMIT 1",
+    return c.execute("SELECT 1 FROM jobs WHERE bot=? AND state IN ('queued','leased','running','input') "
+                     f"AND {H.unheld_sql('jobs')} LIMIT 1",
                      (bot,)).fetchone() is not None
 
 

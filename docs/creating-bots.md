@@ -601,13 +601,16 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
 - **Wakes**: how soon news starts a run. **Token saver**, the default for a new bot, holds
-  nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on) and
-  sends it as one wake at most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
+  nonblocking news (a request it asked for finished, review comments, a failing check nobody waits on, and any
+  other news: a comment from Tico or a bot, a task's status, step or relation moving) and sends it as one wake at
+  most every 30 minutes. It also runs an enabled routine, or a stall check on a task,
   at most every 2 hours. **Performance** coalesces the same news for 1 minute and runs those sweeps at most
   every 15 minutes. Existing bots without a preset, including the former Current behaviour setting,
   move to Performance. In every preset, these wake the bot at once, and only once
   when the same event repeats before its run is over: a person's message, an assignment, a question, something it waits on
-  resolving, a blocker, and a review or QA request. A preset turns on no routine, hook, subscription or
+  resolving, a blocker, a review or QA request, an approval, a gate verdict, a message flagged needs-action, a due
+  date or snooze ending, and a live meeting or Slack digest. A held batch never delays any of these. A stall check
+  on a task that has not changed waits 30 minutes after the last one, then 60, 120, 240 and at most 8 hours. A preset turns on no routine, hook, subscription or
   permission, and leaves Compact at alone. The line under the picker shows what the bot runs on. Each run
   in a task's **Runs** says what woke it. A branch picks its own.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.

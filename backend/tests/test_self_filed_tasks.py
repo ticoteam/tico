@@ -3,6 +3,7 @@
 The task's own turn starts once the filing turn has ended, never beside it: a task the filing turn finished by then
 starts no turn at all. A turn Tico woke on a task already finished that wrote nothing posts no reply to the person;
 its text stays on the run."""
+from backend import wake_presets as W
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_run_triggers import finish, machine, start
@@ -69,6 +70,7 @@ def recheck_after_claim(api, r, task, body="Still held?", refs=None):
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", task["id"], status="review", mover=True)
         H._wake(c, H.task(c, task["id"]), "bot:ops", body, refs)
+        W.tick(c, H.shift(H.now(), minutes=2))           # past the wake preset's batch window
     again = claim(api, r)
     assert again is not None, "the task was open when its automatic wake was claimed"
     with api.app.state.store.transaction() as c:

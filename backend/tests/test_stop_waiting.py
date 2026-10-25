@@ -1,6 +1,7 @@
 """Stop and finished-task notices cannot resurrect work that never started."""
 import pytest
 
+from backend import wake_presets as W
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, expire, post, ready, runner  # noqa: F401
 
@@ -88,6 +89,7 @@ def test_all_keeper_notices_are_obsolete_only_on_finished_tasks(api, status, bod
         notice = H.say(c, H.KEEPER, "bot:ops", body, kind="notice", conversation_id=task["conversation_id"],
                        refs={"task": task["id"], "trigger": "other"})
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (notice["id"],)).fetchone()[0] == "queued"
+        W.tick(c, H.shift(H.now(), minutes=2))           # past the wake preset's batch window
     attempt = claim(api, machine)
     assert (attempt is not None) == (status == "open")
     with api.app.state.store.read() as c:
