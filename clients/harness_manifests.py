@@ -37,6 +37,7 @@ FIELDS = {
     "serial_cold_start": (bool, False),
     "one_turn_per_login": (bool, False),
     "isolated_user": (bool, False),
+    "turn_sign_in": (str, ""),
     "compaction": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
@@ -48,7 +49,8 @@ FIELDS = {
 }
 CHOICES = {"api_keys": ("", "computer", "bot"), "weekly_usage": ("", "refresh", "turns", "manual"),
            "account": ("", "status-json", "app-server"),
-           "model_list": ("", "host", "command")}
+           "model_list": ("", "host", "command"),
+           "turn_sign_in": ("", "claude-oauth", "codex-external")}
 CHECKS = ("none", "command", "json", "file", "bot-key")
 TRANSPORTS = ("http", "sse")
 

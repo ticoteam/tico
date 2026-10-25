@@ -7,7 +7,9 @@ of that format for the runner to finish it, and its final answer is `probe <json
 where the runner started it (its user and capabilities, whether it reaches the runner's registration, state and
 legacy secrets, and a commit and pull in its working tree as itself).
 """
+import base64
 import json
+import time
 import os
 import subprocess
 import sys
@@ -61,6 +63,22 @@ def renamable(path):
     return True
 
 
+def sibling_credentials():
+    folder = HOME / "workspace/credential-sibling"
+    if not folder.exists():
+        return {}
+    # A missing/stale fixture is a test failure, never a vacuous denial.
+    pid = int((folder / "pid").read_text())
+    present = Path(f"/proc/{pid}").exists()
+    try:
+        environment = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    except OSError:
+        environment = []
+    return {"credential_sibling_present": present, "sibling_granted_secret": readable(folder / "granted-secret"),
+            "sibling_tico_token": b"HUB_TOKEN=synthetic-sibling-tico" in environment,
+            "sibling_github_token": b"GH_TOKEN=synthetic-sibling-github" in environment}
+
+
 def git(cwd, *args):
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
     return "ok" if done.returncode == 0 else "failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:160]
@@ -75,7 +93,13 @@ def probe(cwd):
     result = {"harness": NAME, "uid": os.geteuid(), "caps": caps, "where": where,
               "registration": readable(HOME / "runner.json"),
               "state": any(readable(p) for p in HOME.glob("state-*")),
-              "secrets": readable(HOME / "workspace/secrets/_shared.env"), **siblings(cwd)}
+              "secrets": readable(HOME / "workspace/secrets/_shared.env"), **siblings(cwd), **sibling_credentials()}
+    if SPEC["host"] in {"codex", "claude"} and os.geteuid() != 10003:
+        variable, basename = ("CODEX_HOME", "auth.json") if SPEC["host"] == "codex" else ("CLAUDE_CONFIG_DIR", ".credentials.json")
+        private = Path(os.environ[variable])
+        result["private_signin"] = (private.is_relative_to(Path(os.environ["HOME"])) and
+            not (private / basename).exists() and not os.environ.get("CLAUDE_CODE_OAUTH_REFRESH_TOKEN") and
+            (SPEC["host"] != "claude" or bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"))))
     # Bot code's own git in its checkout: a commit, then a pull, as whatever user the runner started it as.
     note = Path(cwd) / f"turn-{NAME}-{uuid.uuid4().hex[:8]}.txt"
     try:
@@ -106,15 +130,45 @@ def codex():
     if "generate-json-schema" in sys.argv:
         return  # no native goals
     cwds = {}
+    private = os.geteuid() not in {10002, 10003, 0}
+    authenticated, refreshed, pending = not private, False, None
     for msg in lines():
         method, params, rid = msg.get("method"), msg.get("params") or {}, msg.get("id")
         if rid is None:
             continue
+        if method == "account/read":
+            if params.get("refreshToken"):
+                path = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "auth.json"
+                auth = json.loads(path.read_text())
+                body = base64.urlsafe_b64encode(json.dumps({"exp": time.time() + 7200, "rotation": uuid.uuid4().hex}).encode()).decode().rstrip("=")
+                auth["tokens"]["access_token"] = "synthetic." + body + ".fixture"
+                auth["tokens"]["refresh_token"] = "synthetic-rotated-refresh-never-in-turn"
+                path.write_text(json.dumps(auth))
+            say({"id": rid, "result": {"account": {"type": "chatgpt", "email": "acme@example.test", "planType": "plus"}}})
+            continue
+        if method == "account/login/start":
+            assert private and params["type"] == "chatgptAuthTokens"
+            assert set(params) == {"type", "accessToken", "chatgptAccountId"}
+            authenticated = bool(params["accessToken"]) and params["chatgptAccountId"] == "acme"
+            say({"id": rid, "result": {"type": "chatgptAuthTokens"}})
+            continue
+        if method is None and rid == "synthetic-refresh":
+            assert msg.get("result", {}).get("chatgptAccountId") == "acme", msg.get("error")
+            assert set(msg["result"]) == {"accessToken", "chatgptAccountId"}
+            refreshed = True
+            msg = pending
+            method, params, rid = msg["method"], msg["params"], msg["id"]
         if method in ("thread/start", "thread/resume"):
+            assert authenticated
             thread = params.get("threadId") or str(uuid.uuid4())
             cwds[thread] = params.get("cwd")
             say({"id": rid, "result": {"thread": {"id": thread}}})
         elif method == "turn/start":
+            if private and not refreshed:
+                pending = msg
+                say({"id": "synthetic-refresh", "method": "account/chatgptAuthTokens/refresh",
+                     "params": {"reason": "unauthorized", "previousAccountId": "acme"}})
+                continue
             thread, turn = params["threadId"], str(uuid.uuid4())
             text = probe(params.get("cwd") or cwds.get(thread))
             say({"id": rid, "result": {"turn": {"id": turn}}})

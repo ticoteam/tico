@@ -15,6 +15,7 @@ mod native;
 pub mod musecode;
 mod oneshot;
 pub mod pi;
+pub mod turn_signin;
 #[cfg(test)]
 mod isolationtests;
 #[cfg(test)]

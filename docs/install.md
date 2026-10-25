@@ -737,6 +737,14 @@ image still starts on the migrated volume and reads its own files; the bots then
 the next update. Use `docker exec -u bot` for what a bot should
 own (model logins). Legacy secret files stay with the runner supervisor; bots receive granted Credentials.
 
+Claude Code and Codex have a brokered sign-in path awaiting the Docker isolation gate. Until that gate passes,
+these tools continue to report `turn_user: bot`. The broker retains the shared refresh credential and gives a
+private turn home only an access credential: Codex can request renewed access tokens, while Claude receives a
+token covering the configured turn limit and stops before expiry. Concurrent turns on one subscription remain
+supported; only token renewal is serialized. API-key turns also remain concurrent, and Mac behavior is unchanged.
+Conversation transcripts are saved separately from sign-in state. The automatic 64-turn ceiling fits the 64-user
+pool; a larger manual ceiling waits for a user when the pool is full.
+
 The image holds no model CLI. Once your team has enabled a provider (Settings > Computers > Models), the runner installs
 that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Settings > Computers shows the progress),
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).

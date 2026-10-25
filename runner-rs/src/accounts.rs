@@ -201,6 +201,7 @@ fn app_server(exe: &std::path::Path, env: &Env) -> tokio::process::Command {
 /// One `account/read` on a fresh `<executable> app-server` in `env`, and for a ChatGPT login its plan usage
 /// (`account/rateLimits/read`, which reads and spends nothing; an API-key login has none and is not asked).
 pub async fn read_app_server(runtime: &str, env: &Env) -> Option<(Value, Option<Value>)> {
+    let _refresh_guard = crate::hosts::turn_signin::guard(runtime, env).await;
     let exe = crate::env::which(&crate::harness_tools::executable_for(runtime), &std::env::var("PATH").unwrap_or_default())?;
     let mut child = app_server(&exe, env).spawn().ok()?;
     let (mut stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);

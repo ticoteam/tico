@@ -29,11 +29,6 @@ pub fn enabled() -> bool {
     identity().is_some()
 }
 
-/// The `setpriv` arguments that switch to the bot user and empty every capability set.
-pub fn prefix() -> Option<Vec<String>> {
-    identity().map(prefix_for)
-}
-
 fn prefix_for((uid, gid): (u32, u32)) -> Vec<String> {
     // A leased turn user also gets the groups of the checkouts its turn runs in (crate::checkout_groups); every other
     // identity runs with none.
@@ -81,10 +76,10 @@ pub fn command_as(id: Option<(u32, u32)>, program: impl AsRef<std::ffi::OsStr>) 
 
 /// `command` run by `parent` (a program and its first arguments), which execs the rest: the bot-user switch, when
 /// isolation is on, happens below the parent, and kills the program when the parent dies (setpriv `--pdeathsig`).
-pub fn command_under(parent: &[std::ffi::OsString], program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+pub fn command_under_as(id: Option<(u32, u32)>, parent: &[std::ffi::OsString], program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(&parent[0]);
     cmd.args(&parent[1..]);
-    if let Some(p) = prefix() {
+    if let Some(p) = id.or_else(identity).map(prefix_for) {
         cmd.args(&p).args(["--pdeathsig", "KILL"]);
         // SAFETY: the closure only calls umask.
         unsafe { cmd.pre_exec(umask_group) };
@@ -485,6 +480,20 @@ pub fn protect_state(directory: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_turn_identity_applies_to_direct_and_reaped_commands() {
+        let direct = command_as(Some((10142, 10002)), "synthetic-cli");
+        let parent = vec![std::ffi::OsString::from("synthetic-reaper")];
+        let reaped = command_under_as(Some((10142, 10002)), &parent, "synthetic-cli");
+        for command in [&direct, &reaped] {
+            let args: Vec<_> = command.as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+            assert!(args.contains(&"--reuid=10142".into()) && args.contains(&"--regid=10002".into()));
+            assert_eq!(args.last().map(String::as_str), Some("synthetic-cli"));
+        }
+        assert!(reaped.as_std().get_args().any(|a| a == "--pdeathsig"));
+    }
+
 
     #[cfg(target_os = "linux")]
     struct Fixture(PathBuf);

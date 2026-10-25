@@ -96,6 +96,9 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
 type Reply = Result<Value, Value>;
 
 struct Shared {
+    identity: Option<(u32, u32)>,
+    broker: Option<super::turn_signin::Broker>,
+    access: Mutex<Option<Value>>,
     tx: Events,
     env: Env,
     base_config: Map<String, Value>,
@@ -127,7 +130,14 @@ pub struct CodexHost(Arc<Shared>);
 impl CodexHost {
     /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
+        Self::on_home_as(env, tx, codex_home, None, None)
+    }
+
+    pub fn on_home_as(env: Env, tx: Events, codex_home: Option<&str>, identity: Option<(u32, u32)>, broker: Option<super::turn_signin::Broker>) -> CodexHost {
         CodexHost(Arc::new(Shared {
+            identity,
+            broker,
+            access: Mutex::new(None),
             tx,
             env,
             base_config: mcp_disable_config(codex_home),
@@ -169,7 +179,8 @@ impl CodexHost {
         if self.running() {
             self.stop_and_reap().await;
         }
-        let mut command = crate::isolation::command("codex");
+        let mut command = crate::isolation::command_as(self.0.identity, "codex");
+        if self.0.identity.is_some() { command.args(["-c", "cli_auth_credentials_store=\"ephemeral\""]); }
         command.arg("app-server").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&self.0.env);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start codex app-server: {e}")))?;
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &self.0.env);
@@ -218,7 +229,20 @@ impl CodexHost {
         });
         let info = json!({"name": "tico-keeper", "title": "Tico keeper", "version": "0.1"});
         self.request("initialize", json!({"clientInfo": info, "capabilities": {"experimentalApi": true}}), START_TIMEOUT).await?;
-        self.notify("initialized", json!({})).await
+        self.notify("initialized", json!({})).await?;
+        if let Some(broker) = &self.0.broker {
+            let access = broker.access(60.0, None).await.map_err(failed)?;
+            *self.0.access.lock().unwrap() = Some(access.clone());
+            let mut params = access;
+            params["type"] = json!(if params["apiKey"].is_string() { "apiKey" } else { "chatgptAuthTokens" });
+            self.request("account/login/start", params, START_TIMEOUT).await?;
+        } else if self.0.identity.is_some() {
+            // Private CODEX_HOME has no auth.json, including for API-key turns.
+            if let Some(key) = self.0.env.get("OPENAI_API_KEY").filter(|s| !s.is_empty()) {
+                self.request("account/login/start", json!({"type": "apiKey", "apiKey": key}), START_TIMEOUT).await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn stop(&self) {
@@ -264,8 +288,12 @@ impl CodexHost {
             return Err(failed("codex app-server is not running"));
         }
         let line = msg.to_string() + "\n";
-        if let Some(c) = self.capture() {
+        // Authentication frames contain access credentials absent from the turn's original redactor.
+        // They never enter a capture (including replies to external-token refresh requests).
+        if msg["method"] != "account/login/start" && msg.get("method").is_some() {
+          if let Some(c) = self.capture() {
             c.sent(&line);
+          }
         }
         let mut stdin = self.0.stdin.lock().await;
         let Some(s) = stdin.as_mut() else { return Err(failed("codex app-server stdin closed")) };
@@ -323,6 +351,25 @@ impl CodexHost {
                         None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
                     });
                 }
+            }
+            (Some(id), Some(method)) if method == "account/chatgptAuthTokens/refresh" && self.0.broker.is_some() => {
+                // Do not block the protocol reader on refresh. The broker's login lock covers this call only.
+                let host = self.clone();
+                let previous = self.0.access.lock().unwrap().clone();
+                tokio::spawn(async move {
+                    let same_account = previous.as_ref().is_some_and(|p| p["chatgptAccountId"] == msg["params"]["previousAccountId"]);
+                    let result = if same_account {
+                        tokio::time::timeout(Duration::from_secs(8), host.0.broker.as_ref().unwrap().access(60.0, previous.as_ref())).await.ok().and_then(Result::ok)
+                    } else { None };
+                    let response = match result {
+                        Some(access) => {
+                            *host.0.access.lock().unwrap() = Some(access.clone());
+                            json!({"jsonrpc": "2.0", "id": id, "result": access})
+                        }
+                        None => json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": "Subscription refresh unavailable; retry this turn"}}),
+                    };
+                    let _ = host.write(&response).await;
+                });
             }
             (Some(id), Some(_)) => {
                 // A server request; the runner approves nothing.

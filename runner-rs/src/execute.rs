@@ -832,17 +832,22 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
-    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>) -> Result<(Instant, String), Fail> {
+    fn run_deadline(&self, aid: &str, config: &Value, relay: Option<&crate::gateway_relay::Relay>, credential_limit: Option<Instant>) -> Result<(Instant, String), Fail> {
         let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
         let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
-        let limit = relay.map_or(requested, |r| r.limit(requested));
-        let name = if limit < requested { "Gateway credential lifetime (24 hours)".into() } else { format!("max_run_minutes ({minutes} minutes)") };
-        if limit < requested {
+        let gateway_limit = relay.map_or(requested, |r| r.limit(requested));
+        let limit = credential_limit.map_or(gateway_limit, |expiry| gateway_limit.min(expiry));
+        let name = if limit < gateway_limit { "Subscription access token lifetime; re-run to continue".into() } else if limit < requested { "Gateway credential lifetime (24 hours)".into() } else { format!("max_run_minutes ({minutes} minutes)") };
+        if gateway_limit < requested {
             self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
         }
         if limit <= run_clock() {
             let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": format!("Timeout: {name}")}));
-            return Err(Fail::runtime("Tico Gateway run time limit reached; start a new attempt to continue with its current key"));
+            return Err(Fail::runtime(if limit < gateway_limit {
+                "Subscription access token lifetime reached; re-run this turn"
+            } else {
+                "Tico Gateway run time limit reached; start a new attempt to continue with its current key"
+            }));
         }
         Ok((limit, name))
     }
@@ -891,7 +896,7 @@ impl Runner {
 
     /// The host for `runtime` on this turn: Claude Code runs the installed (or tools-dir) `claude`, Codex its app
     /// server on the profile's CODEX_HOME, a bot delivered through a Mac app the app driver (`config`).
-    fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, tx: hosts::Events) -> Result<Host, Fail> {
+    fn make_host(&self, bot: &str, runtime: &str, config: &Value, env: &Env, profile: Option<&Profile>, identity: Option<(u32, u32)>, broker: Option<hosts::turn_signin::Broker>, tx: hosts::Events) -> Result<Host, Fail> {
         #[cfg(test)]
         if let Some(command) = tests::HOST_COMMAND.with(|command| command.borrow().clone()) {
             if runtime == "claude" || tests::HOST_CLAUDE.with(|claude| claude.get()) {
@@ -911,7 +916,7 @@ impl Runner {
         }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(bot, vec![crate::harness_tools::executable_for("claude")], tx)),
-            "codex" => Host::Codex(CodexHost::on_home(env.clone(), tx, profile.and_then(|p| p.home("codex")).map(|h| h.display().to_string()).as_deref())),
+            "codex" => Host::Codex(CodexHost::on_home_as(env.clone(), tx, env.get("CODEX_HOME").map(String::as_str), identity, broker)),
             "gemini" => Host::Gemini(GeminiHost::new(bot, &self.state.directory.join("gemini").join(bot), vec!["gemini".into()], tx)),
             "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
                 bot,
@@ -1119,6 +1124,8 @@ impl Runner {
         let mut env: Env = Env::new();
         let mut base_env: Option<Env> = None;
         let mut host: Option<Host> = None;
+        let mut provider_store: Option<hosts::turn_signin::Store> = None;
+        let mut credential_limit = None;
         let mut receivers = Vec::new();
         let (mut thread, mut turn): (Option<String>, Option<String>) = (None, None);
         let mut drove = Drove::interrupted();
@@ -1187,8 +1194,8 @@ impl Runner {
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
             // A turn runs as its own leased OS user when its model is a Tico model (required) or when a harness it may
-            // run on keeps no owner-only state shared across turns (`isolated_user`, optional: a runner with no pool
-            // runs it as `bot`). Harnesses whose sign-in files are 0600 in the bot's home run as `bot`; with them a
+            // run on can sign in from a private home (`isolated_user`, optional: a runner with no pool runs it as
+            // `bot`). Harnesses still needing shared owner-only sign-in files run as `bot`; with them a
             // turn can still enter every bot's checkout, as can the runner's own git (SECURITY.md).
             let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
             if crate::hosts::pi::is_gateway(model.as_deref()) || (own_user(&runtime, &text_of(&config["harness"])) && crate::turn_users::available()) {
@@ -1231,6 +1238,13 @@ impl Runner {
             }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
+            let (broker, expiry) = if turn_identity.is_some() {
+                let kind = crate::harness_tools::caps(&runtime, &text_of(&config["harness"])).turn_sign_in;
+                let home = PathBuf::from(env.get("HOME").cloned().unwrap_or_default());
+                let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
+                hosts::turn_signin::prepare(&kind, base_env.as_ref().unwrap(), &mut env, &home, minutes * 60.0).await.map_err(Fail::runtime)?
+            } else { (None, None) };
+            credential_limit = expiry;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             redactor = redact::for_turn(&pairs, &vault.values);
             if let Some(s) = &self.socket {
@@ -1298,7 +1312,7 @@ impl Runner {
             } else {
                 self.state.session(&bot, &conv, &session_runtime)?
             };
-            let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+            let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref(), credential_limit)?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
@@ -1332,6 +1346,11 @@ impl Runner {
                 self.turn_git(&mut vault, &mut env, &paths)?;
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
+            if let Some(identity) = turn_identity {
+                let kind = crate::harness_tools::caps(&runtime, &text_of(&config["harness"])).turn_sign_in;
+                provider_store = hosts::turn_signin::Store::restore(&kind, &env, &self.state.directory,
+                    &format!("{bot}:{conv}"), identity).await.map_err(Fail::runtime)?;
+            }
             let made = if persistent {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
@@ -1339,7 +1358,7 @@ impl Runner {
                 env = turn_env;
                 Host::Antigravity(warm)
             } else {
-                self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), tx)?
+                self.make_host(&bot, &runtime, &config, &env, selected.as_ref(), turn_identity, broker, tx)?
             };
             let h = host.insert(made);
             if let Some(held) = login_held.as_mut() {
@@ -1566,6 +1585,9 @@ impl Runner {
             if let Some(h) = &host {
                 h.stop().await;
             }
+            if let Some(store) = provider_store.take() {
+                if let Err(e) = store.save().await { log(&format!("Tico runner: {e}")); }
+            }
             login_held = None; // the primary's host is stopped: its login is free for the next turn
             fallback = Some(hop.harness.clone());
             drove = Drove::interrupted();
@@ -1588,14 +1610,20 @@ impl Runner {
                 let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
                 let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
-                    // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
-                    // started, so it does not wait for a free user: with none free the fallback runs as `bot`.
-                    match crate::turn_users::Lease::take() {
-                        Ok(user) => vault.turn_user = Some(user),
-                        Err(e) => log(&format!("Tico runner: turn {aid}: its {} fallback runs as the bot user: {e}", hop.harness)),
-                    }
+                    // An already-started turn cannot return to the pre-start capacity queue. Refuse this fallback
+                    // cleanly when the pool is full, rather than weakening its promised process identity.
+                    vault.turn_user = Some(crate::turn_users::Lease::take().map_err(|_| Fail::runtime(
+                        "Private Docker turn user unavailable for fallback; re-run this turn"))?);
                 }
                 let turn_identity = vault.for_model(&mut hop_env, Some(&hop.model), own).map_err(Fail::runtime)?;
+                let (broker, expiry) = if turn_identity.is_some() {
+                    let source = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                    let kind = crate::harness_tools::caps(&hop.runtime, &hop.harness).turn_sign_in;
+                    let home = PathBuf::from(hop_env.get("HOME").cloned().unwrap_or_default());
+                    let minutes = config["max_run_minutes"].as_f64().or_else(|| text_of(&config["max_run_minutes"]).parse().ok()).unwrap_or(60.0);
+                    hosts::turn_signin::prepare(&kind, &source, &mut hop_env, &home, minutes * 60.0).await.map_err(Fail::runtime)?
+                } else { (None, None) };
+                credential_limit = expiry;
                 env = hop_env.clone();
                 // Named with the harness it moved to, so the task's Runs say where the turn went and why.
                 let note = match (&left, &busy) {
@@ -1625,14 +1653,14 @@ impl Runner {
                     self.turn_git(&mut vault, &mut hop_env, &paths)?;
                     crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
                 }
-                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), tx)?);
+                let h = host.insert(self.make_host(&bot, &hop.runtime, &hop_config, &hop_env, selected.as_ref(), turn_identity, broker, tx)?);
                 if let Some(held) = login_held.as_mut() {
                     held.bind(h.clone());
                 }
                 if let Some(c) = &capture {
                     h.set_capture(c);
                 }
-                let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
+                let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref(), credential_limit)?;
                 h.start().await?;
                 let settings = Settings {
                     identity: turn_identity,
@@ -1792,6 +1820,9 @@ impl Runner {
             }
         }
         // A barrier settles final stderr before last_seq is frozen; cleanup's process exits are discarded.
+        if let Some(store) = provider_store.take() {
+            if let Err(e) = store.save().await { log(&format!("Tico runner: {e}")); }
+        }
         for (tx, rx) in &mut receivers {
             let _ = tx.send(json!({"kind": "_diagnostics_drained"}));
             while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {

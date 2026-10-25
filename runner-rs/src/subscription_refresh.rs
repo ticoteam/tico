@@ -90,6 +90,7 @@ pub async fn read_codex(profile: &crate::profiles::Profile, cancelled: &AtomicBo
     let Some(exe) = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()) else { return json!({"state": "unavailable"}) };
     let process: crate::env::Env = std::env::vars().collect();
     let mut env = profile.environment("codex", &process);
+    let _refresh_guard = crate::hosts::turn_signin::guard("codex", &env).await;
     for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
         env.remove(name);
     }
