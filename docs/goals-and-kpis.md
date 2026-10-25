@@ -144,7 +144,8 @@ and each goal gets a [Why line](#a-goals-why).
 ### How much your CEO Bot does
 
 **Settings > CEO Bot** has the **Regular checks** toggle and three levels: **Passive** (where every company starts),
-**Suggests actions** and **Acts on its own**. Level 3 does what level 2 does until it arrives in a later release.
+**Suggests actions** and **Acts on its own**. At **Acts on its own** it also decides on bots' tasks itself, each
+decision with an Undo ([Your CEO Bot](ceo-bot.md#the-ceo-bot-log)).
 
 - **Passive** keeps the regular checks (KPI readings and automatic goal colours) and otherwise acts only when you talk to
   it. It suggests KPIs, goals and Why lines when asked and changes nothing until accepted. There is no vision ask, no Why
@@ -157,13 +158,15 @@ The levels, who changes them and what stays yours are on [Your CEO Bot](ceo-bot.
 
 #### Recoveries and merged asks
 
-At **Suggests actions** or **Acts on its own**, a red or stalled goal gets a **recovery** in its owner's Needs you, in place of "check why it is off
+At **Suggests actions**, a red or stalled goal gets a **recovery** in its owner's Needs you, in place of "check why it is off
 track": the evidence, up to 4 options and the CEO Bot's pick. Each option is a few changes to bots' tasks only: a new
 task for a bot, a bot's task moved to the top of its queue, or a clash between two bots' tasks settled. **Approve** on
 an option applies exactly that option, in the CEO Bot's name; **Reject** drops them all. Where part of an option
 can't be done (a bot is paused, a task finished meanwhile, or you may not reorder bots' queues), it says why in plain
 words, and what wasn't done comes back as a new recovery. Nothing is dropped. Going down to **Passive** withdraws
-the recoveries waiting.
+the recoveries waiting. At **Acts on its own**, the CEO Bot makes the changes itself as a decision, in place of a
+recovery, and posts a comment on the goal saying what it did and why; you undo a decision in the CEO Bot log. A change
+you undid is never made alone again: tried again, it becomes an item in your Needs you.
 
 When several bots ask you the same thing, the CEO Bot can make them **one item** (`POST /api/v2/ceo-bot/merge`).
 Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends

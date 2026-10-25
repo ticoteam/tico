@@ -297,6 +297,12 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     """Spec 7: the file and its version are refused, and no link to the company's address is handed out; a reader
     with access is sent to a five-minute signed link on it, checked again on every request."""
     made, hq, sync = tico
+    # The media worker (backend/file_metadata.py) reads each new picture once, through the company's address, on its
+    # own poll: it is stopped here and its work run below, so that read lands before any count, not inside one.
+    from backend.file_metadata import PENDING
+    worker = api.app.state.file_metadata
+    worker.stop.set()
+    worker.wake.set()
     picture, tid = png(), task(api)
     early = attach(api, tid, 'early.png', picture + b'early')
     sync(on())
@@ -307,6 +313,12 @@ def test_a_private_tasks_file_in_tico_storage_is_refused_to_a_person_without_acc
     fid = made_file.json()["file"]["id"]
     digest = hashlib.sha256(picture).hexdigest()
     assert f'c/acme/blobs/{digest[:2]}/{digest}' in made[KEY].objects
+    with api.app.state.store.read() as c:
+        waiting = [dict(r) for r in c.execute(PENDING, (float("inf"),))]
+    delivered = hq.edge.delivered.get(ADDRESS, 0)
+    for blob in waiting:
+        worker.process(blob)
+    assert hq.edge.delivered.get(ADDRESS, 0) == delivered + len(picture), "its preview read it once, metered"
 
     for who in ("cara-test",):
         for path in (f"/api/v2/files/{fid}", f"/api/v2/files/{fid}?v=1"):

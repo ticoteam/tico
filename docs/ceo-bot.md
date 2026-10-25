@@ -174,7 +174,9 @@ decision: its owner, its status and step, its place in the queue and its note. A
 Each bot whose task changed is told, including a bot that loses a task it was given. If someone changed a task after
 the decision, their change stays, and a task the decision created that someone has changed stays open. If Tico can't
 put one task back, the others are still put back. A task that has a guest now keeps its owner, so the guest keeps it.
-The entry then says, in plain words, what could not be restored. An entry is undone once.
+The entry then says, in plain words, what could not be restored. An entry is undone once. Your Undo stands: the CEO
+Bot never makes a change you undid alone again (the same new task for the same bot, or the same reorder, reassign or
+close of a task); tried again, it becomes an item in your **Needs you**.
 
 Over the API, the owner reads the log with `GET /api/v2/ceo-bot/log` (`hub goal ceo-bot-log`) and undoes an entry
 with `POST /api/v2/ceo-bot/log/{id}/undo`. The CEO Bot decides with `POST /api/v2/ceo-bot/decisions`

@@ -1,5 +1,6 @@
 """What woke each run, its tokens and whether it acted, and the weekly table of them in hub sql
 (backend/run_triggers.py; token saving 1/9)."""
+import json
 from datetime import timedelta
 
 import pytest
@@ -430,3 +431,27 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], message))
     assert runs("ben-test") == {}
     assert runs("ana-test") == {"status_or_relation": 2, "unknown": 1}
+
+
+def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(api):
+    ana = H.human_actor("ana")
+    with api.app.state.store.transaction() as c:
+        old = H.turn_start(c, "bot:ops", "ops")              # a run with no result, as runs before this were
+        before = dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone())
+        runs = {}
+        for name in ("accepted", "edited", "overridden", "own"):
+            task = H.task_create(c, ana, f"Recheck the {name} cash warning", "Before the deadline.", "bot:ops")
+            runs[name] = (task["id"], H.turn_start(c, "bot:ops", "ops", task_id=task["id"])["id"])
+            H.task_update(c, "bot:ops", task["id"], status="done", note="Rechecked.")
+        H.task_close(c, ana, runs["accepted"][0])
+        H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
+        H.task_close(c, ana, runs["edited"][0])                       # after its edit: still one, `edited`
+        H.task_update(c, ana, runs["overridden"][0], status="open", note="Not yet: the March file is missing.")
+        H.task_update(c, "bot:ops", runs["own"][0], status="doing")    # the bot moving its own result is no verdict
+        got = {r[0]: (r[1], json.loads(r[2])) for r in c.execute(
+            "SELECT target, actor, detail_json FROM events WHERE action='turn.outcome'")}
+        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 3
+        for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
+            task_id, turn_id = runs[name]
+            assert got[turn_id] == (ana, {"task_id": task_id, "outcome": name, "from": "done", "to": to})
+        assert dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone()) == before

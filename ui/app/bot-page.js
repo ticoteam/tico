@@ -516,7 +516,7 @@ async function pageBot(slug, tab) {
 
   // The right rail: Tasks with its tabs, Updates, Files and Routines, in the bot's own order (ui/app/bot-sidebar.js).
   if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
-  botTaskTabShow(slug, botTaskTabFirst(slug, botNeeds(slug).length));
+  botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
   botSidebarApply(slug);
   if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); }
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.

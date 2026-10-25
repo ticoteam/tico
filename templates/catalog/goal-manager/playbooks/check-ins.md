@@ -5,7 +5,8 @@ interpretation. Keep them apart: never put an explanation in a reading's note, n
 
 Only above Passive (`level` in `hub goal ceo-bot`); at Passive you ask nobody. When to ask: a goal turned yellow or red in the status pass, or a KPI on a goal is stale or missing for a second
 pass. Not when a check-in for that goal exists from the last 7 days (`hub goal checkin-list <id>`), and at most one
-question per goal per week.
+question per goal per week. Only the owner's check-ins count here: your own comment on a goal after a level-3
+decision is not their answer.
 
 1. `hub goal show <id>`: owner, KPIs, the reason line, recent check-ins.
 2. Ask the owner, a human or a bot, one question with the facts in it:

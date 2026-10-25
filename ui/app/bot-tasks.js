@@ -191,7 +191,7 @@ function botTaskTabsPaint(slug) {
   host.innerHTML = botTaskCustomPanelsHTML(slug);
   const seen = BOT_TASKS_CACHE.get(slug);
   if (seen) botTasksRender(slug, seen.owned);
-  else botTaskTabShow(slug, botTaskTabFirst(slug, botNeeds(slug).length));
+  else botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
 }
 // Until a person picks: Needs You while it has rows, else Doing, else the first tab there is.
 function botTaskTabFirst(slug, needed) {
@@ -323,12 +323,14 @@ function botTaskWaitsOn(t) {
 function botNeedsPaint(slug) {
   const host = $('#bot-needs'), items = botNeeds(slug);
   if (!host || BOT?.slug !== slug) return new Set();
-  botTaskCount('cnt-needs', items.length);
+  botTaskCount('cnt-needs', Math.max(items.length, needsMeCount(slug)));
   // A question opened here, and an answer half typed into it, survive the redraw.
   const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask]')].map(d =>
     [d.dataset.ask, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
-  list.innerHTML = items.length ? `<div class="bot-task-list">${items.map(it =>
-    it.kind === 'ask' ? looseAskRow(it) : v2TaskRow(it, slug)).join('')}</div>` : '<div class="rail-empty">Nothing needs you.</div>';
+  // Some of this bot's items may be on Needs you pages not read yet.
+  const more = needsMeCount(slug) > items.length ? needsMoreButton() : '';
+  list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(it =>
+    it.kind === 'ask' ? looseAskRow(it) : v2TaskRow(it, slug)).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   for (const d of list.querySelectorAll('details[data-ask]')) {
     const was = kept.get(d.dataset.ask);
     if (!was) continue;

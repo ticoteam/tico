@@ -266,7 +266,7 @@ async fn github(client: Client, bots: Vec<String>) -> Option<Value> {
         if token.is_empty() {
             continue;
         }
-        let http = reqwest::Client::builder().timeout(GITHUB_LIMIT).build().ok()?;
+        let http = crate::tls::http_builder().timeout(GITHUB_LIMIT).build().ok()?;
         let answer = http
             .get("https://api.github.com/installation/repositories?per_page=1")
             .header("Authorization", format!("token {token}"))

@@ -96,7 +96,7 @@ pub struct Client {
 }
 
 pub fn http_client(timeout: Option<Duration>) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder()
+    let mut builder = crate::tls::http_builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .pool_idle_timeout(Duration::from_secs(60))

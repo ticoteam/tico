@@ -282,6 +282,31 @@ def _check(c, change, caller):
     return _offline(c, row["owner"]) or (_offline(c, change["owner"]) if do == "reassign" else None), None
 
 
+# How many undone decisions a new one is checked against: Undo is rare, so this reaches back months.
+UNDONE_SCAN = 200
+
+
+def _same(change):
+    """What makes two changes the same, once `_check` has cleaned them: a new task by its owner and title, any other
+    by its task (and, for a reassign, the bot it goes to)."""
+    do = change.get("do")
+    if do == "create":
+        return do, change.get("owner"), " ".join(str(change.get("title") or "").lower().split())
+    return do, change.get("task_id"), change.get("owner") if do == "reassign" else None
+
+
+def _undone(c, change):
+    """Why a change the owner already undid can't be made again alone, or None. Undo of a reorder, reassign or close
+    leaves no mark on the task the CEO Bot reads, so the server keeps the owner's Undo standing: the same change
+    again is their proposal, not the bot's decision."""
+    key = _same(change)
+    for (changes_json,) in c.execute("SELECT changes_json FROM ceo_actions WHERE kind='decision' AND state='undone' "
+                                     "ORDER BY undone_at DESC LIMIT ?", (UNDONE_SCAN,)):
+        if any(_same(x.get("change") or {}) == key for x in (H._json(changes_json, None) or {}).get("done") or []):
+            return "the owner undid this same change in an earlier decision, so making it again stays theirs"
+    return None
+
+
 FIELDS = ("status", "step_id", "step_rank", "owner", "rank", "note", "closed_at", "closed_by", "version", "private",
           "guest")
 
@@ -355,6 +380,7 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
         for change in changes:
             change = dict(change) if isinstance(change, dict) else {}
             why, kind = _check(c, change, caller)
+            why = why or _undone(c, change)
             if why:
                 left.append({"change": change, "text": describe(c, change, caller), "why": why, "kind": kind})
                 continue

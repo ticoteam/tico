@@ -44,6 +44,22 @@ three-minute deadline. Legacy waiting turns retain their place too, because thos
 reservation before starting. Update the runner to release those places safely and enable the new capacity rules
 for its turns. Upgraded runners opt in after a successful heartbeat and keep the older rules against an older server.
 
+### The turn fixer
+
+A built-in system routine, **Turn fixer**, checks every computer every 10 seconds. It is plain code: no AI and no
+cost. It frees only turns that are proven dead: a start a person stopped, or a turn whose lease is lost and whose
+computer no longer runs its bot (the computer was removed, or its latest claim does not list the bot). A slow reply or
+a healthy wait keeps its place. The task and its history stay, and the task gets a note: **Tico freed a dead start,
+will retry.** A dead turn that may have pushed, sent or paid is not retried blindly: one that only read runs again,
+and any other is held for BotOps with the tools it used.
+
+When the company reaches its warning level, **Settings → Health** shows one **Company turns** finding for the
+incident: the counts by wait reason, the oldest waits, the last progress of each running turn, each computer's CPU
+and memory, and the likely bottleneck in one sentence. Later runs update the same finding, and when the count drops
+below the warning level it says when the incident resolved. If the incident is still open after 5 minutes, BotOps
+gets exactly one task with the finding (the Support bot where there is no BotOps). The owner gets one notice, only when
+the incident is still open after an hour or its main wait needs a person: a login, quota or money.
+
 ## Connections
 
 A **connection** is one login an AI tool on a computer runs on. It is one of:

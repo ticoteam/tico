@@ -1,5 +1,6 @@
 //! The computer-screen relay and same-origin HTTP gateway. Permission policy and audit writes remain in Python.
 mod gateway;
+mod tls;
 use axum::{
     extract::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
@@ -696,7 +697,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|arg| arg == "--healthcheck") {
         let health = std::env::var("TICO_SCREEN_RELAY_HEALTH_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:8766/healthz".into());
-        let response = reqwest::Client::builder()
+        let response = tls::http_builder()
             .timeout(Duration::from_secs(2))
             .build()?
             .get(health)
@@ -717,14 +718,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         )?),
         // The backend closes a keep-alive connection after 5 s idle (backend/server.py). Dropping ours first means no
         // request is sent on a connection the backend is closing, which would come back as a bare 502.
-        proxy: reqwest::Client::builder()
+        proxy: tls::http_builder()
             .connect_timeout(Duration::from_secs(2))
             .pool_idle_timeout(Duration::from_secs(4))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?,
         // Also a backend client (screen authorize), so it drops idle connections before the backend does too.
-        http: reqwest::Client::builder()
+        http: tls::http_builder()
             .timeout(Duration::from_secs(2))
             .pool_idle_timeout(Duration::from_secs(4))
             .redirect(reqwest::redirect::Policy::none())
@@ -753,6 +754,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
     println!("screen relay listening on {}", listener.local_addr()?);
+    tls::announce(|line| println!("{line}"));
     if let Some(public) = public {
         let gateway = gateway::routes(app.clone());
         tokio::spawn(async move {

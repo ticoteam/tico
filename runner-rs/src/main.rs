@@ -70,6 +70,7 @@ mod screen;
 mod sidejobs;
 mod signin;
 mod state;
+mod tls;
 mod subscription_refresh;
 mod watchers;
 mod util;
@@ -428,6 +429,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
         stopper.events.wake.notify_one();
     });
     util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_VERSION, service.config.runner_id()));
+    tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());

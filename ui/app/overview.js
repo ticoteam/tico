@@ -161,7 +161,7 @@ function overviewStuckDraw() {
 function overviewNeedsDraw() {
   const el = OVERVIEW_PAGE && $('#overview-needs'); if (!el) return;
   if (S.me?.role === 'bot') { el.hidden = true; return; }
-  const n = (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
+  const n = S.v2?.needsCount ?? (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
   if (w?.expired) parts.push(`${w.expired} expired`);
   if (w?.withdrawn) parts.push(`${w.withdrawn} withdrawn`);
   if (w?.assistant) parts.push(`${w.assistant} answered by your Assistant`);

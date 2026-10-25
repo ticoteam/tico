@@ -3345,6 +3345,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
         _task_event(conn, row["id"], actor, "step", row.get("step_id"), step_id, note)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
+        # Someone moving a bot's finished result on is what became of the run that made it (backend/run_triggers.py).
+        RT.turn_result(conn, actor, row, RT.result_outcome(row.get("status"), effective), event, effective)
         if effective in ("done", "closed", "declined", "review"):
             TS.clear_finished(conn, actor, row)     # review hands it on: the requester looks now, not at the date
         if effective in ("done", "closed", "declined"):
@@ -5408,6 +5410,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # before the status write supersedes those questions.
     finishing = status == "done" and row["status"] != "done" and is_human(actor)
     askers = [m["from_actor"] for m in open_task_asks(conn, row)] if finishing else []
+    # A bot's result rewritten or handed to someone else, before any status move below: that run's outcome.
+    if title is not None or body is not None and body != row.get("body"):
+        RT.turn_result(conn, actor, row, "edited", event)
+    elif args.get("owner", row["owner"]) != row["owner"]:
+        RT.turn_result(conn, actor, row, "overridden", event)
     if closing_step:
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step)
     elif state_change:

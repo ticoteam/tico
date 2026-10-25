@@ -192,6 +192,13 @@ Every run records what woke it (`turns.trigger_kind`), its tokens, and whether i
 - **`outcome`**: `acted` when `writes` is above zero; otherwise `no_change` when the run's task is still open
   as it ends (it looked, and nothing had moved) and `nothing_to_do` when there was no open task to act on (no
   task, or one already done, closed or declined).
+- **What became of it**: when a bot's task sits at `done` or `review` and someone other than the bot or the keeper
+  moves it on, the run that delivered it gets one `turn.outcome` event (`target` the turn id, `detail_json`
+  `{task_id, outcome, from, to}`): `accepted` (closed, or `review` moved to `done`), `edited` (its title or body
+  rewritten) or `overridden` (sent back to work, declined or handed to another owner). The first is the run's outcome;
+  later moves add none. `SELECT json_extract(detail_json,'$.outcome') o, count(*) FROM events WHERE
+  action='turn.outcome' GROUP BY o`. A caller's own decision calls get the same from `hub decision outcome`
+  (`decision.outcome` events, target the `judge.call` event id).
 - **`did_nothing`**: 1 when `writes` is 0, else 0: the exact flag to measure against. It sees every write that
   reaches Tico with the run's token, and every push from its task's worktrees; a push from anywhere else (the
   bot's own checkout, another task's worktree) is not counted.

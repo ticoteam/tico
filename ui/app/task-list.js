@@ -199,7 +199,9 @@ function taskItems(state, view = state.view) {
   return out;
 }
 // Your Needs you count: the tasks, then the approvals and questions asked outside any task.
-const tasksMyCount = active => active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length;
+// While only some pages of Needs you are held, the server's count of the whole list.
+const tasksMyCount = active => needsAll() ? active.filter(it => taskNeedsViewer(it.task) && !needsFolded(it.id)).length + looseAsks().length + pendingApprovals().length + staleCards().length
+  : S.v2.needsCount;
 function tasksCounts(state) {
   if (state.loading) return {};
   const active = taskItems(state, 'list');

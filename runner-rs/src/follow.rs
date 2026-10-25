@@ -276,7 +276,7 @@ impl Sidecar {
 
     async fn call(&self, post: Option<Value>) -> Result<Value, String> {
         let token = std::fs::read_to_string(&self.token_file).unwrap_or_default().trim().to_string();
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
+        let http = crate::tls::http_builder().timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
         let request = match &post {
             Some(body) => http.post(format!("{}/update", self.url)).json(body),
             None => http.get(format!("{}/status", self.url)),

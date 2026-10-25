@@ -200,7 +200,7 @@ pub async fn start(upstream: &str, key: String, bot: Option<String>) -> Result<R
     let deadline = Instant::now() + Duration::from_secs(MAX_RUN_SECONDS);
     let base = safe_upstream(upstream).ok_or("the Gateway URL is neither https nor this computer")?;
     let local = base.starts_with("http://");
-    let mut builder = reqwest::Client::builder()
+    let mut builder = crate::tls::http_builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(30))
         .user_agent(user_agent());

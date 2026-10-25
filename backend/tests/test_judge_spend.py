@@ -59,7 +59,7 @@ def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallbac
                 "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}
     api.app.state.judge = as_jev
     out = post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
-    assert set(out) == {"model", "answers", "usage", "ms", "label"}, "the reply's shape is unchanged"
+    assert set(out) == {"model", "answers", "usage", "ms", "label", "ref"}, "the reply's shape is unchanged but for its ref"
     detail = events(api, "human:ana")[-1][1]
     assert (detail["model"], detail["usage"]["input_tokens"], detail["ms"], detail["cost_usd"]) == \
         ("jev-1.14", 1_000_000, 180, 0.5)

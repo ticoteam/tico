@@ -23,7 +23,7 @@ only marks the merged PR links the running release contains as Shipped (backend/
 
 ## The fast path
 
-1. **While building a PR**, run the focused tests for its changes; CI selects affected tests conservatively (below).
+1. **While building a PR**, run the focused tests for its changes; CI selects the tests a change can reach (below).
 2. **Freeze main.** The Release Manager runs the release command's freeze guard on current main.
 3. **Build and validate that exact commit.** The release command dispatches the full hosted Release validation for the
    frozen commit as the new version: it builds the runner binaries and the three images once, then tests those. The
@@ -75,9 +75,13 @@ new commit to borrow an old run. Roll back this tooling change by reverting it; 
 
 ## Tests on a PR
 
-Run tests on your computer while you work. The PR checks workflow uses audited affected-test mappings on pull requests to main. Unknown or shared changes
-(including conftest, workflows, dependencies and unmapped backend modules) fall back to the full default Python
-suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
+Run tests on your computer while you work. On pull requests to main, the PR checks workflow runs the default tests
+that a measured static dependency map says use a changed file: what each tracked file imports (transitively), runs
+by path (scripts, `-m` modules, shell and JavaScript) and reads by path (data files, folders it lists or globs). The
+Caddy image job runs only when a change reaches the image inputs or `backend/caddy_assets.py`; otherwise the plan
+compiles the changed files and runs the Dockerfile's import check itself. Conftest, `pytest.ini`, workflows,
+dependencies, `docs/` (except `docs/images` and `docs/history`), CHANGELOG.md, the selector, and deleted or
+unparsable files fall back to the full default Python suite and core browser scripts. Main pushes always run that full default suite, and a newer main push never
 cancels an earlier one; only a pull request's superseded run is cancelled. Runner/harness changes also run
 slow conformance on the Rust runner and all its fake harnesses; UI changes select their browser scripts, including
 imported-history for chat changes, or every browser script when the UI mapping is uncertain.
@@ -93,8 +97,9 @@ seconds per test; untimed browser scripts count 20 seconds. The **PR job timings
 fails if a required job failed or was cancelled. The target is under ten minutes from start to completed checks;
 hosted run receipts, including cache state, establish whether that target is met.
 
-The initial backend leaf mapping is deliberately small (`backend/task_loops.py` to its feature test); extend
-`scripts/pr_checks.py` only after checking related coverage. Filename similarity alone does not prove isolation.
+Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
+time from a parameter, a subprocess's own reads) must name that file or folder literally, or the change will not
+select it. A file that makes a computed import or lists the repository with `git ls-files` runs on every change.
 The Release validation workflow retains its full candidate gate and never cancels a running validation.
 
 Write unit

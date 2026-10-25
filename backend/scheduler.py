@@ -206,6 +206,13 @@ class Scheduler:
         def company_turns_tick(c):
             from . import org_turns
             org_turns.observe(c, self.store.settings)
+        # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
+        with SR.recording(self.store, "turn_fixer", failures) as run:
+            from . import turn_fixer
+            with locked("turn_fixer") as c:
+                freed, incident = turn_fixer.run(c, self.execution, self.store.settings,
+                                                 self.execution.auth.owner_id(c) if self.execution.auth else '')
+            run.did(turn_fixer.words(freed, incident), quiet=not freed)
         with self.store.read() as c:
             from . import start_places
             expired = [row[0] for row in c.execute(

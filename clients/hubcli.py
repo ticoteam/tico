@@ -254,6 +254,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision outcome --ref R --verdict V --action A [--label L]
+                                           after acting on a decision ask or hub classify answer (its `ref`):
+                                           what you did with it, once per call
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -1739,6 +1742,12 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("outcome", help="record what you did with a decision answer, once per call (its ref)")
+    s.add_argument("--ref", required=True, help="the `ref` the decision answer returned")
+    s.add_argument("--verdict", required=True, help="the answer you acted on, in a few words")
+    s.add_argument("--action", required=True, help="what you did with it; say `overrode` when you went against it")
+    s.add_argument("--label", help="the call's label; the one it was made with by default")
+    s.set_defaults(fn="decision outcome")
     s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
                                             "spread, and the month's spend against the cap")
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")

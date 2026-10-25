@@ -123,6 +123,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Unanswered questions** | On weekday mornings, sends questions unanswered for two business days back to their bots. | Hourly |
 | **Bot routine timer** | Starts each bot routine below when it is due. | Every 10 seconds |
 | **Stall checks** | Wakes the bot on a task nothing is moving, no sooner than 30 minutes after the last check and doubling to 8 hours while the task stays unchanged (only other people's comments, status, step, owner, waiting-on and related tasks count as change), and drops queued work its bot can no longer read. | Every minute |
+| **Turn fixer** | Frees turns proven dead (lease lost and process gone, or stopped before they started) with a note on the task; holds a dead turn that may have pushed, sent or paid for BotOps instead of retrying it; keeps one Health finding per busy-turns incident and hands what it cannot fix to BotOps. See [Computers](computers.md#the-turn-fixer). | Every 10 seconds |
 | **Waiting checks** | Sends bot tasks waiting on nothing back to work, and turns a bot's plain ask to a person into a small task. | Hourly |
 | **Snooze ends** | Brings snoozed tasks back when their date comes and starts deferred runs that are due. | Every 10 seconds |
 | **Go-live expiry** | Ends a go-live waiting for a computer that never reports. | Every 10 minutes |

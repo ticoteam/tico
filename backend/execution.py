@@ -1655,7 +1655,12 @@ class Execution:
                             {"bot": row["bot"], "lapsed": row["lease_until"], "lease_until": until,
                              "served_at": served_at})
                     continue
-                retry_state = state = "queued" if row["state"] == "leased" else "uncertain"
+                # A start that reported a tool call or a push did run something: like a running turn, it may have
+                # pushed, sent or paid, so it is held for a check (auto_reconcile), never put back in line blindly.
+                acted = row["state"] == "leased" and c.execute(
+                    "SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='tool' UNION ALL "
+                    "SELECT 1 FROM turns WHERE id=? AND writes>0 LIMIT 1", (row["id"], row["id"])).fetchone()
+                retry_state = state = "queued" if row["state"] == "leased" and not acted else "uncertain"
                 jobs = c.execute("SELECT j.id,j.message_id,t.status AS task_status FROM jobs j "
                                  "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                                  f"LEFT JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
@@ -1670,7 +1675,7 @@ class Execution:
                 from .performance import stamp_attempt
                 stamp_attempt(c, row["id"], row["runner_id"], "end")
                 gateway_connection.forget(c, row["id"])
-                if row["state"] == "leased" and state != "cancelled":
+                if row["state"] == "leased" and state == "queued":
                     tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=? AND started IS NULL "
                                       "AND state='expired' AND finished>=?", (row["job_id"], self.booted)).fetchone()[0]
                     if tries >= PRE_START_TRIES:

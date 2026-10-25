@@ -488,12 +488,18 @@ import glob, os, sqlite3, sys, threading, time
 folder, name, keep, seconds = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
 deadline = time.monotonic() + seconds   # the whole attempt, copy and check, ends inside the updater's own timeout
 os.makedirs(folder, exist_ok=True)
-for stale in glob.glob(os.path.join(folder, "pre-update-*.sqlite.part*")):
-    os.remove(stale)      # an earlier attempt that ran out of time; each is as large as the database
+def remove_all(pattern):
+    # SQLite deletes the copy's -journal at the end of each write transaction, so a file listed here can be gone by the
+    # time it is removed while a worker is still copying.
+    for path in glob.glob(pattern):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+remove_all(os.path.join(folder, "pre-update-*.sqlite.part*"))   # an earlier attempt that ran out of time; each is as large as the database
 part, final = os.path.join(folder, name + ".part"), os.path.join(folder, name)
 def remove_part():
-    for leftover in glob.glob(part + "*"):
-        os.remove(leftover)
+    remove_all(part + "*")
 result = []
 def copy_and_check():
     try:

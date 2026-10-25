@@ -749,8 +749,10 @@ def through_hub(client):
             raise JudgeError(str(code), getattr(exc, "detail", str(exc)), getattr(exc, "status", 0),
                              bool(getattr(exc, "retryable", False)))
         answers = check_answers(result.get("answers") if isinstance(result, dict) else None, questions)
+        # `ref` names the call for `hub decision outcome`; an older server sends none.
         return {"model": str(result.get("model") or MODEL), "answers": answers,
-                "usage": result.get("usage") or {}, "ms": int(result.get("ms") or 0)}
+                "usage": result.get("usage") or {}, "ms": int(result.get("ms") or 0),
+                **({"ref": result["ref"]} if result.get("ref") else {})}
     return engine
 
 

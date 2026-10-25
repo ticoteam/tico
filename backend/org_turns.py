@@ -34,6 +34,20 @@ def levels(c):
             'stop': people * configured['stop_per_person']}
 
 
+def in_use(c):
+    """Turns that hold a place: running, starting, or a leased attempt waiting with its place kept.
+
+    Queued jobs blocked on quota, a spending limit, readiness or a paused bot never became turns, and an attempt
+    parked by the stop itself is not counted either: counting them kept the company at its stop with nothing running.
+    """
+    now = H.now()
+    return c.execute(
+        "SELECT count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+        "WHERE a.state='running' OR (a.state='leased' AND ((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) "
+        "OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?))))",
+        (REASON, now, now)).fetchone()[0]
+
+
 def snapshot(c, settings):
     from .start_places import summary
     counts = dict(running=0, starting=0, waiting=0, queued=0)
@@ -41,8 +55,7 @@ def snapshot(c, settings):
         here = summary(c, row['id'], settings)
         for key in counts:
             counts[key] += here[key]
-    value = {**levels(c), **counts}
-    value['in_use'] = sum(counts[k] for k in ('running', 'starting', 'waiting'))
+    value = {**levels(c), **counts, 'in_use': in_use(c)}
     value['at_warning'] = value['in_use'] >= value['warning']
     value['at_stop'] = value['in_use'] >= value['stop']
     return value

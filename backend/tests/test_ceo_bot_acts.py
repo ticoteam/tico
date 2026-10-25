@@ -76,6 +76,10 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
                          (H.KEEPER,)).fetchone()[0]
     assert told >= 2
     post(api, f"ceo-bot/log/{made['id']}/undo", {}, expected=422)       # once
+    # The same reorder or close again is the owner's: their Undo stands, as a proposal, not a second decision.
+    again = decide(api, ceo, [{"do": "reorder", "task_id": second}, {"do": "close", "task_id": stale}])
+    assert again["state"] == "proposed" and not again["done"] and len(again["left"]) == 2
+    assert "owner undid this same change" in again["left"][0]["why"] and task(api, stale)["status"] == "open"
 
 
 def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_never_dropped(api):

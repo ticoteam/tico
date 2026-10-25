@@ -57,12 +57,24 @@ def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_ti
                           capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite"]
-    # Out of time: the process still ends, and the next attempt sweeps whatever partial copy the worker reached.
-    late = subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-2.sqlite", "3", "0"],
-                          capture_output=True, text=True, timeout=30)
-    assert late.returncode == 0 or "did not finish" in late.stderr
+    # Out of time: the server holds the database, so the copy cannot finish. The worker's SQLite deletes the copy's
+    # -journal at the end of each write transaction, so a listed part can vanish before it is removed; the listing
+    # names one that is already gone, and the process must still end with its message.
+    vanishing = ("import glob\nlisted = glob.glob\nglob.glob = lambda pattern, **kw: listed(pattern, **kw) + "
+                 "([pattern[:-1] + '-journal'] if pattern.endswith('.part*') else [])\n")
+    blocker = sqlite3.connect(db, isolation_level=None)
+    blocker.execute("begin exclusive")
+    try:
+        late = subprocess.run([sys.executable, "-c", vanishing + script, str(folder), "pre-update-v0.1.0-2.sqlite", "3",
+                               "0.2"], capture_output=True, text=True, timeout=30)
+    finally:
+        blocker.execute("rollback"); blocker.close()
+    assert late.returncode == 1 and "did not finish" in late.stderr and "Traceback" not in late.stderr, late.stderr
+    # The next attempt sweeps whatever partial copy an attempt like that reached.
+    for leftover in (".part", ".part-journal"):
+        (folder / ("pre-update-v0.1.0-2.sqlite" + leftover)).write_bytes(b"x")
     subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-3.sqlite", "3", "60"], check=True)
-    assert not [p for p in folder.iterdir() if ".part" in p.name]
+    assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite", "pre-update-v0.1.0-3.sqlite"]
 
 def test_a_failed_health_check_restores_the_snapshot_because_migrations_may_have_run(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)

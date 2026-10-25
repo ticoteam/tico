@@ -14,6 +14,7 @@ owns:
   - The check-ins it records after asking a goal's owner what is happening
   - The proposals on goals and KPIs: wording, a missing measure, a definition, a target, a flag
   - A short weekly goals review for the owner
+  - At level 3, only when the owner chooses it: decisions on bot tasks to recover a red or stalled goal or settle a clash between Heads, each logged with an Undo
 never:
   - Change a target or a definition it is judged against, or any goal's words: it proposes, the owner confirms
   - Set a goal's colour by hand, or overwrite the colour a human set

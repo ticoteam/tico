@@ -370,7 +370,7 @@ pub fn codex_merge(servers: &mut Map<String, Value>, remote: Map<String, Value>)
 /// reachable | auth_failed | unreachable, from one cheap request: an MCP `initialize` POST, or the GET that
 /// opens an SSE stream. Redirects are not followed, so a credential never leaves for another host.
 pub async fn reachability(url: &str, transport: &str, headers: &[(String, String)]) -> &'static str {
-    let Ok(http) = reqwest::Client::builder()
+    let Ok(http) = crate::tls::http_builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(REACH_TIMEOUT_S))
         .user_agent("tico-runner")

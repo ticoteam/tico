@@ -30,7 +30,11 @@ url = "2"
 yaml-rust2 = { version = "0.10", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
-# The computer screen bridge (crate::screen): the hub websocket over the same rustls and webpki roots reqwest uses.
+# Server certificates verify against the OS trust store, the bundled webpki-roots list where there is none (crate::tls).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+webpki-roots = "1"
+# The computer screen bridge (crate::screen): the hub websocket over the same rustls config reqwest uses.
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]

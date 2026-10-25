@@ -3,6 +3,7 @@
 import argparse
 import ast
 from collections import Counter, defaultdict
+import fnmatch
 import json
 import math
 import os
@@ -14,27 +15,6 @@ import sys
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-# Audited feature leaves only. A matching filename alone does not establish isolation.
-PYTHON_MAP = {
-    "backend/task_loops.py": ["backend/tests/test_task_loops.py", "backend/tests/test_health.py",
-                              "backend/tests/test_system_routines.py", "backend/tests/test_scheduler.py"],
-    "backend/aws_identity.py": ["backend/tests/test_aws_identity.py"],
-    "backend/devcopy.py": ["backend/tests/test_devcopy.py"],
-    "backend/operations.py": ["backend/tests/test_operations.py", "backend/tests/test_backup_bundle.py",
-                               "backend/tests/test_company_storage.py"],
-    "backend/code_hash.py": ["backend/tests/test_flight.py"],
-}
-# These consumers were audited with the tests above. New consumers invalidate the
-# audit rather than silently inheriting a filename-based assumption of isolation.
-AUDITED_IMPORTERS = {
-    "backend/task_loops.py": {"backend/health.py", "backend/scheduler.py"},
-    "backend/aws_identity.py": set(),
-    "backend/devcopy.py": set(),
-    "backend/operations.py": set(),
-    "backend/code_hash.py": {"backend/flight.py"},
-}
-SHARED_HUBS = {"backend/app.py", "backend/models.py", "backend/hubdb.py", "backend/store.py",
-               "backend/execution.py"}
 UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
           "ui/app/chat-outline.js": ["chat", "imported-history"],
           "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
@@ -99,8 +79,9 @@ def merge_writes(combined):
 
 
 def is_test(name):
-    path = Path(name)
-    return "tests" in path.parts and path.name.startswith("test_") and path.suffix == ".py"
+    """A file pytest collects by name (pytest's default python_files); prepare() keeps the ones in the default run."""
+    base = Path(name).name
+    return base.endswith(".py") and (base.startswith("test_") or base.endswith("_test.py"))
 
 
 def dotted_name(node):
@@ -108,171 +89,444 @@ def dotted_name(node):
         return node.id
     if isinstance(node, ast.Attribute):
         return dotted_name(node.value) + "." + node.attr
+    if isinstance(node, ast.Call):
+        return dotted_name(node.func)
     return ""
 
 
-class SourceGraph:
-    """Static local imports, literal dynamic imports and fixture references, without executing code."""
+def git_files(root):
+    try:
+        out = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
+        return [p for p in out if p and (root / p).is_file()]
+    except (OSError, subprocess.CalledProcessError):
+        skip = {".venv", "node_modules", ".git", "build", ".cache", "target", "__pycache__"}
+        return [str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and not skip & set(p.parts)]
+
+
+TOKEN = re.compile(r"[\w.\-/]+")
+IDENTIFIER = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$")
+CODE = {".py", ".sh", ".bash", ".js", ".cjs", ".mjs", ".ts"}
+PATHLIKE = {"Path", "PurePath", "PosixPath", "open", "join", "joinpath", "with_name", "spec_from_file_location",
+            "run_path", "copy", "copy2", "copyfile", "copytree", "exists", "isfile", "isdir", "listdir", "scandir",
+            "walk", "read_text", "read_bytes", "relpath", "realpath", "abspath", "files"}
+RUNNERS = {"run", "check_output", "check_call", "call", "Popen", "execv", "execvp", "execvpe", "spawn",
+           "create_subprocess_exec", "create_subprocess_shell", "system"}
+GLOBS = {"glob", "rglob", "iglob"}
+LISTINGS = {"iterdir", "listdir", "scandir", "walk"}
+OS_LISTINGS = {"os.listdir", "os.walk", "os.scandir", "glob.glob", "glob.iglob"}
+# Calls that read, copy, run, hash or measure files; a listing in a function without one uses only names.
+CONTENT = {"read_text", "read_bytes", "open", "load", "loads", "safe_load", "parse", "copy", "copy2", "copyfile",
+           "copytree", "copyfileobj", "exec_module", "run", "check_output", "check_call", "Popen", "call", "stat",
+           "lstat", "getsize", "getmtime", "digest", "hexdigest", "update", "compile", "import_module", "rmtree",
+           "unlink", "rename", "replace", "move", "write_text", "write_bytes", "hash_file", "file_digest"}
+
+
+class DependencyMap:
+    """What each tracked file runs and reads, measured statically, so a change selects every test that can reach it.
+
+    A file *runs* the Python modules it imports (at module level or in a function, with their packages' __init__
+    files), literal importlib/__import__/pytest_plugins and `-m` names, dotted literals naming a tracked module
+    (`"backend.app:app"`, monkeypatch targets) and code files it names by path (scripts, shell, JavaScript). It *reads*
+    the other tracked files and folders it names: path joins, open(), Path(), subprocess arguments, cwd=, globs. Shell
+    and JavaScript files are scanned for the paths and dotted modules they name. A change reaches whoever runs the
+    changed file, whoever runs those, and so on; whoever reads it (directly, through a folder that holds it, or through
+    a glob on an unknown folder) is reached too, but reading a file whose dependencies changed is not running it. `git
+    ls-files` or a computed import makes a file depend on everything. Conftest code applies to the tests below it, a
+    non-autouse conftest fixture body only to the tests that name the fixture.
+    """
 
     def __init__(self, root):
-        self.trees, self.importers, self.references = {}, defaultdict(set), {}
-        self.uncertain = False
-        self.dynamic_fixtures = False
+        self.root = root
+        self.files = git_files(root)
+        self.tracked = set(self.files)
+        self.consts = {}  # module-level NAME = "text" of the file being read, which path joins substitute
+        modules = {str(Path(p).with_suffix("")).replace("/", "."): p for p in self.files if p.endswith(".py")}
+        self.modules = {(m[:-9] if m.endswith(".__init__") else m): p for m, p in modules.items()}
+        self.by_base, self.dirs = defaultdict(set), defaultdict(set)
+        for path in self.files:
+            self.by_base[Path(path).name].add(path)
+            for parent in list(Path(path).parents)[:-1]:
+                self.dirs[parent.name].add(str(parent))
+        self.runs, self.reads = defaultdict(set), defaultdict(set)  # file -> files ("folder/" for a folder)
+        self.globs = defaultdict(set)      # file -> basename patterns it lists in folders it does not name
+        self.listings = defaultdict(set)   # file -> (folder, pattern, recursive, names only) it lists
+        self.everything, self.unparsed = set(), set()
+        self.fixtures = defaultdict(dict)  # conftest -> {fixture: (runs, reads)}
+        self.names = {}                    # Python file -> its identifiers and strings (fixture names it uses)
+        trees = {}
+        for path in self.files:
+            if path.endswith(".py"):
+                try:
+                    trees[path] = ast.parse((root / path).read_bytes())
+                except (OSError, SyntaxError, ValueError):
+                    self.unparsed.add(path)
+                    self.everything.add(path)
+        # Top-level names imported through sys.path (`import hubcli` with clients/ on the path).
+        self.bare = {a.name.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
+                     if isinstance(node, ast.Import) for a in node.names}
+        self.bare |= {node.module.split(".")[0] for tree in trees.values() for node in ast.walk(tree)
+                      if isinstance(node, ast.ImportFrom) and not node.level and node.module}
+        self.bare = {name for name in self.bare - set(self.modules) if any(m.endswith("." + name) for m in self.modules)}
+        for path, tree in trees.items():
+            self.python(path, tree)
+        for path in self.files:
+            if Path(path).suffix in CODE - {".py"} or (not Path(path).suffix and self.shebang(path)):
+                self.text(path)
+        self.run_by, self.read_by = defaultdict(set), defaultdict(set)
+        for edges, reverse in ((self.runs, self.run_by), (self.reads, self.read_by)):
+            for path, targets in edges.items():
+                for target in targets - {path}:
+                    reverse[target].add(path)
+
+    def shebang(self, path):
         try:
-            paths = subprocess.check_output(["git", "ls-files", "-z", "--", "*.py"], cwd=root).decode().split("\0")
-        except (OSError, subprocess.CalledProcessError):
-            paths = [str(p.relative_to(root)) for p in root.rglob("*.py")
-                     if not set(p.parts) & {".venv", "node_modules", ".git", "build", ".cache"}]
-        modules = {str(Path(p).with_suffix("")).replace("/", "."): p for p in paths if p}
-        for name in paths:
-            if not name:
-                continue
-            try:
-                self.trees[name] = ast.parse((root / name).read_text())
-            except (OSError, SyntaxError, UnicodeError):
-                self.uncertain = True
-        for name, tree in self.trees.items():
-            refs, imports = set(), set()
-            loaders = {"__import__"}
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module in ("importlib", "builtins"):
-                    loaders.update(a.asname or a.name for a in node.names if a.name in ("import_module", "__import__"))
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    if node.name.startswith("test_") or node.decorator_list:
-                        args = {arg.arg for arg in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]}
-                        for decorator in node.decorator_list:
-                            if not isinstance(decorator, ast.Call) or not dotted_name(decorator.func).endswith(".parametrize"):
-                                continue
-                            indirect = next((k.value for k in decorator.keywords if k.arg == "indirect"), ast.Constant(False))
-                            if isinstance(indirect, ast.Constant) and indirect.value is False and decorator.args:
-                                argnames = decorator.args[0]
-                                args -= {part.strip() for n in ast.walk(argnames)
-                                         if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                                         for part in n.value.split(",")}
-                        refs.update(args)
-                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    # Also catches pytest_plugins, import_module and __import__
-                    # with literal names, including modules passed to subprocesses.
-                    if node.value in modules or node.value.startswith("test_"):
-                        imports.add(node.value)
-                elif isinstance(node, ast.Call):
-                    function = dotted_name(node.func)
-                    if function.endswith((".getfixturevalue", ".usefixtures")):
-                        refs.update(n.value for arg in node.args for n in ast.walk(arg)
-                                    if isinstance(n, ast.Constant) and isinstance(n.value, str))
-                        if function.endswith(".getfixturevalue") and (not node.args or not isinstance(node.args[0], ast.Constant)):
-                            self.dynamic_fixtures = True
-                    if function.endswith(".parametrize"):
-                        for keyword in node.keywords:
-                            if keyword.arg == "indirect" and not (isinstance(keyword.value, ast.Constant) and keyword.value.value is False):
-                                if not isinstance(keyword.value, (ast.Constant, ast.List, ast.Tuple)):
-                                    self.dynamic_fixtures = True
-                                args = node.args[:1] if isinstance(keyword.value, ast.Constant) else [keyword.value]
-                                refs.update(part.strip() for arg in args for n in ast.walk(arg)
-                                            if isinstance(n, ast.Constant) and isinstance(n.value, str)
-                                            for part in n.value.split(","))
-                    if function in loaders or function.endswith((".import_module", ".__import__")):
-                        if not node.args or not isinstance(node.args[0], ast.Constant) or not isinstance(node.args[0].value, str):
-                            if name.startswith("backend/") or is_test(name):
-                                self.uncertain = True
-                        elif node.args[0].value.startswith("."):
-                            module = node.args[0].value
-                            package = node.args[1] if len(node.args) > 1 else next(
-                                (k.value for k in node.keywords if k.arg == "package"), None)
-                            if isinstance(package, ast.Name) and package.id == "__package__":
-                                package = ast.Constant(".".join(name.split("/")[:-1]))
-                            if isinstance(package, ast.Constant) and isinstance(package.value, str):
-                                level = len(module) - len(module.lstrip("."))
-                                parts = package.value.split(".")
-                                imports.add(".".join(parts[:len(parts) - level + 1] + [module.lstrip(".")]))
-                            else:
-                                self.uncertain = True
-                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                    if any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
-                        value = node.value
-                        if not isinstance(value, (ast.Constant, ast.List, ast.Tuple)) or any(
-                                not isinstance(n, ast.Constant) or not isinstance(n.value, str)
-                                for n in (value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value])):
-                            self.uncertain = True
-                elif isinstance(node, ast.Import):
-                    imports.update(a.name for a in node.names)
-                elif isinstance(node, ast.ImportFrom):
-                    package = name.split("/")[:-1]
-                    prefix = package[:len(package) - node.level + 1] if node.level else []
-                    module = ".".join([*prefix, *([node.module] if node.module else [])])
-                    imports.add(module)
-                    imports.update(module + "." + a.name for a in node.names)
-            self.references[name] = refs
-            for module in imports:
-                targets = {modules[module]} if module in modules else set()
-                # Bare test imports are supported even with importlib collection.
-                if module.split(".")[0].startswith("test_"):
-                    targets.update(p for m, p in modules.items() if m.endswith("." + module))
-                for target in targets - {name}:
-                    self.importers[target].add(name)
-
-    def test_leaf(self, name, previous=None):
-        if self.uncertain or name not in self.trees or self.importers[name]:
+            with open(self.root / path, "rb") as stream:
+                return stream.read(2) == b"#!"
+        except OSError:
             return False
-        tree = ast.parse(previous) if previous is not None else self.trees[name]
-        fixtures = set()
-        aliases = {"pytest.fixture"}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                aliases.update((a.asname or a.name) + ".fixture" for a in node.names if a.name == "pytest")
-            elif isinstance(node, ast.ImportFrom) and node.module == "pytest":
-                aliases.update(a.asname or a.name for a in node.names if a.name == "fixture")
-            elif isinstance(node, ast.Name) and (node.id == "pytest_plugins" or node.id.startswith("pytest_")):
-                return False
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("pytest_"):
-                return False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+
+    def code(self, path):
+        return Path(path).suffix in CODE or (not Path(path).suffix and self.shebang(path))
+
+    def module(self, name, bare=False):
+        """The files importing a dotted name runs: the longest tracked prefix and its packages, else a sys.path module."""
+        parts = name.split(".")
+        for end in range(len(parts), 0, -1):
+            if ".".join(parts[:end]) in self.modules:
+                return {self.modules[".".join(parts[:i])] for i in range(1, end + 1) if ".".join(parts[:i]) in self.modules}
+        if bare and parts[0] in self.bare:
+            for end in range(len(parts), 0, -1):
+                found = {p for m, p in self.modules.items() if m.endswith("." + ".".join(parts[:end]))}
+                if found:
+                    return found
+        return set()
+
+    def path(self, token, runs, reads, bare_word=False, module=True):
+        """A literal that names tracked files or folders: `a/b.json` by path suffix, `b.json` by name, and with
+        bare_word (a path join, open(), subprocess argument) a plain name like `fixtures` or `tico` too."""
+        token = token.strip()
+        while token.startswith(("./", "../", "/")):
+            token = token[3:] if token.startswith("../") else token[2:] if token.startswith("./") else token[1:]
+        token = token.rstrip("/")
+        if token in ("", ".", ".."):
+            return
+        name = token.rsplit("/", 1)[-1]
+        if token in self.tracked:  # a whole repository path, even with no folder or extension: "LICENSE"
+            (runs if self.code(token) else reads).add(token)
+        if "/" in token or "." in name.strip(".") or bare_word:
+            for found in self.by_base.get(name, ()):
+                if found == token or found.endswith("/" + token):
+                    (runs if self.code(found) else reads).add(found)
+        if bare_word:  # a folder only where a path is built or opened, not in free text or a pattern
+            reads.update(d + "/" for d in self.dirs.get(name, ()) if d == token or d.endswith("/" + token))
+        if module and IDENTIFIER.match(token) and token.split(".")[0] in self.modules:
+            runs.update(self.module(token))  # "backend.app:app", "backend.store.Store.method"
+
+    @staticmethod
+    def strings(node):
+        """Literal text in an expression: whole constants and the fixed parts of f-strings."""
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+        elif isinstance(node, ast.JoinedStr):
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    yield value.value
+
+    def paths_of(self, node):
+        """The literal paths an expression names: `ROOT / "docs" / "api.md"` -> docs/api.md, a name bound to one,
+        Path("ui", "app"); the literal parts up to the first computed one."""
+        if isinstance(node, ast.Name):
+            return set(self.values.get(node.id, ()))
+        if isinstance(node, ast.Call) and dotted_name(node.func).rsplit(".", 1)[-1] in ("Path", "PurePath", "PosixPath"):
+            parts = node.args
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            parts = self.chain(node)
+        else:
+            return set()
+        if not parts:
+            return set()
+        head = parts[0]
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            prefixes, rest = {head.value.strip("/")}, parts[1:]
+        else:
+            prefixes, rest = self.paths_of(head) or {""}, parts[1:]
+        literal = bool(self.paths_of(head)) or isinstance(head, ast.Constant)
+        for part in rest:
+            if not (isinstance(part, ast.Constant) and isinstance(part.value, str)):
+                break
+            prefixes = {"/".join(x for x in (prefix, part.value.strip("/")) if x) for prefix in prefixes}
+            literal = True
+        return {p for p in prefixes if p} if literal else set()
+
+    def chain(self, node):
+        """Operands of an a / "b" / "c" path expression, in order; a module-level text constant counts as its text."""
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return self.chain(node.left) + self.chain(node.right)
+        if isinstance(node, ast.Name) and node.id in self.consts:
+            return [ast.Constant(self.consts[node.id])]
+        return [node]
+
+    def joined(self, parts, runs, reads):
+        """Adjacent literal parts of a path join name one path, as `root / "docs" / "api.md"` names docs/api.md."""
+        run = []
+        for part in [*parts, None]:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                run.append(part.value.strip("/"))
                 continue
-            for decorator in node.decorator_list:
-                call = decorator if isinstance(decorator, ast.Call) else None
-                decorator_name = dotted_name(call.func if call else decorator)
-                if decorator_name not in aliases and ".mark." not in decorator_name:
-                    return False
-                if decorator_name in aliases:
-                    fixture = node.name
-                    if call:
-                        for keyword in call.keywords:
-                            if keyword.arg == "name":
-                                if not isinstance(keyword.value, ast.Constant) or not isinstance(keyword.value.value, str):
-                                    return False
-                                fixture = keyword.value.value
-                    fixtures.add(fixture)
-        # Function arguments and fixture-call strings include usefixtures,
-        # parametrize(indirect=...), fixture aliases and getfixturevalue literals.
-        return not (fixtures and self.dynamic_fixtures) and not any(
-            fixtures & refs for other, refs in self.references.items()
-            if other != name and (is_test(other) or Path(other).name == "conftest.py"))
+            if run:
+                self.path("/".join(run), runs, reads, bare_word=True)
+                run = []
+            for text in self.strings(part) if part is not None else ():
+                for token in TOKEN.findall(text):
+                    self.path(token, runs, reads, bare_word=True)
 
-    def backend_tests(self, name):
-        if self.uncertain or name not in AUDITED_IMPORTERS or name in SHARED_HUBS:
-            return None
-        importers = self.importers[name]
-        if any(not is_test(p) and p not in AUDITED_IMPORTERS[name] for p in importers):
-            return None
-        tests = set(PYTHON_MAP[name]) | {p for p in importers if is_test(p)}
-        # A mapped test can itself supply fixtures/helpers. Include that import
-        # closure, or fall back when it reaches a non-test consumer.
-        pending = list(tests)
+    def python(self, path, tree):
+        runs, reads, names = set(), set(), set()
+        package = path.split("/")[:-1]
+        self.consts = {}
+        for statement in tree.body:
+            if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name) \
+                    and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+                self.consts[statement.targets[0].id] = statement.value.value
+        bodies = [tree.body] + [n.body for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        docstrings = {id(b[0].value) for b in bodies if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant)}
+        nested = {id(n.left) for n in ast.walk(tree) if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div)}
+        scope = {}
+        # Module-level names that hold a path found from __file__: ROOT = Path(__file__).parents[2]; DOCS = ROOT / "docs".
+        # A name whose path joins a literal ("docs") names that folder, which its definition reads.
+        located, named_here = set(), set()
+        for statement in tree.body:
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)) and statement.value is not None and any(
+                    isinstance(n, ast.Name) and (n.id == "__file__" or n.id in located) for n in ast.walk(statement.value)):
+                literal = any(isinstance(n, ast.Name) and n.id in named_here for n in ast.walk(statement.value)) or any(
+                    isinstance(part, ast.Constant) and isinstance(part.value, str) for n in ast.walk(statement.value)
+                    if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for part in self.chain(n))
+                for target in statement.targets if isinstance(statement, ast.Assign) else [statement.target]:
+                    found = {n.id for n in ast.walk(target) if isinstance(n, ast.Name)}
+                    located |= found
+                    named_here |= found if literal else set()
+        parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+        # Names bound to a literal path (FIXTURES = Path(__file__).parent / "fixtures"): where such a name is joined
+        # further, the joined path is what is read; where it is listed, only the listing.
+        self.values, deferred = defaultdict(set), set()
+        for _ in range(2):
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    found = self.paths_of(node.value)
+                    if found:
+                        self.values[node.targets[0].id] |= found
+                        deferred.add(id(node.value))
+        # A listing uses only names when nothing in the file reads file contents: a read elsewhere in the module (at
+        # module level, in another function or a helper it calls) may read what was listed, so edits reach it too.
+        reads_content = any(isinstance(n, ast.Call) and dotted_name(n.func).rsplit(".", 1)[-1] in CONTENT
+                            for n in ast.walk(tree))
+        listed = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in GLOBS | LISTINGS:
+                listed.add(id(node.func.value))
+            elif isinstance(node, ast.Call) and dotted_name(node.func) in OS_LISTINGS and node.args:
+                listed.add(id(node.args[0]))
+        if Path(path).name == "conftest.py":
+            for node in ast.walk(tree):
+                for decorator in getattr(node, "decorator_list", []) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else []:
+                    call = decorator if isinstance(decorator, ast.Call) else None
+                    keywords = {k.arg: k.value for k in call.keywords} if call else {}
+                    autouse = keywords.get("autouse")
+                    if dotted_name(call.func if call else decorator).split(".")[-1] == "fixture" and (
+                            autouse is None or isinstance(autouse, ast.Constant) and autouse.value is False):
+                        name = keywords.get("name")
+                        name = name.value if isinstance(name, ast.Constant) else node.name
+                        self.fixtures[path][name] = (set(), set())
+                        scope.update({id(n): self.fixtures[path][name] for n in ast.walk(node)})
+        for node in ast.walk(tree):
+            runs_, reads_ = scope.get(id(node), (runs, reads))
+            if isinstance(node, ast.arg):
+                names.add(node.arg)
+            elif isinstance(node, ast.Name):
+                names.add(node.id)
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    runs_ |= self.module(alias.name, bare=True)
+            elif isinstance(node, ast.ImportFrom):
+                prefix = package[:len(package) - node.level + 1] if node.level else []
+                module = ".".join([*prefix, *([node.module] if node.module else [])])
+                runs_ |= self.module(module, bare=not node.level)
+                for alias in node.names:
+                    runs_ |= self.module(module + "." + alias.name, bare=not node.level)
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in nested:
+                parts = self.chain(node)
+                if id(node) not in deferred | listed:
+                    for found in self.paths_of(node):
+                        self.path(found, runs_, reads_, bare_word=True)
+                start = next((i for i, part in enumerate(parts[1:], 1) if not isinstance(part, ast.Constant)), len(parts))
+                self.joined(parts if not self.paths_of(node) else parts[start:], runs_, reads_)
+            elif isinstance(node, ast.Name) and node.id in self.values and isinstance(node.ctx, ast.Load) and id(node) not in listed:
+                parent = parents.get(id(node))
+                if not (isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Div) and parent.left is node):
+                    for found in self.values[node.id]:
+                        self.path(found, runs_, reads_, bare_word=True)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in targets):
+                    for item in ast.walk(node.value):
+                        for text in self.strings(item):
+                            runs_ |= self.module(text, bare=True)
+            elif isinstance(node, ast.Call):
+                function = dotted_name(node.func)
+                last = function.rsplit(".", 1)[-1]
+                if last in PATHLIKE:
+                    self.joined(node.args, runs_, reads_)
+                if last in RUNNERS or any(k.arg == "cwd" for k in node.keywords):
+                    previous = None
+                    for argument in [*node.args, *(k.value for k in node.keywords)]:
+                        for item in argument.elts if isinstance(argument, (ast.List, ast.Tuple)) else [argument]:
+                            for text in self.strings(item):
+                                if previous == "-m":
+                                    runs_ |= self.module(text, bare=True)
+                                for token in TOKEN.findall(text):
+                                    self.path(token, runs_, reads_, bare_word=True)
+                            previous = item.value if isinstance(item, ast.Constant) else None
+                if last in ("import_module", "__import__"):
+                    first = node.args[0] if node.args else None
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        if first.value.startswith("."):
+                            level = len(first.value) - len(first.value.lstrip("."))
+                            runs_ |= self.module(".".join(package[:len(package) - level + 1] + [first.value.lstrip(".")]))
+                        else:
+                            runs_ |= self.module(first.value, bare=True)
+                    elif isinstance(first, (ast.JoinedStr, ast.BinOp)) and isinstance(
+                            head := first.values[0] if isinstance(first, ast.JoinedStr) else first.left, ast.Constant):
+                        # f"backend.connectors.{name}", "." + name: every module under the fixed package
+                        fixed = str(head.value)
+                        if fixed.startswith("."):
+                            level = len(fixed) - len(fixed.lstrip("."))
+                            fixed = ".".join(package[:len(package) - level + 1] + [fixed.lstrip(".")])
+                        fixed = fixed.rstrip(".")
+                        runs_ |= {p for m, p in self.modules.items() if m == fixed or m.startswith(fixed + ".")}
+                    else:
+                        self.everything.add(path)
+                if last in GLOBS | LISTINGS and isinstance(node.func, ast.Attribute) or function in OS_LISTINGS:
+                    # A listing of a folder this file names (`(ROOT / "docs").glob("*.md")`) reads the files it
+                    # matches, or only their names when the file reads no file contents anywhere. A listing of a
+                    # folder found from a __file__ alone (Path(module.__file__).parent.glob("*.py"), ROOT.iterdir()) reads
+                    # every tracked file its pattern matches; one of a folder found at run time (tmp_path) reads none.
+                    os_call = function in OS_LISTINGS
+                    receiver = (node.args[:1] if os_call else [node.func.value])
+                    patterns = [t for a in node.args[(1 if os_call else 0):] for t in self.strings(a)]
+                    if os_call and function.startswith("glob."):
+                        patterns, receiver = [t for t in self.strings(node.args[0])] if node.args else [], []
+                    if last not in GLOBS or not patterns:
+                        patterns = ["*"]
+                    recursive = last in ("rglob", "walk") or any("**" in t or "/" in t for t in patterns)
+                    folders = {f for r in receiver for f in self.paths_of(r)}
+                    names_only = not reads_content
+                    if folders:
+                        for folder in folders:
+                            folder = folder.strip("/")
+                            name = folder.rsplit("/", 1)[-1]
+                            for found in self.dirs.get(name, ()):
+                                if found == folder or found.endswith("/" + folder):
+                                    self.listings[path].update((found, t.rstrip("/").rsplit("/", 1)[-1] or "*", recursive, names_only)
+                                                               for t in patterns)
+                    elif any(isinstance(n, ast.Name) and (n.id == "__file__" or n.id in located) or
+                             isinstance(n, ast.Attribute) and n.attr == "__file__" for r in receiver for n in ast.walk(r)) or (
+                            os_call and function.startswith("glob.")):
+                        self.globs[path].update(t.rstrip("/").rsplit("/", 1)[-1] or "*" for t in patterns)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
+                names.add(node.value)
+                if "ls-files" in node.value and (is_test(path) or "tests" in Path(path).parts or path.startswith("scripts/")):
+                    self.everything.add(path)  # lists this repository (elsewhere git ls-files reads a bot's checkout)
+                # Free text (a message naming scripts/tico) only reads what it names; a lone dotted name like
+                # "backend.app:app" or a monkeypatch target loads that module.
+                prose = len(node.value.split()) > 1
+                for token in TOKEN.findall(node.value.replace(":", " ")):
+                    self.path(token, reads_ if prose else runs_, reads_, module=not prose)
+        self.runs[path] |= runs
+        self.reads[path] |= reads
+        self.names[path] = names
+
+    def text(self, path):
+        try:
+            raw = (self.root / path).read_bytes()
+        except OSError:
+            return
+        if len(raw) > 512 * 1024 or b"\0" in raw[:4096]:
+            return
+        folder = str(Path(path).parent)
+        for token in TOKEN.findall(raw.decode("utf-8", "replace")):
+            self.path(token, self.runs[path], self.reads[path])
+            if token.startswith(("./", "../")) and folder != ".":
+                self.path(os.path.normpath(folder + "/" + token), self.runs[path], self.reads[path])
+            if IDENTIFIER.match(token) and "." in token:
+                self.runs[path] |= self.module(token, bare=True)
+
+    def affected(self, changed, added=None):
+        """Changed files, and every tracked file that runs one of them, directly or through files that run each
+        other, or that reads one; files that depend on everything and whatever runs them. A listing that uses only
+        names sees added files (None: any changed file may be new); a removed file runs the full suite."""
+        changed = set(changed)
+        added = changed if added is None else set(added)
+        seen = changed | self.everything
+        pending = list(seen)
         while pending:
-            for consumer in self.importers[pending.pop()]:
-                if not is_test(consumer):
-                    return None
-                if consumer not in tests:
-                    tests.add(consumer)
-                    pending.append(consumer)
-        return tests
+            name = pending.pop()
+            users = set(self.run_by.get(name, ()))
+            if name in changed:
+                users |= self.read_by.get(name, set())
+                for parent in list(Path(name).parents)[:-1]:
+                    users |= self.read_by.get(str(parent) + "/", set())
+                users |= {p for p, patterns in self.globs.items()
+                          if any(fnmatch.fnmatchcase(Path(name).name, g) for g in patterns)}
+                folder = str(Path(name).parent)
+                users |= {p for p, listings in self.listings.items() if any(
+                    (folder == d or recursive and folder.startswith(d + "/")) and fnmatch.fnmatchcase(Path(name).name, g)
+                    and (not names_only or name in added) for d, g, recursive, names_only in listings)}
+            for conftest, fixtures in self.fixtures.items():
+                used = {f for f, (runs, reads) in fixtures.items() if name in runs or name in changed and (
+                    name in reads or any(name.startswith(d) for d in reads if d.endswith("/")))}
+                if used:
+                    folder = str(Path(conftest).parent)
+                    users |= {p for p, names in self.names.items() if is_test(p) and used & names
+                              and (folder == "." or p.startswith(folder + "/"))}
+            if Path(name).name == "conftest.py":
+                folder = str(Path(name).parent)
+                users |= {p for p in self.files if is_test(p) and (folder == "." or p.startswith(folder + "/"))}
+            for user in users - seen:
+                seen.add(user)
+                pending.append(user)
+        return seen
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None):
-    """None means the full default suite; an empty list means explicitly unaffected."""
+# Changes that steer every test rather than particular ones: CI, dependency pins, pytest's own configuration
+# (conftest hooks and autouse fixtures, pytest.ini) and this selector and its installer. Tests and the Assistant read
+# docs pages (the committed OpenAPI spec, the API guide, the manual) and CHANGELOG.md's shipped sections, so those
+# run everything too; no test or script reads screenshots, retired designs or the other top-level pages.
+FULL_SUITE = ("CHANGELOG.md", "pytest.ini", "package.json", "package-lock.json", ".gitignore",
+              "scripts/pr_checks.py", "scripts/ci_install.sh", "scripts/playwright-system-packages.json")
+# The Caddy container job builds the server image (Dockerfile, docker/, the screen relay it compiles) and runs its
+# entrypoint's caddy-config, backend/caddy_assets.py. The image also compiles and imports the Python source; a plan
+# that skips the job runs those checks itself (image_checks).
+CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
+CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
+UI_RUNNER = "scripts/ui-tests.cjs"
+
+
+def unread(name):
+    return name.startswith(("docs/images/", "docs/history/")) or (
+        "/" not in name and name.endswith(".md") and name != "CHANGELOG.md")
+
+
+def full_suite(name):
+    return (name in FULL_SUITE or name.startswith((".github/", "docs/")) or Path(name).name == "conftest.py"
+            or re.fullmatch(r"requirements[\w.-]*\.txt", Path(name).name) is not None)
+
+
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
+    """None means the full default suite; an empty list means explicitly unaffected.
+
+    A pull request runs the default tests that use a changed file (DependencyMap) and, of the browser scripts that
+    do, the core ones the full suite runs; a UI change runs its mapped scripts or all of them. `added` names the new
+    files (None: any may be new) and `core` the core browser scripts (None: read from scripts/ui-tests.cjs)."""
     full = {"python": None, "browser": None, "caddy": True, "reason": "full default suite"}
     rust = sorted(crate for crate, inputs in RUST_INPUTS.items() if any(p.startswith(inputs) for p in changed))
     runner = bool(rust) or any(p.startswith(("runner/", "runner-rs/", "relay-rs/")) or
@@ -280,59 +534,48 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None):
     full["rust"] = rust
     if event != "pull_request":
         return {**full, "conformance": runner, "reason": "main runs the full default suite"}
-    python, browser, uncertain = set(), set(), []
+    if not changed:
+        return {**full, "conformance": runner, "reason": "empty diff: full default suite", "uncertain": ["empty diff"]}
+    changed = [n for n in changed if not unread(n)]
+    uncertain = [n for n in changed if full_suite(n) or not (root / n).is_file()]
+    browser = set()
     for name in changed:
-        path = root / name
-        # Tests read docs pages (the committed OpenAPI spec, the API guide, HQ's route contract, the manual) and
-        # CHANGELOG.md's shipped sections, so those run everything. No test or script reads screenshots or
-        # retired designs, and none reads the other top-level pages.
-        if name.startswith(("docs/images/", "docs/history/")) or (
-                "/" not in name and name.endswith(".md") and name != "CHANGELOG.md"):
-            continue
-        if name.startswith("docs/") or name == "CHANGELOG.md":
-            uncertain.append(name)
-            continue
-        if not path.is_file() or path.name in ("conftest.py", "__init__.py") or name in SHARED_HUBS:
-            uncertain.append(name)
-        elif name in PYTHON_MAP or (is_test(name) and name.startswith(("backend/tests/", "scripts/tests/"))):
-            graph = graph or SourceGraph(root)
-            tests = graph.backend_tests(name) if name in PYTHON_MAP else ({name} if graph.test_leaf(name) else None)
-            if tests is not None and is_test(name) and base:
-                try:
-                    exists = subprocess.check_output(["git", "ls-tree", "--name-only", base, "--", name],
-                                                     cwd=root, text=True).strip()
-                    previous = subprocess.check_output(["git", "show", f"{base}:{name}"], cwd=root, text=True) if exists else None
-                    if previous is not None and not graph.test_leaf(name, previous):
-                        tests = None
-                except (OSError, subprocess.CalledProcessError, SyntaxError):
-                    tests = None
-            if tests is None:
-                uncertain.append(name)
-            else:
-                python.update(tests)
-        elif name in UI_MAP:
+        if name in UI_MAP:
             browser.update(UI_MAP[name])
-        else:
-            if name.startswith("ui/"):
-                browser.add("--all")
-            uncertain.append(name)
-    if any(not (root / f).is_file() for f in python):
-        uncertain.append("missing mapped Python test")
+        elif name.startswith("ui/") or name == UI_RUNNER:
+            browser.add("--all")
     if any(n != "--all" and not (root / "ui/tests" / f"{n}.cjs").is_file() for n in browser):
         uncertain.append("missing mapped browser test")
         browser = {"--all"}
-    if uncertain or not changed:
+    if not uncertain and changed:
+        graph = graph or DependencyMap(root)
+        uncertain += [n for n in changed if n in graph.unparsed or n not in graph.files]
+    if uncertain:
         return {**full, "browser": ["--all"] if browser else None, "conformance": runner,
-                "reason": "unmapped, shared, deleted or uncertain change: full default suite",
-                "uncertain": uncertain or ["empty diff"]}
-    return {"python": sorted(python), "browser": sorted(browser), "conformance": runner, "rust": rust,
-            "caddy": False, "reason": "audited affected-test mapping"}
+                "reason": "unmapped, shared, deleted or uncertain change: full default suite", "uncertain": uncertain}
+    if not changed:
+        return {"python": [], "browser": [], "conformance": False, "rust": [], "caddy": False,
+                "reason": "documentation that no test or script reads"}
+    affected = graph.affected(changed, added)
+    python = sorted(p for p in affected if is_test(p) and not p.startswith("ui/"))
+    if "--all" not in browser:
+        scripts = {Path(p).stem for p in affected if Path(p).parent == Path("ui/tests") and p.endswith(".cjs")}
+        if core is None:
+            try:
+                core = browser_scripts([], root)
+            except (OSError, subprocess.CalledProcessError, RuntimeError):
+                core = scripts
+        browser |= scripts & set(core)
+    caddy = any(n.startswith(CADDY_INPUTS) for n in changed) or bool(affected & set(CADDY_ROOTS))
+    return {"python": python, "browser": sorted(browser), "conformance": runner, "rust": rust, "caddy": caddy,
+            "reason": "measured dependency map"}
 
 
-def changed_files(base, head="HEAD", root=ROOT):
+def changed_files(base, head="HEAD", root=ROOT, only=None):
     try:
         ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
-        raw = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "-z", ancestor, head], cwd=root)
+        raw = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "-z",
+                                       *([f"--diff-filter={only}"] if only else []), ancestor, head], cwd=root)
         return raw.decode().rstrip("\0").split("\0") if raw else []
     except (subprocess.CalledProcessError, OSError):
         return []  # The uncertain path runs everything, never nothing.
@@ -390,18 +633,33 @@ def merge_parent(base, head="HEAD", root=None):
     return base
 
 
+def image_checks(changed, root=ROOT):
+    """The image build's own Python checks, for a selective plan that skips the Caddy job: compile each changed file
+    and run the Dockerfile's import line (backend.app and friends) here."""
+    for name in changed:
+        if name.endswith(".py") and (root / name).is_file():
+            compile((root / name).read_bytes(), name, "exec")
+    found = re.search(r"python -c '(import [^']+)'", (root / "Dockerfile").read_text())
+    if not found:
+        raise RuntimeError("Dockerfile import check not found; keep it in step with image_checks")
+    subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
+
+
 def prepare(event, base, output, timings_path=None):
     if event == "pull_request":
         base = merge_parent(base)
         guard_changelog(base)
     changed = changed_files(base) if base else []
-    picked = selection(changed, event, base=base)
+    added = changed_files(base, only="A") if base else None
+    picked = selection(changed, event, base=base, added=added)
+    if picked["python"] is not None and not picked["caddy"]:
+        image_checks(changed)
     counts = collect() if picked["python"] != [] else Counter()
     if picked["python"] is not None:
-        missing = set(picked["python"]) - counts.keys()
-        if missing:
-            raise RuntimeError(f"Affected mapping selected no default tests: {sorted(missing)}")
-        counts = Counter({f: counts[f] for f in picked["python"]})
+        # A selected file with no default test (a changed test whose tests are all slow, which the release gate runs;
+        # a test helper the map follows) has nothing to run here.
+        counts = Counter({f: counts[f] for f in picked["python"] if f in counts})
+        picked["python"] = sorted(counts)
     timings = {}
     if timings_path:
         source = Path(timings_path)

@@ -170,6 +170,10 @@ version for a bot:
   weighted sum.
 - **Say what the decision said.** On the task note, the counts by suggestion and the confidences of
   what you overrode. That is what a human reads to tune the thresholds.
+- **Record what you did.** Each answer (and `hub classify`'s) carries a `ref`; once you have acted, write it
+  down once: `hub decision outcome --ref <ref> --verdict archive --action archived` (`hub_decision_outcome`), and
+  `--action "overrode: read it myself"` when you went against it. That is how a set's answers are checked against
+  what happened.
 - **Check freshness.** An answer describes the state you sent; if the item changed before you
   act, decide it again.
 - **Never coerce.** No re-asking with a nudged state to get the answer you wanted.
