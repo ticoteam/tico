@@ -91,6 +91,9 @@ sections. `hub strategy guides` and `GET /api/v2/strategy/guides` list the ones 
 bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
 `revision`, so two editors get a conflict (`409`), not a silent overwrite.
 
+If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
+A failed bet move also reloads the list; check the order before trying again.
+
 The CEO Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
 published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
@@ -170,6 +173,9 @@ The owner edits the draft and publishes with a note. **Publish** refuses, and th
 
 - at least one bet is active with a `rules_out` and a `wrong_if`, and
 - *What we won't do* is not empty.
+
+Changes only to a bet's market citations or the guide also enable **Publish** when these conditions hold.
+Saving the summary while a bet editor or publish form is open does not prevent you from submitting that form.
 
 Publishing snapshots every bet that is not retired, with its status, as version *n*, and opens a fresh draft copied
 from it. Then:
