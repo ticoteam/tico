@@ -446,9 +446,14 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
 
 
 def _vision_event(c, actor, old, new):
-    """The vision's history on the Goals page (GET /company/history); the text itself lives only in the versions."""
+    """The vision everyone sees changed: its history on the Goals page (GET /company/history), and
+    company_profile.vision kept the same for hub SQL readers."""
+    ts = H.now()
     c.execute("INSERT INTO company_events (id, ts, actor, field, old, new) VALUES (?,?,?,?,?,?)",
-              (H.new_id(), H.now(), actor, "vision", old, new))
+              (H.new_id(), ts, actor, "vision", old, new))
+    c.execute("INSERT INTO company_profile (id, vision, description, updated, updated_by) VALUES ('company',?,'',?,?) "
+              "ON CONFLICT(id) DO UPDATE SET vision=excluded.vision, updated=excluded.updated, "
+              "updated_by=excluded.updated_by", (new or "", ts, actor))
 
 
 # ----------------------------------------------------------------------------- bets

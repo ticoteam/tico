@@ -158,13 +158,16 @@ function goalNoteHtml(g, may) {
   return (said ? `<div class="goal-note">${esc(said)}</div>` : '') + suggest;
 }
 // The bets a goal may serve (ui/strategy-page.js): the active ones, and the one it serves now whatever its status, so
-// saving never drops it. Its caption is the strategy's word for one ("Bet").
+// saving never drops it, even one this person can't see (retired or not yet published). Its caption is the strategy's
+// word for one ("Bet").
 function goalBetHtml(g, may) {
   const st = GOALS_ST?.strategy, all = st?.bets || [];
   const options = all.filter(c => c.status === 'active' || c.id === g.bet_id).sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
   if (!options.length) return '';
+  const unseen = g.bet_id && !options.some(c => c.id === g.bet_id)
+    ? `<option value="${esc(g.bet_id)}" selected>Retired or unpublished</option>` : '';
   return `<label class="goal-f goal-bet-f"><span>${esc(st.label_one || 'Bet')}</span><select name="bet"${may ? '' : ' disabled'}>
-      <option value=""${g.bet_id ? '' : ' selected'}>None</option>${options.map(c =>
+      <option value=""${g.bet_id ? '' : ' selected'}>None</option>${unseen}${options.map(c =>
         `<option value="${esc(c.id)}"${c.id === g.bet_id ? ' selected' : ''}>${esc(c.statement)}</option>`).join('')}</select></label>`;
 }
 function goalFormHtml(g, goals, {owner = '', company = false, fixed = false} = {}) {

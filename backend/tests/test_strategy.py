@@ -307,8 +307,10 @@ def test_an_unpublished_vision_stays_out_of_the_company_history_until_publish(ap
     write(api, vision="Every small landlord on Acme.")
     assert seen() == ["Every landlord on Acme."]
     assert get(api, "company", token="cara-test")["company"]["vision"] == "Every landlord on Acme."
+    sql = lambda: post(api, "sql", {"sql": "SELECT vision FROM company_profile"}, token="cara-test")["rows"][0][0]
+    assert sql() == "Every landlord on Acme."
     publish(api, "Second")
-    assert seen()[0] == "Every small landlord on Acme."
+    assert seen()[0] == "Every small landlord on Acme." and sql() == "Every small landlord on Acme."
 
 
 def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_proposed_them(api):

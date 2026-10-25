@@ -108,12 +108,13 @@ function strategyDiffers(data) {
   if (!b) return !strategyBlank(a, data.bets || []);
   if (!a) return false;
   if (stratText(a.summary) !== stratText(b.summary) || stratText(a.vision) !== stratText(b.vision)) return true;
+  if ((a.guide || '') !== (b.guide || '')) return true;
   for (const sec of STRAT_SECTIONS) if (stratText(a.sections?.[sec.key]) !== stratText(b.sections?.[sec.key])) return true;
   const extra = v => JSON.stringify(Object.entries(stratExtra(v)).map(([k, x]) => [k, stratText(x?.title), stratText(x?.body)]).sort());
   if (extra(a) !== extra(b)) return true;
   // A version keeps every bet not retired; one retired since is missing from the live side, so it still differs.
   const sig = list => (list || []).filter(c => c.status !== 'retired').sort(stratRank)
-    .map(c => [c.id, stratText(c.statement), stratText(c.why), stratText(c.rules_out), JSON.stringify(c.wrong_if || null), c.status].join('\u0001')).join('\u0002');
+    .map(c => [c.id, stratText(c.statement), stratText(c.why), stratText(c.rules_out), JSON.stringify(c.wrong_if || null), JSON.stringify(c.cites || []), c.status].join('\u0001')).join('\u0002');
   return sig(data.bets) !== sig(b.bets);
 }
 
@@ -408,7 +409,7 @@ function strategyBind() {
       if (!note) { form.elements.note.focus(); return; }
       form.querySelectorAll('button').forEach(b => { b.disabled = true; });
       let out = null;
-      const ok = await strategyWrite(async () => { out = await post('/v2/strategy/publish', {note, revision: data.draft?.revision ?? null}); }, {fail: 'Could not publish'});
+      const ok = await strategyWrite(async () => { out = await post('/v2/strategy/publish', {note, revision: state.data?.draft?.revision ?? null}); }, {fail: 'Could not publish'});
       if (ok) { state.publishing = false; strategyRender(); toast(`Published v${out?.n ?? out?.version?.n ?? ''}`.trim()); }
       else form.querySelectorAll('button').forEach(b => { b.disabled = false; });
     };
@@ -540,7 +541,7 @@ function strategyBindBetForm(bform, state, view) {
     bform.querySelectorAll('button').forEach(b => { b.disabled = true; });
     state.editBet = '';
     const ok = await strategyWrite(() => post(was ? `/v2/strategy/bets/${encodeURIComponent(id)}` : '/v2/strategy/bets',
-      {...change, revision: data.draft?.revision ?? null}));
+      {...change, revision: state.data?.draft?.revision ?? null}));
     if (!ok && STRAT === state) { state.editBet = id; bform.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
   };
 }
@@ -552,9 +553,14 @@ async function strategyMove(id, step) {
   const at = live.findIndex(c => c.id === id), to = at + step;
   if (at < 0 || to < 0 || to >= live.length) return;
   [live[at], live[to]] = [live[to], live[at]];
-  await strategyWrite(async () => {
-    for (const [rank, c] of live.entries()) if (c.rank !== rank) await post(`/v2/strategy/bets/${encodeURIComponent(c.id)}`, {rank});
+  // Each save carries the revision the last one answered, so a stale page gets a 409; one that fails midway is read again.
+  let revision = state.data.draft?.revision ?? null;
+  const ok = await strategyWrite(async () => {
+    for (const [rank, c] of live.entries()) {
+      if (c.rank !== rank) revision = (await post(`/v2/strategy/bets/${encodeURIComponent(c.id)}`, {rank, revision}))?.revision ?? null;
+    }
   }, {fail: 'Could not move it'});
+  if (!ok && STRAT === state) await strategyReload(state);
 }
 
 // ---------------------------------------------------------------- versions

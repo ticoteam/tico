@@ -53,7 +53,7 @@ const v1 = {id: 'v-1', n: 1, status: 'published', guide: 'default',
   vision: 'Every home in Austin cleaned by Acme.', sections, bets: bets().filter(b => b.id !== 'b-weekly'), note: 'First version', revision: 7,
   updated: '2026-10-24T09:00:00Z', updated_by: 'human:ana', published: '2026-10-24T09:00:00Z', published_by: 'human:ana'};
 
-async function open(browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = []} = {}) {
+async function open(browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = []} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});  // dates read "24 Oct"
   const errors = [], sent = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -67,7 +67,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
   const goals = [
     {id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: 'b-price'},
     {id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', parent_id: 'g-top', status: 'red', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: null},
-  ];
+    ...more];
   const groups = [{id: 'ops', name: 'Operations', parent: '', bet_id: null}];
   const strategy = () => ({...(role === 'owner' ? {draft: st.draft} : {}), current: st.current, bets: role === 'owner' ? st.bets : st.current?.bets || [],
     label: 'Bets', label_one: 'Bet', may_edit: role === 'owner',
@@ -395,6 +395,34 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await card.locator('[data-decide="confirm"]').click();
       await card.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/proposals/p-draft'), ['POST', '/proposals/p-draft', {decision: 'confirm'}]);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // A goal serving a bet this person can't see (retired, or not published) keeps it when saved for something else.
+    {
+      const old = {id: 'g-old', title: 'Win the office park', owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
+      const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
+      await page.locator('#goal-tree .gt-row').first().waitFor();
+      await page.locator('#goal-tree .gt-row', {hasText: 'Win the office park'}).click();
+      const panel = page.locator('#goal-panel[open]');
+      await panel.locator('[data-gp-edit="g-old"]').click();
+      const picker = panel.locator('select[name="bet"]');
+      assert.equal(await picker.inputValue(), 'b-gone');
+      assert.equal(await picker.locator('option:checked').innerText(), 'Retired or unpublished');
+      await panel.locator('input[name="title"]').fill('Win both office parks');
+      await panel.locator('button[type="submit"]').click();
+      await page.waitForFunction(() => !document.querySelector('#goal-panel [data-goal-form]'));
+      assert.deepEqual(sent.find(x => x[1] === '/goals/g-old'), ['POST', '/goals/g-old', {title: 'Win both office parks'}]);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Moving a bet saves each changed rank with the revision the last save answered.
+    {
+      const {page, errors, sent} = await open(browser);
+      await page.locator('li[data-bet="b-offices"] [data-bet-up]').click();
+      await page.waitForFunction(() => document.querySelector('ol.strat-bets li[data-bet]')?.dataset.bet === 'b-offices');
+      assert.deepEqual(sent.filter(x => x[1].startsWith('/bets/')), [['POST', '/bets/b-offices', {rank: 0, revision: 7}],
+        ['POST', '/bets/b-price', {rank: 1, revision: 8}]]);
       assert.deepEqual(errors, []);
       await page.close();
     }
