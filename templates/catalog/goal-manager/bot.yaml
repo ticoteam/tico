@@ -30,6 +30,14 @@ routines:
     template: playbooks/weekly-goals-review.md
     labels: [priority:p3]
     enabled: false
+  # Runs when the Librarian posts a weekly market briefing that touches a bet (backend/market_briefing.py). Not paused:
+  # with no bet touched the event never fires, and the playbook stops at once if the briefing names none.
+  - id: market-briefing
+    title: Market briefing
+    "on": market.briefing          # quoted: YAML reads a bare `on` as true
+    timezone: America/Los_Angeles
+    template: playbooks/market-briefing.md
+    labels: [priority:p3]
 
 # What this bot may touch. The KPI sources are tools the owner declares here (an analytics project, an API, a
 # read-only database) and grants a stored Credential for; `env:` names the variable, never the value. Without a declared tool a

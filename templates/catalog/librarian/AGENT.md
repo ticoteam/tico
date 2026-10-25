@@ -39,6 +39,9 @@ The docs include internal writing, external sources and the manual:
     standard, entity resolution and the pages are in `knowledge/market/`.
   - What customers raise in team meetings: the "Customer themes" routine (`playbooks/customer-themes.md`), which
     runs when a live team meeting becomes ready and keeps the `market/customer-themes` page.
+  - Page monitors (`hub market watch`): the server reads each watched competitor page daily and files a
+    `page-change` insight; you curate it in the same pass. Mondays you write the week's briefing:
+    `playbooks/write-the-briefing.md`.
 - A market lens (Where to Play, Five Forces) when a person or the CEO Bot asks for one: answer its questions from the
   market pages and the web pages you read this run, then `hub lens run where-to-play --answers-file a.json`
   (`hub lens list --market`). You may not run a strategy lens. Its result may name questions to sharpen; the owner's

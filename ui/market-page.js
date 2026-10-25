@@ -124,6 +124,7 @@ window.pageMarket = async function pageMarket() {
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-shell" class="market-shell"><p class="market-loading">Opening the market…</p></div>';
     marketViewSwitch('players');
     const shell = $('#market-shell');
+    void window.marketBriefingCard?.(shell);
     try {
       const mounted = await mountMarket(shell);
       if (page !== MARKET_PAGE) { mounted.stop(); return; }   // another view or note was asked for meanwhile

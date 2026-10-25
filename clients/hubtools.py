@@ -1767,6 +1767,51 @@ def market_page(api, args):
     return api.post("market/pages/" + args["name"], {"body": args["body"]}, key=_key(args))
 
 
+@tool("hub_market_watch_add", "Librarian (the market curator): watch one public page of a market entity (its pricing, changelog, "
+      "careers, docs or home page). The server reads it once a day and files a market insight only when it changed.",
+      {"entity_id": _s("The market entity, like company/globex"), "url": _s("The page's public address"),
+       "kind": {"type": "string", "enum": ["pricing", "careers", "changelog", "docs", "home", "other"], "default": "other"}},
+      required=("entity_id", "url"), writes=True)
+def market_watch_add(api, args):
+    return api.post("market/watches", {"entity_id": args["entity_id"], "url": args["url"], "kind": args.get("kind") or "other"},
+                    key=_key(args))
+
+
+@tool("hub_market_watch_list", "The watched market pages: entity, address, kind, when last read and changed, and any error.",
+      {"entity_id": _s("Only this entity's pages")})
+def market_watch_list(api, args):
+    return api.get("market/watches", entity_id=args.get("entity_id"))
+
+
+@tool("hub_market_watch_stop", "Librarian (the market curator): stop watching a page. The row is kept.",
+      {"id": _s("The watch id from hub_market_watch_list")}, required=("id",), writes=True)
+def market_watch_stop(api, args):
+    return api.post(f"market/watches/{args['id']}/stop", {}, key=_key(args))
+
+
+@tool("hub_market_watch_check", "Librarian (the market curator): read the watched pages now, the longest unchecked first (at most 50).",
+      {}, writes=True)
+def market_watch_check(api, args):
+    return api.post("market/watches/check", {}, key=_key(args))
+
+
+@tool("hub_market_briefing_post", "Librarian (the market curator): post the week's market briefing. `body` is Markdown, `items` the "
+      "week's findings, each {text, kind: change|signal|theme|size, entity_ids: [market ids it touches]}. The server works out "
+      "which bets cite those ids and tells the CEO Bot. The same week again replaces it.",
+      {"week": _s("ISO week, like 2026-W44"), "title": _s("A short title"), "body": _s("The briefing in Markdown"),
+       "items": {"type": "array", "items": {"type": "object"}, "description": "{text, kind, entity_ids} per finding"}},
+      required=("week", "title", "body"), writes=True)
+def market_briefing_post(api, args):
+    return api.post("market/briefings", {"week": args["week"], "title": args["title"], "body": args["body"],
+                                         "items": args.get("items") or []}, key=_key(args))
+
+
+@tool("hub_market_briefing_latest", "The newest weekly market briefing with its body, its items and the bets it touches "
+      "(`briefing` is null before the first).", {})
+def market_briefing_latest(api, args):
+    return api.get("market/briefings/latest")
+
+
 # ----------------------------------------------------------------------------- listening, intake
 @tool("hub_listening_save", "Listening: save one sweep of one query and every post it saw. status is ok, blocked, "
       "rate_limited or error; anything but ok says what happened in note. A post already saved is not changed.",

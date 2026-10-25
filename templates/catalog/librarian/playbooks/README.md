@@ -7,6 +7,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `docs-setup.md`: the first Docs build, from the places a person said the team's docs are: walk the sources, build the map.
 - `market-setup.md`: the first market map, from a website, a description or links the owner gave. Research, then the market pages and graph.
 - `curate-the-market.md`: the daily routine that turns reported insights into the market graph and pages.
+- `write-the-briefing.md`: Mondays after the sweep, the week's market briefing: items tagged with market ids, one page, posted for the CEO Bot.
 - `urgent-market-insight.md`: one urgent insight, curated now.
 - `customer-themes.md`: a team meeting just became ready; add what customers raised to the customer themes page, with a count and short quotes.
 - `research-a-section.md`: a person's research request on a doc, a market page or a market entry: research the web, add what was found to that one place, cited.

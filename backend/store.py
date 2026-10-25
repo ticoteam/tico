@@ -1388,6 +1388,12 @@ class Store:
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
                 ensure_lenses(c)
+                # Page monitors and the weekly market briefing (backend/market_watch.py, backend/market_briefing.py).
+                # Unversioned the same way: an older release never reads the tables.
+                from .market_briefing import ensure as ensure_market_briefing
+                from .market_watch import ensure as ensure_market_watch
+                ensure_market_watch(c)
+                ensure_market_briefing(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments

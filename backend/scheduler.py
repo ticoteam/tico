@@ -434,6 +434,12 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
+        # Page monitors (backend/market_watch.py): once a day the watched competitor pages are read on their own thread.
+        try:
+            from . import market_watch
+            market_watch.tick(self.store, at)
+        except Exception as exc:
+            failures.append({"market_watch": type(exc).__name__})
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.

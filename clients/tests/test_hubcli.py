@@ -530,3 +530,35 @@ def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
         remotecli.via_tool(None, hubcli.parser().parse_args(argv))
     assert 'limit' not in sent[0]
     assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
+
+
+def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def get(self, path, **kw):
+            if path == 'me':
+                return {'actor': 'bot:librarian'}
+            calls.append(('GET', path, kw))
+            return {}
+
+        def post(self, path, body, **kw):
+            calls.append(('POST', path, body))
+            return {}
+    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
+    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: Api())
+    (tmp_path / 'b.md').write_text('# Week 44\n')
+    (tmp_path / 'items.json').write_text('[{"text": "Example Co raised prices.", "kind": "change", "entity_ids": ["company/example-co"]}]')
+    for argv in (['market', 'watch', 'add', 'company/example-co', 'https://example.test/pricing', '--kind', 'pricing'],
+                 ['market', 'watch', 'stop', 'w1'], ['market', 'watch', 'list'], ['market', 'watch', 'check'],
+                 ['market', 'briefing', 'latest'],
+                 ['market', 'briefing', 'post', '--week', '2026-W44', '--title', 'Week 44',
+                  '--body-file', str(tmp_path / 'b.md'), '--items-file', str(tmp_path / 'items.json')]):
+        remotecli.run(hubcli.parser().parse_args(argv))
+    assert [(c[0], c[1]) for c in calls] == [
+        ('POST', 'market/watches'), ('POST', 'market/watches/w1/stop'), ('GET', 'market/watches'),
+        ('POST', 'market/watches/check'), ('GET', 'market/briefings/latest'), ('POST', 'market/briefings')]
+    assert calls[0][2] == {'entity_id': 'company/example-co', 'url': 'https://example.test/pricing', 'kind': 'pricing'}
+    assert calls[-1][2] == {'week': '2026-W44', 'title': 'Week 44', 'body': '# Week 44\n',
+                            'items': [{'text': 'Example Co raised prices.', 'kind': 'change', 'entity_ids': ['company/example-co']}]}

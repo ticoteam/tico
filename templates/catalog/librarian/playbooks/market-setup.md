@@ -117,6 +117,19 @@ Use only the sixteen relations the server knows (`competes_with`, `partners_with
 name alone. Never delete or retire an entity. If a write is refused, read why and fix that one write: do not
 retry the same call.
 
+### Watch the pages that matter
+
+For each **core** competitor in the graph, watch the pages where a change is news. The server reads each one daily and
+files an insight when it changes by a real amount; the first read is only a baseline.
+
+    hub market watch add company/<slug> https://<their site>/pricing --kind pricing
+    hub market watch add company/<slug> https://<their site>/changelog --kind changelog
+    hub market watch add company/<slug> https://<their site>/careers --kind careers
+
+Use the address you read in step 3, never a guess: a page you could not open is not watched. Kinds are `pricing`,
+`careers`, `changelog`, `docs`, `home` and `other`. At most 200 pages are watched at once; `hub market watch list`
+shows them and `hub market watch stop <id>` ends one.
+
 ## 5. Write the pages
 
 `hub market page <name> --body-file <file>` rewrites a whole page. Write all eight (the ninth, the weekly

@@ -106,7 +106,8 @@ function routineById(id) {
 // day of the month, at a time) and saved as a cron; anything else stays a cron to type.
 const ROUTINE_EVENTS = [['meeting.ready', 'When a meeting is imported'],
   ['recording.ready', 'When a meeting is imported (legacy)'], ['market.insight.urgent', 'When a market insight is urgent'],
-  ['release_published', 'When a release is published'], ['strategy.published', 'When a strategy version is published']];
+  ['release_published', 'When a release is published'], ['strategy.published', 'When a strategy version is published'],
+  ['market.briefing', 'When a market briefing is posted']];
 let ROUTINE_TRIGGERS = null;     // Settings > Triggers (GET /v2/triggers), loaded when the editor or that tab opens
 async function routineTriggersLoad() {
   try { ROUTINE_TRIGGERS = (await get('/v2/triggers')).triggers || []; } catch { ROUTINE_TRIGGERS = ROUTINE_TRIGGERS || []; }

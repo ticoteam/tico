@@ -239,6 +239,7 @@ def _ask(item, manager=ceo_bot.NAME):
         if lens:
             title += f" from the {lens} lens"
         body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
+                + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
                 + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
                 + f": {_change(p, name)}. Confirming writes it to the draft; publishing stays your click on the "
                   f"Strategy page (#/strategy). {closes}it is decided.")
