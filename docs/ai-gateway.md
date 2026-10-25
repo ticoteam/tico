@@ -85,6 +85,31 @@ automatically**. Nobody types or sees the code or the key. The server replaces t
 itself. The invite is only needed for this first sign-up: after it, the server keeps its key with no invite in the
 environment.
 
+### Connect a self-run server through your Tico company
+
+A self-run server can get its Gateway key through its company on [app.tico.dev](https://app.tico.dev/), without an invite code or a pasted key.
+Sign in directly as an owner or admin to link the server:
+
+1. Get a server code from your company on app.tico.dev.
+2. Open **Settings → General → Tico company** in your Tico.
+3. Paste the code into **Server code** and press **Preview**.
+4. Check the company name, then press **Connect**.
+
+The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
+The server asks for a Gateway key immediately, then retries hourly while it has none. Gateway use spends that company's credit.
+The Gateway card in **Settings → Computers → Models** says **Tico AI Gateway: connected automatically** once it has the key.
+
+If linking fails, check the error beside the form. Tico must be able to reach your server's
+[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
+the company Gateway endpoint also needs to be available at Tico HQ.
+
+An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
+Disconnecting the company removes a key obtained through that link; a pasted key stays.
+Reconnecting lets the same install ask for its company key again.
+The server also reports its version daily and within an hour after an update, when HQ is reachable.
+
+### Automatic key maintenance
+
 When the key rotates, a running bot keeps its previous key for up to 24 hours, with the same install spending cap.
 Turning the install off still stops all its keys immediately. A run that could exceed that grace is limited to just
 under 24 hours, including any fallback; its run details explain the shorter limit.
