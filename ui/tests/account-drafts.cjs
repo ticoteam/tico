@@ -21,7 +21,7 @@ async function scenario(browser, name, options = {}) {
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-    if (request.method() === 'POST') posts.push(p);
+    if (request.method() === 'POST' && /\/(?:chat|comments?|messages|uploads)(?:\/|$)/.test(p)) posts.push(p);
     if (p === '/api/v2/logout' || p === '/auth/login') return route.fulfill({contentType: 'text/html',
       body: '<title>Fixture sign-in</title><a id="return" href="/">Sign in</a>'});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
