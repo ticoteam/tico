@@ -1,0 +1,171 @@
+/* ui/styles/market-spend.css — the Market tab's views (ui/market-spend.js): the view switch, the Spend and Buyers
+   treemap, how sure we are, the segment panel, Size vs growth and the Value chain.
+   The cascade runs in the order index.html links these files; keep rules in order. */
+/* The view switch sits in the section's heading. */
+.mkt-views{display:inline-flex;gap:2px;max-width:100%;padding:3px;overflow-x:auto;scrollbar-width:none;background:var(--surface2);border-radius:999px}
+.mkt-views::-webkit-scrollbar{display:none}
+.mkt-views a{padding:3px 12px;border-radius:999px;color:var(--muted);font-size:var(--t-sm);font-weight:500;text-decoration:none;white-space:nowrap}
+.mkt-views a:hover{color:var(--ink);text-decoration:none}
+.mkt-views a[aria-current=page]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* Eight segment hues, lifted on the dark ramp and deepened on the light one. A box takes its hue as a tint of the surface. */
+.mkt-host{--mkt-c1:#7fb3f0;--mkt-c2:#a99bf0;--mkt-c3:#6cc48f;--mkt-c4:#e2b25a;--mkt-c5:#e68fb0;--mkt-c6:#ec9a6c;--mkt-c7:#b7c960;--mkt-c8:#8fa0b8;--mkt-tint:22%;--mkt-hover:brightness(1.12)}
+:root[data-theme="light"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}
+@media (prefers-color-scheme:light){:root[data-theme="system"] .mkt-host{--mkt-c1:#2b6cb0;--mkt-c2:#6b4fc4;--mkt-c3:#2f855a;--mkt-c4:#b7791f;--mkt-c5:#b83b78;--mkt-c6:#c4561a;--mkt-c7:#6f7f12;--mkt-c8:#5b6f8a;--mkt-tint:18%;--mkt-hover:brightness(.95)}}
+
+.mkt-host{flex:1;min-height:0;overflow:auto;padding:18px 28px 32px;background:var(--bg);color:var(--ink)}
+.mkt-host.blank{display:flex;align-items:center;justify-content:center;padding-bottom:12vh}
+.mkt-head{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:6px 16px;margin:0 0 14px}
+.mkt-total{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;min-width:0}
+.mkt-total strong{font-size:var(--t-xl);font-weight:650;line-height:1.1;font-variant-numeric:tabular-nums}
+.mkt-total span{color:var(--muted);font-size:var(--t-base);font-variant-numeric:tabular-nums}
+.mkt-ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mkt-desc{grid-column:1/-1;max-width:72ch;margin:0;color:var(--muted);font-size:var(--t-base)}
+.mkt-seg{display:inline-flex;padding:3px;background:var(--surface2);border-radius:999px}
+.mkt-seg button{border:0;background:none;border-radius:999px;padding:3px 12px;color:var(--muted);font-size:var(--t-sm);font-weight:500;cursor:pointer}
+.mkt-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.mkt-start{width:min(560px,100%)}
+.mkt-start input{width:100%}
+
+/* The treemap: boxes laid out in script, so each is placed by pixel. A box keeps its exact rectangle; the gap between
+   boxes is an inner outline in the page colour. */
+.mkt-map{position:relative;width:100%;min-height:160px}
+.mkt-box{position:absolute;box-sizing:border-box;overflow:hidden;outline:1.5px solid var(--bg);outline-offset:-1.5px}
+.mkt-tile{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 10px 6px;cursor:pointer;color:var(--ink);
+  background:linear-gradient(var(--c),var(--c)) top/100% 3px no-repeat,color-mix(in srgb,var(--c) var(--mkt-tint),var(--surface))}
+.mkt-tile.nested{background:linear-gradient(var(--c),var(--c)) top/100% 2px no-repeat,color-mix(in srgb,var(--c) var(--mkt-tint),var(--surface))}
+.mkt-tile.low{background:linear-gradient(var(--c),var(--c)) top/100% 3px no-repeat,repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--ink) 16%,transparent) 5px 6.5px),color-mix(in srgb,var(--c) calc(var(--mkt-tint) - 6%),var(--surface))}
+.mkt-tile.nested.low{background:linear-gradient(var(--c),var(--c)) top/100% 2px no-repeat,repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--ink) 16%,transparent) 5px 6.5px),color-mix(in srgb,var(--c) calc(var(--mkt-tint) - 6%),var(--surface))}
+.mkt-tile:hover{filter:var(--mkt-hover)}
+.mkt-tile.self{box-shadow:inset 0 0 0 4px var(--accent)}
+.mkt-group.self::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 3px var(--accent);pointer-events:none}
+.mkt-box:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;z-index:2;border-radius:0}
+.mkt-n{font-size:var(--t-base);font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.mkt-v{font-size:var(--t-base);font-weight:500;font-variant-numeric:tabular-nums}
+.mkt-r{color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+.mkt-tile .pill{margin-top:2px;font-size:var(--t-2xs);padding:0 6px;background:color-mix(in srgb,var(--bg) 70%,transparent)}
+.mkt-tile .pill.waiting{background:var(--wait-bg)}
+.pill.us{background:color-mix(in srgb,var(--accent) 16%,var(--surface));color:var(--accent);font-weight:600}
+.mkt-tile .pill.us{background:color-mix(in srgb,var(--accent) 16%,var(--bg))}
+.mkt-group{background:color-mix(in srgb,var(--c) calc(var(--mkt-tint) - 11%),var(--bg))}
+.mkt-group::before{content:"";position:absolute;inset:0 0 auto;height:3px;background:var(--c)}
+.mkt-gh{position:absolute;inset:0 0 auto;display:flex;align-items:center;gap:8px;height:26px;padding:3px 10px 0;border:0;background:none;color:var(--ink);text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden}
+.mkt-gh .mkt-n{overflow:hidden;text-overflow:ellipsis}
+.mkt-gh b{font-weight:500;font-variant-numeric:tabular-nums;color:var(--muted)}
+.mkt-gh .pill{font-size:var(--t-2xs);padding:0 6px}
+.mkt-gh:hover .mkt-n{text-decoration:underline}
+.mkt-gh:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;border-radius:0}
+.mkt-legend{display:flex;align-items:center;flex-wrap:wrap;gap:4px 16px;margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
+.mkt-key{display:inline-flex;align-items:center;gap:6px}
+.mkt-sw{display:inline-block;width:14px;height:14px;border:1px solid var(--line);border-radius:3px;background:var(--surface2)}
+.mkt-sw.low{background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--ink) 30%,transparent) 3px 4.5px),var(--surface2)}
+.mkt-sw.us{border-color:var(--accent);box-shadow:inset 0 0 0 2px var(--accent)}
+.mkt-sec{margin-top:22px}
+.mkt-chips{display:flex;flex-wrap:wrap;gap:6px}
+.mkt-pick{padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font-size:var(--t-sm);cursor:pointer}
+.mkt-pick:hover{background:var(--surface2)}
+.mkt-pick.self{border-color:var(--accent)}
+
+/* How sure are we: low to high on one shared axis, the estimate ticked. */
+.mkt-axis,.mkt-row{display:grid;grid-template-columns:minmax(120px,220px) minmax(0,1fr) 112px;align-items:center;gap:10px}
+.mkt-axis{height:18px;color:var(--muted);font-size:var(--t-xs)}
+.mkt-axis>div{position:relative;height:100%}
+.mkt-axis em{position:absolute;top:0;transform:translateX(-50%);font-style:normal;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mkt-axis em:first-child{transform:none}
+.mkt-axis em:last-child{transform:translateX(-100%)}
+.mkt-row{min-height:30px;padding:2px 0;border-radius:6px;cursor:pointer}
+.mkt-row:hover{background:var(--surface2)}
+.mkt-lab{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-base)}
+.mkt-num{color:var(--muted);font-size:var(--t-sm);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mkt-bar{position:relative;height:16px}
+.mkt-bar i{position:absolute;top:0;bottom:0;width:1px;background:var(--line)}
+.mkt-bar .span{position:absolute;top:4px;height:8px;border-radius:4px;background:color-mix(in srgb,var(--c,var(--accent)) 60%,var(--bg))}
+.mkt-bar .span.low{background:repeating-linear-gradient(135deg,transparent 0 3px,color-mix(in srgb,var(--bg) 55%,transparent) 3px 4.5px),color-mix(in srgb,var(--c,var(--accent)) 60%,var(--bg))}
+.mkt-bar .mid{position:absolute;top:1px;width:2px;height:14px;margin-left:-1px;border-radius:1px;background:var(--ink)}
+.mkt-bar.solo{margin:12px 0 4px}
+.mkt-bar.solo::before{content:"";position:absolute;inset:7px 0 auto;height:2px;border-radius:1px;background:var(--line)}
+
+/* Size vs growth */
+.mkt-growth{min-width:0}
+.mkt-svg{display:block;max-width:100%;overflow:visible}
+.mkt-svg .g{stroke:var(--line);stroke-width:1}
+.mkt-svg .g[data-zero]{stroke:var(--g5)}
+.mkt-svg .t{fill:var(--muted);font-size:var(--t-xs)}
+.mkt-svg .t.cap{font-size:var(--t-sm)}
+.mkt-dot{cursor:pointer;outline:0}
+.mkt-dot circle{fill:var(--surface);stroke:var(--ink);stroke-width:1.75}
+.mkt-dot text{fill:var(--ink);font-size:var(--t-sm);paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-linejoin:round}
+.mkt-dot.self circle{fill:var(--accent);stroke:var(--accent)}
+.mkt-dot:hover circle,.mkt-dot:focus-visible circle{stroke-width:3.5}
+.mkt-dot:focus-visible circle{stroke:var(--accent)}
+
+/* Value chain */
+.mkt-chain{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border:1px solid var(--line);border-radius:var(--radius,8px);background:var(--surface)}
+.mkt-layer{min-width:0;padding:12px}
+.mkt-layer+.mkt-layer{border-left:1px solid var(--line)}
+.mkt-layer .strat-k{margin:0}
+.mkt-nodes{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.mkt-node{display:block;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font-size:var(--t-base);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkt-node:hover{background:var(--surface2);text-decoration:none}
+.mkt-node.self{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:600}
+.mkt-chain.lit .mkt-node:not(.near){opacity:.35}
+
+/* The segment panel: a sheet on the right, at the bottom on a phone. */
+.mkt-panel{margin:0 0 0 auto;width:min(480px,100vw);max-width:100vw;height:100dvh;max-height:100dvh;border-radius:0;flex-direction:column}
+.mkt-panel[open]{display:flex}
+.mkt-panel .tmodal-head{display:flex;align-items:flex-start;gap:8px;padding:12px 12px 10px 16px;border-bottom:1px solid var(--line)}
+.mkt-panel .spacer{flex:1}
+.mkt-panel .tmodal-body{flex:1;max-height:none;padding-top:16px}
+.mkt-ph{min-width:0}
+.mkt-ph small{display:block;color:var(--muted);font-size:var(--t-sm)}
+.mkt-ph h2{margin:0;font-size:var(--t-lg);line-height:1.25;overflow-wrap:anywhere}
+.mkt-body p{margin:10px 0 0;line-height:var(--lh)}
+.mkt-body .mkt-chips{margin:0}
+.mkt-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 16px;margin:12px 0 0}
+.mkt-kv dt{color:var(--muted)}
+.mkt-kv dd{margin:0;font-variant-numeric:tabular-nums}
+.mkt-blk{margin-top:18px}
+.mkt-blk .strat-k{margin:0 0 8px}
+.mkt-blk p{margin:0}
+.mkt-list,.mkt-params,.mkt-ests{margin:0;display:grid;gap:8px}
+.mkt-list{padding-left:18px}
+.mkt-params,.mkt-ests{padding:0;list-style:none}
+.mkt-list code,.mkt-params code,.mkt-arith code{font-family:var(--mono);font-size:var(--t-sm)}
+.mkt-ev q{color:var(--muted);quotes:"“" "”"}
+.mkt-est{padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.mkt-est-h{display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px}
+.mkt-est-h small{color:var(--muted)}
+.mkt-est-h .mkt-mini{margin-left:auto}
+.mkt-mini{padding:2px 8px;font-size:var(--t-sm);line-height:1.4}
+.mkt-body .mkt-arith{margin:8px 0 0;font-size:var(--t-sm);overflow-wrap:anywhere}
+.mkt-params{margin-top:8px}
+.mkt-params form{display:flex;align-items:center;gap:8px}
+.mkt-params label{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.mkt-params input{width:120px;min-width:0}
+.mkt-src{overflow-wrap:anywhere}
+.mkt-fig{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.mkt-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.mkt-cite{display:flex;gap:8px;margin-top:10px}
+.mkt-cite select{flex:1;min-width:0}
+.mkt-body a,.mkt-ev a{overflow-wrap:anywhere}
+
+@media (max-width:800px){
+  .mkt-chain{grid-template-columns:1fr}
+  .mkt-layer+.mkt-layer{border-left:0;border-top:1px solid var(--line)}
+  .mkt-nodes{flex-direction:row;flex-wrap:wrap}
+  .mkt-node{max-width:100%}
+}
+@media (max-width:700px){
+  #main.market-layout .strat-actions{flex:1 1 100%;min-width:0}
+  .mkt-views a{padding:3px 7px}
+  .mkt-panel{margin:auto 0 0;width:100%;height:fit-content;max-height:90dvh;border-radius:14px 14px 0 0}
+  .mkt-panel .tmodal-body{max-height:calc(90dvh - 56px)}
+}
+@media (max-width:600px){
+  .mkt-host{padding:14px 16px 28px}
+  .mkt-head{grid-template-columns:minmax(0,1fr)}
+  .mkt-axis{grid-template-columns:minmax(0,1fr)}
+  .mkt-axis>span{display:none}
+  .mkt-row{grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:6px 0}
+  .mkt-row .mkt-bar{grid-column:1/-1;order:3}
+}
