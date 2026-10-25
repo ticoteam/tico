@@ -192,3 +192,24 @@ def test_botops_filing_for_a_person_only_checks_what_both_can_read(api, botops):
                                           "request_id": cited}, ref=None)
     assert r.status_code == 200 and model.calls == 0, r.text
     assert r.json()["task"]["requester"] == "human:cara"
+
+
+def test_a_fix_closing_a_task_as_duplicate_of_a_private_one_never_names_it(api):
+    """The close note, its status history and the close wake carry no id of the private task (the duplicate_of link's
+    own history is filtered per reader when it is read)."""
+    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Synthetic.", "private": True})
+    newer = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg steps", "body": "Synthetic.",
+                                "reason": "Synthetic second copy"})
+    results = post(api, f"task-rules/{TC.DUPLICATE}/fix",
+                   {"tasks": [{"task": newer["id"], "duplicate_of": private["id"]}]})["results"]
+    assert results == [{"task": newer["id"], "ok": True}]
+    with api.app.state.store.read() as c:
+        assert H.task(c, newer["id"])["status"] == "closed"
+        said = str([tuple(r) for r in c.execute("SELECT * FROM tasks WHERE id=?", (newer["id"],))] +
+                   [tuple(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? AND field<>'duplicate_of'",
+                                                (newer["id"],))] +
+                   [tuple(r) for r in c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? "
+                                                "OR conversation_id=?", (newer["id"], newer["conversation_id"]))])
+        wakes = c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.task')=? AND created>=?",
+                          (newer["id"], H.task(c, newer["id"])["closed_at"])).fetchone()[0]
+    assert private["id"][:8] not in said and "Closed as a duplicate" in said and wakes
