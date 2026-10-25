@@ -97,7 +97,7 @@ Sign in directly as an owner or admin to link the server:
 
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
 The server asks for a Gateway key immediately, then retries hourly while it has none. Gateway use spends that company's credit.
-The Gateway card in **Settings → Computers → Models** says **Tico AI Gateway: connected automatically** once it has the key.
+The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Computers → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
 [connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
