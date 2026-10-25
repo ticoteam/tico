@@ -3346,7 +3346,7 @@ def create_app(settings=None):
                             qa_not_checkable_live=body.qa_not_checkable_live,
                             override_duplicate=bool(found and found.get("match") and str(body.reason or "").strip()))
         # After the create's own refusals (access, approval, lint): a blocked duplicate rolls this task back.
-        checked = task_checks.on_create(c, who.actor, found, body.reason)
+        checked = task_checks.on_create(c, who.actor, found, body.reason, readable=check_readable(who))
         task_checks.after_create(c, who.actor, found, row["id"], body.reason)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if check:
@@ -3447,8 +3447,19 @@ def create_app(settings=None):
         except (Problem, H.Refused):
             return None
         return task_checks.before_create(store, app.state.judge, who, owner, (typ or {}).get("id") or H.GENERAL_TYPE,
-                                         body.title.strip(), body.body)
+                                         body.title.strip(), body.body, readable=check_readable(who))
     app.state.create_check = create_check
+
+    def check_readable(who):
+        """A task check only sees what the caller may read: auth.task, with bot Read access and a run's or BotOps'
+        second principal (`task_actor`)."""
+        def readable(c, row):
+            try:
+                auth.task_row(c, who, row)
+                return True
+            except Problem:
+                return False
+        return readable
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):

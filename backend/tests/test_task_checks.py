@@ -6,7 +6,9 @@ import pytest
 
 from backend import task_checks as TC
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
+from backend import models as M
+from backend.auth import Identity
+from backend.tests.test_api import api, as_member, get, headers, post, put  # noqa: F401
 
 
 class Decide:
@@ -93,3 +95,59 @@ def test_waiting_check_is_the_existing_validation_switched_and_named_by_its_row(
         assert H.task(c, task["id"])["status"] == "waiting"
     put(api, "task-rules/" + TC.QUIET, {"on": True}, expected=422)
     assert put(api, "task-rules/" + TC.QUIET, {"on": True, "check": {"key": "quiet_wait", "hours": 48}})["job"]["on"]
+
+
+def access(api, bot, read=None):
+    """Set a bot's access the way its runner does: everyone sees and writes; Read to `read` people (default everyone)."""
+    everyone = {"everyone": True}
+    current = get(api, f"bots/{bot}/access")
+    put(api, f"bots/{bot}/access", {"see": everyone, "write": everyone, "revision": current["revision"],
+                                    "read": {"people": read} if read else everyone})
+
+
+def created_unnamed(api, token, title, owner="ops"):
+    """The create goes through, and nothing in the reply names another task."""
+    r = api.post("/api/v2/tasks", json={"owner": owner, "title": title, "body": "Synthetic."}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_match_the_caller_cannot_read_is_never_named_sent_to_decide_or_blocking(api):
+    api.app.state.judge = model = Decide()
+    as_member(api, "ben@acme.example")
+    # Write without Read on the owner: Ana's task for ops is not Ben's to read, so it neither blocks nor is named.
+    hidden = post(api, "tasks", {"owner": "ops", "title": "Audit the vendor contracts", "body": "Synthetic."})
+    access(api, "ops", read=["ana"])
+    reply = created_unnamed(api, "ben-test", "Audit the vendor contracts")
+    assert hidden["id"][:8] not in str(reply) and "warning" not in reply
+    # The other party is a bot Ben cannot read: a near match is not sent to Decide either.
+    access(api, "ops")
+    access(api, "finance", read=["ana"])
+    with api.app.state.store.transaction() as c:
+        H.task_create(c, "bot:finance", "Reconcile the payroll ledger", "Synthetic.", "bot:ops")
+    created_unnamed(api, "ben-test", "Reconcile payroll ledger now")
+    # A turn for Ana whose second principal (ops, the bot running it) cannot read Ana's private task with finance:
+    # the before-create check finds nothing to name or ask Decide about (the HTTP create needs a live runner).
+    private = post(api, "tasks", {"owner": "finance", "title": "Draft the severance letters", "body": "Synthetic.",
+                                  "private": True})
+    body = M.TaskCreate(owner="finance", title="Draft severance letters today", body="Synthetic.")
+    turn = Identity("human:ana", "owner", "ana@acme.example", task_actor="bot:ops")
+    assert api.app.state.create_check(turn, body) is None and model.calls == 0
+    assert events(api, "task_check.caught", TC.DUPLICATE) == []
+    # The same create as Ana herself, who can read it, is caught.
+    r = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Draft severance letters soon", "body": "S."},
+                 headers=headers("ana-test"))
+    assert r.status_code == 422 and r.json()["error"]["task_check"]["match"]["id"] == private["id"], r.text
+
+
+def test_fix_never_links_to_a_task_the_person_cannot_read_and_missing_reads_the_same(api):
+    as_member(api, "ben@acme.example")
+    private = post(api, "tasks", {"owner": "ops", "title": "Plan the reorg", "body": "Synthetic.", "private": True})
+    mine = post(api, "tasks", {"owner": "ops", "title": "Plan the team offsite", "body": "Synthetic."}, token="ben-test")
+    tasks = [{"task": mine["id"], "duplicate_of": private["id"]},
+             {"task": mine["id"], "duplicate_of": "00000000-0000-4000-8000-000000000000"}]
+    results = post(api, f"task-rules/{TC.DUPLICATE}/fix", {"tasks": tasks}, token="ben-test")["results"]
+    assert [r["ok"] for r in results] == [False, False] and results[0]["detail"] == results[1]["detail"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM task_relations").fetchone()[0] == 0
+        assert H.task(c, mine["id"])["status"] == "open"

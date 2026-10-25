@@ -230,9 +230,12 @@ def same_title(a, b):
     return " ".join(str(a or "").lower().split()) == " ".join(str(b or "").lower().split())
 
 
-def candidates(c, actor, owner, type_id, title, at=None, limit=CANDIDATES):
+def candidates(c, actor, owner, type_id, title, at=None, limit=CANDIDATES, readable=None):
     """Open tasks of the same type from the last WINDOW_DAYS with the same requester or owner whose titles share
-    words with `title`, closest first, at most `limit`, each one the actor may read."""
+    words with `title`, closest first, at most `limit`. Only tasks the caller may read (`readable(c, row)`: the API's
+    auth.task, with bot Read access and a second principal) are kept, so a task the caller cannot read is never
+    named, never sent to Decide, and never blocks the create."""
+    readable = readable or (lambda c, row: H.task_private_readable(c, actor, row))
     at = at or H.now()
     mine = words(title)
     if not mine:
@@ -246,7 +249,7 @@ def candidates(c, actor, owner, type_id, title, at=None, limit=CANDIDATES):
     scored = []
     for r in rows:
         score = overlap(mine, words(r["title"]))
-        if score >= NEAR and H.task_private_readable(c, actor, dict(r)):
+        if score >= NEAR and readable(c, dict(r)):
             scored.append((score, dict(r)))
     scored.sort(key=lambda s: -s[0])
     return [r for _, r in scored[:limit]]
@@ -347,14 +350,14 @@ def _decide(store, primary, who, title, body, found):
     return "none", None
 
 
-def before_create(store, primary, who, owner, type_id, title, body):
+def before_create(store, primary, who, owner, type_id, title, body, readable=None):
     """Before the create's write: {"rule", "match"} | {"rule", "skipped"} | None. Reads, and at most one Decide call
     off the write lock."""
     with store.read() as c:
         rule = rule_for(c, "duplicate", type_id)
         if not rule:
             return None
-        found = candidates(c, who.actor, owner, type_id, title)
+        found = candidates(c, who.actor, owner, type_id, title, readable=readable)
     if not found:
         return None                         # no near match: no Decide call
     exact = next((t for t in found if same_title(t["title"], title)), None)
@@ -368,14 +371,15 @@ def before_create(store, primary, who, owner, type_id, title, body):
     return None
 
 
-def on_create(c, actor, check, reason):
+def on_create(c, actor, check, reason, readable=None):
     """In the create's write, once the create's own checks have passed: refuses a block with no reason (the savepoint
     takes the new task back); returns the warning for a warn (or None). The rule and the matching task are read again: a rule switched off or a match closed since lets it by."""
     if not check or not check.get("match"):
         return None
     rule = c.execute("SELECT * FROM task_rules WHERE id=?", (check["rule"]["id"],)).fetchone()
     match = H.task(c, check["match"]["id"])
-    if not rule or not rule["enabled"] or not match or match["status"] not in H.ACTIVE_STATUSES:
+    if (not rule or not rule["enabled"] or not match or match["status"] not in H.ACTIVE_STATUSES
+            or (readable and not readable(c, match))):
         check.pop("match", None)
         return None
     rule, seen = dict(rule), describe(c, match)
@@ -523,9 +527,11 @@ def dry_run(c, rule, visible, at=None):
     return {"key": rule["id"], "name": rule["name"], "found": found, "fix": FIXES[key]}
 
 
-def fix(c, who, rule, items):
-    """Run the listed fix on at most FIX_LIMIT tasks, as the confirming person with their own rights. Each task's
-    outcome: done, or the refusal in words; one refused task does not stop the rest."""
+def fix(c, who, rule, items, readable):
+    """Run the listed fix on at most FIX_LIMIT tasks, as the confirming person with their own rights. Both the task and
+    the one it duplicates must be readable to them (`readable(c, task_id)`: the row, or None); a missing task and one
+    they cannot read get the same answer. Each task's outcome: done, or the refusal in words; one refused task does
+    not stop the rest."""
     if len(items) > FIX_LIMIT:
         raise Problem("invalid", f"Fix at most {FIX_LIMIT} tasks at a time", 422)
     key = check_of(rule)["key"]
@@ -534,13 +540,15 @@ def fix(c, who, rule, items):
         task_id = item.get("task")
         c.execute("SAVEPOINT task_check_fix")
         try:
-            row = H.task(c, task_id)
+            row = readable(c, task_id) if task_id else None
             if not row:
-                raise Problem("not_found", "No such task", 404)
+                raise Problem("not_found", "Task not found", 404)
             if key == "duplicate":
                 other = item.get("duplicate_of")
-                if not other or not H.task(c, other):
+                if not other:
                     raise Problem("invalid", "Name the task it duplicates", 422)
+                if not readable(c, other):
+                    raise Problem("not_found", "Task not found", 404)
                 from . import task_relations as TR
                 TR.relate(c, who.actor, task_id, other, "duplicate_of")
                 H.task_close(c, who.actor, task_id, note=f"Duplicate of {other[:8]}")

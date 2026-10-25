@@ -351,9 +351,14 @@ def install(app, store, auth, mutate):
         if who.role not in ("owner", "human") or who.support or getattr(who, "via", ""):
             raise Problem("forbidden", "A person confirms a check's fix", 403)
 
+        def readable(c, task_id):
+            # As the relate route: both tasks through auth.task. Missing and unreadable read the same.
+            try:
+                return auth.task(c, who, task_id)
+            except Problem:
+                return None
+
         def work(c):
             rule = checks(c, key)[0]
-            for item in body.tasks:
-                auth.task(c, who, item.task)
-            return TC.fix(c, who, rule, [item.model_dump() for item in body.tasks])
+            return TC.fix(c, who, rule, [item.model_dump() for item in body.tasks], readable)
         return mutate(request, body, work)
