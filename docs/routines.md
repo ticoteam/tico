@@ -53,7 +53,9 @@ stops at its first line on an open setup question does nothing every time it fir
 A routine runs on a time (`cron`, five fields, in `timezone`, America/Los_Angeles by default) or
 on something happening in Tico (`on`), never both. Tico emits `meeting.ready` when a team meeting with a transcript is first imported (a private meeting emits nothing; `recording.ready` is its old name and is still emitted, so older routines keep firing; see [Meetings](meetings.md)). It emits `release_published` when a release in the release repository is published (not a prerelease), one task per release, with the carried tickets listed. It emits `market.insight.urgent` when someone reports a market insight with
 `--urgent`; that opens the Librarian's urgent market routine and does not fire for an ordinary report. It emits `strategy.published`
-with subject `v{n}` when the owner publishes a [strategy](strategy.md) version. Every bot already gets the new summary and active
+with subject `v{n}` when the owner publishes a [strategy](strategy.md) version. It emits `market.briefing` with subject
+`<ISO week>` when the Librarian posts a [weekly market briefing](market-briefing.md); the payload names the bets it touches,
+and a routine on it is for the CEO Bot's weighing of those bets. Every bot already gets the new summary and active
 bets in its next run's context, and no bot gets a note, so a routine on this event is for work that should follow a change at
 once, not for reading the page. Each event opens one task per routine and per subject, titled `<routine title>:
 <meeting title>`; the body is the routine's text, then the event's facts, then the meeting's

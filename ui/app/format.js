@@ -25,7 +25,7 @@ const routinePaused = r => r.enabled === false || r.enabled === 0 ? ' <span clas
 // A routine runs on a cron or `on:` a hub event (docs/routines.md); one phrase for either.
 const EVENT_WORDS = {'meeting.ready': 'when a meeting is imported', 'recording.ready': 'when a meeting is imported',
   'market.insight.urgent': 'when an urgent market insight comes in', release_published: 'when a release is published',
-  'strategy.published': 'when a strategy version is published'};
+  'strategy.published': 'when a strategy version is published', 'market.briefing': 'when a market briefing is posted'};
 // An event with no words of its own still reads as words: "market.price.changed" is "when market price changed".
 const eventWords = on => EVENT_WORDS[on] || (String(on).startsWith('webhook.') ? `on the ${(typeof ROUTINE_TRIGGERS !== 'undefined' && (ROUTINE_TRIGGERS || []).find(t => t.event === on)?.name) || on.slice(8).replace(/-/g, ' ')} webhook`
   : `when ${String(on).replace(/[._-]+/g, ' ').trim()}`);

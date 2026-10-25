@@ -228,6 +228,7 @@ def _ask(item, manager=ceo_bot.NAME):
         return title, body
     if p["kind"] == "strategy_draft":
         body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
+                + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
                 + (f" because {p['reason'].rstrip('.')}" if p.get("reason") else "")
                 + f": {_change(p, name)}. Confirming writes it to the draft; publishing stays your click on the "
                   f"Strategy page (#/strategy). {closes}it is decided.")

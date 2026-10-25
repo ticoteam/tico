@@ -5,6 +5,8 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
   one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
   One Decide card: retire, rewrite, or keep with a new wrong-if, and your pick.
+- `market-briefing.md`: a task "Market briefing", opened by the server when the Librarian's weekly briefing touches a bet.
+  Weigh each touched bet; propose (source `briefing`) only when one is no longer right.
 - `kpi-pass.md`: the daily routine. Every KPI due on its cadence, one pass, a time budget each, then the status pass.
 - `new-kpi.md`: what to build the first time a KPI needs computing, and how to change one that is wrong.
 - `status-pass.md`: `hub goal refresh` after the readings, and how to report what it did.
@@ -30,7 +32,7 @@ to a file, then `hub proposal create --kind <kind> [--goal ID] [--kpi ID] --payl
 | `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the CEO Bot is on, and only for a goal with no bet) |
 | `recovery` | `--goal` | `{"evidence": "...", "options": [{"label": "...", "actions": [...]}], "pick": 0}` (the CEO Bot at level 2; `playbooks/recoveries.md`) |
 | `kpi_target` | `--kpi` and `--goal` | `{"kind": "improve", "baseline": 40, "target": 65, "deadline": "2026-12-31"}` or `{"kind": "maintain", "min": 40, "max": 60}` |
-| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "know", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
+| `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "know", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
 
 `direction` is up, down or range; `cadence` is daily, weekly or monthly. An improvement target needs a target and a
 deadline; a range needs a min, a max or both. The server refuses anything else with the reason.

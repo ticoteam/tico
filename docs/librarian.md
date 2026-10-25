@@ -4,6 +4,12 @@ The Librarian is a built-in bot that answers questions from the team's docs. Hum
 and on the Market tab of [Strategy](strategy.md) (`#/strategy/market`); other bots and the Assistant ask it with `hub doc ask`. It cites every claim, says "Not in the docs." plainly when the
 docs do not say, and keeps a map of the docs so the next question is cheaper. It never answers from general knowledge.
 
+## Watching competitor pages and the weekly briefing
+
+The Librarian watches the pricing, changelog and careers pages of each core competitor ([Market watch](market-watch.md)): the
+server reads them daily and files an insight when one changes, and the Librarian applies what matters and rejects noise. On
+Mondays, after its sweep, it writes the week's [briefing](market-briefing.md).
+
 ## What it reads
 
 - **Internal docs**: markdown written, pasted or imported in Tico, in folders. It reads them with `hub doc search`,

@@ -89,6 +89,7 @@ window.pageMarket = async function pageMarket() {
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + '<div id="market-shell" class="market-shell"><p class="market-loading">Opening the market…</p></div>';
     const shell = $('#market-shell');
+    void window.marketBriefingCard?.(shell);
     try {
       MARKET_VIEW = await mountMarket(shell);
     } catch (error) {

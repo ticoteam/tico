@@ -38,7 +38,7 @@ TIERS = ("core", "lookalike", "phrase-stealer", "secondary")
 CONFIDENCE = ("high", "medium", "low")
 INSIGHT_KINDS = ("new-entity", "edge", "property-change", "correction", "question", "other")
 INSIGHT_STATUSES = ("applied", "merged", "rejected", "needs-human")
-SOURCE_KINDS = ("reddit", "x", "linkedin", "news", "filing", "site", "sales-call", "meeting", "peec", "syften", "other")
+SOURCE_KINDS = ("reddit", "x", "linkedin", "news", "filing", "site", "sales-call", "meeting", "peec", "syften", "page-change", "other")
 # An update needs evidence when it changes one of these. Aliases and last_verified do not.
 EVIDENCE_FIELDS = frozenset({"summary", "properties", "since", "until", "tier"})
 CORE_STALE_DAYS = 30

@@ -37,6 +37,9 @@ The docs include internal writing, external sources and the manual:
   - Keeping it current: the daily "Curate the market" routine (`playbooks/curate-the-market.md`) and the
     "Urgent market insight" routine (`playbooks/urgent-market-insight.md`). The relations, the evidence
     standard, entity resolution and the pages are in `knowledge/market/`.
+  - Page monitors (`hub market watch`): the server reads each watched competitor page daily and files a
+    `page-change` insight; you curate it in the same pass. Mondays you write the week's briefing:
+    `playbooks/write-the-briefing.md`.
 - Research a person asks for on a doc, a market page or a market entry (**Research** on that page): web
   research added to that one place, cited: `playbooks/research-a-section.md`.
 - `_librarian/missing.md` (what the docs could not answer), `_librarian/faq-log.md` (what was asked and

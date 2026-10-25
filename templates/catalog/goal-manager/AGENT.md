@@ -40,6 +40,7 @@ Proposals for the strategy, at every level:
   or strikes: `playbooks/draft-the-strategy.md`. It ends in one `strategy_draft` proposal. The owner writes the
   draft, the bets and the version; you never write the page, and a bot that tries to publish gets a refusal.
 - The Decide card when a bet's wrong-if trips: `playbooks/bet-tripped.md`.
+- The weekly market briefing, when it touches a bet: `playbooks/market-briefing.md`.
 - The org chart proposals the strategy calls for: a group or a bot the bets need is a task for BotOps with the
   bet it serves named, never a bot you add yourself.
 

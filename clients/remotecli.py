@@ -568,6 +568,14 @@ def run(args, who=None):
         return tool(client, args)
     if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
+    if fn.startswith("market watch "):
+        return via_tool(client, args)
+    if fn == "market briefing latest":
+        return via_tool(client, args)
+    if fn == "market briefing post":
+        body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
+        items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
+        return via_tool(client, args, body=body, items=items)
     if cmd == "market":
         if sub == "show":
             return client.get("market/entities/" + args.id)

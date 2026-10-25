@@ -17,6 +17,11 @@ day that is not Monday, stop at once.
 3. Decide the shape. An insight may become a new entity, an edge, a property change, an `until` on an edge it contradicts, an alias, or nothing.
 4. Write the evidence row first, then the entity or edge that cites it. `hub market apply` does that and closes the insight as applied.
    A verified batch from research is one `hub market import <file.jsonl> --note "<where it came from>"`: one entity or edge per line with its evidence, matched by id, name, alias or domain, recorded as one applied insight; run it with `--dry-run` first and send each needs-human line to the owner.
+   An insight of kind `property-change` whose evidence has source kind `page-change` comes from a page monitor
+   (`hub market watch list`): the server saw a watched page change and filed the diff as the quote. Read it with
+   its page open (`hub doc fetch <source url>`): if it is a real change (a price, a plan, a launch, a role that
+   shows a direction), apply it to the entity; if it is layout, wording or a date, reject it with one sentence.
+   A page that keeps changing for no reason is stopped (`hub market watch stop <id>`).
 5. Otherwise close it: `merged` into another insight, `rejected` with one sentence, or `needs-human` when two credible sources disagree and it matters.
    An insight that contradicts an active bet (`hub strategy show`: each bet's `why` and `wrong_if`) is still applied or closed on its
    own evidence: you curate the market, not the strategy. Say so in one line of the sweep report, and send the CEO Bot one note naming
@@ -28,7 +33,8 @@ day that is not Monday, stop at once.
    sentence; one still `new` or `needs-human` leaves it `new`. The insight's `source_ref` is the
    listening item id, which traces back to the post and the sweep that saw it (`hub listening show`).
 7. File the run with `hub market sweep`. Every `needs-human` insight from this run becomes one task on the team owner, never one task each.
-8. On Mondays the sweep's date is a Monday and the weekly delta page is refreshed from `market_events`.
+8. On Mondays the sweep's date is a Monday: refresh the weekly delta page from `market_events`, then write the week's
+   briefing (`playbooks/write-the-briefing.md`).
 9. Staleness: an entity past `last_verified` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
 
 The sixteen relations, the evidence standard, entity resolution and the page templates are in `knowledge/market/`.
