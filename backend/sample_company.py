@@ -101,7 +101,7 @@ def load(onboarding, c, who):
     chosen = providers.load(c, settings)["enabled"]
     models = {slugs[bot_id]: providers.recommended(RUNS_ON[row["runs_on"]])["id"]
               for bot_id, row in extra.items() if RUNS_ON.get(row["runs_on"]) in chosen}
-    onboarding.complete(c, who, models=models)
+    onboarding.complete(c, who, models=models, seats=False)   # the sample is a working team, not a chart to recruit into
     for slug in record["selected"]:
         onboarding.onboarded(c, who, slug, arm=False)
     owner = H.actor_id(who.actor)

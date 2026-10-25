@@ -12,7 +12,8 @@ routine changes directly.
 
 ## Starting a run
 1. Run `hub goal list`. That is what you are for; the task is one step toward it. A task that
-   serves one of your goals is filed with `--goal <id>`.
+   serves one of your goals is filed with `--goal <id>`. The team's strategy summary and active bets arrive in
+   your context under "Team strategy" once the owner has published one; `hub strategy show` has the full page.
 2. Read `state.md`.
 3. Read the task and its conversation with `hub task show <task-id>`.
 4. Check `memory/learnings.md` and the relevant playbook.

@@ -204,6 +204,28 @@ def test_t3_a_bots_own_comment_never_wakes_it_and_the_skip_is_logged(api):
         (said[1]["comment"]["id"], {"bot": "cpo", "task": mine["id"], "rule": "own_write", "trigger": "comment"})]
 
 
+def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api):
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        mine = H.task_create(c, "human:ana", "Plan the launch", "Plan it", "bot:cpo")
+        c.execute("DELETE FROM jobs")
+    post(api, "chat/cpo", {"text": "Run your check"})
+    attempt = claim(api, r, "cpo")
+    with api.app.state.store.read() as c:
+        before = jobs(c, "cpo")
+    # a bot comments on a task whose recipient is a person: delivered, no bot turn
+    told = post(api, f"tasks/{mine['id']}/comments", {"text": "Done, Ana."}, token=attempt["token"])
+    assert told["comment"]["to_actor"] == "human:ana" and told["woke"] is False and told["delivered"] is True
+    with api.app.state.store.read() as c:
+        assert jobs(c, "cpo") == before
+    # a person comments to a bot owner: one job
+    asked = post(api, f"tasks/{mine['id']}/comments", {"text": "Please start this today."})
+    assert asked["woke"] is True and asked["delivered"] is False
+    with api.app.state.store.read() as c:
+        assert jobs(c, "cpo") == before + 1
+
+
 def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):
     setup(api)
     with api.app.state.store.transaction() as c:
@@ -213,9 +235,10 @@ def test_a_notice_the_bots_own_write_caused_waits_on_any_of_its_tasks(api):
             for body in ("Step moved: In Progress -> Review 1", "Status: review", "Relation added: Launch copy",
                          "Checkpoint saved"):
                 msg = news(c, task, body)
-                assert msg["refs"][W.MARK] == "own_write", body
-        assert jobs(c, "cpo") == 0
-        assert {s["detail"]["rule"] for s in skips(c)} == {"own_write"} and len(skips(c)) == 4
+                # The bot's own run already knows what it wrote: ignored, with no note, under the rule `own_write`.
+                assert msg["refs"][W.MARK] == "ignored" and msg["refs"]["rule"] == "own_write", body
+        assert jobs(c, "cpo") == 0 and not c.execute("SELECT 1 FROM notes WHERE to_actor='bot:cpo'").fetchone()
+        assert {s["detail"]["rule_id"] for s in skips(c)} == {"own_write"} and len(skips(c)) == 4
 
 
 def test_own_writes_still_deliver_what_another_session_waits_for(api):
@@ -307,10 +330,11 @@ def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
             reply = H.say(c, "bot:ops", "bot:cpo", "Here you go", room, refs={"task": task["id"]},
                           in_reply_to=parent["id"])
             assert jobs(c, "cpo") == before + 1 and not reply["refs"].get(W.MARK), parent["body"]
-        # So does anything the rules cannot read as plain news: a malformed flag, a reference they do not know.
-        for refs in ({"needs_action": "yes"}, {"something_new": 1}):
-            assert not news(c, task, "Moved", refs=refs)["refs"].get(W.MARK), refs
-        assert skips(c) == [] and not c.execute("SELECT 1 FROM notes WHERE to_actor='bot:cpo'").fetchone()
+        # So does a malformed flag, which is not plain news. A reference no rule knows is never held as parked news;
+        # no rule names that event, so it waits as a default note the next run carries.
+        assert not news(c, task, "Moved", refs={"needs_action": "yes"})["refs"].get(W.MARK)
+        assert news(c, task, "Moved", refs={"something_new": 1})["refs"]["rule"] != "parked"
+        assert [s["detail"]["rule"] for s in skips(c)] == ["rule"]
 
 
 def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
@@ -332,7 +356,6 @@ def test_sweeps_schedules_checks_and_blockers_keep_their_own_rules(api):
                                         ("Due today", {"wake": "due"}, "schedule"),
                                         ("Checks failed on PR #3", {}, "pr_checks"),
                                         ("Stuck: no worktree", {}, "status_or_relation"),
-                                        ("Ready for review: Build 2/9", {}, "status_or_relation"),
                                         ("New task from bot:ops: Build 3/9", {}, "status_or_relation")):
                 msg = H._wake(c, task, "bot:cpo", body, refs=refs, trigger=trigger)
                 assert not msg["refs"].get(W.MARK), body

@@ -1,5 +1,6 @@
 """Tests read the registry from a fictional company, never from a real environment's."""
 import os
+import sys
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -7,6 +8,8 @@ os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fix
 os.environ["TICO_UPDATE_CHECK"] = "off"
 # A runner readiness call would otherwise start real containers on whoever's computer runs the suite.
 os.environ["TICO_RUNNER_CONTAINER_PROBE"] = "off"
+# Every test's database is thrown away, so no commit waits for the disk (hubdb.synchronous).
+os.environ["TICO_SQLITE_SYNC"] = "off"
 # A test that misses a stub must fail, not act in whoever's AWS account runs the suite: one already
 # created a real bucket. Fake keys and no profile or config files make any real AWS call unauthorized.
 for _name in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_SESSION_TOKEN", "AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"):
@@ -77,6 +80,21 @@ def pytest_configure(config):
         raise pytest.UsageError("No such test path: " + ", ".join(missing))
 
 
+PYTEST_WORKERS_MAX = 8
+
+
+def pytest_xdist_auto_num_workers(config):
+    """`-n auto` (pytest.ini): the cores left over, 1 to 8. Several bots run the suite at once on one team box, and
+    eight workers each had five suites at a load of 54 on eight cores, next to the hub. Linux counts the load average
+    against the cores this process may use; macOS's load average stays high when idle, so a Mac takes its cores.
+    PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
+    if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
+        return int(os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"])
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    free = cores - os.getloadavg()[0] if sys.platform.startswith("linux") else cores
+    return max(1, min(PYTEST_WORKERS_MAX, int(free)))
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Zero collected tests is a failure (exit 5) and says so in an error line, not only in the exit code."""
     if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and not hasattr(session.config, "workerinput"):
@@ -106,12 +124,13 @@ def api_database(tmp_path_factory, request):
     snapshot = settings.db_path.with_name("snapshot.db")
     with closing(sqlite3.connect(settings.db_path)) as source:
         tables = [row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")]
-        allowed = {"cloud_migrations", "registry_metadata", "sqlite_sequence", "task_types", "task_steps"}
+        allowed = {"cloud_migrations", "registry_metadata", "sqlite_sequence", "task_types", "task_steps", "task_rules", "provenance_clock"}
         for table in tables:
             # FTS5 has internal configuration rows but no user document before fixture seeding.
             if table in allowed or "_fts_" in table:
                 continue
             assert not source.execute('SELECT 1 FROM "' + table.replace('"', '""') + '" LIMIT 1').fetchone(), table
+        assert source.execute("SELECT id FROM task_rules").fetchall() == [("task-rule-close-after-done",)]
         keys = {row[0] for row in source.execute("SELECT key FROM registry_metadata")}
         assert keys <= {"access", "owner", "access_bot_limit", "bot_access", "docs_migrated",
                         "credential-file-migration-v1", "credential-file-migration-v2-hub", "message_links.ready",

@@ -11,6 +11,16 @@ function prStateBadge(state) {
   const b = PR_BADGE[state]; if (!b) return '';
   return `<span class="pr-badge ${b[1]}" data-pr-state="${esc(state)}" title="${esc(b[2])}" aria-label="${esc(b[2])}">${esc(b[0])}</span>`;
 }
+// A review or QA subtask's verdict (`verdict`, `verdict_head`, docs/tasks.md): green for approve and pass, red for
+// changes and fail, and the head it judged as a short sha. Nothing until a verdict is recorded.
+const VERDICT_WORDS = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
+function taskVerdictHTML(t) {
+  const v = VERDICT_WORDS[t?.verdict]; if (!v) return '';
+  const head = String(t.verdict_head || '').slice(0, 7);
+  const tip = `Verdict: ${v[0]}${head ? ` on ${head}` : ''}`;
+  return `<span class="verdict-chip ${v[1]}" data-verdict="${esc(t.verdict)}" title="${esc(tip)}" aria-label="${esc(tip)}">${esc(v[0])}${head
+    ? ` <code class="tnum" data-verdict-head>${esc(head)}</code>` : ''}</span>`;
+}
 
 // ---- Code: one line per worktree and per pull request
 const taskLinkDetail = l => {
@@ -140,11 +150,11 @@ function taskSubRowHTML(k, open) {
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
       ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span></button>
-      ${prStateBadge(k.pr_state)}<span class="sub-who" title="${esc(actorLabel(k.owner))}">${who}</span></div>
+      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
 const taskSubAdder = t => canMove() && !['done', 'closed'].includes(String(t.status || ''));
-function taskSubtasksHTML(t, kids, open, adding, owner) {
+function taskSubtasksHTML(t, kids, open, adding, owner, refused = '') {
   if (!kids.length && !adding) return '';
   const summary = taskSubSummary(t, kids), counts = taskSubCounts(t, kids);
   // The heading counts the children shown here; the roll-up of the whole tree sits on the same line, with a thin bar.
@@ -155,7 +165,8 @@ function taskSubtasksHTML(t, kids, open, adding, owner) {
     summary ? `<span class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></span>` : ''}</h3>
     ${kids.length ? `<ul class="sub-list">${kids.map(k => taskSubRowHTML(k, open)).join('')}</ul>` : ''}
     ${taskSubAdder(t) ? `<form class="sub-add" data-sub-add><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Add subtask" aria-label="Add subtask">
-      <input type="hidden" name="owner" value="${esc(pick)}"><button type="button" class="sub-owner" data-sub-owner aria-haspopup="menu" aria-label="For ${esc(actorLabel(actor))}. Change" title="For ${esc(actorLabel(actor))}">${actorFace(actor, 18)}</button></form>` : ''}</section>`;
+      <input type="hidden" name="owner" value="${esc(pick)}"><button type="button" class="sub-owner" data-sub-owner aria-haspopup="menu" aria-label="For ${esc(actorLabel(actor))}. Change" title="For ${esc(actorLabel(actor))}">${actorFace(actor, 18)}</button></form>
+      ${refused ? `<p class="err sub-add-err" role="alert" data-sub-add-error>${esc(refused)}</p>` : ''}` : ''}</section>`;
 }
 
 // The rail on the open task: drawn from what the modal knows, then again once the tree is in.
@@ -168,7 +179,7 @@ function taskRailPaint(d, t) {
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? document.activeElement.name : '';
   // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner);
+  const html = code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
   rail.innerHTML = html;
   rail.hidden = !html;
   d.classList.toggle('has-rail', !!html);
@@ -251,7 +262,8 @@ function taskRailBind(d, t) {
     if (!title || form.dataset.busy) return;
     if (!owner) { form.elements.owner.focus(); return; }
     form.dataset.busy = '1'; input.disabled = true;
-    d.taskRail.owner = owner;
+    d.taskRail.owner = owner; d.taskRail.refused = '';
+    $('[data-sub-add-error]', rail)?.remove();
     try {
       // The details are required; the title stands in until someone writes more (the modal does not repeat it).
       await post('/v2/tasks', {title, body: title, owner, relations: [{task: t.id, kind: 'parent'}]});
@@ -262,7 +274,14 @@ function taskRailBind(d, t) {
         d.taskRail.focus = true;
         taskModalShow(data.task, d);
       }
-    } catch (e) { toast(e.message, true); }
+    } catch (e) {
+      // A refusal ("Review 1 is already open on this ticket") reads under the field it was typed in; the title stays.
+      d.taskRail.refused = e.message || 'Not added';
+      delete form.dataset.busy; input.disabled = false;
+      taskRailPaint(d, t);
+      $('[data-sub-add] input[name=title]', rail)?.focus();
+      return;
+    }
     finally { delete form.dataset.busy; input.disabled = false; }
   };
 }

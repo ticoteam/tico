@@ -38,7 +38,10 @@ TASK_DAYS = 14                            # no task done for two weeks, on a goa
 SOURCES = ("measured", "estimate")        # legacy names of a reading's quality; a connector name is a source
 # goal_why: the CEO Bot's one line tying a goal to the company's vision (backend/company.py).
 # recovery: the CEO Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/ceo_suggest.py).
-PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery")
+# strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
+# strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
+PROPOSALS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
+             "strategy_draft", "strategy_realign")
 FLAGS = ("vague", "duplicate", "unmeasured")
 
 
@@ -230,7 +233,16 @@ def _next_rank(conn, owner, top=False):
     return (highest + 1) if highest is not None else 0
 
 
-def create(conn, actor, title, owner, parent_id=None, body="", top=False):
+def _bet(conn, actor, bet_id):
+    """The strategy bet a goal serves (backend/strategy.py), checked to exist. A retired bet still counts: the goal
+    keeps showing where it came from."""
+    from . import strategy
+    if not strategy.bet(conn, bet_id):
+        H.refuse(conn, actor, "not-found", f"no strategy bet {bet_id}")
+    return bet_id
+
+
+def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id=None):
     """A new goal. With a parent it is proposed: `status` is NULL until whoever owns the parent sets
     its first colour. With none it is only unlinked."""
     H._writer(conn, actor)
@@ -241,14 +253,17 @@ def create(conn, actor, title, owner, parent_id=None, body="", top=False):
         H.refuse(conn, actor, "not-found", f"no goal {parent_id}")
     if parent_id and owner == COMPANY:
         H.refuse(conn, actor, "kind", "a company goal does not support another goal")
+    bet_id = _bet(conn, actor, bet_id) if bet_id else None
     ts = H.now()
     row = {"id": H.new_id(), "title": title, "owner": owner, "parent_id": parent_id or None,
            "body": str(body or ""), "rank": _next_rank(conn, owner, top), "created": ts,
-           "created_by": actor, "updated": ts}
+           "created_by": actor, "updated": ts, "bet_id": bet_id}
     conn.execute("INSERT INTO goals (id, title, owner, parent_id, body, status, status_note, rank, created, "
-                 "created_by, updated) VALUES (:id, :title, :owner, :parent_id, :body, NULL, '', :rank, "
-                 ":created, :created_by, :updated)", row)
+                 "created_by, updated, bet_id) VALUES (:id, :title, :owner, :parent_id, :body, NULL, '', :rank, "
+                 ":created, :created_by, :updated, :bet_id)", row)
     _event(conn, row["id"], actor, "created", None, title)
+    if bet_id:
+        _event(conn, row["id"], actor, "bet_id", None, bet_id)
     H.event(conn, actor, "goal.create", row["id"], {"owner": owner, "title": title, "parent_id": parent_id})
     return goal(conn, row["id"])
 
@@ -279,8 +294,10 @@ def set_status(conn, actor, goal_id, status, note=""):
     return goal(conn, goal_id)
 
 
-def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=None, rank=None, top=False):
-    """Edit the words, the parent, the owner, or the place in the owner's order."""
+def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=None, rank=None, top=False,
+           bet_id=None):
+    """Edit the words, the parent, the owner, the place in the owner's order, or the strategy bet it serves
+    ("" unlinks)."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -327,12 +344,25 @@ def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=No
         sets.append("rank=:rank")
         args["rank"] = _next_rank(conn, args.get("owner") or row["owner"], top=True) if top else int(rank)
         _event(conn, goal_id, actor, "rank", row["rank"], args["rank"])
+    if bet_id is not None and (bet_id or None) != row.get("bet_id"):
+        sets.append("bet_id=:bet_id")
+        args["bet_id"] = _bet(conn, actor, bet_id) if bet_id else None
+        _event(conn, goal_id, actor, "bet_id", row.get("bet_id"), args["bet_id"])
     if not sets:
         return row
     args["id"], args["updated"] = goal_id, H.now()
     conn.execute(f"UPDATE goals SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
     H.event(conn, actor, "goal.update", goal_id, {k: v for k, v in args.items() if k not in ("id", "body")})
     return goal(conn, goal_id)
+
+
+def reads_due(conn, actor, goal_ids, every=600):
+    """The goals `mark_read` would change: read by someone else, or not by `actor` in `every` seconds. A bot reads its
+    goals many times an hour; the read path writes only when one is due."""
+    since = H.shift(H.now(), seconds=-every)
+    return [r[0] for part in H.chunks(sorted(set(goal_ids))) for r in conn.execute(
+        "SELECT id FROM goals WHERE id IN (%s) AND (last_read_by IS NOT ? OR last_read_at IS NULL OR last_read_at<?)"
+        % ",".join("?" * len(part)), (*part, actor, since))]
 
 
 def mark_read(conn, actor, goal_ids):
@@ -406,7 +436,18 @@ def kpi_log(conn, actor, kpi_id, value, note="", source="", at=None, **fields):
     H.event(conn, actor, "kpi.log", kpi_id, {"value": reading["value"], "quality": reading["quality"]})
     for link in K.links_of(conn, kpi_id=kpi_id):
         apply_auto(conn, link["goal_id"])
+    _watch(conn, kpi_id=kpi_id)
     return reading
+
+
+def _watch(conn, **scope):
+    """The strategy's fit check (backend/strategy.py `watch`) after a reading or a status pass. A failure there is
+    logged and never undoes the reading or the colours."""
+    from . import strategy
+    if scope.get("kpi_id") and not strategy.watched(conn, scope["kpi_id"]):
+        return
+    with isolated(conn, "strategy_watch", scope.get("kpi_id") or "all"):
+        strategy.watch(conn, **scope)
 
 
 def kpi_link(conn, actor, goal_id, kpi_id, target):
@@ -570,6 +611,7 @@ def refresh(conn, goal_ids=None, at=None):
                 suggested.append(out)
             elif out and out.get("changed"):
                 changed.append(out)
+    _watch(conn)
     return {"changed": changed, "suggested": suggested, "checked": len([r for r in rows if r])}
 
 
@@ -624,8 +666,14 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
     try:
         if kind == "goal_wording":
-            if not (payload.get("title") or payload.get("body")):
-                return "propose a new title or body"
+            # A bet alone links the goal to the strategy bet it serves (the CEO Bot's goals per bet).
+            if not (payload.get("title") or payload.get("body") or payload.get("bet_id")):
+                return "propose a new title, body or bet_id"
+            if payload.get("bet_id"):
+                from . import strategy
+                found = strategy.bet(conn, str(payload["bet_id"]))
+                if not found or found["status"] == "retired":
+                    return f"no live strategy bet {payload['bet_id']}"
         elif kind == "kpi_definition":
             if not K.clean(payload):
                 return "propose a change to the name, definition, unit, direction, cadence or source note"
@@ -658,6 +706,12 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         elif kind == "recovery":
             from . import ceo_suggest
             return ceo_suggest.payload_error(conn, goal_id, payload)
+        elif kind == "strategy_draft":
+            from . import strategy
+            return strategy.proposal_error(conn, payload)
+        elif kind == "strategy_realign":
+            from . import strategy
+            return strategy.realign_error(conn, payload)
     except ValueError as exc:
         return str(exc)
     return None
@@ -709,10 +763,11 @@ def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)))
 
 
-def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
+def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None):
     """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once.
     A Why may be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options
-    (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py)."""
+    (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py). A strategy realignment is
+    confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py)."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:
@@ -727,6 +782,8 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
         H.refuse(conn, actor, "kind", "only a Why proposal is confirmed with an edited line")
     if option is not None and (row["kind"] != "recovery" or decision != "confirm"):
         H.refuse(conn, actor, "kind", "only a recovery is confirmed with one of its options")
+    if moves and (row["kind"] != "strategy_realign" or decision != "confirm"):
+        H.refuse(conn, actor, "kind", "only a strategy realignment is confirmed with moves")
     result = None
     if row["kind"] == "recovery" and decision == "confirm":
         from . import ceo_suggest
@@ -739,7 +796,8 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
     if decision == "confirm":
         payload, goal_id, kpi_id = row["payload"], row["goal_id"], row["kpi_id"]
         if row["kind"] == "goal_wording":
-            update(conn, actor, goal_id, title=payload.get("title"), body=payload.get("body"))
+            update(conn, actor, goal_id, title=payload.get("title"), body=payload.get("body"),
+                   bet_id=payload.get("bet_id") or None)
         elif row["kind"] == "kpi_definition":
             kpi_edit(conn, actor, kpi_id, payload)
         elif row["kind"] == "kpi_target":
@@ -769,6 +827,13 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
             conn.execute("UPDATE goal_proposals SET status='confirmed' WHERE id=?", (proposal_id,))
             again = ceo_suggest.follow_up(conn, row, applied["left"])
             result = {"option": chosen, "unchanged": chosen == pick, **applied, "follow_up": again and again["id"]}
+        elif row["kind"] == "strategy_draft":
+            # A bot's proposed strategy, written to the draft and its bets as the owner. Never published.
+            from . import strategy
+            result = strategy.apply_proposal(conn, actor, payload)
+        elif row["kind"] == "strategy_realign":
+            from . import strategy
+            result = strategy.apply_realign(conn, actor, payload, moves)
     conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "
                  "WHERE id=?", ("confirmed" if decision == "confirm" else "rejected", actor, H.now(),
                                 str(note or "").strip()[:1000], H._dump(result) if result else None, proposal_id))
@@ -776,6 +841,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None):
         _event(conn, row["goal_id"], actor, "proposal", row["kind"], "confirmed" if decision == "confirm" else "rejected",
                str(note or ""))
     H.event(conn, actor, "goal.decide", proposal_id, {"decision": decision, "kind": row["kind"]})
+    if row["kind"] == "strategy_realign":
+        from . import strategy
+        strategy.settle_card(conn, actor, proposal_id, "Resolved: the goals were realigned with the strategy."
+                             if decision == "confirm" else "Resolved: the goals stay as they are.")
     return proposal(conn, proposal_id)
 
 

@@ -98,7 +98,8 @@ function slashRun(P, text) {
   if (!word) return 'plain';
   const name = word.toLowerCase(), arg = rest.trim();
   const cmd = slashCommands(P.slug).find(c => c.name === name);
-  const done = () => { pillClear(P, true); P.slash && (P.slash.closedFor = null); return true; };
+  const scope = sessionScope(pq(P, '.p-text'));
+  const done = () => { sessionAcknowledge(pq(P, '.p-text'), scope); pillClear(P, true); P.slash && (P.slash.closedFor = null); return true; };
   if (cmd?.kind === 'harness') {
     if (!isKeeper(P.slug)) return 'plain';
     void v2ChatSend(P, text, P.slug, {}, {command: true});

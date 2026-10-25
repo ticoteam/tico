@@ -32,7 +32,7 @@ It does, in order, stopping at the first failure:
 1. **Tag.** Creates `vX.Y.Z` at the approved commit through the GitHub API with this bot's write grant (a tag made with
    the GitHub App's token starts the release workflows). A tag already at that commit is fine; one at another commit stops.
 2. **Wait for the GitHub release.** Installs update from the release's bundle, so it waits for that and for nothing
-   else. A failed Release or Docker workflow for the tag stops the rollout.
+   else. A failed Release workflow for the tag stops the rollout.
 3. **Canary.** Updates each install marked `"canary": true` (the team's own install) through its update key: check for
    updates, start the update, follow it until the updater reports `healthy` and `/healthz` reports the new release.
    Then it waits up to ten minutes for that install's computers to follow and reports how they stand.

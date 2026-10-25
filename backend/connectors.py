@@ -295,7 +295,7 @@ def install_connectors(app, store, execution, mutate):
         """Which connector jobs this computer runs because the owner named its operator in
         TICO_PROCESSING_OPERATORS. Empty means: run them only where the Google key or a connected account is,
         or where a person's Connect Google waits to be finished."""
-        with store.transaction() as c:
+        with store.read() as c:
             runner = execution.runner(c, request.state.identity)
             named = runner["operator"] in store.settings.processing_operators
             if named:
@@ -453,18 +453,20 @@ def install_connectors(app, store, execution, mutate):
         who = request.state.identity
         if who.role not in ("bot", "human", "owner"):
             raise Problem("identity", "Calendar appointments are available to bots and people", 403)
-        with store.transaction() as c:
+        # Read outside the write lock; the audit event is written in a short transaction before anything is returned.
+        with store.read() as c:
             person, address = calendar_person(c, calendar)
             calendar_allowed(c, who, address, person)
             row = c.execute("SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?",
                             (person["id"],)).fetchone()
+        with store.transaction() as c:
             H.event(c, who.actor, "calendar.read", address, {})
-            if not row:
-                return {"calendar": address, "events": [], "updated": None, "stale": True}
-            payload = json.loads(row["payload_json"])
-            stale = row["updated"] < H.shift(H.now(), seconds=-180)
-            return {"calendar": address, "events": payload["events"], "updated": row["updated"],
-                    "version": row["version"], "stale": stale}
+        if not row:
+            return {"calendar": address, "events": [], "updated": None, "stale": True}
+        payload = json.loads(row["payload_json"])
+        stale = row["updated"] < H.shift(H.now(), seconds=-180)
+        return {"calendar": address, "events": payload["events"], "updated": row["updated"],
+                "version": row["version"], "stale": stale}
 
     @app.post("/api/v2/calendar/appointments")
     def schedule_appointment(request: Request, body: CalendarAppointmentCreate):
@@ -478,11 +480,16 @@ def install_connectors(app, store, execution, mutate):
             start = instant(body.start)
             if start.astimezone(timezone.utc) < datetime.now(timezone.utc):
                 raise Problem("start", "Calendar appointments must start in the future", 422)
+            known = {str(row["email"] or "").lower() for row in c.execute("SELECT email FROM humans")}
+            outside = [address for address in body.attendees if address.lower() not in known]
+            if outside:
+                # An invitation outside the company is a send, which stays the owner's whatever this install allows
+                # other bots (backend/ceo_acts.py).
+                from . import ceo_acts
+                ceo_acts.gate(c, who.actor, "send", f"invite {', '.join(outside[:3])} to \"{body.title}\"")
             if who.role == "bot" and store.settings.block_external_invites:
                 # TICO_BLOCK_EXTERNAL_INVITES=1: an invitation is an email from the company's calendar, so a
                 # bot may invite only the people on the roster; anyone else is a person's act.
-                known = {str(row["email"] or "").lower() for row in c.execute("SELECT email FROM humans")}
-                outside = [address for address in body.attendees if address.lower() not in known]
                 if outside:
                     raise Problem("external_attendee", "A bot may invite only people on the company roster; "
                                   + ", ".join(outside[:3]) + " is not. Put the time in a draft for a person to send", 403)

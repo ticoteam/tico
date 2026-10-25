@@ -76,6 +76,7 @@ def _places(conn, row):
 
 def post(conn, kind, row, actor=None, blocker=None):
     """Write the notice everywhere it goes. The requester who made the change themselves is not told about it."""
+    from . import task_relations as TR
     H = _H()
     sent = []
     for where, to in _places(conn, row):
@@ -85,6 +86,10 @@ def post(conn, kind, row, actor=None, blocker=None):
         if not conv:
             continue
         refs = {'task': where['id'], 'comment': True, 'quiet': True, 'task_notice': kind, 'ticket': row['id']}
+        if kind == 'blocked' and where['id'] == row['id'] and blocker and \
+                TR.requester_hears_block(conn, row, blocker, actor):
+            refs = {**refs, 'news': 'task_blocked'}      # the requester's wake for the block (task_relations)
+            del refs['quiet']
         if _names_blocker(conn, kind, blocker, to):
             # Its name and step are in the text, so the comment is read only by who may read the blocker too, then
             # and later (task_privacy.message_tasks): not a guest of the ticket, nor anyone after the blocker narrows.

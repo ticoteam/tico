@@ -13,10 +13,20 @@ const needsLabel = owner => {
   return 'Needs ' + String(p.name || slug).trim().split(/\s+/)[0];
 };
 const prioPill = i => i.priority ? `<span class="pill ${i.priority}">${i.priority}</span>` : '';
+// Memoized per roster: task rows and sort comparators call this many times per render. Rebuilt when S.emps is
+// replaced (every refresh), grows in place (bot-branches.js) or the assistant's name changes.
+let BOT_NAMES = {emps: null, len: -1, key: '', map: new Map()};
 const botDisplayName = slug => {
+  const key = assistantBot() + '\n' + assistantName();
+  if (BOT_NAMES.emps !== S.emps || BOT_NAMES.len !== S.emps.length || BOT_NAMES.key !== key)
+    BOT_NAMES = {emps: S.emps, len: S.emps.length, key, map: new Map()};
+  const hit = BOT_NAMES.map.get(slug);
+  if (hit !== undefined) return hit;
   const name = slug === assistantBot() ? assistantName() : S.emps.find(e => e.name === slug)?.display_name || slug || '—';
-  return S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
+  const out = S.emps.filter(e => e.status !== 'archived' && (e.display_name || e.name).toLowerCase() === name.toLowerCase()).length > 1
     ? `${name} (${slug})` : name;
+  BOT_NAMES.map.set(slug, out);
+  return out;
 };
 const empName = slug => esc(botDisplayName(slug));
 const empChip = slug => slug && S.emps.some(e => e.name === slug) ? `<a class="chip" href="#/bot/${slug}">${avatar(slug, 16)}<span>${empName(slug)}</span></a>` : `<span class="chip">${empName(slug)}</span>`;
@@ -294,8 +304,11 @@ function issuesTable(list, showOwner) {
   ${list.map(i => `<tr><td>${issueLink(i)}</td><td>${esc(i.title)}${i.last_comment ? `<details><summary>last comment</summary><div class="q">${esc(i.last_comment)}</div></details>` : ''}</td>
     ${showOwner ? `<td>${empChip(i.owner)}</td>` : ''}<td>${statusPill(i)}</td><td>${prioPill(i)}</td><td class="muted tnum">${ago(i.updatedAt)}</td></tr>`).join('')}</table></div>`;
 }
-// The models that did a run's work (not the bot's configured one); empty when nothing was counted.
-const ranOn = made => [...new Set(((made || {}).segments || []).map(s => s.model).filter(Boolean))].join(' then ');
+// The models that did a run's work, each with its effort (not the bot's configured one); empty when nothing was counted.
+const ranOn = (made, effort = true) => [...new Set(((made || {}).segments || []).filter(s => s.model)
+  .map(s => s.model + (effort && s.effort ? ` (${s.effort})` : '')))].join(' then ');
+// Why a task run was on that model: the bot's task model, the fallback from it, or a check kept (backend/task_models.py).
+const ranOnNote = made => ((made || {}).task_model || {}).note || '';
 // A failed run offers Report this: Support opens with it attached (ui/support.js).
 function runsReportHTML(r, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
@@ -310,7 +323,7 @@ function runsTable(list, showEmp=true) {
     <td class="muted tnum">${ago(r.finished)}</td><td>${r.record_kind === 'attempt' ? `<span class="pill fail">${esc(r.outcome)} attempt</span><div class="mono muted">${esc(r.attempt_id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
     <td class="tnum">${r.duration_s != null ? Math.round(r.duration_s/60) + 'm ' + (r.duration_s%60) + 's' : ''}</td>
     <td class="tnum">${r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : (r.output_tokens != null ? r.output_tokens.toLocaleString() + ' tokens out' : '')}</td>
-    <td class="mono muted" title="the model that actually ran it, which a fallback changes">${esc(ranOn(r.ran_on))}</td>
+    <td class="mono muted" title="${esc(ranOnNote(r.ran_on) || 'the model that actually ran it, which a fallback changes')}">${esc(ranOn(r.ran_on))}${(r.ran_on?.task_model || {}).source === 'fallback' ? ` <span class="pill waiting" title="${esc(ranOnNote(r.ran_on))}">task model off</span>` : ''}</td>
     <td>${r.fallback ? `<span class="pill waiting" title="ran on the fallback harness after the primary was unavailable">${esc(r.fallback)}</span>` : r.resumed ? 'Where it left off' : 'From the start'}</td><td><a href="${API}/runs/${r.run}/log" target="_blank" rel="noopener">Log</a></td></tr>`).join('')}</table></div>`;
 }
 

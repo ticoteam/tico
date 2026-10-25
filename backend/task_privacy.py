@@ -7,6 +7,13 @@ import json
 import re
 
 from .store import H, Problem
+from . import read_cache
+from .live_privacy import sources as meeting_sources
+
+
+def _task(c, tid):
+    # Authorization uses task identity and parties; display tags are unrelated to access.
+    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -23,7 +30,7 @@ def actor(who):
 
 def task_readable(c, who, row):
     if snapshot(c) and row:
-        row = H.task(c, row["id"])
+        row = _task(c, row["id"])
     principals = actor(who)
     return all(H.task_private_readable(c, a, row) for a in
                (principals if isinstance(principals, tuple) else (principals,)))
@@ -50,35 +57,93 @@ def _candidates(value, out):
     return out
 
 
+def _task_rows(c, ids):
+    """{id: the parties row of that task, or None when no task has that id}, each id read at most once per snapshot.
+    A task page checks every comment, event and run against the same few tasks; reading them per row was thousands
+    of queries on a long task. The rows live in read_cache, so any write in the snapshot discards them."""
+    snapshot(c)
+    values = read_cache.cache(c)
+    known = values.setdefault(("task_privacy_rows",), {}) if values is not None else {}
+    missing = sorted({tid for tid in ids if tid not in known})
+    for start in range(0, len(missing), 500):
+        chunk = missing[start:start + 500]
+        found = {row[0]: row for row in c.execute(
+            "SELECT id,private,owner,requester,guest FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk)}
+        for tid in chunk:
+            known[tid] = found.get(tid)
+    return {tid: known[tid] for tid in ids}
+
+
+def private_tasks(c, ids):
+    """Those of `ids` that H.task_private holds private (a private task, or no task by that id), read together."""
+    return {tid for tid, row in _task_rows(c, ids).items() if H.task_private(c, row)}
+
+
 def references(c, value):
     """Task ids anywhere in a structured reference or payload, including nested lists. Every string that could
     name a task is gathered first and looked up in one query: one query per string was most of a busy server's SQL."""
-    snapshot(c)
-    names = [name for name in _candidates(value, set()) if name]
-    found = set()
-    for start in range(0, len(names), 500):
-        chunk = names[start:start + 500]
-        found.update(row[0] for row in c.execute(
-            "SELECT id FROM tasks WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
-    return found
+    names = {name for name in _candidates(value, set()) if name}
+    return {tid for tid, row in _task_rows(c, names).items() if row is not None}
+
+
+def prime_references(c, values):
+    """Look up every task id the given payloads could name in one pass, so the per-row checks that follow
+    (content_readable, message_readable) read them from this snapshot instead of one query each."""
+    names = set()
+    for value in values:
+        _candidates(value, names)
+    names.discard("")
+    _task_rows(c, names)
 
 
 def message_tasks(c, message, seen=None, include_run=True, current=False):
+    snapshot(c)
+    if not message or seen is not None:
+        return _message_tasks(c, message, seen, include_run, current)
+    from . import provenance_clock
+    row = dict(message)
+    if row.get("id") and not current:
+        row = H.message(c, row["id"], include_deleted=True) or row
+    refs = row.get("refs") or H._json(row.get("refs_json"), {}) or {}
+    run = refs.get("run") if isinstance(refs, dict) else None
+    has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+    key = ("message_tasks", row.get("id"), bool(include_run and has_run), row.get("conversation_id"),
+           json.dumps(refs, sort_keys=True), row.get("in_reply_to"))
+    return provenance_clock.cached(c, key, lambda: _message_tasks(c, row, None, include_run, True))
+
+
+def _message_tasks(c, message, seen=None, include_run=True, current=False):
     """`current`: `message` is its row as stored, read in this snapshot, so it is not read again."""
     snapshot(c)
     if not message:
         return set()
     message = dict(message)
-    seen = set() if seen is None else seen
+    root = seen is None
+    seen = set() if root else seen
     mid = message.get("id")
     if mid in seen:
         return set()
     if len(seen) >= 100:
         # An unbounded reply chain is an unsupported provenance path.
         raise Problem("privacy", "Message provenance is too deep to authorize", 403)
-    seen.add(mid)
     if mid and not current:
         message = H.message(c, mid, include_deleted=True) or message
+    # Only complete root traversals are reusable. A nested traversal can skip ancestors
+    # already visited by its caller, so caching that partial result would lose provenance.
+    values = read_cache.cache(c)
+    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    run = refs.get("run") if isinstance(refs, dict) else None
+    has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+    cache_key = ("message_tasks", mid, bool(include_run and has_run), message.get("conversation_id"),
+           json.dumps(refs, sort_keys=True),
+           message.get("in_reply_to"))
+    cached = values.get(cache_key) if values is not None else None
+    if cached is not None:
+        if len(seen | cached[1]) > 100:
+            raise Problem("privacy", "Message provenance is too deep to authorize", 403)
+        seen.update(cached[1])
+        return set(cached[0])
+    seen.add(mid)
     conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
     refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
     if not isinstance(refs, dict):
@@ -98,6 +163,8 @@ def message_tasks(c, message, seen=None, include_run=True, current=False):
     run_id = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
     if include_run and run_id:
         ids.update(attempt_tasks(c, run_id))
+    if root and values is not None:
+        values[cache_key] = (frozenset(ids), frozenset(seen))
     return ids
 
 
@@ -110,17 +177,130 @@ def attempt_tasks(c, aid, memo=None):
             memo[key] = frozenset(attempt_tasks(c, aid))
         return set(memo[key])
     snapshot(c)
+    from . import provenance_clock
+    return read_cache.value(c, ("attempt_tasks", aid), lambda: provenance_clock.cached(
+        c, ("attempt_tasks", aid), lambda: _attempt_tasks(c, aid)))
+
+
+def _attempt_tasks(c, aid):
     ids = set()
-    for row in c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
-                         "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
-                         "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
-                         "WHERE i.attempt_id=?", (aid, aid)):
-        ids.update(message_tasks(c, row, include_run=False))
+    rows = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                     "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
+                     "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                     "WHERE i.attempt_id=?", (aid, aid)).fetchall()
+    _prime_inputs(c, rows)
+    for row in rows:
+        ids.update(message_tasks(c, row, include_run=False, current=True))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
     for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
                          (aid,)):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
+
+
+def prime_attempts(c, aids):
+    """Read the provenance of many runs in a fixed number of queries, for a page that then checks each run
+    (a task's comments and runs). The results are the ones attempt_tasks and the meeting index would build one
+    run at a time, kept for this snapshot; a run that cannot be authorized is left for its own check to refuse."""
+    snapshot(c)
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    from . import provenance_clock
+    meetings = meeting_sources(c)
+    wanted = sorted({aid for aid in aids if isinstance(aid, str) and aid}
+                    - {key[1] for key in values if isinstance(key, tuple) and key[:1] == ("attempt_tasks",)})
+    for start in range(0, len(wanted), 250):
+        chunk = wanted[start:start + 250]
+        marks = ",".join("?" * len(chunk))
+        inputs = {aid: [] for aid in chunk}
+        for row in c.execute("SELECT a.id AS primed_attempt,m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                             f"JOIN messages m ON m.id=j.message_id WHERE a.id IN ({marks}) UNION "
+                             "SELECT i.attempt_id AS primed_attempt,m.* FROM attempt_inputs i "
+                             f"JOIN messages m ON m.id=i.message_id WHERE i.attempt_id IN ({marks})", chunk * 2):
+            row = dict(row)
+            inputs[row.pop("primed_attempt")].append(row)
+        _prime_inputs(c, [message for rows in inputs.values() for message in rows])
+        carried = {aid: [] for aid in chunk}
+        for row in c.execute(f"SELECT carried_by,id FROM tasks WHERE carried_by IN ({marks})", chunk):
+            carried[row[0]].append(row[1])
+        events = {aid: [] for aid in chunk}
+        moved = {aid: [] for aid in chunk}
+        for row in c.execute("SELECT target,action,detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL +
+                             f") AND target IN ({marks})", chunk):
+            events[row[0]].append(row[2])
+            if row[1] == INPUT_MOVED:
+                moved[row[0]].append(row[2])
+        meetings.prime_attempts(inputs, moved)
+        for aid in chunk:
+            try:
+                ids = set(carried[aid])
+                for message in inputs[aid]:
+                    ids.update(message_tasks(c, message, include_run=False, current=True))
+                for detail in events[aid]:
+                    ids.update(references(c, H._json(detail, {}) or {}))
+            except Problem:
+                continue
+            values[("attempt_tasks", aid)] = provenance_clock.cached(c, ("attempt_tasks", aid), lambda ids=ids: ids)
+
+
+def _parent_ids(message, refs):
+    """The messages a provenance walk reads next from `message`: the one it replies to and those it answers."""
+    out = {message.get("in_reply_to")}
+    for key in ("answers", "inputs"):
+        if isinstance(refs, dict) and isinstance(refs.get(key), list):
+            out.update(v for v in refs[key] if isinstance(v, str))
+    return out
+
+
+def _prime_inputs(c, rows):
+    """A run's messages as stored (a join's `m.*` in this snapshot), with the messages they reply to and answer, the
+    tasks their refs name and their rooms, read together. Every call that checks a run (each event batch, each input
+    poll) rebuilds its provenance once other writes move the clock, and a long goal run has taken in many inputs."""
+    rows = H.prime_message_rows(c, rows)
+    prime_references(c, [H._json(row["refs_json"], {}) or {} for row in rows])
+    H.prime_conversations(c, {row["conversation_id"] for row in rows})
+
+
+def prime_queued(c, messages):
+    """Before a loop checks queued messages one at a time (a claim's candidates, a running turn's next inputs):
+    `messages`, stored rows read in this snapshot, with what they reply to and answer, their rooms and meeting
+    provenance, the tasks they are about and name, and the runs behind them, read together. Each message is still
+    checked on its own by the same rules; a write in the loop discards all of it (read_cache)."""
+    snapshot(c)
+    messages = [dict(m) for m in messages]
+    H.prime_message_rows(c, messages)
+    prime_messages(c, messages)
+    about = set()
+    for m in messages:
+        refs = H._json(m.get("refs_json"), {}) or {}
+        about.add(H.message_task_id({"refs": refs if isinstance(refs, dict) else {}},
+                                    H.conversation(c, m["conversation_id"]) if m.get("conversation_id") else None))
+    H.prime_tasks(c, about)
+
+
+def prime_messages(c, messages):
+    """Before checking each of these stored messages: look up the tasks their refs name, the messages they reply to
+    and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
+    not a few queries per comment."""
+    messages = [dict(m) for m in messages]
+    refs = [m.get("refs") or H._json(m.get("refs_json"), {}) or {} for m in messages]
+    # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
+    # given here as views: they are read as stored with the rest of their ancestry.
+    parents = set().union(*(_parent_ids(m, r) for m, r in zip(messages, refs))) if messages else set()
+    ancestry = [H._json(row["refs_json"], {}) or {}
+                for row in H.prime_message_rows(c, H.prime_messages(c, parents).values())]
+    prime_references(c, refs + ancestry)
+    rooms = {m.get("conversation_id") for m in messages}
+    H.prime_conversations(c, rooms)
+    if read_cache.cache(c) is not None:
+        meeting_sources(c).prime_conversations(rooms)
+    runs = set()
+    for ref in refs:
+        if isinstance(ref, dict):
+            run = ref.get("run")
+            runs.add(ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
+    prime_attempts(c, runs)
 
 
 # Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
@@ -133,18 +313,17 @@ def record_moved_input(c, from_attempt, to_attempt, message):
     """Before an input row moves to another run, keep its tasks against the run that read it."""
     H.event(c, H.KEEPER, INPUT_MOVED, from_attempt,
             {"message_id": message["id"], "to_attempt": to_attempt,
-             "tasks": sorted(message_tasks(c, message, include_run=False))})
+             "tasks": sorted(message_tasks(c, message, include_run=False)),
+             "live_meetings": sorted(meeting_sources(c).message(message, include_run=False))})
 
 
 def readable(c, actor, ids):
-    snapshot(c)
     principals = actor if isinstance(actor, tuple) else (actor,)
-    for tid in ids:
-        # The row alone decides: H.task's labels are not read, and it is read once for every principal.
-        row = H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
-        if not all(H.task_private_readable(c, a, row) for a in principals):
-            return False
-    return True
+    # Every permission is current in this snapshot. Tags and wide task bodies
+    # contribute nothing to the decision, and shared provenance needs one lookup.
+    rows = _task_rows(c, set(ids))
+    return all(row is not None and all(H.task_private_readable(c, a, row) for a in principals)
+               for row in rows.values())
 
 
 def message_readable(c, actor, message, current=False):
@@ -158,9 +337,25 @@ def message_readable(c, actor, message, current=False):
     if message.get("deleted_at") or message.get("deleted"):
         return False
     try:
-        return readable(c, actor, message_tasks(c, message, current=bool(stored)))
+        return (meeting_sources(c).message_readable(actor, message)
+                and readable(c, actor, message_tasks(c, message, current=bool(stored))))
     except Problem:
         return False
+
+
+def readable_messages(c, actor, messages):
+    """The messages message_readable passes, each checked against its row as stored, read together in this snapshot
+    rather than one query per message. A message not stored is checked as given, as message_readable does."""
+    snapshot(c)
+    ids = sorted({dict(m).get("id") for m in messages} - {None, ""})
+    stored = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        stored.update((row["id"], dict(row)) for row in c.execute(
+            "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+    prime_messages(c, list(stored.values()))
+    return [m for m in messages if (message_readable(c, actor, stored[mid], current=True)
+                                    if (mid := dict(m).get("id")) in stored else message_readable(c, actor, m))]
 
 
 def require_message(c, who, message):
@@ -232,7 +427,31 @@ def deleted_comment_ack(c, principal, payload):
             or not H.is_comment(current) or set(current.get("refs", {})) != {"task", "comment"}
             or payload != current):
         return False
-    return readable(c, principal, message_tasks(c, current))
+    return (meeting_sources(c).message_readable(principal, current)
+            and readable(c, principal, message_tasks(c, current)))
+
+
+def _payload_messages(value, out):
+    """The ids of the messages require_payload checks one at a time in `value`: each dict with a room and an id."""
+    if isinstance(value, dict):
+        if value.get("conversation_id") and isinstance(value.get("id"), str):
+            out.add(value["id"])
+        value = value.values()
+    elif not isinstance(value, list):
+        return out
+    for item in value:
+        if isinstance(item, (dict, list)):
+            _payload_messages(item, out)
+    return out
+
+
+def _prime_payload_messages(c, payload):
+    """A reply that carries many messages (a claim's history, a poll's inputs) checks each one with its parents and
+    room: those are read together first, in this snapshot, rather than a few reads per message."""
+    ids = _payload_messages(payload, set())
+    if len(ids) > 1:
+        snapshot(c)
+        prime_queued(c, H.prime_messages(c, ids).values())
 
 
 def require_payload(c, who, payload, principal=None, checked_for=None):
@@ -241,6 +460,8 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
     `checked_for` is the principal an enclosing call already checked every task this value names for:
     a nested value names only tasks its container names, so that check is not run again for it (it was
     one query per nested dict). Everything else is still checked at every level."""
+    if principal is None and checked_for is None:
+        _prime_payload_messages(c, payload)
     principal = principal or actor(who)
     if who.role == "runner" and isinstance(payload, dict) and principal == who.actor:
         attempt = payload.get("attempt")
@@ -260,7 +481,7 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             and isinstance(payload.get("worktree_actions"), list)):
         # A computer is never a task participant, so its heartbeat's worktree actions are each read as the bot
         # it hosts that owns the worktree; the rest of the heartbeat is still read as the computer.
-        if not all(worktree_action_readable(c, who, action) for action in payload["worktree_actions"]):
+        if len(readable_worktree_actions(c, who, payload["worktree_actions"])) != len(payload["worktree_actions"]):
             raise Problem("privacy", "This response contains a task you can no longer read", 403)
         require_payload(c, who, {k: v for k, v in payload.items() if k != "worktree_actions"}, principal, checked_for)
         return payload
@@ -273,6 +494,8 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
         return payload
     if principal != checked_for and not readable(c, principal, references(c, payload)):
         raise Problem("privacy", "This response contains a task you can no longer read", 403)
+    if principal != checked_for and not meeting_sources(c).readable(principal, meeting_sources(c).references(payload)):
+        raise Problem("privacy", "This response contains a meeting you can no longer read", 403)
     if isinstance(payload, dict):
         key = payload.get("key")
         if isinstance(key, str) and key.startswith("report:") and not message_readable(c, principal, H.message(c, key[7:])):
@@ -301,6 +524,19 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             if isinstance(value, (dict, list)):
                 require_payload(c, who, value, principal, principal)
     return payload
+
+
+def readable_worktree_actions(c, who, actions):
+    """Batch the existing own-checkout removal exception; prepare/restore still check every task."""
+    snapshot(c)
+    removals = {a.get("link_id") for a in actions if isinstance(a, dict) and a.get("action") == "remove"}
+    owned = set()
+    for part in H.chunks(removals):
+        owned.update(row[0] for row in c.execute(
+            "SELECT id FROM task_links WHERE kind='worktree' AND computer_id=? AND id IN (" +
+            ",".join("?" * len(part)) + ")", (who.runner_id, *part)))
+    return [a for a in actions if (isinstance(a, dict) and a.get("action") == "remove" and a.get("link_id") in owned)
+            or worktree_action_readable(c, who, a)]
 
 
 def worktree_action_readable(c, who, action):
@@ -342,7 +578,8 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        return readable(c, actor, attempt_tasks(c, aid, memo))
+        return (meeting_sources(c).attempt_readable(actor, aid)
+                and readable(c, actor, attempt_tasks(c, aid, memo)))
     except Problem:
         return False
 
@@ -352,9 +589,15 @@ def require_attempt(c, who, aid):
         raise Problem("not_found", "Turn not found", 404)
 
 
+def private_meetings(c, ids):
+    # A removed source fails closed, just as it does for derived reads.
+    return {rid for rid in ids if not (row := c.execute(
+        "SELECT visibility FROM live_meetings WHERE id=?", (rid,)).fetchone()) or row["visibility"] != "team"}
+
+
 def private_execution(c, who):
-    return bool(who.attempt_id and any(H.task_private(c, H.task(c, tid))
-                                     for tid in attempt_tasks(c, who.attempt_id)))
+    return bool(who.attempt_id and (private_meetings(c, meeting_sources(c).attempt(who.attempt_id)) or
+                any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))))
 
 
 def question_party(c, who, person, parent=None, guest=None):
@@ -421,7 +664,7 @@ def public_message(c, message):
     if not message or dict(message).get("deleted_at") or dict(message).get("deleted"):
         return False
     try:
-        return not any(H.task_private(c, H.task(c, tid)) for tid in message_tasks(c, message))
+        return not any(H.task_private(c, _task(c, tid)) for tid in message_tasks(c, message))
     except Problem:
         return False
 
@@ -435,18 +678,40 @@ def require_batch(c, who, row):
 
 
 def content_readable(c, actor, payload):
-    return readable(c, actor, references(c, payload))
+    return (meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
+            and readable(c, actor, references(c, payload)))
+
+
+def content_readable_rows(c, actor, rows):
+    """The rows content_readable passes, with the tasks they name looked up together first."""
+    rows = list(rows)
+    prime_references(c, rows)
+    return [row for row in rows if content_readable(c, actor, row)]
 
 
 def guard_write(c, who, path, auth):
     """A private execution has no automatic company-publication capability."""
+    # These controls already enforce their own run ownership and never publish company content.
+    if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/")):
+        return
     if (who.role != "bot" and not getattr(who, "task_actor", "")) or not private_execution(c, who):
         return
+    meetings = meeting_sources(c).attempt(who.attempt_id)
+    if private_meetings(c, meetings):
+        # A meeting turn is one scoped reply, not an ordinary task or company publisher.
+        # Run artifacts retain their attempt provenance through the existing file/read fence.
+        if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/files/uploads", "/api/v2/files/imports"):
+            return
+        scoped = re.fullmatch(r"/api/v2/live-meetings/([^/]+)/(chat|turns/[^/]+/claim)", path)
+        if (scoped and meetings == {scoped[1]} and not any(
+                H.task_private(c, H.task(c, tid)) for tid in attempt_tasks(c, who.attempt_id))):
+            return
+        raise Problem("privacy", "Private meeting work can only reply to its meeting or retain scoped run files", 403)
     if path in ("/api/v2/sql", "/api/v2/mcp", "/api/v2/tasks/dry-run"):
         return
     if path == "/api/v2/task-questions":
         return              # a private task of its own, to a person question_party lets read the run's work (media.py)
-    if path.startswith(("/api/v2/attempts/", "/api/v2/jobs/", "/api/v2/files/", "/api/v2/messages",
+    if path.startswith(("/api/v2/files/", "/api/v2/messages",
                         "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")):
         task_path = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/.*)?", path)
         if task_path and task_path[1] not in ("dry-run", "labels", "stuck"):
@@ -467,7 +732,7 @@ def tag_readable(c, who, row):
     for event in c.execute("SELECT detail_json FROM events WHERE target=? AND action='tag.attach'", (row["id"],)):
         linked.update(references(c, H._json(event[0], {}) or {}))
     return (not linked or bool(row.get("is_template")) or
-            any(task_readable(c, who, H.task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
+            any(task_readable(c, who, _task(c, tid)) for tid in linked)) and content_readable(c, actor(who), row)
 
 
 def require_destination(c, who, to, conversation_id, refs, reply=None, guest=None):
@@ -479,15 +744,24 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
         ids.update(attempt_tasks(c, who.attempt_id))
-    private = [H.task(c, tid) for tid in ids if H.task_private(c, H.task(c, tid))]
-    if not private:
+    meetings = meeting_sources(c)
+    meeting_ids = meetings.references(refs)
+    if reply:
+        meeting_ids.update(meetings.message(reply))
+    if who.attempt_id:
+        meeting_ids.update(meetings.attempt(who.attempt_id))
+    restricted_meetings = private_meetings(c, meeting_ids)
+    private = [_task(c, tid) for tid in ids if H.task_private(c, _task(c, tid))]
+    if not private and not restricted_meetings:
         return
     conv = H.conversation(c, conversation_id) if conversation_id else None
     audience = set((conv or {}).get("participants") or []) | {who.actor, to}
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)
+    if not all(meetings.readable(actor, restricted_meetings) for actor in audience):
+        raise Problem("privacy", "Private meeting content stays with its current members", 403)
     target = (refs or {}).get("task") if isinstance(refs, dict) else None
-    target = H.task(c, target) if isinstance(target, str) else None
+    target = _task(c, target) if isinstance(target, str) else None
     for row in private:
         if all(_reads(c, actor, row, guest) for actor in audience):
             continue
@@ -510,6 +784,8 @@ APPROVALS_SQL = ("SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JO
 # The only tasks `status` looks at: a live one (its counts) or a private one (whether its focus may be shown).
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
+# The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
+STATUS_TASK_COLUMNS = "id,owner,requester,status,private,guest,waiting_on"
 
 
 def status_inputs(c, bots):
@@ -520,7 +796,7 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(f"SELECT * FROM tasks WHERE (owner{marks} OR requester{marks}) AND {STATUS_TASKS_SQL}",
+        for t in c.execute(f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) AND {STATUS_TASKS_SQL}",
                            actors * 2):
             t = dict(t)
             for party in {t["owner"], t["requester"]}:
@@ -542,11 +818,11 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
     row = dict(row)
     tid = row.get("task_id")
     tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        f"SELECT * FROM tasks WHERE (owner=? OR requester=?) AND {STATUS_TASKS_SQL}",
+        f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE (owner=? OR requester=?) AND {STATUS_TASKS_SQL}",
         ("bot:" + row["bot"], "bot:" + row["bot"]))]
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
-        task = H.task(c, tid)
+        task = _task(c, tid)
     private = [task] if task and H.task_private(c, task) else []
     if not tid:
         private = [t for t in tasks if H.task_private(c, t)]
@@ -578,10 +854,14 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
 def job_count(c, who, bot, states=("queued",)):
     snapshot(c)
     marks = ",".join("?" * len(states))
-    return sum(message_readable(c, actor(who), row) and
-               (not row["attempt_id"] or attempt_readable(c, actor(who), row["attempt_id"]))
-               for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                    f"WHERE j.bot=? AND j.state IN ({marks})", (bot, *states)))
+    # The rows are the messages as stored in this snapshot (as in job_counts), checked after one lookup for them all.
+    rows = [dict(row) for row in c.execute("SELECT m.*,j.attempt_id AS job_attempt FROM jobs j JOIN messages m "
+                                           f"ON m.id=j.message_id WHERE j.bot=? AND j.state IN ({marks})", (bot, *states))]
+    jobs = [(row.pop("job_attempt"), row) for row in rows]
+    prime_messages(c, rows)
+    prime_attempts(c, [aid for aid, _ in jobs])
+    return sum(message_readable(c, actor(who), row, current=True) and
+               (not aid or attempt_readable(c, actor(who), aid)) for aid, row in jobs)
 
 
 def job_counts(c, who, bots, states=("queued",)):
@@ -620,6 +900,8 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
         if row["scope"].startswith("task:"):
             ids.add(row["scope"][5:])
         if row["attempt_id"]:
+            if not meeting_sources(c).attempt_readable(actor, row["attempt_id"]):
+                return False
             ids.update(attempt_tasks(c, row["attempt_id"], memo))
     linked = bool(ids)
     for row in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id "
@@ -635,19 +917,32 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
 
 def event_readable(c, actor, event):
     event = dict(event)
+    meetings = meeting_sources(c)
+    if not meetings.readable(actor, meetings.references(H._json(event.get("detail_json"), {}) or {})):
+        return False
     ids = references(c, H._json(event.get("detail_json"), {}) or {}) | references(c, event.get("target"))
     target = event.get("target")
-    if H.task(c, target):
+    if _task(c, target):
         ids.add(target)
     msg = H.message(c, target)
     if msg and not message_readable(c, actor, msg):
         return False
     if c.execute("SELECT 1 FROM attempts WHERE id=?", (target,)).fetchone():
+        if not meetings.attempt_readable(actor, target):
+            return False
         ids.update(attempt_tasks(c, target))
+    if c.execute("SELECT 1 FROM conversations WHERE id=?", (target,)).fetchone():
+        if not meetings.conversation_readable(actor, target):
+            return False
+    if c.execute("SELECT 1 FROM live_meetings WHERE id=?", (target,)).fetchone():
+        if not meetings.readable(actor, {target}):
+            return False
     # Tool/audit events from a private execution often have no explicit task ref.
     if H.is_bot(event.get("actor")):
         for row in c.execute("SELECT id FROM attempts WHERE bot=? AND created<=? "
                              "AND coalesce(finished,?)>=?", (H.actor_id(event["actor"]),
                                                             event["ts"], H.now(), event["ts"])):
+            if not meetings.attempt_readable(actor, row[0]):
+                return False
             ids.update(attempt_tasks(c, row[0]))
     return readable(c, actor, ids)

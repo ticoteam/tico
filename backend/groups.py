@@ -8,6 +8,7 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
   rows(...)                a group's row: id, name, parent, people, bots
   create / update / delete the changes the API and the tools make
   place(...)               the team builder: bots into the groups of their templates, made if they are not there yet
+  link_bets(...)           setup's links from the groups it made to the strategy bets they serve
   migrate(c, settings)     once, for a team that had `teams`, org groups or derived departments: every one becomes a
                            group and every bot its group's member (idempotent; `groups_migrated` in the roster)
 
@@ -22,7 +23,7 @@ from . import models as M
 from . import people as P
 from .store import Problem, encode
 
-SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor")
+SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager")
 
 
 def _roster(c):
@@ -71,8 +72,8 @@ def rows(roster, employees, archived=(), can_see=None):
         if team:
             bots.setdefault(team, []).append(slug)
     return [{"id": gid, "name": g["name"], "parent": g["parent"], "people": people.get(gid, []),
-             "bots": sorted(bots.get(gid, [])), "order": i}
-            for i, (gid, g) in enumerate(roster["org_groups"].items())]
+             "bots": sorted(bots.get(gid, [])), "order": g.get("order", i), "bet_id": g.get("bet_id")}
+            for i, (gid, g) in sorted(enumerate(roster["org_groups"].items()), key=lambda row: row[1][1].get("order", row[0]))]
 
 
 def refresh_teams(c, roster=None):
@@ -169,6 +170,31 @@ def _may_change(auth, who):
         raise Problem("forbidden", "Only an owner or an admin changes groups", 403)
 
 
+
+def _set_bet(c, who, group, bet_id):
+    """The strategy bet a group serves: the owner's link, like the bets themselves. "" unlinks it."""
+    if bet_id is None:
+        return
+    from . import goal_routes
+    from . import strategy
+    if not goal_routes.company_editor(who):
+        raise Problem("forbidden", "Only the owner links a group to a strategy bet", 403)
+    bet_id = bet_id.strip()
+    if bet_id and not strategy.bet(c, bet_id):
+        raise Problem("not_found", "Unknown bet: " + bet_id, 404)
+    if bet_id:
+        group["bet_id"] = bet_id
+    else:
+        group.pop("bet_id", None)
+
+
+def _next_order(groups):
+    # Freeze legacy fallback positions before a new key changes their indices in sorted JSON.
+    for i, group in enumerate(groups.values()):
+        group.setdefault("order", i)
+    return max((group["order"] for group in groups.values()), default=-1) + 1
+
+
 def create(c, auth, settings, who, body):
     _may_change(auth, who)
     roster = _roster(c)
@@ -179,7 +205,9 @@ def create(c, auth, settings, who, body):
     if _named(groups, body.name, parent):
         raise Problem("conflict", "There is already a group with that name there", 409)
     gid = _new_id(groups, body.name)
-    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": ""}
+    groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": "",
+                   "order": _next_order(groups)}
+    _set_bet(c, who, groups[gid], body.bet_id)
     people, changed = _apply_members(c, settings, roster, gid, body.add, M.GroupMembers())
     roster = _finish(c, roster, people, changed)
     H.event(c, who.actor, "group.created", gid, {"name": body.name.strip(), "parent": parent})
@@ -202,11 +230,12 @@ def update(c, auth, settings, who, gid, body):
         group["parent"] = parent
     if body.name is not None:
         group["name"] = body.name.strip()
+    _set_bet(c, who, group, body.bet_id)
     if _named(groups, group["name"], group["parent"], skip=gid):
         raise Problem("conflict", "There is already a group with that name there", 409)
     people, changed = _apply_members(c, settings, roster, gid, body.add, body.remove)
     roster = _finish(c, roster, people, changed)
-    H.event(c, who.actor, "group.updated", gid, {"name": body.name, "parent": body.parent,
+    H.event(c, who.actor, "group.updated", gid, {"name": body.name, "parent": body.parent, "bet_id": body.bet_id,
                                                   "added": {"people": body.add.people, "bots": body.add.bots},
                                                   "removed": {"people": body.remove.people, "bots": body.remove.bots}})
     return one(c, roster, gid)
@@ -249,11 +278,12 @@ def ensure(roster, gid, name):
     for other, group in groups.items():
         if group["name"].strip().lower() == name.strip().lower():
             return other
-    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": ""}
+    groups[gid] = {"id": gid, "name": name, "reports_to": "", "parent": "", "root": "",
+                   "order": _next_order(groups)}
     return gid
 
 
-def place(c, settings, slugs):
+def place(c, settings, slugs, group_order=()):
     """The team builder made these bots: each one goes in the group of its template (the group its card is in), which
     is made when the team has none yet. A bot that already has a group of its own keeps it."""
     from . import recruit
@@ -264,13 +294,51 @@ def place(c, settings, slugs):
     homes = recruit.template_groups(settings)
     roster = _roster(c)
     made = set(roster["org_groups"])
+    # Stored JSON sorts object keys, so bot creation order cannot preserve the wizard's chart order.
+    # Only newly made groups take this order; an existing team's groups keep their positions.
+    rank = {gid: i for i, gid in enumerate(group_order)}
+    todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
     for slug in todo:
         home = homes.get(str(configs[slug].get("template") or ""))
         if home and not outside(settings, slug, configs[slug]):
-            _set_bot(c, slug, ensure(roster, home["id"], home["name"]))
+            gid = ensure(roster, home["id"], home["name"])
+            _set_bot(c, slug, gid)
     if set(roster["org_groups"]) != made:
         _save(c, roster)
     refresh_teams(c, roster)
+
+
+def link_bets(c, links):
+    """Setup's links from the groups it made to the strategy bets they serve ({group id: bet id}, from
+    backend/recruit.py `bet_for`). A group already linked keeps its bet. Returns the group ids linked."""
+    roster = _roster(c)
+    done = []
+    for gid, bet_id in (links or {}).items():
+        group = roster["org_groups"].get(gid)
+        if group and bet_id and not group.get("bet_id"):
+            group["bet_id"] = bet_id
+            done.append(gid)
+    if done:
+        _save(c, roster)
+    return done
+
+
+def seat_teams(c, settings, templates, group_order=()):
+    """{template: group id} for seats setup lays out (backend/lifecycle.py `lay_out`): the group a bot of that template
+    would go in (`place`), made when the team has none yet, new groups in `group_order` as `place` makes them. A template
+    with no group gets none."""
+    from . import recruit
+    homes = recruit.template_groups(settings)
+    roster = _roster(c)
+    made, out = set(roster["org_groups"]), {}
+    rank = {gid: i for i, gid in enumerate(group_order)}
+    for template in sorted(templates, key=lambda t: rank.get((homes.get(str(t or "")) or {}).get("id"), len(rank))):
+        home = homes.get(str(template or ""))
+        if home:
+            out[template] = ensure(roster, home["id"], home["name"])
+    if set(roster["org_groups"]) != made:
+        _save(c, roster)
+    return out
 
 
 # ----------------------------------------------------------------------------- the migration

@@ -30,7 +30,8 @@ its conversation, or bot-wide) and a canonical identity:
    and `/api/v2/files/{id}/versions/{n}` for an older one, in the same safe viewer or download as
    any attachment. Adopted legacy attachment IDs keep their original bytes without a version;
    current file lists include an explicit version in their links to those IDs. Tico streams
-   authorized bytes; storage addresses are never shown.
+   authorized bytes or opens a short-lived link on the company's files address when it uses
+   [Tico file hosting](#tico-file-hosting).
 2. **Cloud documents.** A Google Doc, Sheet or Slides, a Notion page, a Figma file or any https
    document. `hub file link <url> --title "..."` registers the address (http, `javascript:`,
    credentials in the URL and private-network hosts are refused). Open goes to the provider, which
@@ -133,15 +134,100 @@ It never substitutes the bot's description for its Instructions.
 
 ## Retention
 
-Every version is kept: versions are immutable and nothing prunes them. The owner or a bot administrator
-removes a file from the bot's page (`PATCH /api/v2/files/{id}` with `archived: true`). That hides the row
+Versions are immutable and kept unless you stop [Tico file hosting](#tico-file-hosting) and its retention period ends.
+The owner or a bot administrator removes a file from the bot's page (`PATCH /api/v2/files/{id}` with `archived: true`). That hides the row
 and keeps the bytes; the file returns when the bot publishes a changed version. A bot cannot remove a file.
 
 ## Storage
 
-Local disk is the default. The owner can put the company's files in its own bucket from Settings › General
-([A company's own bucket](#a-companys-own-bucket)); the server's operator can set one with the steps below.
-To use S3:
+### Prepared file-distribution edge
+
+`infra/files-edge/template.py` renders an **edge-only, disabled** CloudFormation template to stdout;
+it never calls AWS. This is preparation for managed file hosting, not an available storage option.
+The stand-up still requires the owner's cost approval, private bucket and bucket policy, certificate,
+logging and broker provisioning, HQ key synchronization and DNS. Do not create or deploy AWS resources
+before that approval. The template takes `FilesDomain`, `CertificateArn` and `BucketRegionalDomainName`;
+it creates the distribution, OAC, key store, functions and response policies. Its OAC needs a bucket
+policy restricted to this distribution's ARN. Keep Block Public Access on; never grant public reads.
+
+The v1 edge contract is:
+
+- Hosts are `<workspace>-files.<FilesDomain>`; HQ alone writes the lowercase host **label** as the
+  edge key-store key (for example `acme-files`). Its JSON value is
+  `{"v":1,"prefix":"c/<lowercase-v4-install-uuid>/","signing":{"key_id":"k1","secret":"<64-lowercase-hex>"}}`.
+  Host is lowercased before lookup and signature verification. Invalid record versions, prefixes,
+  key IDs or secrets fail closed. HQ derives the per-install secret from its master and writes it
+  before returning the address to the app; the edge never holds that master. HQ removes the record
+  with the company's stored prefix at the end of retention. HQ's `HQ_FILES_KVS_ARN` identifies the store.
+  Company S3 write credentials must never grant key-store writes. The signing secret is used as text,
+  not decoded as base64. Deleting or rotating the record revokes links; the app must refresh its key.
+- The only paths are `/blobs/<2hex>/<sha256>` and `/visuals/<2hex>/<sha256>`, all lowercase and with the
+  first two hash characters repeated in `<2hex>`. The request gate checks `e`, `k` and `s`, refusing
+  duplicates, expired links and expiry more than 300 seconds ahead. `s` is unpadded base64url
+  HMAC-SHA256 over `host + "\n" + original_path + "\n" + e`. It binds the host and namespace before
+  rewriting to `/c/<company-id>` plus the original path. Unknown paths get 404, invalid tokens 403.
+  Only GET/HEAD proceed. Query strings (including S3 response overrides) and cookies are removed.
+- Files always carry `default-src 'none'; sandbox`, `nosniff`, `Access-Control-Allow-Origin: *`,
+  `Cross-Origin-Resource-Policy: cross-origin` and `Referrer-Policy: no-referrer`.
+- Visuals have their own behavior and response function. The stored Content-Type selects HTML or SVG
+  (case-insensitive, before `;`); HTML is normalized to `text/html; charset=utf-8`, SVG to `image/svg+xml`.
+  Missing/unsupported type or `x-amz-meta-tico-visual-policy-version` other than exactly `1` returns an
+  empty 404. HTML without a charset is accepted and normalized. Partial visual responses and redirects
+  are refused. The app writes cleaned bytes, with its reporter script appended for HTML; the edge does
+  not clean or inspect the body.
+- Policy source is object metadata. `x-amz-meta-tico-visual-ancestors` supplies up to eight whitespace
+  separated tokens, each exactly `'self'`, an HTTPS origin matching
+  `https://[a-z0-9.-]+(:[0-9]{1,5})?`, or HTTP localhost/127.0.0.1 with an optional port.
+  `x-amz-meta-tico-visual-script` supplies up to four quoted SHA256 hashes matching
+  `^'sha256-[A-Za-z0-9+/]{43}='$`. Invalid tokens are dropped; an empty slot becomes `'none'`.
+  Metadata cannot supply a full CSP or sandbox tokens. Contract changes require a new version at
+  the edge first.
+
+The fixed visual templates (only `<script>` and `<ancestors>` are substituted) are:
+
+```text
+HTML: default-src 'none'; script-src <script>; img-src data:; font-src data:; media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors <ancestors>; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox
+SVG: default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; frame-ancestors <ancestors>; sandbox
+```
+
+Every visual response sets inline disposition, `nosniff`, `no-referrer`, CORP cross-origin and
+`Cache-Control: private, no-cache`, with no CORS. Response functions remove all object metadata,
+origin CSP/report-only values (including repeated values), and both header and CloudFront cookie-object
+representations of Set-Cookie. They replace CSP with exactly one header. Arbitrary object writers cannot
+introduce a directive or `allow-same-origin`: the document stays in an opaque origin. Body CSP meta tags
+can only restrict this policy; Set-Cookie meta tags do not set cookies. The app still owns body cleaning.
+
+Both behaviors also attach an overriding restrictive response policy and remove Set-Cookie/report-only
+at the policy layer. CloudFront applies policies **before** the viewer-response function, so the visual
+function replaces the fallback CSP without stacking it. When an S3 origin returns an error, CloudFront
+skips viewer-response; the restrictive fallback still applies. S3 errors have no object metadata. There
+are no custom error-page mappings. All cache TTLs are zero so a company cannot freeze mutable metadata
+with its own Cache-Control; the request gate still authenticates every request. Enabling caching later
+requires checking metadata invalidation and the same security boundaries.
+
+Run the synthetic handler and wiring checks with `node --test infra/files-edge/edge.test.cjs`.
+They execute the exact generated function code with only the key store and clock replaced. No AWS or
+team database is used. With Playwright and Chromium installed, the optional builder check
+`node infra/files-edge/browser-check.cjs` verifies that a hostile HTML fixture cannot read/write cookies
+or reach its same-host parent, even with body/meta/header/metadata attempts to add `allow-same-origin`.
+After approval, stand-up additionally needs actual CloudFront validation and
+origin-error/header readback before activation; a local harness cannot prove AWS runtime acceptance.
+
+The prepared Public Suffix List rule for the production base domain also covers `*-files` sibling
+hosts: each hyphenated name is one DNS label, so no extra wildcard entry is needed. Publication and
+browser uptake are separate deployment gates. The sandbox and cookie stripping remain mandatory
+regardless of PSL status.
+
+AWS references: [event and cookie structure](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/functions-event-structure.html),
+[error-event restrictions](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/edge-function-restrictions-all.html),
+[policy ordering](https://aws.amazon.com/blogs/networking-and-content-delivery/amazon-cloudfront-introduces-response-headers-policies/).
+
+### Server storage
+
+Local disk is the default. The owner can use [Tico file hosting](#tico-file-hosting) or
+[the company's own bucket](#a-companys-own-bucket). The server's operator can also configure a bucket.
+
+To use S3 for the server's storage:
 
 1. Create a dedicated bucket in the AWS console, or preview
    `deploy/aws/attachments-s3.sh --bucket acme-files --region us-east-1 --role acme-server`
@@ -180,6 +266,40 @@ Read retries never change the selected write source.
 
 Keys are passed directly to S3 clients, never exported into the server's environment or logged.
 
+### Tico file hosting
+
+A self-hosted company with Gateway credits can keep its files in storage Tico runs, served from its own
+`ticofiles.com` address. It covers task files, chat attachments, visuals, reports and recordings.
+The owner turns it on in **Settings** through the Gateway page. Tico HQ supplies the storage access and files
+address; you do not enter AWS keys. For example, Acme at `acme.example` can use `acme-files.ticofiles.com` for its files.
+
+New files go to Tico storage from then on, without a restart. Existing files stay readable where they are
+until the owner chooses to move them. **Settings › General › Storage** shows **Tico file hosting**, its files
+address and the controls below.
+
+**Move existing files** shows the file count and GB estimate before you confirm. It copies every file and every
+version into Tico storage and checks each copy before switching reads to it. The completed move reports the GB
+moved, matching the estimate. The move never deletes the originals. Tico's own copy checks do not incur delivery
+charges. If the estimate changes before you confirm, Tico asks you to check the new one. An interrupted move can
+be started again to copy what remains.
+
+Files in Tico storage are reachable only through short-lived signed links. Tico checks access on every request,
+private-task files stay private, and there is no public listing. Pictures, video and audio open inline from the
+company's files address. For self-hosted companies using file hosting, web pages and SVG files show as **Open**
+cards that open the file viewer. Full inline pages and SVG are a separate change.
+
+When the owner stops file hosting on the Gateway page, new files go back to the company's own storage: its bucket,
+or the server's storage if it has no bucket. **Download all files** offers a ZIP export of every file and version
+the owner may open. Files private to someone else are left out, with a count in the export's manifest.
+Tico HQ keeps the hosted files for 30 days, emails the owner before deleting them, then deletes them.
+The app shows the keep-until date HQ supplies. **Move files back** copies every file and version to the company's
+own storage while HQ still keeps them. Download or move the files before that date.
+
+If Gateway credits run out, existing files stay readable. New uploads go to the company's own storage until
+credits are added. If that storage is unavailable, Tico refuses the upload with a plain reason.
+File hosting does not change the visual upload caps: 25 MB for bots and 10 MB for people
+([Visuals in replies](visuals.md#types-and-limits)).
+
 ### A company's own bucket
 
 In **Settings › General › Storage** the owner enters a bucket, its region, an optional folder in it, and an access key ID
@@ -190,12 +310,16 @@ got. The keys need `s3:PutObject`, `s3:GetObject`
 and `s3:AbortMultipartUpload` on the bucket's objects (step 2 above, without the IAM role), and `s3:DeleteObject` to
 replace the team icon (docs/desktop.md).
 
-From the moment it is saved, without a restart, every new file goes to that bucket, ahead of `TICO_BLOB_BUCKET` and the
-server's disk. Files already stored keep opening: a file is read from the bucket in use, then from each bucket used
-before it (newest first), then from the server's own storage. Files on the server's disk are copied into the new bucket
-in the background (Settings › Health shows progress); files in another bucket stay where they are. **Use the server's
-storage** sends new files back to the server's own storage; the bucket stays on the list of places files are read from.
-Backups (docs/install.md) read each file from wherever it is stored, so they use the company's keys for its bucket.
+Unless Tico file hosting is taking new files, saving this setting sends new files to that bucket without a restart.
+It takes priority over `TICO_BLOB_BUCKET` and the server's disk. While file hosting is on, this bucket remains the company's own
+storage for when file hosting stops or Gateway credits run out.
+
+Files already stored keep opening: Tico tries the bucket taking new files, earlier buckets (newest first), then
+the server's storage. When the company's own bucket takes new files, Tico also copies files from the server's disk
+into it in the background (**Settings › Health** shows progress). Files in another bucket stay where they are.
+**Use the server's storage** selects the server's storage instead of the company's own bucket; it does not stop
+Tico file hosting. The bucket stays on the list of places files are read from. Backups (docs/install.md) read each
+file from wherever it is stored, so they use the company's keys for its bucket.
 
 The secret access key is sealed with the credential key (`credential.key`, or `TICO_CREDENTIAL_KMS_KEY`) and is
 never shown again, logged or returned by the API. Leave it empty to keep the saved one when changing the bucket's folder
@@ -275,7 +399,8 @@ Media fields live on each file version: `width`, `height`, `duration_ms`, `poste
 `thumb_blob_id`, and `media_state` (`pending`, `ready`, `none`). One background worker fills them;
 existing versions default to `none` and are not automatically backfilled. New versions are `pending`.
 Transient storage failures retry with bounded backoff; permanent decode failures become `none`.
-Missing tools or unsupported media never fail an upload. Pillow decodes only PNG/JPEG/GIF/WebP in a subprocess capped at 1 GiB memory, 20 CPU seconds,
+Missing tools or unsupported media never fail an upload, and a version nothing can be derived from (an SVG, or a
+video or PDF without its tool) becomes `none` without being read: in Tico's bucket every read is delivery. Pillow decodes only PNG/JPEG/GIF/WebP in a subprocess capped at 1 GiB memory, 20 CPU seconds,
 50 MP and a 30-second timeout (macOS uses parent RSS supervision for memory), and makes thumbnails up to 480 px; without Pillow, PNG/JPEG/GIF/WebP headers still provide dimensions. ffprobe/ffmpeg make
 video posters at the earlier of 1 second or 10% of duration, up to 640 px. pdftoppm renders PDF
 page one. A supplied poster is preserved.

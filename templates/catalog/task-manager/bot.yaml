@@ -1,0 +1,15 @@
+name: task-manager               # the slug: it matches the repository bot-task-manager and the label owner:task-manager
+display_name: "Task Manager"
+labels: [owner:task-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: low
+max_run_minutes: 20
+
+# It sends nothing outside the team.
+outbound_send: false
+
+# No routines and no watchers: it never thinks on a schedule. The server builds each department's report in plain code
+# once an hour on weekdays (backend/task_manager.py) and opens a task only when a report has something in it.
+tools: []

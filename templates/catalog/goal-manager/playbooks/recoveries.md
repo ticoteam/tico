@@ -1,7 +1,8 @@
 # Recoveries and merged asks (the CEO Bot, level 2)
 
 Only where `hub goal ceo-bot` says `on` and `level` 2 or 3. Below that, the server refuses both; at level 1 a red goal
-gets a check-in (`playbooks/check-ins.md`) and nothing more.
+gets a check-in (`playbooks/check-ins.md`) and nothing more. At level 3 a red or stalled goal gets a decision you
+make yourself (`playbooks/acts-on-its-own.md`) in place of a recovery; merging asks is the same at both levels.
 
 ## A recovery for a red or stalled goal
 A goal that is red, or has stalled, gets one recovery proposal for its owner. The server puts it

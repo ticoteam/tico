@@ -36,6 +36,20 @@ pub fn configured(config: &Value) -> Option<Hop> {
     Some(Hop { runtime: crate::harness_tools::runtime_of(&harness), harness, model, reasoning_effort: effort, default: false })
 }
 
+/// A different model on the spent login is no fallback. Ignore that named hop so the company's next provider
+/// can take the turn; with none ready the primary's limit stands. Per-bot keys have no shared login here.
+pub fn limited_config(config: &Value, profile: Option<&crate::profiles::Profile>) -> Value {
+    let mut out = config.clone();
+    if let Some(hop) = configured(config) {
+        let runtime = text_of(&config["runtime"]);
+        let own = login(&runtime, &text_of(&config["harness"]), profile);
+        if hop.runtime == runtime && own.is_some() && own == login(&hop.runtime, &hop.harness, profile) {
+            out.as_object_mut().unwrap().remove("fallback");
+        }
+    }
+    out
+}
+
 /// Where a turn goes when the bot's own subscription hit its limit and it names no fallback (service.py
 /// default_fallback): the first of the company's providers (`choices`, GET /api/v2/config `fallback_models`) on
 /// another runtime `ready` says is signed in here. None when the bot named a fallback or turned it off
@@ -279,8 +293,21 @@ pub fn server_keeps_holds() -> bool {
 /// one refuses a field it does not know, and with it the whole heartbeat.
 static SERVER_DATA_PROBLEM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+static SERVER_COMPUTER_LOGINS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_uses_computer_logins() -> bool {
+    SERVER_COMPUTER_LOGINS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn server_takes_data_problem() -> bool {
     SERVER_DATA_PROBLEM.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether the server takes a readiness runtime row's `turn_user` (`readiness_turn_user`), as `data_problem`.
+static SERVER_TURN_USER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_takes_turn_user() -> bool {
+    SERVER_TURN_USER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Whether a config answer has been kept since start.
@@ -295,6 +322,8 @@ pub fn remember(config: &Value) {
     }
     // Each answer decides, so a server rolled back to one that refuses the field gets heartbeats without it again.
     SERVER_DATA_PROBLEM.store(config["readiness_data_problem"] == true, std::sync::atomic::Ordering::Relaxed);
+    SERVER_COMPUTER_LOGINS.store(config["computer_logins_v1"] == true, std::sync::atomic::Ordering::Relaxed);
+    SERVER_TURN_USER.store(config["readiness_turn_user"] == true, std::sync::atomic::Ordering::Relaxed);
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
     // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
@@ -371,6 +400,31 @@ mod tests {
         let hop = configured(&json!({"reasoning_effort": "high", "fallback": {"harness": "antigravity", "model": "g"}})).unwrap();
         assert_eq!((hop.runtime.as_str(), hop.reasoning_effort.as_deref()), ("gemini", Some("high")));
         assert_eq!(configured(&json!({"fallback": {"harness": "claude", "model": "m", "effort": "low"}})).unwrap().reasoning_effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn a_named_model_on_the_limited_primary_login_does_not_hide_the_next_company_provider() {
+        let config = json!({"runtime": "codex", "harness": "codex", "model": "primary",
+                            "fallback": {"harness": "codex", "model": "another-model"}});
+        let choices = vec![json!({"runtime": "codex", "model": "another-model"}),
+                           json!({"runtime": "claude", "model": "claude-test"})];
+        let shared = crate::profiles::Profile::new("shared", "/synthetic/shared", true);
+        let own = crate::profiles::Profile::new("login-a", "/synthetic/login-a", false);
+        for profile in [None, Some(&shared), Some(&own)] {
+            let filtered = limited_config(&config, profile);
+            assert!(configured(&filtered).is_none());
+            assert_eq!(default_choice(&filtered, &choices, &crate::env::Env::new(), |_| true).unwrap().runtime, "claude");
+            assert!(default_choice(&filtered, &choices[..1], &crate::env::Env::new(), |_| true).is_none());
+        }
+        // Other providers, a deliberate off setting, and per-bot key harnesses keep their existing policy.
+        for fallback in [json!({"harness": "claude", "model": "claude-test"}), json!({"off": true})] {
+            let mut other = config.clone();
+            other["fallback"] = fallback;
+            assert_eq!(limited_config(&other, None), other);
+        }
+        let keyed = json!({"runtime": "pi", "harness": "pi", "model": "own-key-model",
+                           "fallback": {"harness": "pi", "model": "tico-mid-1.0"}});
+        assert_eq!(limited_config(&keyed, None), keyed);
     }
 
     #[test]

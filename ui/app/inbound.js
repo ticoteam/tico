@@ -226,6 +226,7 @@ async function inboundMount() {
   try { await refreshInboxes(); await messages(); } catch(error) { failure(error); }
   INBOUND_TIMER=setInterval(()=>{
     if (!active()) { clearInterval(INBOUND_TIMER);return; }
+    if (document.hidden) return;
     void refreshInboxes().then(messages).catch(failure);
   },15000);
 }

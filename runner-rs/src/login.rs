@@ -251,11 +251,7 @@ impl Session {
 }
 
 fn profile_for(config: &Config, name: &str) -> Option<crate::profiles::Profile> {
-    if name.is_empty() {
-        crate::profiles::select(&config.data, None, None)
-    } else {
-        crate::profiles::select(&config.data, None, Some(name))
-    }
+    crate::profiles::select(&config.data, Some(name))
 }
 
 // Login and its verdict must use the same user as runtime readiness and bot turns, as well as the same home.
@@ -305,10 +301,13 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         "command" => {
             let (ok, out) = run(&args, timeout)?;
             let out = out.to_lowercase();
-            if ok && out.contains(&status.ready) && (status.not_ready.is_empty() || !out.contains(&status.not_ready)) {
+            if !status.not_ready.is_empty() && out.contains(&status.not_ready) {
+                // Some CLIs use a nonzero exit for their explicit signed-out answer.
+                Some((false, String::new()))
+            } else if ok && out.contains(&status.ready) {
                 Some((true, if out.contains("api key") { "Signed in with an API key".into() } else { status.ready_detail }))
             } else {
-                Some((false, String::new()))
+                None
             }
         }
         "json" => {
@@ -322,7 +321,7 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
             Some((true, if method.is_empty() { status.ready_detail } else { format!("Signed in with {method}") }))
         }
         // No status command: the login file in this sign-in's config folder is the sign-in, as readiness checks it.
-        "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { status.ready_detail } else { String::new() })),
+        "file" => crate::hosts::file_signed_in(runtime, env).map(|on| (on, if on { crate::hosts::file_sign_in_detail(runtime, env).map(String::from).unwrap_or(status.ready_detail) } else { String::new() })),
         _ => None,
     }
 }
@@ -402,6 +401,12 @@ fn login_env(runtime: &str, config: &Config, profile_name: &str) -> Result<(Stri
         Some(p) => p.environment(runtime, &process),
         None => process,
     };
+    crate::hosts::prepare_login_home(runtime, &env);
+    if profile.as_ref().is_some_and(|p| !p.share_operator) {
+        for key in crate::harness_tools::api_key_env(runtime) {
+            env.remove(&key);
+        }
+    }
     if crate::harness_tools::caps(runtime, "").own_config_home {
         // Bot turns read this host's login from Tico's own config folder, never the operator's.
         crate::hosts::use_own_config_home(runtime, profile.as_ref(), &mut env);
@@ -442,6 +447,10 @@ fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
 /// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_files`.
 fn begin_switch(runtime: &str, id: &str, env: &Env) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let login = crate::harness_tools::login_command(runtime).ok_or("Switching accounts is not available")?;
+    let caps = crate::harness_tools::caps(runtime, "");
+    if caps.profile_home_overrides.iter().any(|k| env.get(k).is_some_and(|v| !v.is_empty())) {
+        return Err("Switching accounts with a custom login folder is not available; sign out and sign in instead".into());
+    }
     let home = login_home(runtime, env).ok_or("Switching accounts is not available for this runtime")?;
     let side = home.join(format!(".tico-switch-{}", id.chars().filter(|c| c.is_ascii_alphanumeric()).take(32).collect::<String>()));
     let (home_s, side_s) = (home.display().to_string(), side.display().to_string());
@@ -491,15 +500,19 @@ fn adopt_files(files: &[String], home: &std::path::Path, side: &std::path::Path,
         }
         let to = home.join(rel);
         let step = (|| -> Result<(), String> {
-            if std::fs::symlink_metadata(&to).is_ok() {
+            let had_old = std::fs::symlink_metadata(&to).is_ok();
+            if had_old {
                 let kept = old.join(rel);
                 mkdir_for(&kept)?;
                 file_command(&["mv", "-f", &to.display().to_string(), &kept.display().to_string()], env)?;
                 moved.push(Moved { to: to.clone(), kept: Some(kept) });
-            } else {
-                moved.push(Moved { to: to.clone(), kept: None });
             }
             mkdir_for(&to)?;
+            // A failed mkdir has not installed anything to undo. In particular, BSD rm -f reports ENOTDIR
+            // for a missing file under a plain file, so recording it early would falsely fail the rollback.
+            if !had_old {
+                moved.push(Moved { to: to.clone(), kept: None });
+            }
             file_command(&["mv", "-f", &from.display().to_string(), &to.display().to_string()], env)
         })();
         if let Err(e) = step {
@@ -775,7 +788,7 @@ fn log_out(exe: &str, logout: &[String], env: &Env) {
 }
 
 /// Sign `runtime` out: the computer's own login is marked signed out first (so no key signs it straight back in),
-/// then the CLI's own logout runs and the sign-in is checked again. A logout that did not take leaves it as it was.
+/// then the CLI's own logout runs and the sign-in is checked again. Only a confirmed existing login clears the mark.
 fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |msg: &str| s.finish("failed", msg, &runner, &default);
@@ -800,11 +813,15 @@ fn run_sign_out(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
         }
     }
     log_out(&exe, &logout, &env);
-    if signed_in(&s.runtime, &exe, &env, false).0 {
-        if own {
-            let _ = runner.sign_in.unmark_signed_out(&s.runtime);
+    match sign_in_status(&s.runtime, &exe, &env) {
+        None => return fail(&format!("The logout finished but could not confirm whether {} signed out", s.runtime)),
+        Some((true, _)) => {
+            if own {
+                let _ = runner.sign_in.unmark_signed_out(&s.runtime);
+            }
+            return fail(&format!("The logout finished but {} is still signed in", s.runtime));
         }
-        return fail(&format!("The logout finished but {} is still signed in", s.runtime));
+        Some((false, _)) => {},
     }
     let account = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
     crate::accounts::forget(&account, &s.runtime);
@@ -1234,8 +1251,10 @@ fn run_remove(s: Arc<Session>, runner: Arc<Runner>, config: Config) {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        if signed_in(&s.runtime, &exe, &env, false).0 {
-            return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile));
+        match sign_in_status(&s.runtime, &exe, &env) {
+            None => return fail(&format!("The logout finished but could not confirm whether {} signed out on {}", s.runtime, s.profile)),
+            Some((true, _)) => return fail(&format!("The logout finished but {} is still signed in on {}", s.runtime, s.profile)),
+            Some((false, _)) => {},
         }
     }
     crate::accounts::forget(&profile.name, &s.runtime);
@@ -1291,12 +1310,15 @@ impl Logins {
     fn begin(&mut self, runner: &Arc<Runner>, work: &Value) {
         let s = Session::new(work);
         // Read again: a profile `profile add` (or a sign-in) made since start is in the file, not in memory.
-        let mut config = runner.config_now();
+        let config = runner.config_now();
         let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         // A key job runs for a runtime with no browser sign-in too, and only on the computer's own login.
         let key_job = ["clear_key", "use_key", "to_key"].contains(&s.kind.as_str());
-        if key_job && !s.profile.is_empty() {
+        if !s.profile.is_empty() && ["sign_in", "switch", "to_subscription"].contains(&s.kind.as_str()) {
+            // One login per tool per computer, used by all its bots: no named subscription signs in any more.
+            s.finish("failed", "Each computer has one login per AI tool; sign in the computer's login, or add another runner for a different account", runner, &default);
+        } else if key_job && !s.profile.is_empty() {
             s.finish("failed", &format!("Subscription {} holds no key of this computer's; only its own login has one", s.profile), runner, &default);
         } else if key_job && crate::signin::headless_names(&s.runtime).is_empty() {
             s.finish("failed", &format!("This computer does not hold a key for {}", s.runtime), runner, &default);
@@ -1326,8 +1348,6 @@ impl Logins {
         } else if named.as_ref().is_some_and(|p| p.share_operator) && !crate::harness_tools::caps(&s.runtime, "").own_config_home {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish("failed", &format!("Profile {} shares the operator's own logins; sign in normally", s.profile), runner, &default);
-        } else if s.kind == "to_subscription" && !s.profile.is_empty() {
-            s.finish("failed", "Switch to subscription is for the computer's own login", runner, &default);
         } else if (s.kind == "switch" || s.kind == "to_subscription")
             && crate::harness_tools::login_command(&s.runtime).is_some_and(|l| l.keychain.iter().any(|p| p == crate::runner::platform()))
         {
@@ -1351,16 +1371,6 @@ impl Logins {
             let (s2, r2) = (s.clone(), runner.clone());
             std::thread::spawn(move || run_sign_out(s2, r2, config));
         } else {
-            if !s.profile.is_empty() && named.is_none() {
-                if let Err(e) = crate::profiles::add_profile(&config, &s.profile) {
-                    s.finish("failed", &format!("Could not create subscription profile: {e}"), runner, &default);
-                    self.sessions.insert(s.id.clone(), s);
-                    return;
-                }
-                config = runner.config_now();
-                // Listed at the next heartbeat as not signed in; a failed or abandoned sign-in leaves it so, never hidden.
-                runner.events.ask(&["heartbeat"]);
-            }
             let (s2, r2, lifetime) = (s.clone(), runner.clone(), self.lifetime);
             std::thread::spawn(move || run_session(s2, r2, config, lifetime));
         }
@@ -1548,10 +1558,10 @@ case "$1 $2" in
   "login status")
     case "$home" in
       *tico-switch-*) if [ -f "$HOME/hold-probe" ]; then : > "$HOME/probing"; n=0; while [ ! -f "$HOME/release" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n+1)); done; fi ;;
-      *) if [ -f "$HOME/refuse" ]; then echo "Not signed in"; exit 1; fi ;;
+      *) if [ -f "$HOME/refuse" ]; then echo "Not logged in"; exit 1; fi ;;
     esac
     if grep -q '^apikey' "$home/auth.json" 2>/dev/null; then echo "Logged in using an API key - sk-***"; exit 0; fi
-    if [ -f "$home/auth.json" ]; then echo "Logged in using ChatGPT"; exit 0; fi; echo "Not signed in"; exit 1 ;;
+    if [ -f "$home/auth.json" ]; then echo "Logged in using ChatGPT"; exit 0; fi; echo "Not logged in"; exit 1 ;;
   "logout ") [ -f "$HOME/stuck" ] || rm -f "$home/auth.json"; exit 0 ;;
   "login --with-api-key")
     read key
@@ -2259,6 +2269,20 @@ exit 2
         std::fs::write(root.join(".claude.json"), settings).unwrap();
         sign.mark_key_off("claude").unwrap();
         let claude_key = r#"{"credentials":[{"env":"ANTHROPIC_API_KEY","value":"sk-ant-key-0123456789","source":"computer"}]}"#;
+        if crate::harness_tools::login_command("claude").unwrap().keychain.iter().any(|p| p == crate::runner::platform()) {
+            // A file fixture cannot stand in for a reversible Keychain logout. This platform must refuse before
+            // touching either account; the file-backed platforms exercise the transactional path below.
+            let before = std::fs::read_to_string(&runs).unwrap_or_default();
+            let result = to_key("claude", claude_key, None);
+            assert_eq!(result, ("failed".into(), "Switching to an API key isn't available for claude on this computer: sign out, then add a key".into()));
+            assert_eq!(std::fs::read_to_string(&creds).unwrap(), subscription);
+            assert_eq!(std::fs::read_to_string(root.join(".claude.json")).unwrap(), settings);
+            assert!(sign.key_off("claude") && sign.headless_secret("claude").is_none());
+            assert_eq!(read_env(&computer), [("OPENAI_API_KEY".into(), "sk-key-0123456789".into())].into_iter().collect());
+            assert_eq!(std::fs::read_to_string(&runs).unwrap_or_default(), before, "no CLI runs at this boundary");
+            assert!(no_side() && std::fs::read_dir(&root).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".tico-switch-")));
+            return;
+        }
         let flag = |name: &str, on: bool| if on { std::fs::write(root.join(name), "").unwrap() } else { std::fs::remove_file(root.join(name)).unwrap() };
         let claude_side = || std::fs::read_dir(&root).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-switch-"));
         let still_subscription = |why: &str| {
@@ -2339,6 +2363,16 @@ exit 2
         assert!(!creds.exists() && !sign.key_off("claude") && !claude_side());
         assert_eq!(sign.headless_secret("claude"), Some(("ANTHROPIC_API_KEY".into(), "sk-ant-key-0123456789".into())), "the next turn's key");
         assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-key-0123456789");
+        // An uncertain logout keeps the explicit block on saved keys; sign-out retains a computer-owned key on disk.
+        std::fs::write(&creds, subscription).unwrap();
+        flag("break-after", true);
+        let out = Session::new(&json!({"id": "lunknown", "runtime": "claude", "kind": "sign_out"}));
+        run_sign_out(out.clone(), runner.clone(), config.clone());
+        assert_eq!(state(&out), ("failed".into(), "The logout finished but could not confirm whether claude signed out".into()));
+        assert!(sign.signed_out("claude") && sign.headless_secret("claude").is_none());
+        assert!(!creds.exists());
+        assert_eq!(read_env(&computer)["ANTHROPIC_API_KEY"], "sk-ant-key-0123456789", "sign-out blocks, but does not clear, a computer-owned key");
+        assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-key-0123456789");
     }
 
     #[test]
@@ -2405,8 +2439,9 @@ exit 2
         let mut logins = Logins::default();
         let held = Session::new(&json!({"id": "lheld", "runtime": "codex", "kind": "remove", "profile": "work"}));
         logins.sessions.insert(held.id.clone(), held);
+        // A named subscription never signs in any more: one login per tool per computer.
         logins.begin(&runner, &json!({"id": "lin", "runtime": "claude", "kind": "sign_in", "profile": "work"}));
-        assert_eq!(state(&logins.sessions["lin"]), ("failed".into(), "Something else is running on work; try again when it ends".into()));
+        assert!(state(&logins.sessions["lin"]).1.starts_with("Each computer has one login per AI tool"));
         assert!(claude.exists() && listed());
 
         // Every other tool surely signed out: the subscription leaves runner.json and its folder goes.
@@ -2417,13 +2452,521 @@ exit 2
     }
 
     #[test]
+    fn muse_sign_out_and_switch_preserve_each_logins_files() {
+        const CHILD: &str = "TICO_TEST_MUSE_SWITCH";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            // A separate process keeps every home, credential and stand-in CLI isolated from the runner and other tests.
+            let root = std::env::temp_dir().join(format!("tico-muse-switch-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::write(root.join("bin/muse"), r#"#!/bin/sh
+home="$XDG_CONFIG_HOME/muse"
+if [ "$TBH_CREDENTIAL_BACKEND" != file ]; then
+  # As on macOS by default: the token goes to a Keychain item outside the config folder (here one item, the worst case).
+  case "$1" in
+    login) mkdir -p "$home"; echo "$XDG_CONFIG_HOME" > "$HOME/keychain"
+      printf '%s\n' '{"schema_version":2,"providers":{"meta":{"storage":"keychain"}}}' > "$home/auth.json" ;;
+    logout) rm -f "$HOME/keychain" ;;
+  esac
+  exit 0
+fi
+case "$1" in
+  logout)
+    if [ -f "$HOME/broken" ]; then echo malformed > "$home/auth.json"
+    else printf '%s\n' '{"schema_version":1,"providers":{}}' > "$home/auth.json"; fi ;;
+  login)
+    mkdir -p "$home"; printf '%s\n' '{"schema_version":1,"providers":{"meta":{"api_key":"new"}}}' > "$home/auth.json"
+    if [ -f "$HOME/hold" ]; then
+      echo ready > "$HOME/started"
+      while [ -f "$HOME/hold" ]; do sleep 0.05; done
+    fi ;;
+  *) exit 2 ;;
+esac
+"#).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.join("bin/muse"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::muse_sign_out_and_switch_preserve_each_logins_files", "--nocapture"])
+                .env_clear().env(CHILD, &root).env("HOME", &root)
+                .env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display()))
+                .env("XDG_CONFIG_HOME", root.join("operator"))
+                .env("MUSE_AUTH_PATH", root.join("operator/auth.json"))
+                .output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && said.contains("1 passed"), "{said}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        crate::hosts::musecode::set_state_dir(&root.join("host-state"));
+        std::fs::create_dir_all(root.join("operator")).unwrap();
+        let operator = root.join("operator/auth.json");
+        std::fs::write(&operator, "operator").unwrap();
+        let keychain = root.join("keychain");
+        std::fs::write(&keychain, "operator").unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "fixture",
+            "projects_dir": root.join("projects")}).to_string()).unwrap();
+        crate::profiles::add_profile(&Config::load(&path).unwrap(), "acme").unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+        let own = crate::hosts::musecode::config_home(None).join("muse/auth.json");
+        let named = root.join("profiles/acme/musecode/muse/auth.json");
+        let old = "{\"schema_version\":1,\"providers\":{\"meta\":{\"api_key\":\"old\"}}}\n";
+        let new = "{\"schema_version\":1,\"providers\":{\"meta\":{\"api_key\":\"new\"}}}\n";
+        for auth in [&own, &named] {
+            std::fs::create_dir_all(auth.parent().unwrap()).unwrap();
+            std::fs::write(auth, old).unwrap();
+        }
+        for (profile, auth, other) in [("", &own, &named), ("acme", &named, &own)] {
+            let session = |kind: &str| Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()),
+                "runtime": "musecode", "kind": kind, "profile": profile}));
+            let untouched = std::fs::read(other).unwrap();
+            // An unreadable verdict is not confirmation of sign-out.
+            std::fs::write(root.join("broken"), "").unwrap();
+            let broken = session("sign_out");
+            run_sign_out(broken.clone(), runner.clone(), config.clone());
+            // The credential boundary first: a logout from Tico's folder never reaches the item outside it.
+            assert_eq!(std::fs::read_to_string(&keychain).ok().as_deref(), Some("operator"), "a Tico logout reached the Keychain");
+            assert_eq!(state(&broken).0, "failed", "{:?}", state(&broken));
+            assert!(state(&broken).1.contains("could not confirm"));
+            assert_eq!(runner.sign_in.signed_out("musecode"), profile.is_empty());
+            std::fs::remove_file(root.join("broken")).unwrap();
+            std::fs::write(auth, old).unwrap();
+            let out = session("sign_out");
+            run_sign_out(out.clone(), runner.clone(), config.clone());
+            assert_eq!(state(&out).0, "signed_out", "{:?}", state(&out));
+            assert!(auth.exists(), "Muse logout keeps an empty credential store");
+            let (exe, env, _) = login_env("musecode", &config, profile).unwrap();
+            assert_eq!(sign_in_status("musecode", &exe, &env).unwrap().0, false);
+            assert_eq!(std::fs::read(other).unwrap(), untouched);
+
+            // A cancelled sign-in has already written a new file on the side; the old file must stay in use.
+            std::fs::write(auth, old).unwrap();
+            std::fs::write(root.join("hold"), "").unwrap();
+            let cancelled = session("switch");
+            let (s, r, c) = (cancelled.clone(), runner.clone(), config.clone());
+            let running = std::thread::spawn(move || run_session(s, r, c, Duration::from_secs(20)));
+            wait_for(|| root.join("started").exists());
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
+            cancelled.cancelled.store(true, Ordering::SeqCst);
+            running.join().unwrap();
+            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
+            std::fs::remove_file(root.join("hold")).unwrap();
+            std::fs::remove_file(root.join("started")).unwrap();
+
+            // A completed login moves into place only after the server confirms the switch.
+            let switched = session("switch");
+            answer_finishing(&switched, true);
+            run_session(switched.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+            assert_eq!(state(&switched).0, "signed_in", "{:?}", state(&switched));
+            assert_eq!(std::fs::read_to_string(auth).unwrap(), new);
+            assert_eq!(std::fs::read(other).unwrap(), untouched);
+            assert_eq!(std::fs::read_to_string(&operator).unwrap(), "operator");
+            let home = auth.parent().unwrap().parent().unwrap();
+            assert!(!std::fs::read_dir(home).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-switch-")));
+        }
+        // Remove needs an explicit signed-out result before deleting a Tico-made subscription folder.
+        let folder = root.join("profiles/acme");
+        let listed = || Config::load(&path).unwrap().data["profiles"].get("acme").is_some();
+        let untouched = std::fs::read(&own).unwrap();
+        let remove = || {
+            let s = Session::new(&json!({"id": format!("l{}", uuid::Uuid::new_v4().simple()),
+                "runtime": "musecode", "kind": "remove", "profile": "acme"}));
+            answer_finishing(&s, true);
+            run_remove(s.clone(), runner.clone(), Config::load(&path).unwrap());
+            state(&s)
+        };
+        std::fs::write(root.join("broken"), "").unwrap();
+        let broken = remove();
+        assert_eq!(broken.0, "failed", "malformed logout must keep the subscription: {broken:?}");
+        assert!(listed() && folder.is_dir() && named.is_file(), "unknown sign-out deleted the subscription");
+        assert_eq!(std::fs::read_to_string(&named).unwrap(), "malformed\n");
+        std::fs::remove_file(root.join("broken")).unwrap();
+        std::fs::write(&named, old).unwrap();
+        assert_eq!(remove(), ("done".into(), "Removed acme".into()));
+        assert!(!listed() && !folder.exists(), "confirmed sign-out must remove the subscription and folder");
+        assert_eq!(std::fs::read(&own).unwrap(), untouched);
+        assert_eq!(std::fs::read_to_string(&operator).unwrap(), "operator");
+        assert_eq!(std::fs::read_to_string(&keychain).unwrap(), "operator", "a Tico login reached the shared Keychain");
+    }
+
+    /// Run only on a disposable Linux box: no provider connection or real credential is used.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a disposable Linux two-user environment"]
+    fn isolated_grok_computer_login_repairs_supervisor_owned_store() {
+        use std::os::unix::fs::{chown, MetadataExt, PermissionsExt};
+        const CHILD: &str = "TICO_TEST_GROK_PERMISSIONS";
+        assert_eq!(unsafe { libc::geteuid() }, 0, "disposable supervisor fixture");
+        assert!(std::env::var_os("TICO_TEST_DISPOSABLE").is_some());
+        assert_eq!(crate::isolation::identity(), Some((10003, 10002)));
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            let root = std::env::temp_dir().join(format!("tico-grok-permissions-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::util::write_script(&root.join("bin/grok"), r#"#!/usr/bin/python3
+import json, os, pathlib, sys
+if sys.argv[1:] == ['--version']:
+    print('1.0.70')
+    sys.exit(0)
+def session(name):
+    store = pathlib.Path(os.environ['HOME']) / '.grok/sessions'
+    store.mkdir(parents=True, exist_ok=True)
+    (store / (name + '.json')).write_text('{}')
+if sys.argv[1:] == ['session']:
+    session('synthetic')
+    sys.exit(0)
+if sys.argv[1:2] == ['agent']:
+    for line in sys.stdin:
+        request = json.loads(line)
+        try:
+            if request['method'] == 'initialize':
+                result = {'protocolVersion': 1}
+            else:
+                session(request['method'].split('/')[1])
+                result = {'sessionId': str(os.getpid())}
+            reply = {'result': result}
+        except PermissionError:
+            reply = {'error': {'message': 'Failed to save credentials: Permission denied (os error 13)'}}
+        print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], **reply}), flush=True)
+    sys.exit(0)
+if sys.argv[1:] not in (['login', '--device-auth'], ['refresh']):
+    sys.exit(2)
+print('Open https://login.example/device\nEnter code ABCD-1234', flush=True)
+try:
+    store = pathlib.Path(os.environ['HOME']) / '.grok/auth.json'
+    store.write_text(json.dumps({'https://accounts.x.ai/sign-in': {'auth_mode': 'oidc', 'key': 'synthetic'}}))
+    store.chmod(0o600)
+except PermissionError:
+    print('Error: Failed to save credentials: Permission denied (os error 13)', file=sys.stderr)
+    sys.exit(1)
+"#);
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "login::tests::isolated_grok_computer_login_repairs_supervisor_owned_store", "--ignored", "--nocapture"])
+                .env(CHILD, &root).env("HOME", &root).env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display()))
+                .env_remove("GROK_HOME").env_remove("GROK_AUTH_PATH").env_remove("XAI_API_KEY")
+                .output().unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let home = root.join(".grok");
+        let auth = home.join("auth.json");
+        // An existing 0755 folder (the incident), a private old store, and both entry points:
+        // startup repairs an existing login; login_env repairs a folder created after startup.
+        for (mode, existing, startup) in [(0o755, false, false), (0o700, true, false), (0o755, true, true)] {
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(mode)).unwrap();
+            chown(&home, Some(10002), Some(10002)).unwrap();
+            let old = b"synthetic old store";
+            let inode = if existing {
+                std::fs::write(&auth, old).unwrap();
+                std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o600)).unwrap();
+                chown(&auth, Some(10002), Some(10002)).unwrap();
+                Some(auth.metadata().unwrap().ino())
+            } else { None };
+            let env: Env = std::env::vars().collect();
+            let before = model_command(root.join("bin/grok").to_str().unwrap(), &["login", "--device-auth"], &env).output().unwrap();
+            assert!(!before.status.success());
+            assert!(String::from_utf8_lossy(&before.stderr).contains("Failed to save credentials: Permission denied (os error 13)"));
+            if startup { crate::hosts::grok::hand_login_to_bot(); }
+            let (exe, env, profile) = login_env("grok", &config, "").unwrap();
+            assert!(profile.is_none());
+            assert_eq!(home.metadata().unwrap().uid(), 10003);
+            assert_eq!(home.metadata().unwrap().mode() & 0o777, mode, "no permission broadening");
+            if let Some(inode) = inode {
+                assert_eq!(auth.metadata().unwrap().ino(), inode, "handoff keeps the original file");
+                assert_eq!(std::fs::read(&auth).unwrap(), old);
+                assert_eq!((auth.metadata().unwrap().uid(), auth.metadata().unwrap().mode() & 0o777), (10003, 0o600));
+            }
+            let runner = Arc::new(Runner::new(config.clone(), client.clone(), crate::state::State::open(&root.join("state")).unwrap()));
+            let login = Session::new(&json!({"id": uuid::Uuid::new_v4().simple().to_string(), "runtime": "grok"}));
+            run_session(login.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
+            assert_eq!(state(&login).0, "signed_in", "{:?}", state(&login));
+            assert_eq!(auth.metadata().unwrap().uid(), 10003);
+            // The same account can refresh in place, and readiness reads that same store.
+            assert!(model_command(&exe, &["refresh"], &env).status().unwrap().success());
+            assert_eq!(sign_in_status("grok", &exe, &env).unwrap().0, true);
+            let ready = rt.block_on(crate::readiness::runtime_readiness("grok", &runner.sign_in, &runner.client, &[], None));
+            assert_eq!(ready["authenticated"], "ready");
+            assert!(!root.join("projects/bots").exists(), "no copied bot login");
+            std::fs::remove_dir_all(&home).unwrap();
+        }
+        // An API-key turn still writes sessions, without passing through the interactive login path.
+        std::fs::create_dir(&home).unwrap();
+        chown(&home, Some(10002), Some(10002)).unwrap();
+        let mut env: Env = std::env::vars().collect();
+        env.insert("XAI_API_KEY".into(), "synthetic".into());
+        let exe = root.join("bin/grok").display().to_string();
+        assert!(!model_command(&exe, &["session"], &env).output().unwrap().status.success());
+        rt.block_on(async {
+            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = crate::hosts::grok::GrokHost::new("acme", &exe, tx);
+            let settings = crate::hosts::Settings { env: env.clone(), cwd: root.display().to_string(), ..Default::default() };
+            // Launch the actual host path with an API key, without interactive login.
+            let thread = host.start_thread("acme", &settings).await.unwrap();
+            assert!(host.alive());
+            assert_eq!(home.join("sessions/new.json").metadata().unwrap().uid(), 10003);
+            // Recreate the incident after the process is already running. Both new and resumed
+            // threads must repair the store without restarting that process (session id = pid).
+            for resume in [false, true] {
+                std::fs::remove_dir_all(&home).unwrap();
+                std::fs::create_dir(&home).unwrap();
+                chown(&home, Some(10002), Some(10002)).unwrap();
+                assert!(!model_command(&exe, &["session"], &env).output().unwrap().status.success());
+                let result = if resume { host.resume_thread(&thread, &settings).await } else { host.start_thread("acme", &settings).await };
+                assert_eq!(result.unwrap(), thread, "the running agent must be reused");
+                assert_eq!(home.metadata().unwrap().uid(), 10003);
+                let file = if resume { "load.json" } else { "new.json" };
+                assert_eq!(home.join("sessions").join(file).metadata().unwrap().uid(), 10003);
+            }
+            host.stop().await;
+        });
+        std::fs::remove_dir_all(&home).unwrap();
+
+        // A named subscription hands over only its profile home; a shared profile uses the operator home.
+        std::fs::create_dir(&home).unwrap();
+        chown(&home, Some(10002), Some(10002)).unwrap();
+        let profiles = root.join("profiles");
+        let named_home = profiles.join("acme/grok");
+        std::fs::create_dir_all(named_home.join(".grok")).unwrap();
+        std::fs::write(named_home.join(".grok/auth.json"), "synthetic old named store").unwrap();
+        chown(named_home.join(".grok"), Some(10002), Some(10002)).unwrap();
+        let mut named_config = config.clone();
+        named_config.data.insert("profiles".into(), json!({"acme": {"dir": profiles.join("acme")},
+            "shared": {"dir": profiles.join("shared"), "share_operator": true}}));
+        let (_, named_env, _) = login_env("grok", &named_config, "acme").unwrap();
+        assert_eq!(named_env["HOME"], named_home.display().to_string());
+        assert_eq!(home.metadata().unwrap().uid(), 10002, "named login must not hand over the operator store");
+        assert_eq!(named_home.join(".grok").metadata().unwrap().uid(), 10003);
+        assert!(model_command(&exe, &["login", "--device-auth"], &named_env).status().unwrap().success());
+        assert!(std::fs::read_to_string(named_home.join(".grok/auth.json")).unwrap().contains("synthetic"));
+        named_config.data.insert("default_profile".into(), json!("acme"));
+        let (_, default_env, _) = login_env("grok", &named_config, "").unwrap();
+        assert_eq!(default_env["HOME"], named_env["HOME"]);
+        crate::hosts::grok::prepare_home(&named_env);
+        assert_eq!(home.metadata().unwrap().uid(), 10002, "profile turns must leave the operator store alone");
+        let (_, shared_env, _) = login_env("grok", &named_config, "shared").unwrap();
+        assert_eq!(shared_env["HOME"], root.display().to_string());
+        assert_eq!(home.metadata().unwrap().uid(), 10003);
+        std::fs::remove_dir_all(&home).unwrap();
+
+        // Ownership repair never traverses a link to unrelated supervisor state or a foreign hardlink.
+        let outside = root.join("private");
+        std::fs::create_dir(&outside).unwrap();
+        let control = outside.join("control.json");
+        std::fs::write(&control, "synthetic supervisor state").unwrap();
+        std::fs::set_permissions(&control, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut custom_env: Env = std::env::vars().collect();
+        custom_env.insert("GROK_HOME".into(), outside.display().to_string());
+        custom_env.insert("GROK_AUTH_PATH".into(), control.display().to_string());
+        crate::hosts::prepare_login_home("grok", &custom_env);
+        assert_eq!(outside.metadata().unwrap().uid(), 0, "overrides never redirect the privileged handoff");
+        assert_eq!(control.metadata().unwrap().uid(), 0);
+        std::os::unix::fs::symlink(&outside, &home).unwrap();
+        crate::hosts::grok::hand_login_to_bot();
+        assert_eq!(outside.metadata().unwrap().uid(), 0);
+        assert_eq!(control.metadata().unwrap().uid(), 0);
+        std::fs::remove_file(&home).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        std::os::unix::fs::symlink(&outside, home.join("linked-directory")).unwrap();
+        std::os::unix::fs::symlink(&control, home.join("linked-file")).unwrap();
+        crate::hosts::grok::hand_login_to_bot();
+        assert_eq!(outside.metadata().unwrap().uid(), 0, "links inside the store must not be traversed");
+        assert_eq!(control.metadata().unwrap().uid(), 0);
+        std::fs::hard_link(&control, &auth).unwrap();
+        crate::hosts::grok::hand_login_to_bot();
+        assert_eq!(control.metadata().unwrap().uid(), 0);
+        assert_eq!(control.metadata().unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn grok_computer_login_controls_stay_in_default_home() {
+        subscription_account_controls("grok", ".grok/auth.json", "login::tests::grok_computer_login_controls_stay_in_default_home");
+    }
+
+    #[test]
+    fn cursor_computer_login_controls_stay_in_default_home() {
+        let file = if cfg!(target_os = "macos") { ".cursor/auth.json" } else { ".config/cursor/auth.json" };
+        subscription_account_controls("cursor", file, "login::tests::cursor_computer_login_controls_stay_in_default_home");
+    }
+
+    fn subscription_account_controls(runtime: &str, file: &str, test: &str) {
+        const CHILD: &str = "TICO_TEST_SUBSCRIPTION_CONTROLS";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            let root = std::env::temp_dir().join(format!("tico-subscription-controls-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            let exe = crate::harness_tools::executable_for(runtime);
+            crate::util::write_script(&root.join("bin").join(exe), r#"#!/bin/sh
+set -eu
+case "$(basename "$0")" in
+  grok) auth="${GROK_AUTH_PATH:-${GROK_HOME:-$HOME/.grok}/auth.json}"; login='login --device-auth' ;;
+  cursor-agent)
+    test "$AGENT_CLI_CREDENTIAL_STORE" = file
+    test "$NO_OPEN_BROWSER" = 1
+    case "$(uname)" in Darwin) auth="$HOME/.cursor/auth.json" ;; *) auth="${XDG_CONFIG_HOME:-$HOME/.config}/cursor/auth.json" ;; esac
+    login=login ;;
+esac
+case "$*" in
+  "$login")
+    echo 'Open https://login.example/device'; echo 'Enter code ABCD-1234'
+    while test ! -f "$TICO_TEST_SUBSCRIPTION_CONTROLS/continue"; do sleep 0.02; done
+    mkdir -p "$(dirname "$auth")"
+    echo '{"https://accounts.x.ai/sign-in":{"auth_mode":"oidc","key":"new"}}' > "$auth" ;;
+  logout)
+    if test -f "$TICO_TEST_SUBSCRIPTION_CONTROLS/logout-error"; then exit 2; fi
+    if test -f "$TICO_TEST_SUBSCRIPTION_CONTROLS/logout-corrupt"; then echo '{broken' > "$auth"; else echo '{}' > "$auth"; fi ;;
+  status)
+    if test -f "$TICO_TEST_SUBSCRIPTION_CONTROLS/status-error"; then echo 'Internal service failure' >&2; exit 2; fi
+    if test -f "$auth" && grep -q '"key"' "$auth"; then echo 'Logged in'; else echo 'Not logged in'; exit 1; fi ;;
+  --version) echo 1.0.0 ;;
+  *) exit 2 ;;
+esac
+"#);
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", test, "--nocapture"])
+                .env(CHILD, &root).env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display())).env("HOME", &root)
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV);
+            for key in ["GROK_HOME", "GROK_AUTH_PATH", "XDG_CONFIG_HOME", "CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "XAI_API_KEY", "CURSOR_API_KEY"] {
+                cmd.env_remove(key);
+            }
+            let out = cmd.output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let old = r#"{"https://accounts.x.ai/sign-in":{"auth_mode":"oidc","key":"old"}}"#;
+        let legacy_auth = root.join("legacy-home").join(runtime).join(file);
+        std::fs::create_dir_all(legacy_auth.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_auth, old).unwrap();
+        for use_default in [false, true] {
+            let mut config = Config::load(&path).unwrap();
+            if use_default {
+                config.data.insert("profiles".into(), json!({"computer": {"dir": root.join("default-home")}, "other": {"dir": root.join("per-profile-home")}, "legacy": {"dir": root.join("legacy-home")}}));
+                config.data.insert("default_profile".into(), json!("computer"));
+                config.save().unwrap();
+                // Inherited operator paths and keys cannot answer for the computer's isolated default login.
+                for key in ["GROK_HOME", "GROK_AUTH_PATH", "XDG_CONFIG_HOME", "CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR", "XAI_API_KEY", "CURSOR_API_KEY"] {
+                    std::env::set_var(key, root.join("outside"));
+                }
+            }
+            let runner = Arc::new(Runner::new(config.clone(), client.clone(), crate::state::State::open(&root.join("state")).unwrap()));
+            let home = if use_default { root.join("default-home").join(runtime) } else { root.clone() };
+            let auth = home.join(file);
+            let operator_before = std::fs::read(root.join(file)).ok();
+            let make = |kind: &str| Session::new(&json!({"id": uuid::Uuid::new_v4().simple().to_string(), "runtime": runtime, "kind": kind}));
+            let (exe, env, p) = login_env(runtime, &config, "").unwrap();
+            assert_eq!(sign_in_status(runtime, &exe, &env), Some((false, String::new())));
+            if use_default {
+                let ready = rt.block_on(crate::readiness::runtime_readiness(runtime, &runner.sign_in, &runner.client, &[], p.as_ref()));
+                assert_eq!(ready["authenticated"], "missing", "an inherited operator key is not the default home's login");
+            }
+            std::fs::remove_file(root.join("continue")).ok();
+            let login = make("sign_in");
+            let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+            let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(5)));
+            wait_for(|| {
+                let i = login.inner.lock().unwrap();
+                i.state == "waiting" && !i.url.is_empty() && !i.code.is_empty()
+            });
+            let report = login.report().unwrap();
+            assert_eq!(report["url"], "https://login.example/device");
+            assert_eq!(report["code"], "ABCD-1234");
+            std::fs::write(root.join("continue"), "").unwrap();
+            running.join().unwrap();
+            assert_eq!(state(&login).0, "signed_in", "{:?}", state(&login));
+            assert_eq!(sign_in_status(runtime, &exe, &env).unwrap().0, true);
+            let ready = rt.block_on(crate::readiness::runtime_readiness(runtime, &runner.sign_in, &runner.client, &[], p.as_ref()));
+            assert_eq!(ready["authenticated"], "ready");
+            if use_default {
+                assert_eq!(p.as_ref().unwrap().name, "computer");
+                assert_eq!(std::fs::read(root.join(file)).ok(), operator_before);
+                assert!(!root.join("outside").exists());
+            }
+            std::fs::write(&auth, old).unwrap();
+            std::fs::write(root.join("logout-error"), "").unwrap();
+            std::fs::write(root.join("status-error"), "").unwrap();
+            let failed = make("sign_out");
+            run_sign_out(failed.clone(), runner.clone(), config.clone());
+            assert_eq!(state(&failed).0, "failed");
+            assert_eq!(runner.sign_in.signed_out(runtime), crate::harness_tools::caps(runtime, "").sign_in_status.check == "command", "an unknown verdict must keep automatic key login blocked; a confirmed existing login clears the mark");
+            assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
+            std::fs::remove_file(root.join("logout-error")).unwrap();
+            std::fs::remove_file(root.join("status-error")).unwrap();
+            if crate::harness_tools::caps(runtime, "").sign_in_status.check == "file" {
+                std::fs::write(root.join("logout-corrupt"), "").unwrap();
+                let corrupt = make("sign_out");
+                run_sign_out(corrupt.clone(), runner.clone(), config.clone());
+                assert_eq!(state(&corrupt).0, "failed");
+                assert!(state(&corrupt).1.contains("could not confirm"));
+                assert!(runner.sign_in.signed_out(runtime));
+                assert_eq!(sign_in_status(runtime, &exe, &env), None);
+                std::fs::remove_file(root.join("logout-corrupt")).unwrap();
+                std::fs::write(&auth, r#"{"xai::api_key":{"auth_mode":"api_key","key":"stored-synthetic-key"}}"#).unwrap();
+                assert!(sign_in_status(runtime, &exe, &env).unwrap().0);
+                let ready = rt.block_on(crate::readiness::runtime_readiness(runtime, &runner.sign_in, &runner.client, &[], p.as_ref()));
+                assert_eq!(ready["authenticated"], "ready");
+                assert_eq!(ready["detail"], "Signed in with an API key");
+                std::fs::write(&auth, old).unwrap();
+            }
+            if !use_default {
+                let mut custom = env.clone();
+                for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+                    custom.insert(key, root.join("outside").display().to_string());
+                }
+                assert!(begin_switch(runtime, "custom", &custom).unwrap_err().contains("custom login folder"));
+                assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
+                assert!(!root.join("outside").exists());
+            }
+            let cancelled = make("switch");
+            answer_finishing(&cancelled, false);
+            run_session(cancelled.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
+            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
+            let switch = make("switch");
+            answer_finishing(&switch, true);
+            run_session(switch.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
+            assert_eq!(state(&switch).0, "signed_in", "{:?}", state(&switch));
+            assert!(std::fs::read_to_string(&auth).unwrap().contains("\"new\""));
+            assert!(!std::fs::read_dir(&home).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with(".tico-switch-")));
+            let logout = make("sign_out");
+            run_sign_out(logout.clone(), runner.clone(), config.clone());
+            assert_eq!(state(&logout).0, "signed_out", "{:?}", state(&logout));
+            assert_eq!(sign_in_status(runtime, &exe, &env), Some((false, String::new())));
+            let ready = rt.block_on(crate::readiness::runtime_readiness(runtime, &runner.sign_in, &runner.client, &[], p.as_ref()));
+            assert_eq!(ready["authenticated"], "missing");
+            if use_default {
+                assert_eq!(std::fs::read(root.join(file)).ok(), operator_before);
+            }
+            let mut sessions = Logins::default();
+            sessions.begin(&runner, &json!({"id": "named", "runtime": runtime, "profile": "other", "kind": "sign_in"}));
+            assert!(state(&sessions.sessions["named"]).1.starts_with("Each computer has one login"));
+            assert_eq!(std::fs::read_to_string(&legacy_auth).unwrap(), old);
+            assert!(!root.join("per-profile-home").exists());
+            assert!(!root.join("profiles").exists());
+        }
+    }
+
+    #[test]
     fn a_muse_sign_in_is_its_login_file_not_a_status_command() {
         let dir = std::env::temp_dir().join(format!("muse-signin-{}", uuid::Uuid::new_v4().simple()));
         let env: Env = [("XDG_CONFIG_HOME".to_string(), dir.display().to_string())].into_iter().collect();
         // `muse` has no `auth status`; the executable is never run for it.
         assert!(!signed_in("musecode", "/nonexistent/muse", &env, false).0);
         std::fs::create_dir_all(dir.join("muse")).unwrap();
-        std::fs::write(dir.join("muse").join("auth.json"), "{}").unwrap();
+        std::fs::write(dir.join("muse").join("auth.json"), r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#).unwrap();
         let signed = signed_in("musecode", "/nonexistent/muse", &env, false);
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(signed, (true, "Signed in with a Meta account".into()));

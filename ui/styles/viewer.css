@@ -12,9 +12,13 @@
 .doc-viewer.viewer-media .doc-viewer-head>[data-doc-close]{color:#c3cad3}.doc-viewer.viewer-media .doc-viewer-head>[data-doc-close]:hover{color:#f1f4f7;background:rgba(255,255,255,.12)}.doc-viewer.viewer-media .ghost{border-color:#39424d}
 .doc-viewer.viewer-media .viewer-count{color:#aab4bf}
 .viewer-image,.viewer-video,.viewer-embed{display:flex;align-items:center;justify-content:center;padding:10px!important;min-height:200px}
-.viewer-img{max-width:100%;max-height:calc(92vh - 90px);object-fit:contain;border-radius:6px;cursor:zoom-in;touch-action:pinch-zoom;background:linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 0 0/16px 16px,linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 8px 8px/16px 16px,#fff}
-.viewer-img.zoom{max-width:none;max-height:none;cursor:zoom-out}
-.viewer-image:has(.zoom){display:block;overflow:auto}
+.viewer-img{max-width:100%;max-height:calc(92vh - 90px);object-fit:contain;border-radius:6px;cursor:zoom-in;touch-action:none;user-select:none;-webkit-user-select:none;background:linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 0 0/16px 16px,linear-gradient(45deg,#e7eaec 25%,transparent 25%,transparent 75%,#e7eaec 75%) 8px 8px/16px 16px,#fff}
+/* A picture opens whole: the viewer is a fixed height, the picture centred in it no bigger than its body, and zoomed
+   only by transform (picZoom), so the body never scrolls (Dev 338). */
+@media (min-width:761px){.doc-viewer.viewer-media:has(>.viewer-image){height:92vh}}
+.doc-viewer-body.viewer-image{position:relative;flex:1;min-height:200px;overflow:hidden;touch-action:none}
+.viewer-image .viewer-img{position:absolute;inset:10px;margin:auto;max-width:calc(100% - 20px);max-height:calc(100% - 20px)}
+.viewer-img.zoom{cursor:grab}
 .viewer-video video{max-width:100%;max-height:calc(92vh - 90px);border-radius:6px;background:#000}
 .viewer-audio{padding:28px!important}.viewer-audio audio{width:100%}
 .viewer-pdf{padding:0!important}.viewer-pdf iframe{display:block;width:100%;height:calc(92vh - 60px);border:0;background:#fff}
@@ -79,3 +83,13 @@
 #person-tasks .trow .tags{grid-area:tags}
 #person-tasks .trow .tnum{grid-area:age}
 .person-tasks-done{margin-top:10px}.person-tasks-done>summary{cursor:pointer;font-size:var(--t-base);padding:4px 0}.person-tasks-done>summary .cnt{margin-left:4px}
+
+/* A modal keeps its heading and actions visible while its content scrolls. */
+.tmodal-shell[open],.tmodal-shell>form{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.tmodal-shell>form{max-height:inherit}
+.tmodal-shell :is(.tmodal-head,header){flex:none;display:flex;align-items:center;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.tmodal-shell :is(.tmodal-head,header) h2{min-width:0;margin:0;font-size:var(--t-md);color:var(--ink);overflow-wrap:anywhere}
+.tmodal-shell :is(.tmodal-head,header)>button{flex:none}
+.tmodal-shell :is(.tmodal-head,header)>h2{flex:1}
+.tmodal-shell .tmodal-body{flex:1;min-height:0;max-height:none;overflow:auto;padding:16px}
+.tmodal-shell .tmodal-foot{flex:none;padding:12px 16px;border-top:1px solid var(--line);background:var(--surface)}

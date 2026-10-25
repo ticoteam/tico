@@ -296,7 +296,12 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         return (String::new(), MISSING.into());
     }
     let made: Result<(String, String), Fault> = async {
-        let common = gitrun::git(main, &env, &["rev-parse", "--path-format=absolute", "--git-common-dir"], 15).await?.stdout.trim().to_string();
+        let asked = gitrun::git(main, &env, &["rev-parse", "--path-format=absolute", "--git-common-dir"], 15).await?;
+        if !asked.ok() {
+            // Said as git says it, not taken for shared metadata.
+            return Ok((String::new(), format!("can't read the bot's checkout: {}", git_reason(&asked))));
+        }
+        let common = asked.stdout.trim().to_string();
         if Path::new(&common).canonicalize().ok() != main.join(".git").canonicalize().ok() {
             return Ok((String::new(), "the bot's checkout shares Git metadata outside its own repository; left as it is".into()));
         }
@@ -328,6 +333,8 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
             }
             crate::isolation::chown(parent);
         }
+        // Given its own group before git writes the bot's files into it.
+        crate::checkout_groups::prepare(path.to_path_buf()).await;
         let branch = format!("{BRANCH}{task}");
         let exists = g(main, &env, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")], 15).await?.ok();
         let p = path.display().to_string();
@@ -921,7 +928,7 @@ impl Runner {
         let mut suffix = "";
         if !place.task.is_empty() {
             let session = path_for(&self.config.projects_dir(), &place.bot, &place.task);
-            let (mut tracked, mut problem) = self.task_worktree(place, &session, attempt, env).await;
+            let (mut tracked, mut problem) = self.task_worktree(place, &session, attempt, env).await?;
             if !problem.is_empty() && !place.person && problem != MISSING && problem != NO_UPSTREAM {
                 // In the checkout this turn would hold the bot's chats behind it for the whole turn, so it waits for
                 // its worktree first, holding nothing a chat needs.
@@ -929,7 +936,9 @@ impl Runner {
                 place.checkout = None;
                 let until = Instant::now() + Duration::from_secs(WORKTREE_WAIT_S);
                 while !problem.is_empty() && Instant::now() < until {
-                    if !pause(Duration::from_secs(WORKTREE_RETRY_S), lost).await {
+                    let aid = text_of(&attempt["id"]);
+                    let waited = self.during_drain(&aid, async { Ok(pause(Duration::from_secs(WORKTREE_RETRY_S), lost).await) }).await;
+                    if !waited.map_err(|e| e.text)? {
                         break;
                     }
                     if crate::product_files::unpushed(&place.bot) {
@@ -941,14 +950,16 @@ impl Runner {
                             }
                         }
                     }
-                    (tracked, problem) = self.task_worktree(place, &session, attempt, env).await;
+                    (tracked, problem) = self.task_worktree(place, &session, attempt, env).await?;
                 }
             }
             if !problem.is_empty() {
                 // Without a worktree of its own the task's turn waits for the main checkout like any other.
                 crate::util::diagnostic(&format!("Tico runner: {}: task {} runs in the bot's checkout ({problem})", place.bot, place.task));
                 if place.checkout.is_none() {
-                    place.checkout = Some(self.lanes.hold_checkout(&place.bot, place.person, lost).await?);
+                    place.checkout = Some(self.during_drain(&text_of(&attempt["id"]), async {
+                        self.lanes.hold_checkout(&place.bot, place.person, lost).await.map_err(crate::execute::Fail::runtime)
+                    }).await.map_err(|e| e.text)?);
                     self.refresh_checkout(place, attempt, env).await;
                 }
             } else {
@@ -969,18 +980,21 @@ impl Runner {
         Ok(suffix)
     }
 
-    /// Add or reuse the task's worktree under the checkout's git lock and rebase it onto its upstream.
-    async fn task_worktree(&self, place: &Place, session: &Path, attempt: &mut Value, env: &Env) -> (String, String) {
+    /// Add or reuse the task's worktree under the checkout's git lock and rebase it onto its upstream. Err only when
+    /// a drain hands the claim back while it waits for the lock: that is no worktree problem to wait out.
+    async fn task_worktree(&self, place: &Place, session: &Path, attempt: &mut Value, env: &Env) -> Result<(String, String), String> {
         if crate::product_files::unpushed(&place.bot) {
             // The worktree would sync from an upstream without the refreshed product files.
-            return (String::new(), "its refreshed product files are not pushed yet".into());
+            return Ok((String::new(), "its refreshed product files are not pushed yet".into()));
         }
-        let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
+        let _git = self.during_drain(&text_of(&attempt["id"]), async {
+            Ok(self.lanes.git_lock(&place.main_path).lock_owned().await)
+        }).await.map_err(|e| e.text)?;
         let (tracked, problem) = ensure(&place.main_path, session, &place.task, env).await;
         if problem.is_empty() {
             attempt["branch_sync_problem"] = json!(sync_shared(session, env).await);
         }
-        (tracked, problem)
+        Ok((tracked, problem))
     }
 
     /// Whether the task a turn's session is keyed on is finished, read with the turn's own token.

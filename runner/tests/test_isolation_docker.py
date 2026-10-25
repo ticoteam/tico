@@ -12,8 +12,11 @@ update: it must still read its registration and state and run a harness, and `bo
 """
 import json
 import os
+import platform
 import shutil
 import subprocess
+import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -43,6 +46,23 @@ def volume():
 
 
 CAPS = [a for cap in ("CHOWN", "DAC_OVERRIDE", "KILL", "SETGID", "SETUID") for a in ("--cap-add", cap)]
+
+
+def probe_binary():
+    """The runner's Linux test executable, built from this checkout to run inside the candidate image."""
+    if platform.system() != "Linux":
+        pytest.skip("Building the turn-user probe needs Linux; set TICO_RUNNER_TEST_BINARY to a Linux test executable")
+    if not shutil.which("cargo"):
+        pytest.fail("cargo is required to build the Gateway turn-user probe for the candidate image")
+    root = Path(__file__).resolve().parents[2]
+    built = subprocess.run(["cargo", "test", "--locked", "--manifest-path", str(root / "runner-rs/Cargo.toml"),
+                            "--no-run", "--message-format=json"], capture_output=True, text=True, timeout=1200)
+    assert built.returncode == 0, built.stderr[-4000:]
+    executables = [message["executable"] for message in map(json.loads, built.stdout.splitlines())
+                   if message.get("reason") == "compiler-artifact" and message.get("executable")
+                   and message["target"]["name"] == "tico-runner" and message["profile"]["test"]]
+    assert len(executables) == 1, executables
+    return executables[0]
 
 
 def test_a_turn_cannot_read_the_registration_but_can_run_a_harness_and_push(volume):
@@ -168,3 +188,322 @@ def test_the_bot_user_clones_and_fetches_the_mirror_the_supervisor_owns(volume):
         "test, not the fix", result)
     assert result["clone"] == [0, ""] and result["fetch"] == [0, ""], result
     assert result["commits"] == "2" and result["trust_file"] == "0o644", result
+
+
+# ------------------------------------------------------------------ the real runner, every harness, a task's session
+#
+# These start the image's own runner (its entrypoint and binary, the way docker/runner.compose.yaml does) against
+# isolation/fake_hub.py in a container beside it, with isolation/fake_cli.py standing in for every harness's
+# executable. So they test what an image ships, and pointing TICO_RUNNER_TEST_IMAGE at an older release shows
+# whether that release had the defect.
+
+HARNESSES = Path(__file__).resolve().parents[1] / "harnesses"
+ROOT = Path(__file__).resolve().parents[2]
+WAIT_SECONDS = 300
+
+
+def harnesses():
+    """Every harness and variant the manifests name, with what its stand-in CLI needs to answer."""
+    found = []
+    for path in sorted(HARNESSES.glob("*.toml")):
+        manifest = tomllib.loads(path.read_text())
+        base_caps = manifest.get("capabilities") or {}
+        rows = [(manifest["runtime"], manifest, base_caps)]
+        for variant, fields in (manifest.get("variants") or {}).items():
+            rows.append((variant, {**manifest, **{k: fields[k] for k in ("host", "executable") if k in fields}},
+                         {**base_caps, **(fields.get("capabilities") or {})}))
+        for harness, fields, caps in rows:
+            found.append({
+                "harness": harness, "runtime": manifest["runtime"], "host": fields["host"],
+                "executable": fields["executable"], "bot": "acme-" + "".join(c if c.isalnum() else "-" for c in harness),
+                "version_args": (manifest.get("version") or {}).get("args") or ["--version"],
+                "status": caps.get("sign_in_status") or {},
+                "key_env": ((manifest.get("auth") or {}).get("api_key_env") or [""])[0],
+                "isolated": bool(caps.get("isolated_user")),
+            })
+    return found
+
+
+class Stack:
+    """A fake hub and GitHub on a private network, and the runner's volume; the runner container comes and goes."""
+
+    def __init__(self, tmp):
+        self.name = "tico-turns-" + uuid.uuid4().hex[:8]
+        self.hub, self.runner, self.volume = self.name + "-hub", self.name + "-runner", self.name
+        self.tmp = tmp
+        self.turns = 0
+
+    def must(self, *args, **kwargs):
+        done = docker(*args, **kwargs)
+        assert done.returncode == 0, (args[:3], done.stdout[-2000:], done.stderr[-2000:])
+        return done.stdout
+
+    def start_hub(self, image, bots):
+        self.must("network", "create", self.name)
+        self.must("run", "-d", "--name", self.hub, "--network", self.name, "--network-alias", "hub", "-u", "0",
+                  "--entrypoint", "python", "-v", f"{HERE / 'fake_hub.py'}:/fake_hub.py:ro", image, "/fake_hub.py")
+        origins = "".join(f"""
+            git init -q -b main /tmp/{bot} && cd /tmp/{bot} && echo '# Acme bot' > AGENT.md && git add AGENT.md
+            git -c user.name='Acme' -c user.email=bots@acme.example commit -qm start
+            git clone -q --bare /tmp/{bot} /srv/git/acme/bot-{bot}.git && cd / && rm -rf /tmp/{bot}""" for bot in bots)
+        self.must("exec", self.hub, "sh", "-c", "set -e; mkdir -p /srv/git/acme /work/queue /work/claimed /work/done" + origins)
+
+    def put(self, path, value):
+        self.must("exec", "-i", self.hub, "sh", "-c", f"cat > /work/{path}.tmp && mv /work/{path}.tmp /work/{path}",
+                  input=json.dumps(value))
+
+    def seed(self, image, script):
+        """Run `script` as root in `image` with the volume mounted and the fake GitHub reachable."""
+        return self.must("run", "--rm", "-u", "0", "--network", self.name, "-v", f"{self.volume}:/home/runner",
+                         "--entrypoint", "sh", image, "-c", "set -e; cd /home/runner\n" + script)
+
+    def start_runner(self, image, table):
+        spec = {h["executable"]: {"host": h["host"], "version_args": h["version_args"], "version": "9.9.9 (fake)",
+                                  "status": h["status"]} for h in table}
+        (self.tmp / "spec.json").write_text(json.dumps(spec))
+        mounts = [a for h in table for a in ("-v", f"{HERE / 'fake_cli.py'}:/usr/local/bin/{h['executable']}:ro")]
+        docker("rm", "-f", self.runner)
+        self.must("run", "-d", "--name", self.runner, "--network", self.name, "--user", "0", "--cap-drop", "ALL",
+                  "--security-opt", "no-new-privileges:true", *CAPS, "-v", f"{self.volume}:/home/runner",
+                  "-v", f"{self.tmp / 'spec.json'}:/fake/spec.json:ro", *mounts, image)
+
+    def queue(self, table):
+        """One task turn per harness, each in its own task's lane; returns the attempt ids."""
+        self.turns += 1
+        ids = []
+        for h in table:
+            task = "t-" + h["bot"]
+            aid = f"a{self.turns}-{h['bot']}"
+            self.put(f"queue/{aid}.json", {
+                "id": aid, "job_id": "j" + aid, "bot": h["bot"], "token": f"acme-turn-{aid}", "lease_seconds": 600,
+                "conversation": {"id": "c-" + h["bot"]}, "message": {"text": "Acme: probe this checkout", "refs": {}},
+                "lane": f"task:{task}", "task": {"id": task, "title": "Acme probe"}, "credential_vault": True,
+                "config": {"runtime": h["runtime"], "harness": h["harness"], "model": ""}})
+            ids.append(aid)
+        return ids
+
+    def completions(self, ids):
+        deadline = time.monotonic() + WAIT_SECONDS
+        while True:
+            listed = docker("exec", self.hub, "ls", "/work/done").stdout.split()
+            if all(f"{aid}.json" in listed for aid in ids) or time.monotonic() > deadline:
+                break
+            if docker("inspect", "-f", "{{.State.Running}}", self.runner).stdout.strip() != "true":
+                break  # the runner stopped: nothing more will finish
+            time.sleep(2)
+        return {aid: json.loads(self.must("exec", self.hub, "cat", f"/work/done/{aid}.json") or "null") or {}
+                for aid in ids if f"{aid}.json" in listed}
+
+    def logs(self):
+        done = docker("logs", "--tail", "120", self.runner)
+        return (done.stdout + done.stderr)[-6000:]
+
+    def owners(self, image):
+        """uid:gid and mode of every path in the volume, as root sees them."""
+        out = self.must("run", "--rm", "-u", "0", "-v", f"{self.volume}:/home/runner", "--entrypoint", "find", image,
+                        "/home/runner", "-printf", "%U:%G %m %p\\n")
+        return {path: (owner, mode) for owner, mode, path in (line.split(" ", 2) for line in out.splitlines())}
+
+    def close(self):
+        for container in (self.runner, self.hub):
+            docker("rm", "-f", container)
+        docker("network", "rm", self.name)
+        docker("volume", "rm", "-f", self.volume)
+
+
+def image_ready(image):
+    if not shutil.which("docker"):
+        pytest.skip("Docker is not installed; runner isolation requires Docker and an explicitly selected image")
+    if docker("image", "inspect", image).returncode != 0 and docker("pull", "-q", image).returncode != 0:
+        pytest.fail(f"The runner image {image} is unavailable")
+
+
+@pytest.fixture
+def stack(tmp_path):
+    if not IMAGE:
+        pytest.skip("Set TICO_RUNNER_TEST_IMAGE to a freshly built runner image; the release check selects its candidate")
+    image_ready(IMAGE)
+    made = Stack(tmp_path)
+    yield made
+    made.close()
+
+
+def registration(bots):
+    """What an install on the two-user layout leaves: the registration, and each bot's checkout cloned from its
+    GitHub repository by the bot user."""
+    config = json.dumps({"url": "http://hub:8765", "token": "acme-runner-token", "runner_id": "r1",
+                         "projects_dir": "/home/runner/workspace", "self_update": False})
+    clones = "".join(f"""
+        git clone -q http://hub:8766/acme/bot-{bot}.git workspace/bot-{bot}
+        git -C workspace/bot-{bot} config user.name 'Acme {bot}'; git -C workspace/bot-{bot} config user.email {bot}@acme.example
+        chown -R 10003:10002 workspace/bot-{bot}; chmod -R g+rwX workspace/bot-{bot}""" for bot in bots)
+    return f"""
+        : > .tico-two-user-layout; chown 10002:10002 .tico-two-user-layout
+        printf '%s' '{config}' > runner.json; chmod 600 runner.json
+        mkdir -p workspace/secrets; echo ACME_LEGACY=1 > workspace/secrets/_shared.env
+        chown 10002:10002 . workspace; chown -R 10002:10002 workspace/secrets{clones}
+    """
+
+
+def probe_problems(table, done, logs):
+    """Each turn must have completed with no capabilities, in its task's own worktree, unable to read the runner's
+    registration, state or legacy secrets, and able to commit and pull there. A harness with `isolated_user` runs as a
+    leased turn user that cannot enter or write another bot's checkout or worktree; every other harness signs in and
+    runs as the bot user, unchanged, which still can (the control that makes the denial mean something)."""
+    problems = []
+    for h in table:
+        body = next((b for a, b in done.items() if a.endswith("-" + h["bot"])), None)
+        if not body:
+            problems.append(f"{h['harness']}: no completion")
+            continue
+        text = body.get("text") or ""
+        if body.get("outcome") != "completed" or "probe {" not in text:
+            problems.append(f"{h['harness']}: {body.get('outcome')}: {text[:300]}")
+            continue
+        seen = json.loads(text[text.index("probe {") + 6:].strip())
+        want = {"caps": "0000000000000000", "registration": False, "state": False, "secrets": False,
+                "commit": "ok", "pull": "ok", "where": f"sessions > bot-{h['bot']} > t-{h['bot']}"}
+        want.update({"sibling_enter": False, "sibling_write": False, "sibling_rename": False} if h["isolated"] else
+                    {"uid": 10003, "sibling_enter": True, "sibling_write": True, "sibling_rename": True})
+        wrong = {k: seen.get(k) for k, v in want.items() if seen.get(k) != v}
+        if h["isolated"] and not 10100 <= int(seen.get("uid") or 0) <= 10163:
+            wrong["uid"] = seen.get("uid")
+        if not seen.get("siblings_seen"):
+            wrong["siblings_seen"] = 0   # nothing to try: the denial would prove nothing
+        if wrong:
+            problems.append(f"{h['harness']}: {wrong}")
+    return problems + ([f"runner log:\n{logs}"] if problems else [])
+
+
+def test_every_harness_takes_task_turns_as_the_bot_user_and_the_session_stays_the_bots(stack):
+    # v0.2.8 crash-looped after its first turn, v0.2.12 re-locked a token it no longer owned, v0.3.43 and v0.3.45 left
+    # worktrees with the wrong owner, and Muse Code, Gemini and Antigravity turns ran as the supervisor until 0.3.48.
+    # So: a task turn for every harness through the real runner (which adds the worktree as the bot user), a restart,
+    # a second turn in the same worktrees, and then who owns the sessions and the runner's private files.
+    table = harnesses()
+    bots = [h["bot"] for h in table]
+    stack.start_hub(IMAGE, bots)
+    stack.put("assignments.json", [{"bot": h["bot"], "config": {"runtime": h["runtime"], "harness": h["harness"]}}
+                                   for h in table])
+    stack.put("credentials.json", [{"id": "k-" + env, "env": env, "value": "acme-fake-key", "kind": "env"}
+                                   for env in sorted({h["key_env"] for h in table if h["key_env"]})])
+    stack.seed(IMAGE, registration(bots))
+
+    stack.start_runner(IMAGE, table)
+    problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
+    assert not problems, "\n".join(problems)
+
+    stack.must("restart", "-t", "20", stack.runner)
+    problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
+    assert not problems, "the first round passed, then after a restart:\n" + "\n".join(problems)
+
+    stack.must("stop", "-t", "20", stack.runner)
+    owners = stack.owners(IMAGE)
+    workspace = "/home/runner/workspace"
+    wrong = []
+    for h in table:
+        session = f"{workspace}/sessions/bot-{h['bot']}/t-{h['bot']}"
+        gitdir = f"{workspace}/bot-{h['bot']}/.git/worktrees/t-{h['bot']}"
+        if session not in owners or gitdir not in owners:
+            wrong.append(f"{h['harness']}: no session worktree")
+        wrong += [f"{path} {owner}" for path, (owner, _) in owners.items()
+                  if (path.startswith(session) or path.startswith(gitdir)) and not owner.startswith("10003:")]
+    assert not wrong, "the bot user must own its sessions:\n" + "\n".join(wrong[:40])
+    assert owners["/home/runner/runner.json"] == ("10002:10002", "600"), owners["/home/runner/runner.json"]
+    assert owners["/home/runner/state-r1"][0] == "10002:10002", owners["/home/runner/state-r1"]
+    assert owners[f"{workspace}/secrets"] == ("10002:10002", "700"), owners[f"{workspace}/secrets"]
+
+
+def previous_image():
+    """The release before the candidate: TICO_RUNNER_PREVIOUS_IMAGE, or the newest release tag's runner image."""
+    chosen = os.environ.get("TICO_RUNNER_PREVIOUS_IMAGE", "").strip()
+    if chosen:
+        return chosen
+    tags = subprocess.run(["git", "tag", "-l", "v[0-9]*", "--sort=-v:refname"], cwd=ROOT, capture_output=True,
+                          text=True).stdout.split()
+    tags = [t for t in tags if "-" not in t]
+    if not tags:
+        pytest.fail("No release tag here to start from: set TICO_RUNNER_PREVIOUS_IMAGE")
+    return f"ghcr.io/ticoteam/tico-runner:{tags[0]}"
+
+
+def test_handing_an_older_releases_session_to_the_bot_changes_no_owner_outside_it(stack):
+    # Before 0.3.48 the handoff walked a session's paths and chowned each one, so a hard link in the session (or a
+    # checkout whose objects a local clone shares with the supervisor's mirror) gave the bot user files outside it.
+    # The previous release takes a task turn, the session gets files with mixed owners and links out, and the
+    # candidate takes the next turn there: nothing outside the session and its checkout may change owner.
+    previous = previous_image()
+    image_ready(previous)
+    table = harnesses()[:1]
+    h = table[0]
+    bot, other = h["bot"], "acme-other"
+    stack.start_hub(previous, [bot, other])
+    stack.put("assignments.json", [{"bot": bot, "config": {"runtime": h["runtime"], "harness": h["harness"]}}])
+    if h["key_env"]:
+        stack.put("credentials.json", [{"id": "k", "env": h["key_env"], "value": "acme-fake-key", "kind": "env"}])
+    stack.seed(previous, registration([bot, other]))
+    stack.start_runner(previous, table)
+    seeded = stack.completions(stack.queue(table))
+    assert seeded and all(b.get("outcome") == "completed" for b in seeded.values()), (previous, seeded, stack.logs())
+    stack.must("stop", "-t", "20", stack.runner)
+
+    session = f"workspace/sessions/bot-{bot}/t-{bot}"
+    stack.seed(previous, f"""
+        S={session}; C=workspace/bot-{bot}
+        # Mixed owners inside the session: the handoff is meant to give these to the bot user.
+        echo root > $S/acme-root-file; echo sup > $S/acme-supervisor-file; chown 10002:10002 $S/acme-supervisor-file
+        mkdir -p $S/acme-dir; echo x > $S/acme-dir/nested
+        # Supervisor-private files outside it, which the session reaches by a hard link and a symlink.
+        mkdir -p state-r1/acme-private; echo private > state-r1/acme-private/note
+        chown -R 10002:10002 state-r1/acme-private; chmod 700 state-r1/acme-private; chmod 600 state-r1/acme-private/note
+        ln state-r1/acme-private/note $S/acme-hardlink; ln -s /home/runner/runner.json $S/acme-symlink
+        # The supervisor's mirror of the bot's repository, made by a local clone, so it shares the checkout's objects.
+        mkdir -p state-r1/mirrors; git clone -q --mirror --local $C state-r1/mirrors/acme__bot-{bot}.git
+        chown -R 10002:10002 state-r1/mirrors
+        # Another bot's checkout with a file root owns.
+        echo root > workspace/bot-{other}/acme-root-file
+    """)
+    before = stack.owners(previous)
+
+    stack.start_runner(IMAGE, table)
+    problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
+    stack.must("stop", "-t", "20", stack.runner)
+    after = stack.owners(IMAGE)
+    inside = (f"/home/runner/{session}", f"/home/runner/workspace/bot-{bot}/")
+    def gated(path):
+        # A checkout root given its own group (runner-rs/src/checkout_groups.rs): same owner, a group from that range.
+        (was, now) = (before[path][0].split(":"), after[path][0].split(":"))
+        return was[0] == now[0] and 20000 <= int(now[1]) <= 59999 and os.path.isabs(path) and \
+            path.rstrip("/").count("/") == "/home/runner/workspace/x".count("/")
+    changed = [f"{path}: {before[path][0]} -> {after[path][0]}" for path in sorted(before)
+               if path in after and before[path][0] != after[path][0] and not path.startswith(inside) and not gated(path)]
+    assert not changed, f"the handoff from {previous} to {IMAGE} changed owners outside the session:\n" + "\n".join(changed[:40])
+    assert not problems, "\n".join(problems)
+    for name in ("acme-root-file", "acme-supervisor-file", "acme-dir/nested"):
+        assert after[f"/home/runner/{session}/{name}"][0].startswith("10003:"), (name, after[f"/home/runner/{session}/{name}"])
+
+
+def test_gateway_turn_users_block_siblings_and_clean_before_reuse(volume):
+    """The source-pinned Rust probe exercises the real pool and relay in the candidate image.
+
+    On Linux the test builds the probe from this checkout (`cargo test --no-run`), so the release gate runs it;
+    TICO_RUNNER_TEST_BINARY names a prebuilt one instead. No host home, credential or database is mounted.
+    The probe verifies its fingerprint against the candidate's runner and all 64 passwd entries.
+    """
+    binary = os.environ.get("TICO_RUNNER_TEST_BINARY", "").strip() or probe_binary()
+    binary = Path(binary).resolve(strict=True)
+    assert binary.is_file() and os.access(binary, os.X_OK), binary
+    configured = docker("run", "--rm", "--user", "0", "--cap-drop", "ALL", *CAPS,
+                        "--security-opt", "no-new-privileges:true", "--network", "none",
+                        "-v", f"{volume}:/home/runner", IMAGE, "python", "-c",
+                        "import os; print(os.geteuid(),os.environ['TICO_RUNNER_TURN_UIDS'])")
+    assert configured.returncode == 0, configured.stdout + configured.stderr
+    assert configured.stdout.strip().splitlines()[-1] == "10002 10100-10163", configured.stdout
+    result = docker("run", "--rm", "--user", "0", "--cap-drop", "ALL", *CAPS,
+                    "--security-opt", "no-new-privileges:true", "--network", "none",
+                    "-e", "TICO_TEST_DISPOSABLE=1", "-v", f"{volume}:/home/runner",
+                    "-v", f"{binary}:/turn-user-probe:ro", "--entrypoint", "/turn-user-probe", IMAGE,
+                    "--ignored", "--exact", "gateway_relay::tests::docker_turn_user_blocks_siblings_and_cleans_before_reuse",
+                    "--nocapture", "--test-threads=1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout and "0 failed" in result.stdout, result.stdout

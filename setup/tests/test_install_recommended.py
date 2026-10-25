@@ -2,8 +2,10 @@
 release with docker, curl and the host checks stubbed (the `box` of test_install_runner.py)."""
 import os
 import pty
+import re
 import stat
 import subprocess
+import sys
 import time
 
 import pytest
@@ -25,12 +27,17 @@ esac
 exit 0
 """
 # The health check answers; the enrollment call records how it was asked (its argv and its --config on stdin) and
-# answers with a code like the server's; every other call (the release download, file://) is the real curl.
+# answers like the server: a code, or the 422 it gives a write without an Idempotency-Key (always, with STUB_REFUSE);
+# every other call (the release download, file://) is the real curl.
 CURL = """#!/bin/sh
 case "$*" in
   *healthz*) echo ok ;;
   *enrollments*) echo "curl $*" >> "$STUB_LOG"; cat > "$STUB_CURL_CONFIG"
-    [ -n "${STUB_NO_CODE:-}" ] || printf '{"code": "%s", "expires": "2026-10-18T23:00:00Z", "operator": null}\\n' "$STUB_CODE" ;;
+    case "$*" in
+      *"Idempotency-Key: "?*) [ -n "${STUB_REFUSE:-}" ] || [ -n "${STUB_NO_CODE:-}" ] || printf '{"code": "%s", "expires": "2026-10-18T23:00:00Z", "operator": null}\\n' "$STUB_CODE" ;;
+      *) STUB_REFUSE=1 ;;
+    esac
+    [ -z "${STUB_REFUSE:-}" ] || printf '{"error":{"code":"idempotency_key","detail":"Provide an Idempotency-Key of 1–200 characters"}}\\n' ;;
   *) exec /usr/bin/curl "$@" ;;
 esac
 """
@@ -87,6 +94,9 @@ def test_recommended_adds_a_docker_computer_on_the_server_network_without_the_ow
     assert "docker compose -f runner.compose.yaml -f runner.override.yaml up -d" in log   # the Docker runner, isolated
     assert "/api/v2/enrollments" in log and TOKEN not in log                              # the token went on stdin
     assert server["config"].read_text() == f'header = "Authorization: Bearer {TOKEN}"\n'
+    # The server refuses an enrollment without an Idempotency-Key (the stub answers 422 then, as the server does).
+    key = re.search(r"Idempotency-Key: (\S+)", log).group(1)
+    assert 1 <= len(key) <= 200
     assert not (server["dir"] / "runner.compose.yaml").exists()                          # the server's directory is its own
 
 
@@ -97,6 +107,14 @@ def test_a_server_computer_that_cannot_start_leaves_the_install_running_and_says
     assert "Add it later: Settings > Computers > Add computer" in r.stderr, trouble
     assert env_of(server["dir"] / ".env")["TICO_INSTALL_PRESET"] == "recommended"
     assert "Tico is running on this computer only." in r.stdout
+
+
+def test_a_refused_enrollment_puts_the_servers_short_reason_in_the_warning_and_never_the_token(server):
+    r = run(server, "--recommended", "--owner-email", "ana@example.com", STUB_REFUSE="1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    warning = [line for line in r.stderr.splitlines() if "did not give a computer code" in line]
+    assert len(warning) == 1 and "(Provide an Idempotency-Key of 1–200 characters)" in warning[0]
+    assert TOKEN not in r.stderr and CODE not in r.stderr and "Add it later" in warning[0]
 
 
 def test_recommended_without_an_invite_still_installs_and_says_in_one_line_that_the_gateway_is_not_set_up(server):
@@ -220,6 +238,9 @@ def test_on_a_terminal_with_nothing_chosen_the_install_asks_and_the_recommended_
 
 def test_with_nothing_chosen_and_no_terminal_nothing_is_asked_and_the_wizard_runs_on_flags_as_before(server):
     # A fresh install, no mode and no --yes: only the missing terminal keeps the question away. Its own session has none.
+    # This one runs the wizard, which needs Python 3.10+: pin python3 to the test's interpreter, not the host's /usr/bin one.
+    (server["stubs"] / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (server["stubs"] / "python3").chmod(0o755)
     variables = {"PATH": f"{server['stubs']}:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
                  "HOME": str(server["tmp"]), "STUB_LOG": str(server["log"]),
                  "TICO_INSTALL_RELEASES_URL": "file://" + str(server["rel"]),

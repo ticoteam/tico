@@ -118,6 +118,14 @@ def _calls(detail):
     return (calls, 0, {}) if _on_jev(detail.get("model")) else (0, calls, {})
 
 
+def _answers(detail):
+    """Each call's answers on one `judge.call` row: a nightly learnings run keeps a list, one map per call."""
+    answers = detail.get("answers")
+    if isinstance(answers, dict):
+        return [answers]
+    return [a for a in answers if isinstance(a, dict)] if isinstance(answers, list) else []
+
+
 def _empty():
     return {"calls": 0, "jev": 0, "fallback": 0, "failed": Counter(), "cost_usd": 0.0, "ceiling_priced": 0,
             "versions": set(), "answers": {}}
@@ -156,13 +164,13 @@ def readout(c, settings, days=7, at=None):
         row["fallback"] += other
         row["failed"].update(failed)
         row["calls"] += jev + other + sum(failed.values())
-        answers = detail.get("answers") if isinstance(detail.get("answers"), dict) else {}
         if name == OTHER_LABELS:
             continue
-        for qid, answer in answers.items():
-            key = spread_key(str(qid), answer, sets[name])
-            if key:
-                row["answers"].setdefault(key[0], Counter())[key[1]] += 1
+        for answers in _answers(detail):
+            for qid, answer in answers.items():
+                key = spread_key(str(qid), answer, sets[name])
+                if key:
+                    row["answers"].setdefault(key[0], Counter())[key[1]] += 1
     out = []
     for name in sorted(by, key=lambda n: (n == OTHER_LABELS, n)):
         row = by[name]

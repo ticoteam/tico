@@ -22,7 +22,7 @@
 .gt-kn{display:none;align-items:center;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .gt-needs{margin:0 0 var(--s3);padding:4px 10px;background:var(--surface);border:1px solid color-mix(in srgb,var(--wait) 45%,var(--line));border-radius:var(--radius)}
 .gt-needs-h{display:flex;align-items:center;gap:8px;height:28px;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
-.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait);letter-spacing:0}
+.gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:0}
 .gt-needs ul{list-style:none;margin:0;padding:0}
 @media (max-width:760px){
   .gt{--ind:10px;padding:2px 0}
@@ -77,19 +77,18 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .goal-why .linkish{font-size:var(--t-sm);font-style:normal}
 .goal-why-prop{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 8px 19px;padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius);font-size:var(--t-sm)}
 .goal-why-ed{display:flex;gap:8px;align-items:center;margin:0 0 8px 19px}.goal-why-ed input{flex:1 1 auto;min-width:0}
-/* the company, at the top of Goals */
-.gco{margin:0 0 var(--s3);padding:8px 12px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
-.gco-head{display:flex;align-items:center;gap:8px;min-height:32px}
-.gco-head h2{margin:0;font-size:var(--t-label);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
-.gco-prompt{margin:2px 0 8px;font-size:var(--t-md)}
-.gco-fields{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:4px 0 0}
-.gco-fields dt{font-size:var(--t-sm);font-weight:600;color:var(--muted);padding-top:1px}
-.gco-fields dd{margin:0;line-height:1.45;overflow-wrap:anywhere;white-space:pre-line}
-.gco-form textarea{width:100%;resize:vertical}
-.gco-events{list-style:none;margin:0;padding:0}
-.gco-events li{display:flex;flex-direction:column;gap:2px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-sm)}
-.gco-events li:first-child{border-top:0}.gco-new,.gco-old{overflow-wrap:anywhere;white-space:pre-line}
-@media (max-width:760px){.gco-fields{grid-template-columns:1fr}.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
+/* the strategy, one line at the top of Goals */
+.gst{display:flex;align-items:baseline;gap:8px;min-width:0;margin:0 0 var(--s3);padding:7px 12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);color:var(--ink);font-size:var(--t-base);text-decoration:none}
+.gst:hover{background:var(--surface2);text-decoration:none}
+.gst-k{flex:none;font-weight:600}
+.gst-sum{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.gst-sum::before{content:"· ";color:var(--muted)}
+.gst-go{color:var(--accent)}
+.goal-bet-line{display:flex;align-items:center;gap:8px;min-width:0;margin:-2px 0 6px 19px;font-size:var(--t-sm)}
+.goal-bet-chip{flex:none;display:inline-flex;align-items:center;height:22px;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface2);color:var(--ink);font-weight:600;text-decoration:none}
+.goal-bet-chip:hover{border-color:var(--accent);text-decoration:none}
+.goal-bet-st{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
+@media (max-width:760px){.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
 .kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.35}
 .kpi-line:hover,.need-row:hover{background:var(--surface2)}
@@ -214,3 +213,21 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gm-form .p-chips:empty{display:none}
 .gm-chat .err{margin:0;font-size:var(--t-sm)}
 .gm-on{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
+/* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
+   what changes, or one row per goal with its Keep / Retire / Move to. */
+.kpi-prop.strat-prop{align-items:flex-start}
+.gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
+.strat-prop-open{margin-left:6px;font-size:var(--t-sm)}
+.strat-prop-list,.strat-realign{list-style:none;margin:2px 0;padding:0;display:grid;gap:4px}
+.strat-prop-list li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
+.strat-prop-k{color:var(--muted);font-size:var(--t-sm);font-weight:600}
+.strat-prop-wrong{display:block;font-size:var(--t-sm)}
+.strat-realign-goal{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 0}
+.strat-realign-t{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;font-size:var(--t-base);overflow-wrap:anywhere}
+.strat-realign-t .muted{font-size:var(--t-sm)}
+.strat-realign-f{flex:0 0 220px}
+@media (max-width:760px){
+  .strat-prop-list li{grid-template-columns:1fr;gap:0}
+  .strat-realign-goal{flex-direction:column;align-items:stretch;gap:6px}
+  .strat-realign-f{flex-basis:auto}
+}

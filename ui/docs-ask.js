@@ -92,6 +92,7 @@ html.demo .dask{top:var(--demo-h)}
   #main.librarian-open .docs-workspace{grid-template-columns:minmax(200px,240px) minmax(0,1fr)}
   .dask{width:var(--librarian-w);box-shadow:none;animation:none}
   body:has(#main.librarian-open) .toast{right:calc(var(--librarian-w) + 20px)}
+  body:has(#main.librarian-open) #topbar{margin-right:var(--librarian-w)}
 }
 /* The market's three columns need room the rail takes: under 1600px the graph moves below the note. */
 @media(min-width:761px) and (max-width:1599px){
@@ -115,7 +116,7 @@ html.demo .dask{top:var(--demo-h)}
   // What each page keeps between opening and closing the panel: the conversation, so a follow-up has context,
   // and what was asked and answered, so closing it does not lose the thread. Docs and Market each have their own.
   const sessions = {docs: {conversationId: '', turns: []}, market: {turns: []}};
-  const where = () => /^#\/market(?:[/?]|$)/.test(location.hash) ? 'market' : 'docs';
+  const where = () => /^#\/strategy\/market(?:[/?]|$)/.test(location.hash) ? 'market' : 'docs';
   const HINTS = {docs: ['How do we handle a refund?', 'Who helps new hires?', 'Where is the pricing?'],
     market: ['Who competes with us?', 'What changed this week?', 'Which channels matter?']};
   const PLACEHOLDER = {docs: 'Ask about your docs…', market: 'Ask about the market…'};
@@ -207,7 +208,7 @@ html.demo .dask{top:var(--demo-h)}
 
   // Desktop on Docs or Market: a rail beside the page. Anywhere else, and on a phone: a sheet over it.
   const desktop = () => matchMedia('(min-width: 761px)').matches;
-  const railPage = () => /^#\/(docs|market)(?:[/?]|$)/.test(location.hash);
+  const railPage = () => /^#\/(docs|strategy\/market)(?:[/?]|$)/.test(location.hash);
   const asRail = () => desktop() && railPage();
   // Hidden or shown, per viewer, in this browser only; a browser that will not store it shows the rail.
   const hiddenKey = () => 'tico.librarian.collapsed.' + (S.me?.id || '');
@@ -345,7 +346,7 @@ html.demo .dask{top:var(--demo-h)}
       const ids = [...new Set((out.citations || []).filter(c => c.kind === 'entity').map(c => c.id))];
       turn.answer = String(out.answer || '').replace(/\s*\[[a-z]+:[^\]]+\]/gi, '');
       await window.marketCite?.(ids);
-      turn.cites = ids.map(id => ({href: '#/market?note=' + encodeURIComponent(id), label: window.marketName?.(id) || id})).filter(c => c.label);
+      turn.cites = ids.map(id => ({href: '#/strategy/market?note=' + encodeURIComponent(id), label: window.marketName?.(id) || id})).filter(c => c.label);
     } catch (e) {
       turn.error = (e && e.message) || 'The Librarian could not answer.';
     }
@@ -515,7 +516,8 @@ html.demo .dask{top:var(--demo-h)}
       else if (!railHidden()) open(undefined, false);
     } else if (panel?.getAttribute('role') === 'complementary') close(false);
   };
-  window.addEventListener('resize', () => window.syncLibrarianRail());
+  let resizeSoon = 0;                               // once a frame while the window is dragged
+  window.addEventListener('resize', () => { cancelAnimationFrame(resizeSoon); resizeSoon = requestAnimationFrame(() => window.syncLibrarianRail()); });
   window.openDocsAsk = open;
   // The old entry point, until every page that called it says openDocsAsk.
   window.openDocsChat = () => open();

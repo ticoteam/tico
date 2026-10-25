@@ -1,0 +1,34 @@
+# Plain questions any team can answer: the first default. Its own sections on who you serve, what you sell, how you
+# win and pricing are fixed sections of every strategy now (serve, sell, know), so only channels and brand are left
+# to suggest.
+# Not listed until the page can switch guides (docs/strategy.md); the stored shape is the same for every guide.
+id: plain
+name: Plain
+description: Plain questions any team can answer. The first default, kept for teams that used it.
+listed: false
+bets_label: Bets
+bet_label: Bet
+questions:
+  - key: q1
+    ask: Who is the one kind of customer you would choose if you could only have one, and what are they trying to get done?
+  - key: q2
+    ask: When one of them picks you, what did they almost pick instead, and why did they not?
+  - key: q3
+    ask: What do you charge, and what would break if you charged double or half?
+  - key: q4
+    ask: Where did your last ten customers come from, and which of those channels would you double down on?
+  - key: q5
+    ask: Name one thing a competitor does well that you have decided not to do.
+  - key: q6
+    ask: What request from a good customer have you turned down in the last year, and why?
+  - key: q7
+    ask: If the team had to describe itself in one sentence to a stranger at a conference, what is the sentence?
+  - key: q8
+    ask: What is the bet you are making that most people in your market would call wrong?
+suggested_sections:
+  - key: reach
+    title: Channels
+    prompt: 'How buyers find you and how you reach them: the two or three channels that bring most of them, and the one you are betting on next.'
+  - key: brand
+    title: Brand and voice
+    prompt: What the team should sound like and stand for in every message, and the words it never uses.

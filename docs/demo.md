@@ -58,7 +58,6 @@ node scripts/screenshots --only updates,settings-health   # some pages
 meeting, Settings > Health, Settings > Computers, Finish setup, a tour step, Docs and Market at a desktop and a phone
 width, light and dark, and writes `<page>-<desktop|phone>-<light|dark>.png`. It waits for the icon font and
 fails, instead of saving a bad picture, on any console error, failed request, error banner, unloaded icon or
-page that never finished loading. The manual `Screenshots` workflow runs it from the Actions tab
-(Run workflow) and opens a pull request with the new images.
+page that never finished loading.
 
 ![Health](images/settings-health-desktop-light.png)

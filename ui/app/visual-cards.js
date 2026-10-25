@@ -39,7 +39,8 @@ function nativeVisualRepaint() {
 const visualRef = f => `${f.file_id}@${Number(f.version)}`;
 // Without a separate visual address (Visuals always on, backend/visuals.py mode) a page or SVG is never served from
 // the app's own address: the server sends `open` and no `src`, and it is a card with its title, its still preview
-// when it has one, and Open, which shows it in the file viewer.
+// when it has one, and Open, which shows it in the file viewer. One held in Tico file hosting gets a `src` on the app's
+// own route instead, which sends the browser on to the company's ticofiles.com address (backend/tico_storage.py).
 const VISUAL_OPEN_KINDS = new Set(['page', 'svg']);
 // A card, or null for a chip.
 function visualState(f) {
@@ -172,6 +173,17 @@ document.addEventListener('click', ev => {
   if (what === 'expand') VISUAL_EXPAND[card.dataset.kind]?.(card);
   else if (what === 'newer') visualOpen(card, Number(card.dataset.current));
   else if (what === 'open') visualOpen(card);
+});
+// A thumbnail's menu is wider than the thumbnail (Dev 338): one that would open past the screen's left edge opens to
+// the right. The menu is opened here, then sided, before the next frame, so it never shows on the wrong side.
+document.addEventListener('click', ev => {
+  const menu = ev.target.closest?.('details.vcard-menu > summary')?.parentElement;
+  if (!menu || menu.open) return;
+  ev.preventDefault();
+  menu.open = true;
+  const list = menu.querySelector('.vcard-menu-list');
+  list.classList.remove('toward-right');
+  if (list.getBoundingClientRect().left < 4) list.classList.add('toward-right');
 });
 // A still preview that did not load leaves the card with its title and Open, never a broken picture; a redraw with a
 // renewed address shows it again (visualKept). Errors do not bubble, so this listens in the capture phase.

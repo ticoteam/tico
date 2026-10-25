@@ -3,10 +3,10 @@
 'use strict';
 
 // What the bot editor shows for an existing bot beyond its definition: who may use it, who it works for and who
-// owns it (each opens its own dialog); its computer, where it compacts, how soon it wakes and, for a synced bot, the
-// app it is delivered through (each applies as soon as it is picked); and its model and fallback, whose pickers hold
-// a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model change, either
-// way, goes through its transition dialog.
+// owns it (each opens its own dialog); its computer, where it compacts, its profile (what wakes it and which tasks it
+// takes) and, for a synced bot, the app it is delivered through (each applies as soon as it is picked); and its model, fallback and task model, whose
+// pickers hold a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model
+// change, either way, goes through its transition dialog; a task model changes only what its tasks run on.
 function settingsBotEditorRows(e) {
   const chips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
   const manage = settingsCanManageBot(e);
@@ -15,14 +15,16 @@ function settingsBotEditorRows(e) {
     <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
-    ${settingsWakeRow(e)}
+    ${profileRowHTML(e)}
+    ${settingsKeepTasksRow(e)}
+    ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-sub" data-bot-sub-line hidden></div>
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
-    <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
-    <div class="sb-row" data-bot-sub-row hidden><span>Connection</span><select class="settings-inline-select" data-bot-sub="${esc(e.name)}" aria-label="Connection for ${esc(e.display_name)}"></select><span></span></div>`}`;
+    <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
+    <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
 // `compaction` takes it, and it saves on its own without a fresh session, like the computer.
@@ -50,28 +52,29 @@ async function settingsSetCompact(select) {
     toast(error.message, true);
   } finally { if (select.isConnected) select.disabled = false; }
 }
-// Routine news is batched; direct requests remain immediate in both modes.
-const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
-function settingsWakeRow(e) {
-  const current = e.wake?.preset === 'token_saver' ? 'token_saver' : 'performance';
-  return `<div class="sb-row"><span>Wakes</span><select class="settings-inline-select" data-bot-wake="${esc(e.name)}" data-current="${esc(current)}" aria-label="Wake preset for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
-      ${SETTINGS_WAKE_PRESETS.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
-    </select><span></span></div>
-    ${e.wake?.summary ? `<div class="sb-sub muted" data-bot-wake-summary>${esc(e.wake.summary)}</div>` : ''}`;
+function settingsKeepTasksRow(e) {
+  if (e.agent) return '';
+  const current = e.keep_tasks_going == null ? '' : String(e.keep_tasks_going);
+  return `<div class="sb-row"><span>Keep N tasks going</span><input type="number" min="0" max="1000" step="1" class="settings-inline-select"
+    data-bot-keep-tasks="${esc(e.name)}" data-current="${esc(current)}" value="${esc(current)}" placeholder="No limit"
+    aria-label="Keep N tasks going for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
+    <div class="sb-sub muted">Blank: start assigned work whenever a turn is free. 0: off. Waiting work frees a place; reviews have no cap.</div>`;
 }
-async function settingsSetWake(select) {
-  const slug = select.dataset.botWake, e = S.emps.find(row => row.name === slug);
-  if (!e || select.value === select.dataset.current) return;
-  select.disabled = true;
+async function settingsSetKeepTasks(input) {
+  const e = S.emps.find(row => row.name === input.dataset.botKeepTasks);
+  if (!e || input.disabled || input.value === input.dataset.current || !input.checkValidity()) return;
+  input.disabled = true;
   try {
-    await post(`/v2/bots/${encodeURIComponent(slug)}/wake-preset`, {wake_preset: select.value, expected_revision: e.revision});
+    await post(`/v2/bots/${encodeURIComponent(e.name)}/keep-tasks-going`, {
+      keep_tasks_going: input.value === '' ? null : Number(input.value), expected_revision: e.revision});
     await loadSettings();
-    toast(`${e.display_name} wakes on ${select.selectedOptions[0]?.textContent || select.value}`);
-  } catch (error) {
-    select.value = select.dataset.current;
-    toast(error.message, true);
-  } finally { if (select.isConnected) select.disabled = false; }
+    input.dataset.current = input.value;
+    toast('Automatic task starts updated');
+  } catch (error) { input.value = input.dataset.current; toast(error.message, true); }
+  finally { if (input.isConnected) input.disabled = false; }
 }
+// The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
+const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
 // A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
 // through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
 // computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
@@ -186,7 +189,7 @@ function settingsEditBot(slug = '', inline = false) {
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Access, owners and computer save as soon as you change them. A model or fallback pick applies with Apply or Save bot.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Access, owners and computer save as soon as you change them. A model, fallback or task model pick applies with Apply or Save bot.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -209,7 +212,7 @@ function settingsEditBot(slug = '', inline = false) {
   let rev = e?.revision, touched = false;
   const rows = dialog.querySelector('[data-bot-people]');
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); void budgetMount(rows, slug); void profileMount(rows, slug); };
     const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
@@ -238,8 +241,10 @@ function settingsEditBot(slug = '', inline = false) {
       if (machine) { touched = true; void settingsMoveBot(machine); }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) { touched = true; void settingsSetCompact(compact); }
-      const wake = event.target.closest('[data-bot-wake]');
-      if (wake) { touched = true; void settingsSetWake(wake); }
+      const profile = event.target.closest('[data-bot-profile], [data-profile-key]');
+      if (profile) { touched = true; void profileChange(profile); }
+      const keep = event.target.closest('[data-bot-keep-tasks]');
+      if (keep) { touched = true; void settingsSetKeepTasks(keep); }
       const delivery = event.target.closest('[data-bot-app-delivery]');
       if (delivery) { touched = true; void settingsSetAppDelivery(delivery); }
     });
@@ -309,8 +314,9 @@ function settingsEditBot(slug = '', inline = false) {
     try {
       if (editing) {
         const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
-        const unfinished = [model, fallback].find(pick => pick && !pick.ready);
-        if (unfinished) throw new Error(`${unfinished === model ? 'Model' : 'Fallback'} change not applied: finish choosing it, or reset it.`);
+        const task = settingsEditorPendingChoice(rows, 'task');
+        const unfinished = [model, fallback, task].find(pick => pick && !pick.ready);
+        if (unfinished) throw new Error(`${unfinished === model ? 'Model' : unfinished === fallback ? 'Fallback' : 'Task model'} change not applied: finish choosing it, or reset it.`);
         // A model change starts a fresh session, so Save asks first, as Apply does; saying no saves nothing.
         const bot = S.emps.find(row => row.name === slug) || e, target = model && settingsChoiceFromValue(model.value);
         if (model && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
@@ -319,6 +325,11 @@ function settingsEditBot(slug = '', inline = false) {
           rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
           fallback.box.dataset.current = fallback.box.querySelector('[data-choice-fields]').dataset.current = fallback.value;
+        }
+        if (task) {
+          // Only the task model: the bot's own model, and so its sessions, stay as they are.
+          rev = await settingsSaveTaskModel(bot, task.value, rev, true);
+          task.box.dataset.current = task.box.querySelector('[data-choice-fields]').dataset.current = task.value;
         }
         rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,

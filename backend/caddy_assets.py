@@ -185,7 +185,9 @@ def prepare(environ=os.environ):
         if enabled:
             raise ValueError("caddy_config_directory_missing")
         return inert
-    if not directory.is_dir():
+    # os.path.isdir is False for a path that cannot be inspected on every Python; Path.is_dir raised
+    # PermissionError before 3.13, which would escape as an unsanitized startup error.
+    if not os.path.isdir(directory):
         raise ValueError("caddy_config_directory_invalid")
     path = directory / "caddy.json"
     if not enabled and not os.access(directory, os.W_OK) and not _present(path):

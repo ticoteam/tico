@@ -231,6 +231,7 @@ async function chatGoalSend(P, text) {
   if (!text) { box?.focus(); return false; }
   if (!state || state.slug !== P.slug) return false;
   if (!state.goalSupported) { toast("Goal mode isn't available for this chat. Turn Goal mode off to send a regular message.", true); return false; }
+  const scope = sessionScope(box);
   while (P.sending) {
     if (!P.sent) return false;
     await P.sent;
@@ -248,6 +249,7 @@ async function chatGoalSend(P, text) {
       intent = P.goalPending = {slug: state.slug, text, action: goalPinned(state.goal) ? 'edit' : 'set'};
     }
     if (!await chatGoalAct(intent.action, text)) return false;
+    sessionAcknowledge(box, scope);
     if (P.goalPending === intent) P.goalPending = null;
     // Do not erase edits made while the server was saving. Goal writes use the shared API's
     // stable Idempotency-Key retries, and failed/uncertain writes leave the draft untouched.

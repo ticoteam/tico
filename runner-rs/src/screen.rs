@@ -664,7 +664,7 @@ async fn bridge(client: &Client, session_id: &str, endpoint: Endpoint) -> Result
     let headers = request.headers_mut();
     headers.insert("Authorization", format!("Bearer {token}").parse().map_err(|_| "bad token".to_string())?);
     headers.insert("User-Agent", format!("Tico-Client/{CLIENT_VERSION}").parse().unwrap());
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async(request))
+    let (ws, _) = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(crate::tls::websocket_connector())))
         .await
         .map_err(|_| "the hub did not answer".to_string())?
         .map_err(|e| format!("websocket: {e}"))?;

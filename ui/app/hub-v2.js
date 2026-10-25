@@ -74,7 +74,7 @@ const ownerHandle = () => S.me?.owner_id || 'owner';           // unsigned Issue
 const myHandle = () => personHandle(S.me?.id || S.me?.email) || ownerHandle();
 const unsigned = body => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ via the hub_?\s*$/, '');
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
-async function v2Get(path) { try { return await get(path); } catch { return null; } }
+async function v2Get(path, opts) { try { return await get(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
   const [st, needs] = await Promise.all([v2Get('/v2/status'), v2NeedsRead()]);
@@ -85,39 +85,93 @@ async function v2Refresh() {
   if (needs && typeof OVERVIEW_PAGE !== 'undefined' && OVERVIEW_PAGE) overviewNeedsDraw();
   if (needs && !needs.unchanged && typeof BOT !== 'undefined' && BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
 }
-// Needs you as the page holds it: the list and its version. A read names the version held; an unchanged list comes
-// back without its items.
+// Needs you as the page holds it: the first items of the list, a page at a time (GET /v2/needs-you?limit=), in the
+// server's order, with its version, its whole count, each bot's count over the whole list (`bots`) and where the next
+// page starts (`needsNext`, null once it is all here). A read names the version held; an unchanged list comes back
+// without its items. Each read is its own request: one already on its way may have been answered before the change
+// this read was asked for (an answer sent, a live event), and sharing it would keep the old list. An older read that
+// lands after a newer one is not kept. A server without pages sends the whole list, and there is no next page.
+const NEEDS_PAGE = 50, NEEDS_PAGE_MAX = 200;
+// Where the next page starts in the list at `version`: the server's cursor (backend/views.py needs_cursor).
+const needsCursor = (version, n) => `${version}.${n}`;
+const needsAll = () => !S.v2.needsNext;
+// An item past the pages held, read alone (`ids=`) for a task's question box; forgotten whenever the list moves.
+const NEEDS_ONE = new Map();     // id -> {read, it}
+function v2NeedsOne(id) {
+  const key = String(id);
+  if (!NEEDS_ONE.has(key)) {
+    const one = {it: null};
+    one.read = v2Get(`/v2/needs-you?ids=${encodeURIComponent(key)}`).then(r => (one.it = (r?.items || [])[0] || null));
+    NEEDS_ONE.set(key, one);
+  }
+  return NEEDS_ONE.get(key).read;
+}
+const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
+function needsTake(needs) {
+  NEEDS_ONE.clear();
+  S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
+  S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+}
+let NEEDS_READ = 0, NEEDS_KEPT = 0;
 async function v2NeedsRead() {
-  const held = S.v2.needsVersion;
-  const needs = await v2Get('/v2/needs-you' + (held ? `?version=${encodeURIComponent(held)}` : ''));
+  const held = S.v2.needsVersion, seq = ++NEEDS_READ;
+  // As many as are held, so a list that moved does not drop the pages already read.
+  const limit = Math.min(NEEDS_PAGE_MAX, Math.max(NEEDS_PAGE, (S.v2.needs || []).length));
+  const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
-  if (!needs.unchanged) { S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null; }
+  if (seq < NEEDS_KEPT) return needs;
+  NEEDS_KEPT = seq;
+  if (!needs.unchanged) needsTake(needs);
   S.v2.wentAway = needs.went_away || null;
   return needs;
 }
+// The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
+let NEEDS_MORE = null;
+function v2NeedsMore() {
+  if (needsAll()) return Promise.resolve(false);
+  return NEEDS_MORE ||= (async () => {
+    try {
+      const cursor = S.v2.needsNext;
+      const r = await v2Get(`/v2/needs-you?limit=${NEEDS_PAGE}&cursor=${encodeURIComponent(cursor)}`, {fresh: true});
+      if (!r || S.v2.needsNext !== cursor) return false;        // a read or a live event moved the list meanwhile
+      if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
+      S.v2.needs = [...S.v2.needs, ...(r.items || [])];
+      S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
+      return true;
+    } finally { NEEDS_MORE = null; }
+  })();
+}
 // A live `needs` event (live.js asks for changes, not the list): mend the held list from the ids that changed, or read
 // it whole when the event was counted from another version than the one held. One at a time, in order. Resolves true
-// when the list may have moved.
+// when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
+// moves, and the next page starts after what is held.
 let NEEDS_MEND = Promise.resolve(false);
 const v2NeedsChanged = d => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d)));
 async function v2NeedsMend(d) {
   if (d.went_away) S.v2.wentAway = d.went_away;
-  if (Array.isArray(d.items)) { S.v2.needs = d.items; S.v2.needsVersion = null; return true; }   // a server without changes
+  if (Array.isArray(d.items)) { needsTake({...d, version: null, next: null}); return true; }   // a server without changes
   const held = S.v2.needsVersion;
   if (!d.version || d.version === held) return false;
   const whole = async () => { await v2NeedsRead(); return true; };
   if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed)) return whole();
-  const out = new Set([...d.changed, ...d.removed].map(String));
+  const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));
   if (d.changed.length) {
     const r = await v2Get(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
     if (!r || r.version !== d.version) return whole();
-    // Unchanged items kept their order against each other, so each changed one goes back at its place, first place first.
-    for (const it of (r.items || []).slice().sort((a, b) => r.positions[String(a.id)] - r.positions[String(b.id)]))
-      items.splice(r.positions[String(it.id)], 0, it);
+    // Unchanged items kept their order against each other, so each changed one goes back at its place, first place
+    // first. Past the end of the pages held, the rest wait for their page.
+    for (const it of (r.items || []).slice().sort((a, b) => r.positions[String(a.id)] - r.positions[String(b.id)])) {
+      const at = r.positions[String(it.id)];
+      if (!all && at > items.length) break;
+      items.splice(at, 0, it);
+    }
   }
-  if (items.length !== d.count) return whole();
-  S.v2.needs = items; S.v2.needsVersion = d.version;
+  if (all ? items.length !== d.count : items.length > d.count) return whole();
+  NEEDS_ONE.clear();
+  S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
+  S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
+  if (d.bots) S.v2.needsBots = d.bots;
   return true;
 }
 // One line above the composer when the bot cannot answer right now: its status says so, or
@@ -150,8 +204,33 @@ async function limitRetry(slug) {
 }
 const limitRetryButton = (slug, cls = 'linkish') => v2StatusOf(slug)?.state === 'limited' && settingsCanManageBot(S.emps.find(x => x.name === slug))
   ? ` <button type="button" class="${cls}" data-limit-retry>Try now</button>` : '';
+// Release: Tico stopped the bot (backend/bot_stops.py: five fast failed runs, or over its run budget) and a person
+// who manages it lets it run again (POST /v2/bots/{bot}/release, which clears both). One click, wherever it shows.
+async function botRelease(slug) {
+  await post(`/v2/bots/${encodeURIComponent(slug)}/release`, {});
+  await v2Refresh();
+  toast(`${empName(slug)} released`);
+}
+const botMayRelease = slug => settingsCanManageBot((S.emps || []).find(x => x.name === slug));
+const botReleaseButton = (slug, cls = 'linkish') => botMayRelease(slug)
+  ? ` <button type="button" class="${cls}" data-bot-release="${esc(slug)}">Release</button>` : '';
+// Every Release button (the chat line, the bot page, Health) goes through one listener; each page redraws its own.
+document.addEventListener('click', async ev => {
+  const button = ev.target.closest?.('[data-bot-release]');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    await botRelease(button.dataset.botRelease);
+    if (typeof pausedRender === 'function') pausedRender();
+    if (typeof botAlertDraw === 'function' && $('#bot-alert')) botAlertDraw();
+    if (button.closest('#hl-page')) window.hlRefresh?.();
+  } catch (error) { button.disabled = false; toast(error.message, true); }
+});
 function pausedNotice(slug) {
   const s = v2StatusOf(slug) || {};
+  // Tico's own words for the stop, as the server sends them: what happened and what to check.
+  if (s.stopped) return `${esc(s.focus || `Tico stopped ${empName(slug)}`)}${botReleaseButton(slug)}`;
+  if (s.backoff) return esc(s.backoff);
   const when = since => since ? ` since ${clockTime(since)}` : '';
   if (s.bot_state === 'quarantined') {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
@@ -164,7 +243,8 @@ function pausedNotice(slug) {
   let why = PAUSED_WHY[s.state], since = s.since;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
-    return `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
+    return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`
+      : `${empName(slug)} saved a stopped run for later${esc(when(since))} — only that request is paused; other work continues`;
   if (!why) {
     const off = (S.status?.health_issues || []).find(i => i.kind === 'machine' && (i.bots || [i.bot]).includes(slug) && i.since);
     if (off && Date.now() - Date.parse(off.since) > 10 * 60000) { why = off.title; since = off.since; }
@@ -197,7 +277,7 @@ function pausedRender() {
   const el = $('#conv-paused'); if (!el || !V2C) return;
   const text = pausedNotice(V2C.slug);
   const agent = text ? '' : agentNotice(V2C.slug);
-  el.innerHTML = text || agent; el.hidden = !(text || agent);
+  patchLiveHTML(el, text || agent); el.hidden = !(text || agent);
   el.classList.toggle('agent', !text && !!agent && agentQuiet(V2C.slug));
   const resume = el.querySelector('[data-quarantine-resume]'), slug = V2C.slug;
   if (resume) resume.onclick = async () => {
@@ -220,10 +300,13 @@ function pausedRender() {
 }
 // A bot over its spend limit (backend/usage_limits.py `over`): its status carries the limit while it holds new work.
 const overLimit = slug => v2StatusOf(slug)?.limit || null;
-const overLimitWord = limit => `Over its ${limit.period} limit`;
+// A hold by the team's or a group's limit names it: raising the bot's own limit would not lift it.
+const overLimitWord = limit => limit.scope && limit.scope !== 'bot' ? `Waiting: ${limit.name} is over its ${limit.period} limit` : `Over its ${limit.period} limit`;
 function v2StatePill(slug) {
   const s = v2StatusOf(slug);
   if (!s) return botStatePill(slug);
-  return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(V2_WORD[s.state] || s.state || 'Unknown')}</span>${
-    s.focus ? ` <span class="muted">${esc(s.focus)}</span>` : ''}`;
+  // A back-off keeps the bot's state; its wait is the line beside it until the next try.
+  const line = s.backoff || s.focus;
+  return `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(s.stopped ? 'Stopped' : V2_WORD[s.state] || s.state || 'Unknown')}</span>${
+    line ? ` <span class="muted">${esc(line)}</span>` : ''}`;
 }

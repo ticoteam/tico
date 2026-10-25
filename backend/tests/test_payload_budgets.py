@@ -83,6 +83,13 @@ def test_payloads_stay_under_their_budgets(api):
     assert len(opened.content) <= 256 * KB and snap["has_more"] and snap["execution"]["parts"]
     assert len(snap["execution"]["parts"]) <= 40
 
+    # The inbox (`hub inbox`): ana's 1,000 unread replies and 500 tasks arrive as the newest 100 of each, flagged.
+    # A 6 KB reply is sent with its body and raw body, so 100 measure about 1.3 MB; held there.
+    inbox = api.get("/api/v2/messages?unread=1", headers=headers())
+    unread = inbox.json()
+    assert len(unread["messages"]) == len(unread["tasks"]) == 100 and unread["more_messages"] and unread["more_tasks"]
+    assert unread["messages"][-1]["created"] >= unread["messages"][0]["created"] and len(inbox.content) <= 1400 * KB
+
     # The task board's brief list and the status line.
     board = api.get("/api/v2/tasks?brief=1&limit=500", headers=headers())
     # The aim is 200 KB. A brief task is still about 1.2 KB (its type, step, rollups and empty fields, every one sent);

@@ -130,7 +130,6 @@ shopping_cart
 smart_toy
 star
 store
-storefront
 strategy
 supervisor_account
 support_agent
@@ -145,6 +144,7 @@ troubleshoot
 unarchive
 verified_user
 view_agenda
+view_kanban
 view_timeline
 warning
 waving_hand

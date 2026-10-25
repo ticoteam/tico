@@ -38,6 +38,24 @@ account that only lets setup create IAM roles under a permissions boundary, pass
 `--aws-permissions-boundary`: the role is created under it, with both tags, in one call. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
 
+A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
+public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
+can read only this install's plan prefix. Creating the bucket needs permission to create/tag S3 buckets and configure
+public access blocking, ownership controls, encryption and lifecycle rules. A failure stops before the chart upload.
+Setup refuses an existing bucket without this install's ownership tags. The empty bucket remains after the chart is
+deleted. With an explicit `--plan-bucket BUCKET`
+(and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup puts the packed
+plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on
+`plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
+`/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it
+from `TICO_COMPANY_FILE` (the server mounts that folder by its absolute path, `TICO_COMPANY_FILE_DIR`). A copy the app can't use (missing, unreadable, empty or too big)
+starts the server with the built-in bots only and shows the owner why on first run and on Health, never another
+team in its place. Setup deletes the
+object once the running app reads its copy; if S3 refuses, setup says so and the object stays until you delete it or
+the bucket's lifecycle rule, if it has one, expires it. If the first boot stops (a copy or sha256 failure), fix the
+cause and re-run the same command: it finishes that boot. A server set up before `--plan-bucket` gets this release's
+`compose.yaml` and image on that re-run. Charts up to 300 seats fit.
+
 ```
 python3 -m setup destroy --domain tico.example.com --dry-run   # list what carries both tags
 python3 -m setup destroy --domain tico.example.com             # asks you to type the name
@@ -87,6 +105,112 @@ IPs (assign one). Or `doctl compute droplet create ... --user-data-file`.
 **A runner computer.** Edit `tico-runner.yaml` (version, `TICO_URL`, `TICO_CODE`, label), create a server of 4 GB or more with it
 (`cax21` or `cx33` on Hetzner, `s-2vcpu-4gb` on DigitalOcean), and attach a firewall with no inbound rules. The join code
 works once and expires after 15 minutes, so create the server right after copying it.
+
+## Apply hosted visual configuration on the same installation
+
+The optional operator protocol `tico-hosted-assets-v1` changes only `TICO_VISUAL_ORIGIN`,
+`TICO_CADDY_VISUALS` and `TICO_VISUAL_SAME_ORIGIN` on an existing hosted EC2 installation.
+The trusted Hosting owner supplies the persisted operation/revision/nonce, company/workspace/app-attempt,
+asset lease and DNS record receipt, public and operational hosts, EC2 identity and census UUID. It uses
+the existing instance-scoped SSM authority; there is no customer API, generic executor or setup fallback.
+
+Both the selected installer bundle and running server must contain this protocol from the **same source
+commit**. The bundle's `installer-manifest.json` verifies its actual setup modules and Compose bytes;
+the running image's existing `release-manifest.json` and code digest verify runtime content, with separate
+exact supervisor/module hashes. A branch name, tag, environment switch or bare commit label grants no support.
+Old releases, missing/modified manifests and mismatched releases stay pending. The regular release bundle
+and existing updater carry these files. Fresh AWS bootstrap also obtains the bundle for the actual running
+image's pinned release and commit, verifies `SHA256SUMS`, runtime hashes and the existing Compose bytes,
+then installs only the matching setup modules and manifest. Missing/corrupt/old artifacts leave this optional
+capability pending while ordinary app startup proceeds. Earlier compose-only installations need a separately
+approved normal bundle update before this command is available. An HQ
+installer selected from a source checkout also needs the verified installer bundle, rather than an invented manifest.
+
+From the installed `/opt/tico` directory, the fixed commands are:
+
+```sh
+python3 -B -m setup.visual_config capabilities
+sudo python3 -B -m setup.visual_config status
+sudo python3 -B -m setup.visual_config apply --request "$persisted_request_base64url"
+```
+
+Discovery verifies selected source, the running server's generated configuration and shared supervisor,
+and the existing census in read-only mode. It does not initialize the backend, allocate census state,
+create locks or write data. A successful capability object contains exactly `protocol`,
+`installer_revision`, `runtime_revision`, `initial_flags`, `same_instance_apply` and `applied_receipt`.
+The booleans describe supported operations; they do not assert current Caddy health or prove application.
+An existing stopped or unhealthy Caddy can remain a recovery target. Actual applied-generation, health
+and TLS checks are still required before a receipt, and an absent Caddy service remains unsupported.
+Runtime verification requires an existing instance; initial-install flags remain pending before that target
+can be proved. `apply` accepts only the exact versioned, nonsecret request as unpadded base64url of compact
+ASCII JSON (maximum 4096 decoded bytes). It independently reads EC2 IMDSv2 and the persisted census UUID.
+Successful output is a challenge-bound asset receipt of at most 2048 bytes. Pending returns exit 2 and a
+fixed reason, without a receipt, key, signed address, body, credentials or provider diagnostics.
+
+### Prepare existing local probe material
+
+The operator supplies `/opt/tico/.visual-probe.json`, a regular root-owned file, mode `0600`, at most
+4096 bytes, without symlinks. Its exact fields are:
+
+```json
+{"install_id":"<the existing census UUID>","token":"<an existing authorized visual token>","sha256":"<64 lowercase hex characters>"}
+```
+
+Use an existing visual that an authorized reader can currently open. For a small PNG/JPEG/GIF/WebP
+attachment, `sha256` is the SHA256 of its exact served image bytes; HTML and SVG may be transformed and
+need the digest of the served response. Obtain the current token from that reader's existing visual `src`,
+keeping just the `/visuals/` token component. Prepare this file privately on the installation using a local
+editor or private stdin; keep its content out of SSM commands, shell arguments, tickets and logs. Use the
+actual census UUID already bound by the trusted Hosting operation. Do not mint a token for another reader,
+create a synthetic artifact, generate/export a signing key or loosen file permissions to make a probe pass.
+
+The runtime verifies the existing token with the existing private key and requires at least 30 seconds
+of remaining validity. It connects only to that installation's private Caddy service using the exact asset
+hostname for SNI/Host and ordinary CA verification. ON requires authorized GET/HEAD, matching served-content
+digest, unsigned refusal, app/auth-route refusal and no response cookies. A second signed request carries
+inert credential markers. Exact observed renderer bytes, supervisor file digest/generation and health also
+prove that the running policy deletes authentication headers and response cookies; the request alone does
+not assert stripping. No probe token, key or body leaves the installation.
+
+OFF requires the app-only applied generation, a healthy app front door, and refusal of the **still-valid**
+former signed token and app/auth paths on the asset hostname. Its private material fingerprint must match
+the preceding successful ON probe. Refresh and verify that existing authorized probe while ON before
+requesting OFF; an arbitrary replacement token after OFF cannot manufacture former-read evidence.
+An explicit peer TLS name/handshake refusal
+can prove retirement with those other barriers; a timeout, invalid certificate or unreachable front door
+cannot. Missing, expired or unauthorized material remains pending even after configuration was applied.
+For ON, refresh only the private probe file from the existing authorized workflow, then retry the same
+persisted operation. An expired former OFF probe remains pending and requires explicit operator recovery;
+the command never re-enables serving to obtain evidence. DNS removal, an unsigned 404 and an expired token
+do not prove retirement.
+
+### Reconcile and recover
+
+`apply` records intent before changing `.env`, preserving every unrelated byte and refusing ambiguous
+multiline/duplicate assignments. Its private `.visual-config.lock` and versioned `.visual-config.json`
+serialize operations, preserve their exact tuples and fence stale ON/OFF. Re-enable after OFF requires a
+fresh lease on the same app attempt, EC2 instance and census identity. The journal has a one-MiB limit;
+it refuses additional intent rather than discard stale-operation tombstones.
+
+A finite local owner holds that lock while recreating only the existing server and Caddy, using fixed
+Compose arguments, the installed release and `--pull never --no-build`. Its Docker command budget is
+150 seconds; the bounded SSM call may return pending sooner. The operation's process identity, deadline,
+stage and any uncertain Docker client identity are visible in `status`. Repeat the **same** request after
+the owner settles; do not allocate another operation, lease, server or identity because a response was lost.
+If the server restart is durably complete and the Caddy restart has not been dispatched, that same
+operation can reach its owed fixed Caddy restart even when Caddy is stopped or its applied marker is
+missing. Source/instance/census and journal continuity are checked before the restart; missing applied
+health is not proof of success and cannot bypass uncertain dispatch fencing.
+
+After a lost Docker response, that same operation can advance without issuing the mutation again only
+when its exact recorded client has exited and a fresh healthy target container proves the expected current
+configuration/generation. Unknown dispatch cuts or an unchanged/unhealthy container retain uncertainty.
+New revisions cannot overtake it. Use `status` to inspect saved/runtime configuration and applied-generation
+observations. A concurrent editor, source update, unrelated environment change or rollback stays pending;
+no cached receipt or automatic ON replay repairs it. Resolve the actual install through the existing
+operator recovery/update procedure before repeating the same request. If the dispatch identity or target
+outcome still cannot be established, retain the journal and seek explicit operator recovery; never delete
+the lock/journal, copy another install's receipt or edit uncertainty into success.
 
 ## Advanced: your own front door
 

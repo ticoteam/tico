@@ -221,3 +221,35 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
         H._next_number(c, "human:priya", second["id"], "t2")
         assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 91
     assert get(api, "deleted-tasks", token="priya-test")["tasks"] == []
+
+
+def test_a_milestone_wait_takes_the_blocker_gate_and_comes_back_with_a_restored_task(api):
+    from backend.task_delete import restore_tasks
+    task = post(api, "tasks", {"owner": "ben", "title": "Cut v1.3.0", "body": "x"}, token="priya-test")
+    # A requester outside the mover teams may not park someone else's task, by a blocker or by a milestone alike.
+    refused = post(api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="priya-test",
+                   expected=403)
+    assert refused["error"]["code"] == "identity"
+    post(api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="ben-test")
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert delete_tasks(c, [task["id"]], apply=True)["applied"] is True
+        assert c.execute("SELECT count(*) FROM task_milestone_waits WHERE task_id=?", (task["id"],)).fetchone()[0] == 0
+        restore_tasks(c, [task["id"]])
+        assert [r[0] for r in c.execute("SELECT target FROM task_milestone_waits WHERE task_id=?",
+                                        (task["id"],))] == ["acme/tico@v1.2.0"]
+
+
+def test_a_deleted_task_whose_step_was_retired_still_comes_back(api):
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Fix the billing page", "body": "Imported."}, token="ben-test")
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET number=52 WHERE id=?", (ticket["id"],))
+        c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('gone','general','Gone',99,'review')")
+        c.execute("UPDATE tasks SET step_id='gone' WHERE id=?", (ticket["id"],))
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    with store.transaction() as c:
+        c.execute("DELETE FROM task_steps WHERE id='gone'")
+    assert post(api, "tasks/52/restore", {}, token="ben-test")["restored"] == ticket["id"]
+    with store.read() as c:
+        assert c.execute("SELECT number, step_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[:] == (52, None)

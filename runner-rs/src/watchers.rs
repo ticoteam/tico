@@ -335,6 +335,8 @@ async fn run_program(argv: &[String], cwd: &Path, env: &Env, timeout: Duration) 
         }
         (owned(fds[0]), owned(fds[1]))
     };
+    // As `bot`, not a leased turn user: a watcher runs every few minutes, and a lease's cleanup sweeps the whole shared
+    // home each time. So a watcher's granted credentials are reachable by other bots' `bot` turns (SECURITY.md).
     let mut cmd = crate::isolation::command(&argv[0]);
     cmd.args(&argv[1..])
         .current_dir(cwd)

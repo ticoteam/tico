@@ -8,7 +8,9 @@ Controls appear when your rights allow the action.
 | Give work or review a result | Tasks → New task, List, Board or Done |
 | Talk to a bot about one task | Bot chat → tap the task's row ([Sessions](sessions.md)) |
 | See or link a task's sessions | Task → Sessions +; ⋯ → Copy session ID |
-| Add or edit a Routine | Settings → Routines → New routine, or the bot's Routines card |
+| Add or edit a Routine | Settings → Rules → New routine, or the bot's Routines card |
+| See what Tico runs on its own | Settings → Rules → What Tico runs on its own ([System routines](system-routines.md)) |
+| See or change what wakes a bot | Settings → Rules → What wakes a bot, or a task's **Wake rules** line |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
@@ -23,12 +25,14 @@ Controls appear when your rights allow the action.
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |
-| Review goals and KPIs | Goals |
+| Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the CEO Bot proposes ([Strategy](strategy.md)) |
+| See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
+| Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | Contact support or continue a support conversation | Help (?) → Support rail |
 
 All four system bots appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries
 (Assistant opens your private chat, `#/assistant`);
-the CEO Bot is on Goals, and Ask the Librarian is on Docs and Market. The CEO Bot is at the top of the team chart; the other three stay out of it.
+the CEO Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The CEO Bot is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.

@@ -438,8 +438,7 @@ class Builder:
                 self.clock.at += timedelta(minutes=4)
                 model, provider, billing = D.USAGE[bot]
                 cached = tokens_in * 2 // 3
-                hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", tokens_in, tokens_out,
-                                  round((tokens_in * 5 + tokens_out * 25) / 1_000_000, 2), summary,
+                hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", summary,
                                   usage={"input_tokens": tokens_in - cached, "cached_tokens": cached,
                                          "output_tokens": tokens_out, "model": model, "provider": provider,
                                          "est_cost_usd": providers.estimate_cost(model, tokens_in - cached, cached, tokens_out),

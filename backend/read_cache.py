@@ -60,3 +60,33 @@ def value(c, key, build):
         values[key] = build()
     # Callers enrich roster/config dictionaries; their changes must not become cached policy.
     return deepcopy(values[key])
+
+
+def one(c, statement, args=()):
+    """One neutral stored row; never cache a mutation or an answer outside its snapshot."""
+    values = cache(c) if statement.lstrip().upper().startswith("SELECT ") else None
+    key = ("one", statement, tuple(args))
+    if values is None:
+        return c.execute(statement, args).fetchone()
+    if key not in values:
+        values[key] = c.execute(statement, args).fetchone()
+    return values[key]
+
+
+def prime(c, statement, found):
+    """Seed `one` with rows read together in this snapshot, {args: row or None}, so a loop of one-row lookups that
+    follows reads none of them again. A row already cached stays as it is."""
+    values = cache(c)
+    if values is None:
+        return
+    for args, row in found.items():
+        values.setdefault(("one", statement, tuple(args)), row)
+
+
+def prime_rows(c, statement, found):
+    """Seed `rows` as `prime` seeds `one`: {args: the rows that statement returns for them}."""
+    values = cache(c)
+    if values is None:
+        return
+    for args, value in found.items():
+        values.setdefault((statement, tuple(args)), tuple(value))

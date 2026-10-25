@@ -107,6 +107,32 @@ def test_who_may_write_a_bots_routines(api):
     assert rows(api, "ops", token=attempt["token"])[0]["key"] == "weekly"
 
 
+def test_a_manager_bot_reads_its_reports_routines_and_no_other_bot_does(api):
+    # ops reports to cpo: cpo's own run reads ops's routines and their occurrences; finance, beside it, cannot.
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot IN ('cpo','finance')")
+    tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))
+    ben = runner(api, "ben", "Ben Mac")
+
+    def place(computer, bot):
+        with api.app.state.store.read() as c:
+            placed = c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()
+        assign(api, computer, bot, generation=placed[0] if placed else 0)
+        ready(api, computer, [bot])
+        post(api, "chat/" + bot, {"text": "How are your reports doing?"})
+        return claim(api, computer, bot=bot)
+
+    manager = place(ben, "cpo")
+    assert [row["key"] for row in rows(api, "ops", token=manager["token"])] == ["audit", "weekly"]
+    assert get(api, "routines/ops:audit/occurrences", token=manager["token"])["occurrences"]
+    create(api, "ops", DEBRIEF, token=manager["token"], expected=403)
+    other = place(r, "finance")
+    get(api, "bots/ops/routines", token=other["token"], expected=403)
+    get(api, "routines/ops:audit/occurrences", token=other["token"], expected=403)
+
+
 def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api):
     r = setup(api)
     fired = tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"]
@@ -133,7 +159,7 @@ def test_delete_keeps_history_closes_unclaimed_work_and_leaves_running_work(api)
     attempt = claim(api, r)
     post(api, "routines/ops:audit/delete", {})
     with api.app.state.store.read() as c:
-        assert H.task(c, attempt["task"]["id"])["status"] == "open"
+        assert H.task(c, attempt["task"]["id"])["status"] == "doing"
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "leased"
 
 
@@ -186,14 +212,14 @@ def test_pausing_a_bot_holds_its_routines_and_resuming_brings_back_the_enabled_o
     assert [get(api, "tasks/" + tid)["task"]["routine_id"] for tid in fired] == ["ops:audit"]
 
 
-def test_a_bot_still_in_setup_gets_no_timed_runs_and_keeps_its_event_runs(api):
+def test_an_onboarding_bot_runs_no_routines_timed_or_on_an_event(api):
     setup(api)
     create(api, "ops", DEBRIEF)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='ops'")
         from backend import routines
-        # A meeting's notes are announced once, so its run waits for the bot instead of being dropped.
-        assert len(routines.emit(c, "meeting.ready", "rec-1", title="Planning")) == 1
+        # Onboarding is learn-only (backend/lifecycle.py): no task is opened, so nothing is refused or held for it.
+        assert routines.emit(c, "meeting.ready", "rec-1", title="Planning") == []
     assert tick(api, datetime(2026, 9, 14, 14, tzinfo=timezone.utc))["fired"] == []
     assert {row["held_by_bot"] for row in rows(api)} == {"needs_setup"}
     post(api, "routines/ops:audit/run", {}, expected=409)     # as the page, which offers no Run now

@@ -20,6 +20,12 @@ An install can also get its own key with no one copying it (`auto_tick`): when t
 one with `origin: "automatic"`, and swaps it for a new one when the Gateway says (`rotate_after`). The install's id and
 secret (sealed) prove it is the same install if it ever loses the key. A pasted or environment key always wins. When Tico
 turns the install off, enrolling stops and Health says so in plain words.
+
+A self-run server linked to its Tico company (backend/company_server.py) gets its key the same way with no invite: it
+asks HQ with its server key (`company_server.gateway_key`), which enrolls the install for the company, so Tico models
+spend the company's credit (`via: "company"`). It asks right after linking and hourly while it has no key, before an
+install command's invite. When the link ends (either side) HQ revokes that key and the server forgets it
+(`company_ended`); the install keeps its id and secret and asks again once it is linked again.
 """
 
 import datetime
@@ -46,6 +52,7 @@ MODEL_PREFIX = "tico-"
 INVITE_ENV = "TICO_GATEWAY_INVITE"
 INSTALL_CONTEXT = "gateway-connection:install"
 AUTOMATIC = "automatic"
+COMPANY = "company"                                       # `via`: the key and identity came from the company link
 SYSTEM = "system:gateway"
 # What Health says once Tico has turned this install off: it then never asks again under the same invite.
 STOPPED = "Tico AI Gateway was turned off for this install by Tico. Contact support."
@@ -230,7 +237,7 @@ def clear(c, who, now, settings=None):
         return _public(before), _public(before)
     after = {"url": before.get("url", ""), "revision": int(before.get("revision") or 0) + 1, "updated": now,
              "updated_by": who.actor}
-    for field in ("install", "install_secret"):
+    for field in ("install", "install_secret", "via"):
         if before.get(field):
             after[field] = before[field]                  # the install stays itself if it connects again
     if before.get("origin") == AUTOMATIC:
@@ -291,6 +298,7 @@ def check_soon(store, vault, settings=None, opener=None):
     with store.read() as c:
         record = _row(c)
         fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
+                                                    COMPANY if _linked(c, settings) else
                                                     "install:" + record["install"] if _identity(record) else "")
     if not fingerprint:
         return None
@@ -449,9 +457,32 @@ def _identity(record):
 
 
 def maintained(c, settings=None):
-    """Whether the install looks after its own Gateway key: it has an invite to sign up with, or the identity a first
-    sign-up gave it (which keeps rotating and enrolling again by its secret with no invite)."""
-    return bool(invite(settings)) or _identity(_row(c))
+    """Whether the install looks after its own Gateway key: it has an invite to sign up with, a Tico company link that
+    gives it one, or the identity a first sign-up gave it (which keeps rotating and enrolling again by its secret with
+    no invite; one its company gave it only while linked)."""
+    record = _row(c)
+    return bool(invite(settings)) or _linked(c, settings) or (_identity(record) and record.get("via") != COMPANY)
+
+
+def _linked(c, settings=None):
+    """Whether this self-run server is linked to its Tico company (backend/company_server.py), which gives it its key."""
+    from . import company_server
+    return company_server.linked(c, settings)
+
+
+def company_ended(c):
+    """The Tico company link ended (backend/company_server.py `_forget`): HQ revoked the key it gave, so it goes here
+    too. The install keeps its id and secret, so linked again it is the same install. A pasted key stays."""
+    record = _row(c)
+    if record.get("via") != COMPANY or record.get("origin") != AUTOMATIC or not record.get("key"):
+        return False
+    after = {k: v for k, v in record.items()
+             if k not in ("key", "preview", "origin", "key_id", "rotate_after", "check", "auto")}
+    after.update(revision=int(record.get("revision") or 0) + 1, updated=H.now(), updated_by=SYSTEM)
+    _write(c, after)
+    H.event(c, SYSTEM, "gateway.connection.company_ended", PROVIDER,
+            {"install": record.get("install", ""), "revision": after["revision"]})
+    return True
 
 
 def _stopped(auto, settings):
@@ -480,11 +511,14 @@ def bot_header(c, vault, slug):
     return {G.BOT_HEADER: G.bot_id(secret, slug)}
 
 
-def _due(record, settings, now):
-    """What `auto_tick` should do with the connection as it is: "enroll", "rotate" or None."""
+def _due(record, settings, now, linked=False):
+    """What `auto_tick` should do with the connection as it is: "enroll", "rotate" or None. `linked`: the server is
+    linked to its Tico company (`_linked`)."""
     if env_key(settings) or getattr(settings, "rehearsal", False):
         return None
-    if not invite(settings) and not _identity(record):
+    if record.get("via") == COMPANY and not linked:
+        return None                                       # its company's identity: HQ holds it until it links again
+    if not invite(settings) and not _identity(record) and not linked:
         return None                                       # the invite is only needed to make the identity
     auto = record.get("auto") if isinstance(record.get("auto"), dict) else {}
     if auto.get("off") or _stopped(auto, settings):
@@ -518,7 +552,8 @@ def auto_tick(store, vault, settings=None, opener=None, now=None):
 def _auto_tick(store, vault, settings, opener, now):
     with store.read() as c:
         record = _row(c)
-        action = _due(record, settings, now)
+        linked = _linked(c, settings)
+        action = _due(record, settings, now, linked)
         if not action:
             return None
         base = url(c, settings)
@@ -542,11 +577,17 @@ def _auto_tick(store, vault, settings, opener, now):
         with store.transaction() as c:
             if not _unchanged(c, record):
                 return None
-            record = {**_row(c), "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret)}
+            record = {**_row(c), "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
+                      **({"via": COMPANY} if linked else {})}
             _write(c, record)
-    status, answer, code = G.enroll(base, install, secret, invite(settings), opener=opener)
+    if linked:
+        # The company's key, billed to its credit: HQ enrolls this install for it (backend/company_server.py).
+        from . import company_server
+        status, answer, code = company_server.gateway_key(store, vault, install, secret)
+    else:
+        status, answer, code = G.enroll(base, install, secret, invite(settings), opener=opener)
     if status == 201 and answer.get("key"):
-        return _keep(store, vault, record, answer, now, install, secret, "enrolled")
+        return _keep(store, vault, record, answer, now, install, secret, "enrolled", COMPANY if linked else "")
     if code == G.INSTALL_REVOKED:
         return _note(store, record, code, now, stopped=_invite_mark(invite(settings)))
     if code == "already_enrolled":
@@ -564,7 +605,7 @@ def _unchanged(c, record):
     return int(_row(c).get("revision") or 0) == int(record.get("revision") or 0)
 
 
-def _keep(store, vault, record, answer, now, install, secret, what):
+def _keep(store, vault, record, answer, now, install, secret, what, via=""):
     key_value = _clean_key(answer["key"])
     with store.transaction() as c:
         if not _unchanged(c, record):
@@ -575,7 +616,8 @@ def _keep(store, vault, record, answer, now, install, secret, what):
                  "install": install, "install_secret": vault.cipher.seal(c, INSTALL_CONTEXT, secret),
                  "origin": AUTOMATIC, "key_id": str(answer.get("key_id") or ""),
                  "rotate_after": str(answer.get("rotate_after") or ""),
-                 "revision": int(record.get("revision") or 0) + 1, "updated": _stamp(now), "updated_by": SYSTEM}
+                 "revision": int(record.get("revision") or 0) + 1, "updated": _stamp(now), "updated_by": SYSTEM,
+                 **({"via": via} if via else {})}
         _write(c, after)
         H.event(c, SYSTEM, f"gateway.connection.{what}", PROVIDER,
                 {"install": install, "key_id": after["key_id"], "revision": after["revision"]})

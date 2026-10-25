@@ -144,6 +144,7 @@ HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO
 SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
 HQ_CLIENTS = {
+    "backend/company_server.py": '"User-Agent": user_agent()',
     "backend/inbound.py": '"User-Agent": user_agent()',
     "backend/recruit.py": '"User-Agent": "tico"',
     "backend/billing_check.py": '"User-Agent": "tico-billing-check"',

@@ -71,6 +71,9 @@ struct Inner {
     settings: Option<Settings>,
     provider: Option<String>,
     usage: Value,
+    /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
+    streamed: (String, String),
+    new_message: bool,
     tx: Events,
     reader: Option<tokio::task::JoinHandle<()>>,
 }
@@ -97,6 +100,8 @@ impl AntigravityHost {
                 settings: None,
                 provider: None,
                 usage: json!({}),
+                streamed: Default::default(),
+                new_message: false,
                 tx,
                 reader: None,
             }),
@@ -186,7 +191,7 @@ impl AntigravityHost {
     fn command(&self, settings: &Settings, effort: Option<&str>, provider: Option<&str>) -> Result<Command, HostError> {
         let argv = argv(&self.0.cmd, settings, effort, provider)?;
         let mut command = crate::isolation::command(&argv[0]);
-        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).current_dir(&settings.cwd);
+        command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd);
         if !settings.env.is_empty() {
             command.env_clear().envs(&settings.env);
         }
@@ -203,6 +208,11 @@ impl AntigravityHost {
     fn spawn(&self, settings: &Settings, effort: Option<&str>, provider: Option<&str>) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
         let mut command = self.command(settings, effort, provider)?;
         let mut child = command.spawn().map_err(|e| failed(format!("could not start agy: {e}")))?;
+        let host = self.clone();
+        let _stderr = crate::run_diagnostics::Stderr::capture_with(&mut child, move |value| {
+            let inner = host.inner();
+            if inner.turn.is_some() { let _ = inner.tx.send(value); }
+        }, &settings.env);
         log(&format!("antigravity: agy started pid {}", child.id().map_or("?".into(), |p| p.to_string())));
         let stdout = child.stdout.take().ok_or_else(|| failed("agy has no stdout"))?;
         let mut stdin = child.stdin.take();
@@ -217,11 +227,17 @@ impl AntigravityHost {
         });
         let (kill, mut asks) = mpsc::unbounded_channel::<i32>();
         let (done, exited) = watch::channel(false);
+        let host = self.clone();
         tokio::spawn(async move {
             let mut asking = true;
             loop {
                 tokio::select! {
-                    _ = child.wait() => break,
+                    status = child.wait() => {
+                        let code = super::return_code(&status);
+                        let inner = host.inner();
+                        let _ = inner.tx.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
+                        break;
+                    },
                     sig = asks.recv(), if asking => match sig {
                         // Not reaped yet: only this task waits for the child, so the group is still its own.
                         Some(sig) => if let Some(pid) = child.id() {
@@ -255,6 +271,7 @@ impl AntigravityHost {
             return Err(failed("Antigravity is unavailable or already running a turn"));
         }
         inner.turn = Some(turn.clone());
+        (inner.streamed, inner.new_message) = Default::default();
         let _ = inner.tx.send(event("status", Some(thread_id), Some(&turn), json!({"state": "active"})));
         Ok(turn)
     }
@@ -313,9 +330,13 @@ impl AntigravityHost {
         let Some(turn) = turn else { return Ok(()) };
         let (tid, turn) = (tid.as_deref(), Some(turn.as_str()));
         if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
-            let _ = inner.tx.send(event("delta", tid, turn, json!({"text": step["text_delta"], "delta_kind": "text"})));
+            let text = text_of(&step["text_delta"]);
+            inner.streamed.0.push_str(&text);
+            let piece = super::add_piece(&mut inner.streamed.1, std::mem::take(&mut inner.new_message), &text);
+            let _ = inner.tx.send(event("delta", tid, turn, json!({"text": piece, "delta_kind": "text"})));
         }
         if step["step_type"] == "tool" {
+            inner.new_message = true;
             let tool = step.get("tool_name").cloned().unwrap_or(json!("tool"));
             let _ = inner.tx.send(event("tool", tid, turn, json!({"tool": tool, "state": step.get("state").cloned().unwrap_or(Value::Null)})));
         }
@@ -339,7 +360,12 @@ impl AntigravityHost {
         };
         send(event("tokens", tid, turn, json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}})));
         if result["status"] == "SUCCESS" {
-            let text = result["response"].as_str().unwrap_or_default().trim().to_string();
+            let mut text = result["response"].as_str().unwrap_or_default().trim().to_string();
+            // Antigravity's answer runs the turn's messages together with nothing between them: when it is just the
+            // streamed text, each message keeps its own paragraph.
+            if !text.is_empty() && text == inner.streamed.0.trim() {
+                text = inner.streamed.1.trim().to_string();
+            }
             send(event("message", tid, turn, json!({"text": text, "final": true})));
             send(event("turn_completed", tid, turn, json!({"status": "completed"})));
         } else {

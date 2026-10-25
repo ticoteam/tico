@@ -1,7 +1,8 @@
 """The real Rust screen WebSocket and lifecycle contract.
 
 These start only owned loopback services on allocated ports and use fictional identities/SQLite.
-Build relay-rs first, then run this file with -m slow -n 0 and TICO_SCREEN_RELAY_BIN set.
+Build relay-rs first (`cd relay-rs && cargo build --release`), then run this file with -m slow -n 0. The binary is
+TICO_SCREEN_RELAY_BIN, else the checkout's own relay-rs/target/release build when it matches the sources.
 """
 import contextlib
 from dataclasses import replace
@@ -29,6 +30,19 @@ from backend.tests.test_screen import offer
 
 pytestmark = pytest.mark.slow
 KEY = "fictional-relay-key-for-isolated-tests-only"
+
+
+def relay_binary():
+    """The relay under test: TICO_SCREEN_RELAY_BIN, else this checkout's release build if it is the current sources'."""
+    from backend import screen_binary
+    binary = os.environ.get("TICO_SCREEN_RELAY_BIN", "")
+    if not binary:
+        built = Path(os.environ.get("CARGO_TARGET_DIR") or screen_binary.ROOT / "relay-rs" / "target") / "release" / "tico-screen-relay"
+        if screen_binary.current(built, screen_binary.source_id()):
+            return str(built)
+    if not binary or not Path(binary).is_file():
+        raise RuntimeError("Build relay-rs (cd relay-rs && cargo build --release) or set TICO_SCREEN_RELAY_BIN to its executable")
+    return binary
 
 
 class Service:
@@ -60,9 +74,7 @@ class Service:
         return listener
 
     def start_rust(self):
-        binary = self.binary or os.environ.get("TICO_SCREEN_RELAY_BIN", "")
-        if not binary or not Path(binary).is_file():
-            raise RuntimeError("Build relay-rs and set TICO_SCREEN_RELAY_BIN to its executable")
+        binary = self.binary or relay_binary()
         port = 0 if self.relay_url == self.origin else int(self.relay_url.rsplit(":", 1)[1])
         if not hasattr(self, "public_origin"):
             reserved = self.bind()

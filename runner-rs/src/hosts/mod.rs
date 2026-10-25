@@ -60,9 +60,25 @@ pub fn limit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
+            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
         )
         .unwrap()
+    })
+}
+
+/// A provider out of capacity for the moment, not a login's quota (backend/login_holds.py _CAPACITY_RE, _QUOTA_RE):
+/// still a limit, so a fallback can take the turn, but the server holds the login for minutes, not a quota backoff.
+fn capacity_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)model is at capacity|no capacity available|\boverloaded(?:_error)?\b|\b(?:code|status|http) 503\b|(?:retry|try again) (?:after|in) \d+(?:\.\d+)? ?(?:s|secs?|seconds)\b").unwrap()
+    })
+}
+
+fn quota_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|quota|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|out_of_credit|billing|\bresets?\b").unwrap()
     })
 }
 
@@ -93,6 +109,11 @@ fn secretish_re() -> &'static Regex {
 
 pub fn is_limit(text: &str) -> bool {
     limit_re().is_match(text)
+}
+
+/// Whether a limit notice is the provider's temporary model capacity: quota or billing words in it win.
+pub fn is_capacity(text: &str) -> bool {
+    capacity_re().is_match(text) && !quota_re().is_match(text)
 }
 
 pub fn is_auth_rejected(text: &str) -> bool {
@@ -128,6 +149,8 @@ pub fn compact_at(value: &Value) -> i64 {
 
 #[derive(Clone, Debug, Default)]
 pub struct Settings {
+    /// Only a Gateway harness receives its turn's leased OS identity.
+    pub identity: Option<(u32, u32)>,
     pub cwd: String,
     pub model: Option<String>,
     pub effort: Option<String>,
@@ -182,6 +205,20 @@ pub fn event(kind: &str, thread: Option<&str>, turn: Option<&str>, fields: Value
         ev.extend(f);
     }
     Value::Object(ev)
+}
+
+/// Adds one streamed piece to a turn's reply and returns the text its `delta` carries. Pieces of one message join
+/// with nothing between them; the first piece of a new message after earlier text starts a paragraph of its own,
+/// as Claude's separate answers do, so two messages never read as one ("...recovers.No change...").
+pub fn add_piece(reply: &mut String, new_message: bool, text: &str) -> String {
+    if !new_message || reply.trim().is_empty() {
+        reply.push_str(text);
+        return text.to_string();
+    }
+    reply.truncate(reply.trim_end().len());
+    let piece = format!("\n\n{}", text.trim_start());
+    reply.push_str(&piece);
+    piece
 }
 
 /// The longest input summary a `tool` event carries. The drive loop scrubs it with the rest of the event.
@@ -593,6 +630,24 @@ impl Host {
             _ => thread_id.to_string(),
         }
     }
+
+    /// Whether this host says when a thread it started is up (a `thread_confirmed` event: Claude's system init,
+    /// Gemini's init, Pi's session line, Codex's first turn/started). A new thread on one is kept only then.
+    pub fn confirms_threads(&self) -> bool {
+        matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
+    }
+
+    /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
+    /// that does not confirm threads.
+    pub fn confirmed(&self, thread_id: &str) -> Option<String> {
+        match self {
+            Host::Claude(h) => h.confirmed(thread_id),
+            Host::Codex(h) => h.confirmed(thread_id),
+            Host::Gemini(h) => h.confirmed(thread_id),
+            Host::Pi(h) => h.confirmed(thread_id),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -643,6 +698,15 @@ mod tests {
     }
 
     #[test]
+    fn a_new_message_starts_a_paragraph_and_pieces_of_one_message_join_with_nothing() {
+        let mut reply = String::new();
+        assert_eq!(add_piece(&mut reply, true, "Holding until "), "Holding until ");
+        assert_eq!(add_piece(&mut reply, false, "it recovers. "), "it recovers. ");
+        assert_eq!(add_piece(&mut reply, true, "No change."), "\n\nNo change.");
+        assert_eq!(reply, "Holding until it recovers.\n\nNo change.");
+    }
+
+    #[test]
     fn the_python_classifiers_agree() {
         assert!(is_limit("You've hit your usage limit"));
         assert!(is_limit("You've hit your session limit · resets 12:40am (UTC)"));
@@ -658,6 +722,15 @@ mod tests {
         assert!(!is_limit("Raise the storage quota for the team drive"));
         assert!(!is_limit("Quota: 40 of 100 seats used"));
         assert!(!is_limit("write /tmp/out: Disk quota exceeded (os error 122)"));
+        // Capacity is a limit (a fallback may take the turn) but not quota; the plan's quota stays quota.
+        assert!(is_limit("Selected model is at capacity. Please try a different model.") && is_capacity("Selected model is at capacity. Please try a different model."));
+        assert!(is_capacity("HTTP 503 overloaded"));
+        // An API's structured refusal ("overloaded_error"): the underscore is a word character, so it needs its own match.
+        let structured = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Server busy"}}"#;
+        assert!(is_limit(structured) && is_capacity(structured));
+        assert!(!is_capacity("Quota exceeded. Check your plan and billing details."));
+        assert!(!is_capacity("API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-19T00:00:00Z. (rate_limit_error)"));
+        assert!(!is_capacity("You've hit your usage limit"));
         assert!(is_auth_retryable("OAuth: failed to refresh OAuth token"));
         assert!(!is_auth_retryable("unexpected status 401 Unauthorized: Invalid API key"));
         assert!(is_auth_rejected("Invalid API key · Please run /login"));
@@ -721,6 +794,14 @@ pub fn bot_key_sign_in(runtime: &str, assignments: &[Value]) -> (&'static str, S
     }
 }
 
+/// Hand a host's default computer-login store to the account that runs its CLI. Profile homes have their own handoff.
+pub fn prepare_login_home(runtime: &str, env: &Env) {
+    match runtime {
+        "grok" => grok::prepare_home(env),
+        _ => {}
+    }
+}
+
 /// Points `env` at the host's own config folder (`own_config_home`), so a login or status check sees the login its
 /// turns use rather than the operator's. False for a host without one.
 pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Profile>, env: &mut Env) -> bool {
@@ -747,6 +828,23 @@ pub fn data_problem(runtime: &str, profile: Option<&crate::profiles::Profile>) -
 pub fn file_signed_in(runtime: &str, env: &Env) -> Option<bool> {
     match runtime {
         "musecode" => musecode::signed_in(&musecode::auth_file(env)),
+        "grok" => grok::signed_in(env),
+        _ => None,
+    }
+}
+
+/// A file-backed host can distinguish a subscription from a saved API-key login.
+pub fn file_sign_in_detail(runtime: &str, env: &Env) -> Option<&'static str> {
+    match runtime {
+        "grok" => grok::sign_in_detail(env),
+        _ => None,
+    }
+}
+
+/// Why the host's login file cannot be used, when `file_signed_in` gives no answer for a reason the person can fix.
+pub fn file_problem(runtime: &str, env: &Env) -> Option<String> {
+    match runtime {
+        "musecode" => musecode::store_problem(&musecode::auth_file(env)),
         _ => None,
     }
 }

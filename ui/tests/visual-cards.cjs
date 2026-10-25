@@ -142,7 +142,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     await m1.locator('figure.vcard').nth(3).waitFor();
     const chart = m1.locator('figure.vcard[data-kind="image"] .vcard-body');
     const before = await chart.evaluate(el => [el.getBoundingClientRect().width, el.getBoundingClientRect().height]);
-    assert(before[1] > 50 && Math.abs(before[1] - before[0] / 2) < 2, `${label}: the chart holds its 2:1 space before it loads ${before}`);
+    // a picture is a quarter-column thumbnail (Dev 338): 76x38 on a phone
+    assert(before[1] > 20 && Math.abs(before[1] - before[0] / 2) < 2, `${label}: the chart holds its 2:1 space before it loads ${before}`);
     release(); hold = null;
     await m1.locator('figure.vcard[data-kind="image"] .vcard-body.ready').waitFor();
     const after = await chart.evaluate(el => el.getBoundingClientRect().height);

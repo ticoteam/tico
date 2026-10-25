@@ -139,6 +139,48 @@ pub struct CredentialSocket {
     pub path: PathBuf,
     dir: Option<PathBuf>,
     attempts: Arc<Mutex<HashMap<String, Registered>>>,
+    client: Client,
+    cache: Arc<TokenCache>,
+}
+
+/// A Gateway turn's own door to the credential socket: in its private directory, owned by its leased user and
+/// owner-only, so neither the bot user nor a sibling turn can connect through it. Answers like the shared one.
+/// The turn's lease owns it (crate::turn_users::Lease::hold_socket), so it closes before the UID can be lent again.
+pub struct TurnSocket {
+    pub path: PathBuf,
+    task: tokio::task::JoinHandle<()>,
+    /// The (dev, ino) bound at `path`: the path is fixed per UID, and a later turn's socket there is not this one's.
+    bound: (u64, u64),
+}
+
+impl Drop for TurnSocket {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        self.task.abort();
+        if std::fs::symlink_metadata(&self.path).is_ok_and(|m| (m.dev(), m.ino()) == self.bound) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn accept(listener: tokio::net::UnixListener, shared: Arc<Mutex<HashMap<String, Registered>>>, client: Client, cache: Arc<TokenCache>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else { continue };
+            let (attempts, client, cache) = (shared.clone(), client.clone(), cache.clone());
+            tokio::spawn(async move {
+                let (read, mut write) = stream.into_split();
+                let mut reader = tokio::io::BufReader::new(read).take(MAX_LINE as u64);
+                let mut line = String::new();
+                let answered = tokio::time::timeout(Duration::from_secs(20), async {
+                    let _ = reader.read_line(&mut line).await;
+                    let reply = answer(&attempts, &client, &cache, &line).await;
+                    let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
+                });
+                let _ = answered.await;
+            });
+        }
+    })
 }
 
 impl CredentialSocket {
@@ -168,25 +210,31 @@ impl CredentialSocket {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         crate::isolation::chown(&path);
         let attempts: Arc<Mutex<HashMap<String, Registered>>> = Arc::new(Mutex::new(HashMap::new()));
-        let shared = attempts.clone();
-        tokio::spawn(async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else { continue };
-                let (attempts, client, cache) = (shared.clone(), client.clone(), cache.clone());
-                tokio::spawn(async move {
-                    let (read, mut write) = stream.into_split();
-                    let mut reader = tokio::io::BufReader::new(read).take(MAX_LINE as u64);
-                    let mut line = String::new();
-                    let answered = tokio::time::timeout(Duration::from_secs(20), async {
-                        let _ = reader.read_line(&mut line).await;
-                        let reply = answer(&attempts, &client, &cache, &line).await;
-                        let _ = write.write_all(format!("{reply}\n").as_bytes()).await;
-                    });
-                    let _ = answered.await;
-                });
-            }
-        });
-        Ok(CredentialSocket { path, dir, attempts })
+        // The listener task lives as long as the runner.
+        drop(accept(listener, attempts.clone(), client.clone(), cache.clone()));
+        Ok(CredentialSocket { path, dir, attempts, client, cache })
+    }
+
+    /// `serve` for one leased turn user at `path` (crate::turn_users), and `env` pointed at it instead.
+    pub fn serve_for(&self, env: &mut Env, path: &Path, owner: (u32, u32)) -> std::io::Result<TurnSocket> {
+        let _ = std::fs::remove_file(path);
+        let listener = tokio::net::UnixListener::bind(path)?;
+        use std::os::unix::fs::MetadataExt;
+        let info = std::fs::symlink_metadata(path)?;
+        let task = accept(listener, self.attempts.clone(), self.client.clone(), self.cache.clone());
+        let turn = TurnSocket { path: path.to_path_buf(), task, bound: (info.dev(), info.ino()) };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        std::os::unix::fs::lchown(path, Some(owner.0), Some(owner.1))?;
+        self.repoint(env, path);
+        Ok(turn)
+    }
+
+    /// Point a turn's helper and socket variables from this socket to its own `path`.
+    pub fn repoint(&self, env: &mut Env, path: &Path) {
+        let (shared, own) = (self.path.display().to_string(), path.display().to_string());
+        for value in env.values_mut() {
+            if value.contains(&shared) { *value = value.replace(&shared, &own); }
+        }
     }
 
     pub fn register(&self, attempt_token: &str, bot: &str) {
@@ -288,7 +336,7 @@ pub fn token_problem(e: &ApiError, repository: &str) -> String {
 
 // ----------------------------------------------------------------------------- the turn's environment
 
-fn git_environment(env: &mut Env, token: &str, helper: &str) {
+pub(crate) fn git_environment(env: &mut Env, token: &str, helper: &str) {
     for (k, v) in [
         ("GH_TOKEN", token),
         ("GITHUB_TOKEN", token),
@@ -303,6 +351,34 @@ fn git_environment(env: &mut Env, token: &str, helper: &str) {
     ] {
         env.insert(k.into(), v.into());
     }
+}
+
+/// Git refuses a work tree another user owns. A Gateway turn's leased user works in the bot's checkout, so the
+/// turn trusts exactly these paths (never `*`), after the entries `git_environment` set.
+pub fn trust_directories(env: &mut Env, paths: &[PathBuf]) {
+    for path in paths {
+        add_config(env, "safe.directory", &path.display().to_string());
+    }
+}
+
+/// One more command-line config entry (GIT_CONFIG_KEY_n/VALUE_n), unless it is already there.
+pub fn add_config(env: &mut Env, key: &str, value: &str) {
+    let count: usize = env.get("GIT_CONFIG_COUNT").and_then(|c| c.parse().ok()).unwrap_or(0);
+    let present = (0..count).any(|i| env.get(&format!("GIT_CONFIG_KEY_{i}")).map(String::as_str) == Some(key)
+        && env.get(&format!("GIT_CONFIG_VALUE_{i}")).map(String::as_str) == Some(value));
+    if value.is_empty() || present { return; }
+    env.insert(format!("GIT_CONFIG_KEY_{count}"), key.into());
+    env.insert(format!("GIT_CONFIG_VALUE_{count}"), value.into());
+    env.insert("GIT_CONFIG_COUNT".into(), (count + 1).to_string());
+}
+
+/// One more command-line config entry, even an empty one: for a key git reads as a list (`credential.helper`,
+/// `http.extraHeader`) an empty value clears what came before it, and for most others it means "none".
+pub fn push_config(env: &mut Env, key: &str, value: &str) {
+    let count: usize = env.get("GIT_CONFIG_COUNT").and_then(|c| c.parse().ok()).unwrap_or(0);
+    env.insert(format!("GIT_CONFIG_KEY_{count}"), key.into());
+    env.insert(format!("GIT_CONFIG_VALUE_{count}"), value.into());
+    env.insert("GIT_CONFIG_COUNT".into(), (count + 1).to_string());
 }
 
 /// The helper git runs on every `get`: this binary asking the socket.
@@ -493,7 +569,7 @@ pub fn git_credential_main(socket: Option<String>) -> i32 {
     let _ = std::io::stdin().read_to_string(&mut input);
     let wanted: HashMap<String, String> = input.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.into(), v.into())).collect();
     let host = std::env::var("TICO_GITHUB_HOST").ok().filter(|h| !h.is_empty()).unwrap_or_else(|| "github.com".into());
-    if wanted.get("host") != Some(&host) {
+    if wanted.get("host") != Some(&host) || wanted.get("protocol").is_some_and(|p| p != "https") {
         return 0;
     }
     let repo = wanted.get("path").and_then(|p| repository_name(p));
@@ -613,6 +689,69 @@ mod tests {
             assert_eq!(select_token(&granted, repo.as_deref()), "actions", "{command}");
         }
         assert_eq!(select_token(&granted, gh_repository(&a("pr list -R acme/bot-rm"), None).as_deref()), "plain");
+    }
+
+    #[tokio::test]
+    async fn a_turn_user_trusts_only_its_checkout_and_owns_its_own_credential_socket() {
+        let dir = PathBuf::from("/tmp").join(format!("tico-turn-cred-{}", uuid::Uuid::new_v4().simple())); // socket paths are short
+        std::fs::create_dir(&dir).unwrap();
+        let client = Client::new("http://127.0.0.1:9", "synthetic", 5, 0).unwrap();
+        let shared = CredentialSocket { path: dir.join("shared.sock"), dir: None, attempts: Default::default(), client, cache: Arc::new(TokenCache::new()) };
+        let mut env = Env::new();
+        git_environment(&mut env, "t", &fresh_helper(&shared.path, "ops"));
+        env.insert(SOCKET_ENV.into(), shared.path.display().to_string());
+        let (main, worktree) = (PathBuf::from("/home/runner/workspace/bot-ops"), PathBuf::from("/home/runner/worktrees/t1"));
+        trust_directories(&mut env, &[main.clone(), worktree.clone(), main.clone()]);
+        assert_eq!(env["GIT_CONFIG_COUNT"], "5");
+        assert_eq!((env["GIT_CONFIG_KEY_3"].as_str(), env["GIT_CONFIG_VALUE_3"].as_str()), ("safe.directory", "/home/runner/workspace/bot-ops"));
+        assert_eq!(env["GIT_CONFIG_VALUE_4"], "/home/runner/worktrees/t1");
+        assert!(!env.values().any(|v| v == "*"));
+        // This test's own IDs stand in for the leased user: the runner chowns the socket to it, owner-only.
+        let owner = unsafe { (libc::geteuid(), libc::getegid()) };
+        let own = dir.join("turn.sock");
+        let turn = shared.serve_for(&mut env, &own, owner).unwrap();
+        let info = std::fs::symlink_metadata(&own).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!((info.uid(), info.gid(), info.mode() & 0o777), (owner.0, owner.1, 0o600));
+        assert_eq!(env[SOCKET_ENV], own.display().to_string());
+        assert!(env["GIT_CONFIG_VALUE_1"].contains(&own.display().to_string()) && !env.values().any(|v| v.contains("shared.sock")));
+        let reply = tokio::task::spawn_blocking(move || {
+            let mut stream = std::os::unix::net::UnixStream::connect(&own).unwrap();
+            stream.write_all(b"not json\n").unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            line
+        }).await.unwrap();
+        assert!(reply.contains("bad request"), "{reply}");
+        drop(turn);
+        assert!(!dir.join("turn.sock").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_finished_turn_leaves_the_next_borrowers_socket_at_the_same_path() {
+        let dir = PathBuf::from("/tmp").join(format!("tico-turn-reuse-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).unwrap();
+        let client = Client::new("http://127.0.0.1:9", "synthetic", 5, 0).unwrap();
+        let shared = CredentialSocket { path: dir.join("shared.sock"), dir: None, attempts: Default::default(), client, cache: Arc::new(TokenCache::new()) };
+        let owner = unsafe { (libc::geteuid(), libc::getegid()) };
+        // The path is fixed per UID: the next turn on the same UID binds it while the old one is still being dropped.
+        let own = dir.join("git-credential.sock");
+        let old = shared.serve_for(&mut Env::new(), &own, owner).unwrap();
+        let new = shared.serve_for(&mut Env::new(), &own, owner).unwrap();
+        drop(old);
+        let path = own.clone();
+        let reply = tokio::task::spawn_blocking(move || {
+            let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+            stream.write_all(b"not json\n").unwrap();
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).unwrap();
+            line
+        }).await.unwrap();
+        assert!(reply.contains("bad request"), "{reply}");
+        drop(new);
+        assert!(!own.exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -168,18 +168,20 @@ class Inbound:
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_sync':sync['last_sync'],'error':sync['error'],
                 'gaps':json.loads(sync['gaps_json'])}
 
-    def connection_actor(self, who):
-        # Delegated human identities may manage other Inbox operations, never company linking.
+    def connection_actor(self, who, what='Inbox', code='inbox_connection'):
+        # Delegated human identities may manage other Inbox operations, never company linking. Also the rule for
+        # linking this server to its company (backend/company_server.py), with its own `what` and error `code`.
+        forbidden = Problem(code+'_forbidden',f'A signed-in owner or admin must connect {what} directly.',403)
         if (who.role not in ('owner','human') or not who.actor.startswith('human:')
                 or any((who.support,who.via,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
-            raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+            raise forbidden
         from . import access, census
         with self.store.read_transaction() as c:
             validate_identity(c,who)
             human = H.human(c,H.actor_id(who.actor))
             role = access.role_of(access.load_access(c,self.settings),access.load_owner(c,self.settings)['email'],human.get('email'))
             if role not in ('owner','admin'):
-                raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+                raise forbidden
             validate_identity(c,replace(who,role='owner' if role=='owner' else 'human',email=human.get('email') or ''))
             # This getter must stay read-only: a reported census ID does not prove ownership.
             try:record = census._load(c)
@@ -188,9 +190,9 @@ class Inbound:
         try:
             if not isinstance(ident,str) or str(uuid.UUID(ident))!=ident:raise ValueError()
         except (ValueError,TypeError,AttributeError):
-            raise Problem('inbox_connection_unavailable','This workspace has no saved installation identity yet.',409) from None
+            raise Problem(code+'_unavailable','This workspace has no saved installation identity yet.',409) from None
         if len(who.actor)>100 or any(ord(ch)<32 or ord(ch)==127 for ch in who.actor):
-            raise Problem('inbox_connection_forbidden','A signed-in owner or admin must connect Inbox directly.',403)
+            raise forbidden
         return {'reported_install_id':ident,'actor':who.actor}
 
     async def company_connection(self, who, body):

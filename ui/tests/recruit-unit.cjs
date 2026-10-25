@@ -5,13 +5,13 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 (async () => {
-  let allowed = true, created = [], dialog, resolveCatalog, submitHandlerAtShow;
+  let allowed = true, created = [], opened = [], dialog, resolveCatalog, submitHandlerAtShow;
   const submit = {}, status = {}, button = {dataset:{recruitCreate:'support'}};
   const results = {innerHTML:'',querySelectorAll:()=>[button],replaceChildren(){}};
   const form = {querySelector:()=>submit};
   const makeDialog = () => ({id:'',className:'',innerHTML:'',setAttribute(){},showModal(){
     submitHandlerAtShow=form.onsubmit;
-  },close(){},
+  },close(){},addEventListener(){},
     querySelectorAll:()=>[],querySelector:selector=>({form,'[data-recruit-status]':status,'[data-recruit-candidates]':results})[selector]});
   const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const values = {title:'Support teammate',brief:'Answer tickets using our team docs.',tools:'Mailbox',reviewer:'Support lead'};
@@ -21,9 +21,10 @@ const path = require('node:path');
     $:()=>undefined,esc:escape,S:{me:{id:'owner'},emps:[],route:'#/tasks'},SETTINGS:'#/settings',
     settingsCanCreateBots:()=>allowed,settingsShow(){},catalogCards:x=>x.cards,
     get:()=>new Promise(resolve=>{resolveCatalog=resolve;}),
-    post:async(url,body)=>{created.push({url,body});return {};},refresh:async()=>{},loadSettings:async()=>{},toast(){},settingsEditBot(){}
+    post:async(url,body)=>{created.push({url,body});return url==='/v2/seats'?{id:'seat-1'}:{};},refresh:async()=>{},loadSettings:async()=>{},toast(){},settingsEditBot(){}
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../app/recruit.js'),'utf8'),context);
+  context.recruitSeat=async id=>{opened.push(id);};
   const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support'});
   assert.equal(typeof submitHandlerAtShow,'function','submission is intercepted before the form is shown');
   let prevented = false;
@@ -57,6 +58,9 @@ const path = require('node:path');
   prevented=false;
   await form.onsubmit({preventDefault(){prevented=true;}});
   assert.equal(prevented,true,'catalog failure cannot restore browser submission');
-  assert.equal(created.length,1,'catalog failure cannot create another bot');
+  assert.equal(created.filter(c=>c.url==='/v2/bots').length,1,'catalog failure cannot create another bot');
+  // Recruit candidates needs no catalog here: it makes a Recruiting seat and opens it (backend/recruiting.py).
+  assert.deepEqual(created.slice(1).map(c=>[c.url,c.body.title]),[['/v2/seats','Support teammate']]);
+  assert.deepEqual(opened,['seat-1'],'the new seat opens for its job description and candidates');
   console.log('Recruit submit cancellation, handoff, explicit creation and stale-permission checks passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

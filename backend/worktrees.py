@@ -1,6 +1,7 @@
 """Task worktree authorization and computer lifecycle reports (task_links v2 schema)."""
 import json
 import re
+import sqlite3
 import uuid
 import unicodedata
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from clients import git_repository
 from . import hubdb as H, repositories as R, task_relations as TR, worktree_waits as waits
 from .auth import validate_identity
 from .models import Contract
+from .roadmap_flow import READY_FROM
 from .store import Problem, readiness_document
 
 CLOSED = ('done', 'closed', 'declined')
@@ -138,38 +140,88 @@ def supported(c):
     return 'computer_id' in {r[1] for r in c.execute('PRAGMA table_info(task_links)')}
 
 
-LIMIT = 50            # live worktrees per bot; the computer's free-disk floor can stop it sooner
+LIMIT = 100           # live worktrees per bot; the computer's free-disk floor can stop it sooner
 CLEANUP_TRIES = 6     # a refused worktree cleanup is asked again after 2, 4, ... 64 minutes, then left
+READINGS = ('last_activity', 'size_mb', 'activity_at')     # a worktree report's readings that move as a bot works
+READINGS_EVERY = 300
 PENDING_HOURS = 6     # a checkout or setup with no progress this long has failed; its owner is told and may retry
 
 
-def live_turn(c, task_id, owner):
-    """The owner bot is in a turn on this task now: a leased or running attempt that carries the task."""
+def live_turn(c, task_id, owner, memo=None):
+    """The owner bot is in a turn on this task now: a leased or running attempt that carries the task. Only the turns
+    of the bot that owns both the tree and the task count: a reviewer's or another bot's turn on the task, or a turn of
+    a bot the task has since moved away from, neither holds the tree nor shields it from the setup deadline."""
     if not task_id or not H.is_bot(owner or ''):
         return False
+    task = c.execute('SELECT owner FROM tasks WHERE id=?', (task_id,)).fetchone()
+    if not task or task[0] != owner:
+        return False
+    memo = {} if memo is None else memo
+    key = ("live_turn", owner)
+    if key not in memo:
+        memo[key] = _live_tasks(c, H.actor_id(owner), memo)
+    return task_id in memo[key]
+
+
+def _live_tasks(c, bot, memo):
     from .task_privacy import attempt_tasks
     try:
-        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')",
-                         (H.actor_id(owner),)).fetchall()
-    except Exception:               # a local hub has no attempts table
-        return False
-    return any(task_id in attempt_tasks(c, r[0]) for r in rows)
+        rows = c.execute("SELECT id FROM attempts WHERE bot=? AND state IN ('leased','running')", (bot,)).fetchall()
+    except sqlite3.OperationalError as exc:
+        if 'no such table' not in str(exc):
+            raise                   # a fault must not release a checkout under its running turn
+        return frozenset()          # a local hub has no attempts table
+    return frozenset(tid for row in rows for tid in attempt_tasks(c, row[0], memo))
+
+
+def live_turn_cache(c, computer):
+    """Prepare provenance without the write lock; the caller validates its source clock before using it."""
+    from . import provenance_clock
+    memo = {("provenance_clock",): provenance_clock.current(c)}
+    owners = {row['owner'] for row in inventory(c, computer) if H.is_bot(row['owner'] or '')}
+    for owner in owners:
+        memo[("live_turn", owner)] = _live_tasks(c, H.actor_id(owner), memo)
+    return memo
 
 
 def start_refusal(c, task):
     """Why no new worktree starts for this task now, or '': a coding step cannot run on a finished task, one not
-    started (On Deck, or any task still `open`) or one an open task blocks. A task being worked (`doing`), or one at a
-    review or waiting while its fix-forward or a review fix runs, gets one; so does reassigned work. No step names."""
+    started (On Deck, or any task still `open`) or one blocked by a task whose code is not merged yet (`unmerged`). A
+    task being worked (`doing`), or one at a review or waiting while its fix-forward or a review fix runs, gets one; so
+    does reassigned work."""
     if task['status'] in CLOSED:
         return f"This task is {task['status']}: a finished task gets no new worktree."
     if task['status'] == 'open':
         return 'This task has not started: move it to In Progress first.'
-    blocker = TR.live_blocker(c, task['id'], H.ACTIVE_STATUSES)
-    if blocker:
-        row = H.task(c, blocker) or {}
-        name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or blocker)
-        return f'This task is blocked by {name}: it gets a worktree once that is done.'
+    for row in TR.live_blockers(c, task['id'], H.ACTIVE_STATUSES):
+        if why := unmerged(c, row):
+            name = (f"#{row['number']} " if row.get('number') else '') + (row.get('title') or row['id'])
+            return f'This task is blocked by {name}, {why}: it gets a worktree once that code is merged.'
     return ''
+
+
+def unmerged(c, blocker):
+    """Why an open blocker's code is not on main yet, in plain words, or '' when it is: a worktree builds from source,
+    so a blocker counts once it is merged, not once it ships. Merged means a ready status, its type's Pending Release
+    step or a later one, or a merged pull request with none still open (one closed unmerged was abandoned). The cutoff
+    is the Pending Release step itself: a step with a ready status may come before work that still changes code."""
+    if blocker['status'] == 'ready':
+        return ''
+    step = c.execute('SELECT name,position FROM task_steps WHERE id=?', (blocker.get('step_id'),)).fetchone()
+    release = c.execute('SELECT min(position) FROM task_steps WHERE type_id=? AND lower(trim(name))=?',
+                        (blocker.get('type_id'), READY_FROM)).fetchone()[0] if step else None
+    if release is not None and step['position'] >= release:
+        return ''
+    prs = c.execute("SELECT number,url,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+                    "ORDER BY created,rowid", (blocker['id'],)).fetchall()
+    waiting = [pr for pr in prs if pr['state'] not in ('merged', 'closed')]
+    if not waiting and any(pr['state'] == 'merged' for pr in prs):
+        return ''
+    where = f"still at {step['name']}" if step else f"still {blocker['status']}"
+    if not waiting:
+        return f'{where} with no merged pull request'
+    names = ', '.join(f"#{pr['number']}" if pr['number'] else pr['url'] for pr in waiting)
+    return f"{where} with pull request {names} not merged yet"
 
 
 def released_event(c, row, detail):
@@ -216,15 +268,15 @@ def expire_pending(c, row, detail):
         H._wake(c, H.task(c, row['task_id']), row['owner'],
                 f"Tico stopped preparing this task's {row['repo'] or ''} worktree at {row['path']}: {reason}. Its place "
                 f"stays this task's; run `{retry}` to try again on the same worktree.",
-                trigger='other', source=row['id'])
+                refs={'wake': 'blocker'}, trigger='other', source=row['id'])
 
 
-def held_reason(c, row, detail):
+def held_reason(c, row, detail, memo=None):
     """Why a tree whose pull requests are finished is not released yet, or '': its bot is in a turn on the task (a
     fix-forward or review fix starting), or its pushed branch has moved past the head of the last finished pull
     request on it (fix-forward commits after a merge). Both clear on their own: the turn ends, or a new pull request
     carries the commits and finishes."""
-    if live_turn(c, row['task_id'], row.get('owner')):
+    if live_turn(c, row['task_id'], row.get('owner'), memo):
         return 'held: live turn'
     last = c.execute("SELECT number,detail_json,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
@@ -272,21 +324,43 @@ def attached(c, task_id, computer, bot):
             if r["path"] and not json.loads(r["detail_json"] or "{}").get("setup_pending")]
 
 
+def allocation_has_pr(row, detail, prs):
+    """A finished PR can release working trees only from the allocation it was opened for.
+
+    A revived link keeps its original creation date and branch, so its allocation needs its own timestamp.
+    Legacy links use creation; missing PR branch/repo metadata keeps its established compatibility behavior.
+    """
+    since = H.parse_ts(detail.get('allocation_started') or row['created'])
+    if since is None:
+        return False
+
+    def at_or_after(value):
+        # GitHub merge times can omit fractions that allocation timestamps include.
+        timestamp = H.parse_ts(value)
+        return timestamp is not None and timestamp >= since
+
+    return any(at_or_after(pr['created']) and (not pr['pr_merged_at'] or at_or_after(pr['pr_merged_at']))
+               and (not pr['repo'] or not row['repo'] or pr['repo'].casefold() == row['repo'].casefold())
+               and (not pr['branch'] or not row['branch'] or pr['branch'] == row['branch']) for pr in prs)
+
+
 def holdings(c, owner):
     """The bot's live worktrees, each with what clears it: `merged` or `closed` (its pull requests are finished and the
     computer releases it once the bot is idle), `merge_ready` (an approved, passing pull request), `task_finished`,
     or `in_progress`. A worktree the computer kept says why in `kept`."""
-    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
+    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,l.created,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
                      "AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
     out = []
     for row in rows:
-        prs = c.execute("SELECT url,state,review_state,checks,mergeable FROM task_links WHERE task_id=? AND kind='pr'",
+        prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
                         (row['task_id'],)).fetchall()
         states = [p['state'] for p in prs]
+        detail = json.loads(row['detail_json'] or '{}')
         if row['status'] in CLOSED:
             clear, why = 'task_finished', 'task ' + row['status']
-        elif prs and all(s in PR_FINISHED for s in states):
+        elif (prs and all(s in PR_FINISHED for s in states)
+              and (row['status'] != 'doing' or allocation_has_pr(row, detail, prs))):
             clear = 'merged' if any(s in ('merged', 'shipped') for s in states) else 'closed'
             why = 'pull request ' + clear
         elif any(p['state'] == 'open' and p['review_state'] == 'approved' and p['checks'] != 'failing'
@@ -294,7 +368,6 @@ def holdings(c, owner):
             clear, why = 'merge_ready', 'pull request approved, ready to merge'
         else:
             clear, why = 'in_progress', 'in progress'
-        detail = json.loads(row['detail_json'] or '{}')
         item = {'link_id': row['id'], 'task_id': row['task_id'], 'task': row['title'], 'path': row['path'],
                 'repo': row['repo'], 'branch': row['branch'], 'clear': clear, 'why': why, 'updated': row['updated'],
                 'pull_requests': [{'url': p['url'], 'state': p['state']} for p in prs]}
@@ -316,7 +389,7 @@ def preparable(c, row, detail):
             and bool(waits.preparing(c, row['id'])))
 
 
-def heartbeat(c, who, reports, capable, default_org=""):
+def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     if not supported(c):
         return []
     rows = {r['id']: r for r in inventory(c, who.runner_id)}
@@ -358,8 +431,10 @@ def heartbeat(c, who, reports, capable, default_org=""):
                                and not detail.get('setup_pending'))
                               or legacy_restore_passthrough)
         now = H.now()
-        changed = (detail.get('last_commit') != report.last_commit or detail.get('dirty_files') != report.dirty_files
-                   or detail.get('last_activity') != report.last_activity)
+        # A report that leaves a reading out (a removed checkout has no commit or activity) changes nothing:
+        # detail keeps the last value, so comparing None with it would count as activity on every heartbeat.
+        changed = any(getattr(report, key) is not None and detail.get(key) != getattr(report, key)
+                      for key in ('last_commit', 'dirty_files', 'last_activity'))
         # A push changes none of the above; only the count of commits not on the remote drops.
         pushed = report.ahead < detail.get('ahead', 0)
         if (changed or pushed) and detail.get('release_requested'):
@@ -384,24 +459,26 @@ def heartbeat(c, who, reports, capable, default_org=""):
         else:
             detail.pop('missing_since', None)
             detail.pop('missing_woke', None)
-        task = H.task(c, row['task_id'])
-        if task['status'] not in CLOSED and row['bot_state'] == 'active':
+        # Most reports have no overdue wake; read current task state only when one is due.
+        if row['bot_state'] == 'active':
             for key, since, days, message in (
                 ('missing_woke', detail.get('missing_since'), 1, 'Worktree missing for a day'),
                 ('stalled_woke', detail.get('activity_at') if report.ahead else None, 3, 'Worktree has unpushed commits and no activity for three days')):
                 if since and not detail.get(key) and (datetime.now(timezone.utc) - datetime.fromisoformat(since.replace('Z', '+00:00'))).total_seconds() >= days * 86400:
-                    H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
-                    detail[key] = True
-        if report.state == 'removed' and detail.get('cleanup_requested'):
-            if row['state'] != 'removed':
-                released_event(c, row, detail)
-            detail['removed_by'] = 'cleanup'
+                    task = H._one(c, "SELECT * FROM tasks WHERE id=?", (row['task_id'],))
+                    if task['status'] not in CLOSED:
+                        H._wake(c, task, task['owner'], message + ': ' + row['path'], trigger='stall_check', source=row['id'])
+                        detail[key] = True
         # A stamped report is stale when the record was added, attached, re-queued or patched after the
         # computer read it; heartbeat writes don't count, or a busy worktree's reports would always be stale.
         # An unstamped one (an older computer) is stale only when it would move the checkout back.
         stale = (report.record_updated < (detail.get('record_changed') or row['updated'] or '')
                  if report.record_updated is not None
                  else stale_checkout_report(detail, report.checkout_state))
+        if report.state == 'removed' and not stale and detail.get('cleanup_requested'):
+            if row['state'] != 'removed':
+                released_event(c, row, detail)
+            detail['removed_by'] = 'cleanup'
         reported = report.model_dump(exclude_none=True,
                                      exclude={'link_id', 'state', 'branch', 'checkout_state', 'record_updated',
                                               *(IDENTITY if stale else ())})
@@ -424,7 +501,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                               and not detail.get('setup_pending')) or legacy_present
                              or (checkout_state == 'legacy_present' and not detail.get('setup_pending')
                                  and row['state'] in ('present', 'unknown')))
-        state = ('removed' if report.state == 'removed' else
+        state = ((row['state'] if stale else 'removed') if report.state == 'removed' else
                  report.state if legacy_passthrough else
                  'pending' if not completion_proven else
                  row['state'] if stale and report.state in ('pending', 'present') else
@@ -436,7 +513,12 @@ def heartbeat(c, who, reports, capable, default_org=""):
         branch = report.branch if report.state == 'present' and row['branch'] is None else None
         # Every heartbeat reports every worktree; only a difference is written. A write is a task change that every
         # open board follows (backend/events.py), and a computer retrying a failed cleanup reports every few seconds.
-        if (state, row['branch'] or branch, detail) != before:
+        # A tree a bot is working in moves its activity and size on every beat: those alone are written at most every
+        # READINGS_EVERY seconds, nothing decides on them sooner (the stall wake waits days).
+        readings = ((state, row['branch'] or branch) == before[:2] and row['updated']
+                    and row['updated'] > H.shift(now, seconds=-READINGS_EVERY)
+                    and all(detail.get(k) == before[2].get(k) for k in set(detail) | set(before[2]) if k not in READINGS))
+        if (state, row['branch'] or branch, detail) != before and not readings:
             c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail_json=?,updated=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
             row['updated'] = H.now()
@@ -450,11 +532,24 @@ def heartbeat(c, who, reports, capable, default_org=""):
     if not capable:
         c.execute("UPDATE task_links SET state='unknown' WHERE kind='worktree' AND computer_id=? AND state<>'removed'", (who.runner_id,))
         return []
+    # Serving can revive a removed link from the inventory read before the reports. Use its new allocation
+    # state and detail, or this cleanup pass can overwrite the reset with the retired allocation's flags.
+    rows.update({r['id']: r for r in inventory(c, who.runner_id)})
+    # PR metadata is unchanged by cleanup; load it once rather than once per checkout.
+    task_prs = {}
+    for part in H.chunks({row['task_id'] for row in rows.values()}):
+        for pr in c.execute("SELECT task_id,state,created,pr_merged_at,repo,branch FROM task_links "
+                            "WHERE kind='pr' AND task_id IN (%s)" % ','.join('?' * len(part)), part):
+            task_prs.setdefault(pr['task_id'], []).append(pr)
     actions = []
+    # This pass changes checkout records, not the tasks carried by active attempts. Share provenance only
+    # inside this transaction: fifty finished trees must not walk the same hundred runs fifty times.
+    live_tasks = {} if live_tasks is None else live_tasks
     for row in rows.values():
         detail = json.loads(row['detail_json'] or '{}')
         stored = dict(detail)
-        prs = [r[0] for r in c.execute("SELECT state FROM task_links WHERE task_id=? AND kind='pr'", (row['task_id'],))]
+        pr_links = task_prs.get(row['task_id'], [])
+        prs = [pr['state'] for pr in pr_links]
         finished = all(state in PR_FINISHED for state in prs)
         closed = row['task_status'] in CLOSED or row['bot_state'] == 'archived' or detail.get('delete_requested')
         # A worktree whose pull requests are all merged or closed has done its job even while its task waits on
@@ -468,7 +563,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
         # Its own branch's commits with no pull request linked are nobody's yet: the tree stays and says why.
         unlinked = released and any(m['link_id'] == row['id'] for m in H.unlinked_pushes(c, row['task_id']))
         held = (f"held: commits on {row['branch']} with no pull request linked" if unlinked
-                else held_reason(c, row, detail) if released else '')
+                else held_reason(c, row, detail, live_tasks) if released else '')
         if row['state'] == 'pending' and (released or closed) and waits.preparing(c, row['id']):
             held = held or 'held: reserved for a waiting turn'
         if held:
@@ -476,6 +571,8 @@ def heartbeat(c, who, reports, capable, default_org=""):
             detail['held'] = held
         else:
             detail.pop('held', None)
+        if released and row['task_status'] == 'doing' and not allocation_has_pr(row, detail, pr_links):
+            released = False
         reason = ('task finished' if closed else
                   'pull request merged' if any(s in ('merged', 'shipped') for s in prs) else 'pull request closed')
         if (row['state'] == 'pending' and not held and (released or closed and (finished or detail.get('delete_requested')))
@@ -483,10 +580,11 @@ def heartbeat(c, who, reports, capable, default_org=""):
                 and not (detail.get('current_branch') or detail.get('last_commit'))):   # nothing reported on disk
             cancel_pending(c, row, detail, 'No longer needed: ' + reason)
             continue
-        if (row['state'] == 'pending' and not closed and not detail.get('pending_expired')
+        # A tree released in this same pass is not told to retry its setup: the retry would only be removed again.
+        if (row['state'] == 'pending' and not closed and not released and not detail.get('pending_expired')
                 and detail.get('checkout_state') != 'setup_failed'
                 and H.shift(row['updated'] or row['created'], hours=PENDING_HOURS) < H.now()
-                and not live_turn(c, row['task_id'], row['owner'])):
+                and not live_turn(c, row['task_id'], row['owner'], live_tasks)):
             expire_pending(c, row, detail)
         if released and not detail.get('release_requested'):
             detail['release_requested'] = True
@@ -520,7 +618,7 @@ def heartbeat(c, who, reports, capable, default_org=""):
                     detail['cleanup_retry_at'] = H.shift(now, minutes=2 ** detail['cleanup_attempts'])
         elif detail.get('cleanup_requested') and row['state'] != 'removed':
             # Removal is no longer asked (the task reopened): the refused cleanup's record goes with it.
-            for key in ('cleanup_requested', 'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up'):
+            for key in ('cleanup_requested', 'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up', 'release_reason'):
                 detail.pop(key, None)
         if detail != stored:
             c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), row['id']))
@@ -632,8 +730,12 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         raise Problem('worktree_limit', detail, 409, extra={'worktrees': held, 'limit': LIMIT})
     if existing:
         detail = json.loads(existing['detail_json'] or '{}')
-        detail.pop('removed_by', None)
-        detail.pop('cleanup_requested', None)
+        # This is a new allocation on the same link, not another attempt to release the retired tree.
+        for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'cancelled',
+                    'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up', 'cleanup_retry_generation',
+                    'pending_expired', 'error', 'held'):
+            detail.pop(key, None)
+        detail['allocation_started'] = H.now()
         detail['owner'] = task['owner']
         detail.update(checkout_state='attached_pending' if attaching else 'queued', setup_pending=not attaching)
         detail.pop('expected_head', None)

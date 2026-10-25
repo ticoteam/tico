@@ -27,7 +27,7 @@ The page answers three things: how humans get here, who is here, and what each h
   exactly as before. The server still refuses a wildcard inside an address (`a*@example.com`), a malformed address and a public
   email domain such as gmail.com. Narrowing the list stops new humans; it does not remove anyone on the roster.
 - **Each human** is one row: the role (**Owner** is fixed; the owner switches **Admin** and **Member**), a **Can sign in** switch
-  (see [permissions](permissions.md)), and a ⋯ menu: **Can add bots** and **Can add humans** for a member, **Make owner** and
+  (see [permissions](permissions.md)), and a ⋯ menu: **Send invite** (see [Invites](#invites)), **Can add bots** and **Can add humans** for a member, **Make owner** and
   **Mark as left** for the owner, and **Change my sign-in email** on the owner's own row ([below](#change-the-owners-sign-in-email)). Everything saves when it changes. Title and group are kept on the human but edited on
   their profile, not here.
 - **Mark as left.** They drop off the team chart, their API tokens are revoked, and they can no longer sign in. **Restore** (under
@@ -140,8 +140,41 @@ policy: also allow the same addresses in the Access policy or the Cognito user p
 stopped before they reach the app. Tico does not change that policy itself; after an add, Settings > Humans shows one line saying
 so when either proxy is on.
 
+## Invites
+
+Adding someone sends no email. **Send invite** (owners and admins, in a human's ⋯ menu; **Send invite again** once sent) and
+**Invite** under **From your setup** (the owner, for the people a [company file](onboarding.md) names) do: the person gets
+"You're invited to Tico" from Tico's own sign-in mail, the same sender as sign-in codes (login@tico.dev), with the address
+to sign in at. Never the company's connected mailbox, and nothing the sender typed goes in it.
+
+Only an install that signs in with Tico accounts can send one (the built-in sign-in, `TICO_AUTH_PROXY=oidc`, whose issuer
+names `tico_invite_endpoint` in its discovery; hosted installs do). The install asks the issuer with its own client id and
+secret (`POST /oauth2/invite`, `backend/invites.py`), so the secret only ever goes to the issuer it already signs in with.
+A rehearsal (`TICO_REHEARSAL=1`) sends no invites: **Send invite** isn't offered and the API refuses with `rehearsal`.
+Anywhere else, and whenever the mail does not go, the page says so in words and nothing is recorded: *This Tico doesn't sign
+in with Tico accounts, so it can't email invites. Tell Dana to sign in at https://... with dana@...*, too many invites to
+that address today (3 a day per address, 50 a day per install), or the mail could not be delivered. A sent invite is
+recorded (`invites` in `GET /api/v2/access`, audit event `person.invited`) and the row says **Invited 2h ago**.
+One click sends at most one email: a repeat of the same request (the page retrying a lost answer) never sends again,
+and if Tico can't tell whether it went, it says so instead of sending; clicking again sends a new one.
+
+Inviting a person from setup adds them to the roster and the sign-in list with that email first, and the Recruiting seats
+the file put under them (which reported to the owner meanwhile) move under them, unless someone has moved a seat since. If
+the invite then does not go, they stay added and **Invite** sends again.
+
+**Create password** (owners and admins, in the same ⋯ menu) is the other way in: the issuer makes the person a Tico
+account with a generated password and the page shows it once, to copy and share. It is offered only when the issuer names
+`tico_accounts_endpoint` in its discovery (`POST /oauth2/accounts`, the same client id and secret), never in a rehearsal.
+Tico keeps no copy: not in the database, the request cache, an event (`person.account_created` says only that one was
+made), a log or a notification, and a repeat of the same request says the password can't be shown again. Someone who
+already has a Tico account is refused: *Dana already has a Tico account; use Invite.* The account signs in only at this
+install until its owner chooses **Forgot password?** on the sign-in page, which proves the email and sets their own.
+
 ## API
 
+`POST /api/v2/access/humans/{id}/invite` (owners and admins) and `POST /api/v2/setup/company/people/{key}/invite` with
+`email` (the owner) send an invite ([above](#invites)); `POST /api/v2/access/humans/{id}/password` (owners and admins)
+makes the account and answers its password once.
 `GET /api/v2/access` (owners and admins; it includes `home_domain`, `domain_sign_in` and `directory`, the saved sync
 source), `POST /api/v2/access/humans`, `POST /api/v2/access/humans/{id}` (`role` owner only; `sign_in`, `create_bots`,
 `add_people`, `left: false`), `PUT /api/v2/access/limits` (owners and admins), and owner only `PUT /api/v2/access/allow` (with

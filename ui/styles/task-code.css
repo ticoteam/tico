@@ -92,7 +92,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .code-chip{font-size:var(--t-xs);line-height:15px;padding:0 5px;border-radius:8px;background:var(--idle-bg);color:var(--muted);white-space:nowrap}
 .code-chip.ok{background:var(--ok-bg);color:var(--ok)}
 .code-chip.fail{background:var(--fail-bg);color:var(--fail)}
-.code-chip.waiting{background:var(--wait-bg);color:var(--wait)}
+.code-chip.waiting{background:var(--wait-bg);color:var(--wait-ink)}
 .code-x{position:absolute;right:-4px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:24px;height:24px;border:0;background:none;padding:0;color:var(--muted);font-size:12px;cursor:pointer;opacity:0}
 .code-line:hover .code-x,.code-x:focus-visible{opacity:1}
 .code-x:hover{color:var(--fail)}
@@ -113,6 +113,7 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .sub-row.finished>.sub-line .sub-title{color:var(--muted)}
 .sub-add{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px;margin:4px 0 0}
 .sub-add input{width:100%;min-width:0;font-size:var(--t-base);padding:3px 6px}
+.sub-add-err{margin:4px 0 0;font-size:var(--t-sm);overflow-wrap:anywhere}
 .sub-add select{width:auto;max-width:120px;font-size:var(--t-sm);padding:3px 4px}
 .code-state.err{color:var(--fail)}
 /* One small badge for a task's pull requests: the worst state across them */
@@ -120,7 +121,11 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .pr-badge.run{background:var(--run-bg);color:var(--run)}
 .pr-badge.ok{background:var(--ok-bg);color:var(--ok)}
 .pr-badge.fail{background:var(--fail-bg);color:var(--fail)}
-.pr-badge.waiting{background:var(--wait-bg);color:var(--wait)}
+.verdict-chip{flex:none;display:inline-flex;gap:3px;align-items:baseline;font-size:var(--t-2xs);font-weight:600;line-height:14px;padding:0 4px;border-radius:7px;white-space:nowrap}
+.verdict-chip.ok{background:var(--ok-bg);color:var(--ok)}
+.verdict-chip.fail{background:var(--fail-bg);color:var(--fail)}
+.verdict-chip code{font:inherit;font-family:var(--mono);font-weight:400;opacity:.85}
+.pr-badge.waiting{background:var(--wait-bg);color:var(--wait-ink)}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .pr-badge{grid-area:pr}
 
 .prop[data-prop-row="owner"] .prop-vwrap,.prop[data-prop-row="private"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}

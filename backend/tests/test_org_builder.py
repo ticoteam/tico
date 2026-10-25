@@ -223,7 +223,8 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
                         "about": {"what": "We sell scheduling software to clinics", "sells_to": "businesses",
                                   "software": True}}]
     assert answer == {"bots": [{"template_id": "partner-scout", "why": "Resellers are your channel"}],
-                      "suggested_default": ["partner-scout"], "source": "hq", "shared": True, "off_by": ""}
+                      "suggested_default": ["partner-scout"], "bet": None, "source": "hq", "shared": True,
+                      "off_by": ""}
 
     # An HQ on the older engine says Matches “<word>”: the install's own why replaces it (none for a niche card).
     hq.reply["json"] = {"bots": [{"template_id": "sales-manager", "why": "Matches “managers”"},

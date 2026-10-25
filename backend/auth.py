@@ -95,6 +95,20 @@ class Identity:
     support: str = ""
 
 
+def touch(c, sql, args):
+    """A last_used hint, written only if the database is free right now: on a pooled read connection (outside the
+    writer gate) the 30 s busy timeout would otherwise hold every sign-in, SSE re-auth included, behind a writer."""
+    try:
+        wait = c.execute("PRAGMA busy_timeout").fetchone()[0]
+        c.execute("PRAGMA busy_timeout=0")
+        try:
+            c.execute(sql, args)
+        finally:
+            c.execute(f"PRAGMA busy_timeout={int(wait)}")
+    except sqlite3.Error:
+        pass
+
+
 def standing(c, pid):
     """"left" when marked as left on the roster (backend/app.py person_update, which also ended their tokens),
     "off" when an owner or admin turned their sign-in off (Settings > Humans), else ""."""
@@ -354,10 +368,7 @@ class Auth:
         # last_used is a hint for the token list, not part of the decision: a script in a loop
         # should not write a row per request, and a locked database must not refuse a read.
         if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            try:
-                c.execute("UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
-            except sqlite3.Error:
-                pass
+            touch(c, "UPDATE human_tokens SET last_used=? WHERE id=?", (now, row["id"]))
         email = str(row["email"] or "").lower()
         role = "owner" if email and email == self.owner_email else "human"
         return Identity("human:" + row["human"], role, email=email, via_token=True,
@@ -376,10 +387,7 @@ class Auth:
             raise Problem("forbidden", service_keys.refusal(row["scope"]), 403)
         now = H.now()
         if not row["last_used"] or row["last_used"] < H.shift(now, seconds=-60):
-            try:
-                c.execute("UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
-            except sqlite3.Error:
-                pass
+            touch(c, "UPDATE service_keys SET last_used=? WHERE id=?", (now, row["id"]))
         return Identity("service:" + row["id"], "service", token_label=str(row["label"]), scope=row["scope"] or "tasks")
 
     def assistant_principal(self, c, attempt):
@@ -388,27 +396,48 @@ class Auth:
         Only a turn the person started themselves in their own Assistant room counts: the message
         that queued the job came from the room's owner through /api/v2/assistant/messages (the
         only door that sets the `assistant` reference). Any other turn of the assistant bot (a
-        Slack route, a meeting delivery, a routine) stays the bot's own."""
+        Slack route, a meeting delivery, a routine) stays the bot's own.
+
+        The CEO Bot is the owner's Assistant (backend/assistant.py): its turn in the owner's CEO Bot chat acts as the
+        owner, with the same rights, while that person is still the owner. Its every other turn (the regular checks,
+        goal work, a bot's message) stays the bot's own."""
+        from . import ceo_bot
         # Only a live lease: a token kept from a finished turn means nothing (validate_identity says the
         # same for the plain bot identity; this repeats it where the token turns into a person).
-        if (attempt["bot"] != self.settings.assistant_bot or attempt["state"] not in ("leased", "running")
+        room_key = (rooms.ASSISTANT_ROOM if attempt["bot"] == self.settings.assistant_bot
+                    else rooms.CEO_ROOM if attempt["bot"] == ceo_bot.SLUG else None)
+        if (not room_key or attempt["state"] not in ("leased", "running")
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
         row = c.execute(
             "SELECT v.owner_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
             "AND v.room_key=? AND m.from_actor=v.owner_actor AND json_extract(m.refs_json,'$.assistant')=1",
-            (attempt["job_id"], rooms.ASSISTANT_ROOM)).fetchone()
-        if not row or not str(row["owner_actor"] or "").startswith("human:"):
+            (attempt["job_id"], room_key)).fetchone()
+        if not row:
             return None
-        human = H.human(c, H.actor_id(row["owner_actor"]))
+        return self.chat_person(c, row["owner_actor"], attempt["bot"], attempt["id"], attempt["runner_id"])
+
+    def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
+        """The person a turn of their chat bot (`bot`: the Assistant, or the CEO Bot for the owner) acts as, with
+        their rights and nobody more, or None: a person who is gone or suspended, or for the CEO Bot one who is no
+        longer the owner (ownership moved on since they asked: the turn is the bot's own, never theirs)."""
+        from . import ceo_bot
+        if not str(owner_actor or "").startswith("human:"):
+            return None
+        human = H.human(c, H.actor_id(owner_actor))
         if not human or standing(c, human["id"]):
             return None
         email = str(human.get("email") or "").lower()
-        return Identity(row["owner_actor"], "owner" if email and email == self.owner_email else "human",
-                        email=email, via_token=True, token_label=self.settings.assistant_name,
-                        via="assistant", task_actor="bot:" + attempt["bot"],
-                        attempt_id=attempt["id"], runner_id=attempt["runner_id"])
+        owner = bool(email) and email == self.owner_email
+        ceo = bot == ceo_bot.SLUG
+        if ceo and not owner:
+            return None
+        return Identity(owner_actor, "owner" if owner else "human",
+                        email=email, via_token=True,
+                        token_label=ceo_bot.name(c) if ceo else self.settings.assistant_name,
+                        via="assistant", task_actor="bot:" + bot,
+                        attempt_id=attempt_id, runner_id=runner_id)
 
     def authenticate(self, headers, path="", method=""):
         bearer = headers.get("authorization", "")
@@ -535,9 +564,9 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot, the Health Monitor): they act for
+        """The built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot, the Health Monitor, the Task Manager): they act for
         the whole company, so only the company owner changes them. Admins manage every other bot."""
-        return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor")
+        return slug in (self.settings.assistant_bot, "assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager")
 
     def bot_manager(self, c, who, slug, operator=None):
         """Whether this person may manage the bot: the one "can manage this bot" rule (docs/permissions.md).
@@ -554,6 +583,22 @@ class Auth:
         if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])):
             return True
         return self.manages(c, who, "bot", slug)
+
+    def bot_above(self, c, who, slug):
+        """Whether the caller is a bot's own run that sits above this bot in the `reports_to` chain: a manager bot,
+        or one above its manager. It already has full access to the bot (`bot_accesses`); this is for the few reads
+        that check the caller's kind before access, like a bot's routines. Never true for a run acting for someone."""
+        if who.role != "bot" or who.via or not str(who.actor).startswith("bot:"):
+            return False
+        me = H.actor_id(who.actor)
+        parents = {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}
+        seen, parent = {slug}, parents.get(slug, "")
+        while parent and parent not in seen:
+            if parent == me:
+                return True
+            seen.add(parent)
+            parent = parents.get(parent, "")
+        return False
 
     def botops_manages(self, c, who, slug):
         """BotOps in its own run (the daily update, or a routine only the owner wrote: `botops_act.own_run`) manages
@@ -851,6 +896,8 @@ class Auth:
         bot: `see` to name it at all, `write` to send it something, `read` to look at its work."""
         self.domain(who)
         actor = H.resolve_actor(c, target)
+        if not actor and (why := H.recruiting(c, target)):
+            raise Problem("recruiting", why, 409)
         if not actor or actor == H.KEEPER:
             raise Problem("not_found", "Unknown recipient", 404)
         if actor.startswith("bot:"):
@@ -862,6 +909,10 @@ class Auth:
         `reports_to` chain also reads its reports' work: a run on a task or a routine, or one a bot asked for. A run
         a person started by chatting stays theirs, and peers and the bots above `bot` keep the conversation rule.
         The task fence (backend/task_privacy.py) still applies on top."""
+        from .live_privacy import sources
+        from .task_privacy import actor
+        if not sources(c).message_readable(actor(who), message):
+            raise Problem("not_found", "Turn not found", 404)
         if who.role == "bot" and H.actor_id(who.actor) != bot and above(
                 {r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)}, H.actor_id(who.actor), bot):
             from . import task_privacy
@@ -873,11 +924,16 @@ class Auth:
                 pass
         self.conversation(c, who, message["conversation_id"])
 
-    def conversation(self, c, who, conversation_id):
+    def conversation(self, c, who, conversation_id, *, write=False):
         self.domain(who)
         row = H.conversation(c, conversation_id)
         if not row:
             raise Problem("not_found", "Conversation not found", 404)
+        from .live_privacy import require_conversation, sources
+        from .task_privacy import actor
+        meeting_room = require_conversation(c, actor(who), conversation_id)
+        if write and (meeting_room or sources(c).conversation(conversation_id)):
+            raise Problem("forbidden", "Use live meeting chat for scoped meeting replies", 403)
         if row.get("task_id"):
             self.task(c, who, row["task_id"])
             if row.get("kind") == "task":
@@ -901,6 +957,8 @@ class Auth:
                 else:
                     raise Problem("forbidden", "This conversation is outside the current execution context", 403)
             return row
+        if meeting_room:
+            return row
         scope = row.get("scope") or "direct"
         if scope == rooms.PERSONAL:
             owner = row.get("owner_actor") or next(
@@ -908,6 +966,10 @@ class Auth:
             # Personal assistant rooms do not inherit the normal owner inspection bypass.
             if who.actor != owner:
                 raise Problem("forbidden", "This personal conversation belongs to another person", 403)
+            # The CEO Bot chat belongs to the owner seat: a person who is no longer the owner reads it no more, even
+            # before it moves to the new owner (backend/assistant.py ceo_room).
+            if row.get("room_key") == rooms.CEO_ROOM and who.role != "owner":
+                raise Problem("forbidden", "This chat belongs to the company's owner", 403)
         elif scope == rooms.SHARED:
             bot = rooms.room_bot(row)
             if not bot or not rooms.shared_member(c, self, who.actor, bot) or not self.bot_access(c, who, bot)["read"]:

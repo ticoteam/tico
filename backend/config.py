@@ -85,6 +85,33 @@ def _typesafe_key():
     return _secret("TYPESAFE_API_KEY", "TICO_TYPESAFE_SECRET_ARN", "/etc/tico/typesafe-api-key")
 
 
+def _company_file_data():
+    """The installer's packed starter plan as (text, configured, error): TICO_COMPANY_FILE_B64, or else the file
+    TICO_COMPANY_FILE names (a plan too big for the env, which setup copied to the server). A named file that is
+    missing, unreadable, too big or empty is still a configured chart: the server starts, keeps why for the owner to see
+    on first run and on Health (backend/company_import.py `start`), and never starts as some other team."""
+    data = os.environ.get("TICO_COMPANY_FILE_B64", "").strip()
+    path = os.environ.get("TICO_COMPANY_FILE", "").strip()
+    if data or not path:
+        return data, bool(data), ""
+    from .company_file.starter import MAX_PACKED
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(MAX_PACKED + 1)
+    except OSError as exc:
+        return "", True, f"The company file setup copied to this server can't be read ({exc.strerror or 'no access'})"
+    if len(raw) > MAX_PACKED:
+        return "", True, f"The company file setup copied to this server is larger than a starter plan can be ({MAX_PACKED} bytes)"
+    return raw.decode("ascii", "replace").strip(), True, ""
+
+
+def _company_file_fields(rehearsal):
+    if rehearsal:
+        return {}
+    data, configured, error = _company_file_data()
+    return {"company_file_data": data, "company_file_configured": configured, "company_file_error": error}
+
+
 def _gateway_key():
     """The Tico AI Gateway key behind `POST /api/v2/decisions` and the Slack gateway: the default decision provider."""
     return _secret("TICO_GATEWAY_KEY", "TICO_GATEWAY_SECRET_ARN", "/etc/tico/gateway-key")
@@ -251,12 +278,19 @@ class Settings:
     # The task role a GitHub review request puts its reviewer in (backend/github.py), matched by the
     # person's `github` login on the roster. Unset: review requests change no roles.
     github_review_role: str = ""
+    # Owner-operated reviewer identity; bot runs cannot select or alter it.
+    github_reviewer_bots: tuple[str, ...] = ()
+    github_reviewer_app_id: str = ""
+    github_reviewer_installation_id: str = ""
+    github_reviewer_private_key_file: str = field(default="", repr=False)
     observability_environment: str = ""
     observability_id_secret: str = field(default="", repr=False)
     posthog_key: str = field(default="", repr=False)
     posthog_host: str = field(default="", repr=False)
     sentry_dsn: str = field(default="", repr=False)
     sentry_server_dsn: str = field(default="", repr=False)
+    # Which install a server error report comes from (backend/observability.py); unset: the company name.
+    instance_name: str = ""
     # Decide's providers, in order (backend/judge.py): the Tico AI Gateway with its key, then a customer's own TypeSafe
     # key (never set by default), then the team's own LLM; with none of them Decide is off.
     gateway_key: str = field(default="", repr=False)
@@ -282,6 +316,10 @@ class Settings:
     # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
     sample_company: bool = False
     company_file_data: str = field(default="", repr=False)
+    # Whether the installer named a company file at all, apart from whether its text could be read, and why not: an
+    # empty or unreadable file is a failed import the owner sees, never a reason to start the sample company instead.
+    company_file_configured: bool = False
+    company_file_error: str = ""
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
     # database holds a choice, these are never read again.
     enabled_providers: tuple[str, ...] = ()
@@ -500,12 +538,17 @@ class Settings:
             **_release_origin(),
             github_webhook_secret=os.environ.get("TICO_GITHUB_WEBHOOK_SECRET", "").strip(),
             github_review_role=os.environ.get("TICO_GITHUB_REVIEW_ROLE", "").strip().lower(),
+            github_reviewer_bots=tuple(b.strip() for b in os.environ.get("TICO_GITHUB_REVIEWER_BOTS", "").split(",") if b.strip()),
+            github_reviewer_app_id=os.environ.get("TICO_GITHUB_REVIEWER_APP_ID", "").strip(),
+            github_reviewer_installation_id=os.environ.get("TICO_GITHUB_REVIEWER_INSTALLATION_ID", "").strip(),
+            github_reviewer_private_key_file=os.environ.get("TICO_GITHUB_REVIEWER_PRIVATE_KEY_FILE", "").strip(),
             observability_environment=os.environ.get("TICO_OBSERVABILITY_ENVIRONMENT", ""),
             observability_id_secret=os.environ.get("TICO_OBSERVABILITY_ID_SECRET", ""),
             posthog_key=quiet(os.environ.get("TICO_POSTHOG_KEY", "")),
             posthog_host=quiet(os.environ.get("TICO_POSTHOG_HOST", "")),
             sentry_dsn=quiet(os.environ.get("TICO_SENTRY_DSN", "")),
             sentry_server_dsn=quiet(os.environ.get("TICO_SENTRY_SERVER_DSN", "")),
+            instance_name=os.environ.get("TICO_INSTANCE_NAME", "").strip(),
             gateway_key="" if rehearsal else _gateway_key(),
             gateway_url=_gateway_url(),
             typesafe_api_key="" if rehearsal else _typesafe_key(),
@@ -517,7 +560,7 @@ class Settings:
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
-            company_file_data="" if rehearsal else os.environ.get("TICO_COMPANY_FILE_B64", "").strip(),
+            **_company_file_fields(rehearsal),
             enabled_providers=tuple(part.strip().lower() for part in
                                     os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()),
             default_runtime=os.environ.get("TICO_DEFAULT_RUNTIME", "").strip().lower(),

@@ -9,7 +9,12 @@ Librarian) stay out of the chart and the Goals tree. Assistant and BotOps have m
 the Librarian is reached from Docs and Market. Settings > Bots lists them with the CEO Bot, the fourth built-in bot.
 When bots' names start with the same words (the "Head of" in **Head of Product** and **Head of Sales**), those words are
 muted, and on a narrow sidebar they drop out whole so each row keeps the part that tells it apart. Hover a bot to see its
-whole name. A bot waiting for its setup conversation has a small amber gear beside its name (**Needs setup**).
+whole name. A bot still onboarding has a small amber gear beside its name (**Onboarding**).
+A **Recruiting** seat, a role with no bot yet ([A bot's stages](onboarding.md#a-bots-stages)), is a row with the role's title
+and a **Recruiting** mark where its reporting line puts it: under its bot or human, or under the seat it reports to (a chosen
+chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job description. It is not dragged and nothing
+is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
+The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
 The built-in **CEO Bot** ([Your CEO Bot](ceo-bot.md)) is on every install, at the top of the chart under the owner. The Heads, each in its department's group, and the bots that report to no one sit under it.
 The Assistant, BotOps, the Librarian and message bots stay apart. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `hub team show` still gives each bot the `reports_to` it has.
@@ -61,8 +66,11 @@ direct reports' ([Updates](using-tico.md#updates)).
 ## Groups
 
 The **+** beside **Team** offers **Add section**, **Add bot** and **Add human**, according to your permissions.
-**Add section** opens the inline group-name field. **Add bot > From template** opens the template picker;
-**Ask BotOps** opens its chat with an editable request, preserving any draft already there. Describe a custom bot or
+**Add section** opens the inline group-name field. **Add bot** makes a Recruiting seat (a role with no bot yet) under the
+manager you choose and opens it: its job description, which the CEO Bot drafts for the owner, then **Recruit** and the
+pick ([Recruiting a seat](onboarding.md#recruiting-a-seat)). Open seats show on the chart under their manager with a
+**Recruiting** mark; clicking one opens it. **Ask BotOps** in the Add bot form opens its chat with an editable request,
+preserving any draft already there. Describe a custom bot or
 share an existing agent's folder path and computer, or its GitHub URL. Nothing is sent until you send the message;
 BotOps helps work out the setup rather than automatically importing an arbitrary folder.
 
@@ -161,7 +169,7 @@ when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting t
 
 ## Adding a human
 
-Choose **Team > + > Add human** for an email and optional name, or open **Settings > Humans > Add manually**. No email is sent.
+Choose **Team > + > Add human** for an email and optional name, or open **Settings > Humans > Add manually**. Adding sends no email; an invite goes out only when you choose **Send invite** in the person's menu.
 Owners and admins can add humans outside the team's domain;
 members with **Can add humans** can add coworkers in the domain. See [Humans](people.md) for sign-in and directory sync.
 

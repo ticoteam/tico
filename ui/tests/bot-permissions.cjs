@@ -182,9 +182,13 @@ async function access(browser) {
   assert.ok((await order()).includes('b:sales'));
 
   // ---- A bot page for someone who may only write to it, and one who may only see it
+  // The settings hook is present so only the access check can hide the Tasks header icons.
+  await page.evaluate(() => { window.botTaskSettingsOpen = () => {}; });
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
+  await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
+  assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
   assert.equal(await page.locator('#bot-files, #bot-recurring, #bot-history, #bot-routines, #sess-card, #bot-updates-card').count(), 0);
   assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);

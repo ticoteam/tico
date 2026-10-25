@@ -97,9 +97,15 @@ def parent_sql(alias="tasks"):
 CHILD_IDS = "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?"
 
 
+PARENT_SQL = "SELECT to_task FROM task_relations WHERE from_task=? AND kind='parent'"
+BLOCKED_SQL = "SELECT to_task FROM task_relations WHERE from_task=? AND kind='blocks' ORDER BY created, rowid"
+
+
 def parent_of(conn, task_id):
-    row = conn.execute("SELECT to_task FROM task_relations WHERE from_task=? AND kind='parent'",
-                       (task_id,)).fetchone()
+    # Through the snapshot's read cache, so a page that read its tasks' ancestry together (prime_ancestry) reads no
+    # parent twice.
+    from .read_cache import one
+    row = one(conn, PARENT_SQL, (task_id,))
     return row[0] if row else None
 
 
@@ -115,8 +121,36 @@ def blocker_ids(conn, task_id):
 
 def blocked_ids(conn, task_id):
     """The tasks this one blocks."""
-    return [r[0] for r in conn.execute("SELECT to_task FROM task_relations WHERE from_task=? AND kind='blocks' "
-                                       "ORDER BY created, rowid", (task_id,))]
+    from .read_cache import rows
+    return [r[0] for r in rows(conn, BLOCKED_SQL, (task_id,))]
+
+
+def prime_ancestry(conn, task_ids):
+    """Read the parents of these tasks and of all their ancestors, and the tasks each of them blocks, one query a
+    level, for the parent_of, ancestors and blocked_ids lookups that follow in this snapshot (a Needs you card walks
+    its task's chain). Returns every task id it met. Without a read snapshot it reads nothing: those lookups then
+    read for themselves."""
+    from .read_cache import cache, prime, prime_rows
+    met, walked, frontier = set(), set(), {tid for tid in task_ids if tid}
+    if cache(conn) is None:
+        return met
+    while frontier:
+        met |= frontier
+        walked |= frontier
+        parents, blocked = {}, {}
+        for part in _parts(sorted(frontier)):
+            for row in conn.execute("SELECT from_task,to_task,kind FROM task_relations WHERE from_task IN (%s) "
+                                    "AND kind IN ('parent','blocks') ORDER BY created, rowid"
+                                    % ",".join("?" * len(part)), part):
+                if row[2] == "parent":
+                    parents[row[0]] = (row[1],)
+                else:
+                    blocked.setdefault(row[0], []).append((row[1],))
+        prime(conn, PARENT_SQL, {(tid,): parents.get(tid) for tid in frontier})
+        prime_rows(conn, BLOCKED_SQL, {(tid,): blocked.get(tid, ()) for tid in frontier})
+        met |= {row[0] for found in blocked.values() for row in found}
+        frontier = {row[0] for row in parents.values()} - walked
+    return met
 
 
 def live_blocker(conn, task_id, statuses):
@@ -280,7 +314,8 @@ def _mine(conn, actor, row, mover):
     mine = actor in (row["owner"], row["requester"]) or bool(H._one(
         conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
         (row["id"], actor, H.now())))
-    mine = mine or H.task_ancestor_party(conn, actor, row) or H.type_bot_works(conn, actor, row)
+    mine = (mine or H.task_ancestor_party(conn, actor, row) or H.type_bot_works(conn, actor, row)
+            or H.task_manager_acts(conn, actor, row))
     if not mine and not mover and actor != H.KEEPER:
         H.refuse(conn, actor, "identity", f"{row['id']} is not yours to change")
 
@@ -464,10 +499,33 @@ def _check_blocker(conn, actor, row, blocker_id):
 
 
 def _blocker_gate(conn, actor, row, mover):
-    """The owner says what its own task waits on; anyone else who may change it must be a mover."""
+    """The owner says what its own task waits on; anyone else who may change it must be a mover (or the Task Manager,
+    whose grant covers relations)."""
     _mine(conn, actor, row, mover)
-    if actor != row["owner"] and not mover:
+    if actor != row["owner"] and not mover and not _H().task_manager_acts(conn, actor, row):
         _need_mover(conn, actor, "blocked_by")
+
+
+def requester_hears_block(conn, row, blocker, actor):
+    """Whether a task that now waits on `blocker` (a task) wakes its requester: a bot that handed the task to someone
+    else, told of a block it may act on (find the person, drop the request), as of a decline. Not when the owner waits
+    on itself, nor on work it split off to a bot (a review, a delegated part: its own flow), nor on the requester (that
+    is an ask, its own wake), nor when the requester made the change. A person requester sees it in Needs you."""
+    H = _H()
+    req, owner, waits_on = row.get("requester"), row.get("owner"), (blocker or {}).get("owner")
+    split_off = H.is_bot(waits_on) and blocker.get("requester") == owner
+    return bool(req and H.is_bot(req) and waits_on and req not in (owner, actor, waits_on)
+                and waits_on != owner and not split_off)
+
+
+def _tell_requester(conn, actor, row, blocker):
+    """The requester's wake for a block (requester_hears_block); a Dev ticket's own notice carries it instead."""
+    from .ticket_notices import _engineering
+    H = _H()
+    if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
+        return
+    H._wake(conn, row, row["requester"], f"Blocked: {row['title']}: waits on {blocker['title']}",
+            {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)
 
 
 def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
@@ -489,6 +547,7 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too
     blocked(conn, actor, row, blocker_id)
+    _tell_requester(conn, actor, H.task(conn, task_id), H.task(conn, blocker_id))
     return True
 
 

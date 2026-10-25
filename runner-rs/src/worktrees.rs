@@ -621,11 +621,18 @@ async fn create_or_resume(path: &Path, c: &Checkout<'_>, base: &Path, default: &
             crate::isolation::mkdir(parent, 0o755)?;
         }
         write_marker(c.workspace, &with_phase(&identity, "materializing"))?;
+        // Given its own group before git writes the bot's files into it (sessions.rs does the same).
+        crate::checkout_groups::prepare(path.to_path_buf()).await;
         let p = path.display().to_string();
-        if target == format!("refs/heads/{branch}") {
-            git(base, c.env, &["worktree", "add", &p, branch], true).await?;
+        let added = if target == format!("refs/heads/{branch}") {
+            git(base, c.env, &["worktree", "add", &p, branch], true).await
         } else {
-            git(base, c.env, &["worktree", "add", "--no-track", "-b", branch, &p, &target], true).await?;
+            git(base, c.env, &["worktree", "add", "--no-track", "-b", branch, &p, &target], true).await
+        };
+        if let Err(e) = added {
+            // The prepared folder goes if git left it empty, so the next attempt finds the path absent as before.
+            let _ = std::fs::remove_dir(path);
+            return Err(e);
         }
         resume_interrupted(path, c, &expected, &expected_base, &identity).await?;
     }
@@ -640,7 +647,7 @@ fn setup_environment(env: &Env) -> Env {
 }
 
 /// Run the repository's setup command in a new worktree (worktrees.setup): as the bot user, its own process
-/// group, output discarded, at most ten minutes.
+/// group, output discarded, at most ten minutes. It gets no granted credentials, so it takes no leased turn user.
 async fn setup(path: &Path, command: &str, env: &Env) -> R<()> {
     if command.is_empty() {
         return Ok(());
@@ -979,6 +986,92 @@ async fn fast_forward(path: &Path, branch: &str, target: &str, env: &Env) -> R<(
 
 async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
     Ok(git(path, env, args, true).await?.stdout.trim().parse::<i64>().unwrap_or(0))
+}
+
+/// A folder a tool can rebuild on its own: a Python virtual environment (`pyvenv.cfg`), a cache that declares
+/// itself (`CACHEDIR.TAG`, which Cargo's `target` and `.pytest_cache` write), `node_modules`, or a pytest base
+/// temp folder.
+fn rebuildable(dir: &Path) -> bool {
+    let name = dir.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let tagged = std::fs::read(dir.join("CACHEDIR.TAG")).is_ok_and(|b| b.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55"));
+    dir.join("pyvenv.cfg").is_file()
+        || tagged
+        || name == "node_modules"
+        || name.starts_with("pytest-of-")
+        || (name.starts_with("tmp") && name.contains("pytest"))
+}
+
+/// Folders under `dir` to delete and git checkouts to consider, never through a symlink and at most six levels down.
+fn scratch(dir: &Path, depth: u32, caches: &mut Vec<PathBuf>, checkouts: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) || entry.file_name() == ".git" {
+            continue;
+        }
+        if rebuildable(&path) {
+            caches.push(path);
+            continue;
+        }
+        if path.join(".git").is_file() {
+            checkouts.push(path.clone());
+        }
+        if depth < 6 {
+            scratch(&path, depth + 1, caches, checkouts);
+        }
+    }
+}
+
+/// After a finished task's worktree is removed, what its bot built beside it in `tasks/<task-short>/` goes too:
+/// rebuildable caches anywhere in the folder, and extra git worktrees with nothing unsaved or unpushed. Logs,
+/// notes and anything else stay, and a checkout that is dirty, ahead of origin or holds ignored files outside
+/// build folders is kept as it is.
+pub async fn clear_task_scratch(workspace: &Path, removed: &str, env: &Env) {
+    let root = resolve(workspace);
+    let tasks = root.join("tasks");
+    let mut parts = Path::new(removed).components();
+    let (Some(std::path::Component::Normal(top)), Some(std::path::Component::Normal(task))) = (parts.next(), parts.next()) else { return };
+    let folder = tasks.join(task);
+    if top != "tasks" || is_symlink(&tasks) || is_symlink(&folder) || resolve(&folder).parent() != Some(tasks.as_path()) || !folder.is_dir() {
+        return;
+    }
+    let walk = folder.clone();
+    let Ok((caches, checkouts)) = tokio::task::spawn_blocking(move || {
+        let (mut caches, mut checkouts) = (vec![], vec![]);
+        scratch(&walk, 1, &mut caches, &mut checkouts);
+        (caches, checkouts)
+    })
+    .await
+    else {
+        return;
+    };
+    for tree in checkouts {
+        let Ok(common) = common_dir(&tree, env).await else { continue };
+        if !common.starts_with(&root) || common.starts_with(&folder) || !tree.exists() {
+            continue;
+        }
+        let clean = git(&tree, env, &["status", "--porcelain"], true).await.is_ok_and(|o| o.stdout.trim().is_empty());
+        let ignored = git(&tree, env, &["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], true).await;
+        let only_build = ignored.is_ok_and(|o| o.stdout.split('\0').all(|n| n.is_empty() || build_file(n)));
+        if clean && only_build && count(&tree, env, &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]).await.is_ok_and(|n| n == 0) {
+            let _ = git(common.parent().unwrap(), env, &["worktree", "remove", &tree.display().to_string()], true).await;
+        }
+    }
+    let gone = tokio::task::spawn_blocking(move || {
+        let mut freed = 0;
+        for dir in caches.iter().filter(|d| !is_symlink(d) && d.starts_with(&folder)) {
+            if std::fs::remove_dir_all(dir).is_ok() {
+                freed += 1;
+            }
+        }
+        let _ = std::fs::remove_dir(&folder); // only when nothing else is left
+        freed
+    })
+    .await
+    .unwrap_or(0);
+    if gone > 0 {
+        crate::util::diagnostic(&format!("Tico runner: removed {gone} rebuildable folders from finished task folder {}", task.to_string_lossy()));
+    }
 }
 
 /// The pushes a turn made from its task's worktrees since `since` (unix seconds), as `{"path", "count"}` per
@@ -1373,6 +1466,16 @@ impl Worktrees {
             self.maintaining.lock().unwrap().insert(bot.clone());
             let mut action_row = Map::new();
             let outcome = self.act_on(&host, &row, action, &kind, released, &mut action_row).await;
+            if kind == "remove" && is_closed && !released && outcome.as_ref().is_ok_and(|s| s.0 == "removed") {
+                let path = text_of(&row["path"]);
+                let folder: Vec<_> = Path::new(&path).components().take(2).collect();
+                let shared = rows.iter().enumerate().any(|(i, r)| {
+                    i != index && r["state"] != "removed" && Path::new(&text_of(&r["path"])).components().take(2).eq(folder.iter().copied())
+                });
+                if !shared {
+                    clear_task_scratch(&self.workspace, &path, &crate::env::process_environment()).await;
+                }
+            }
             self.maintaining.lock().unwrap().remove(&bot);
             drop(guards);
             match outcome {

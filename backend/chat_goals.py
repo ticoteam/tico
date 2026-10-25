@@ -216,7 +216,7 @@ def install(app, store, auth, mutate, send):
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
             who = request.state.identity
-            conv = auth.conversation(c, who, cid)
+            conv = auth.conversation(c, who, cid, write=True)
             bot, supported, _ = capabilities(c, auth, conv)
             if bot:
                 auth.require_write(c, who, bot)
@@ -255,6 +255,8 @@ def install(app, store, auth, mutate, send):
             refs = {**(message.get("refs") or {}), "goal_action": body.action, "goal_id": goal["id"],
                     "goal_revision": now, "goal_objective": goal["objective"]}
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            # The objective is stored after send()'s own recheck: charge the final references.
+            H.held_queue_recheck(c, message["id"])
             H.event(c, who.actor, "chat.goal", cid, {"status": status})
             return {"goal": goal}
         return mutate(request, body, work)

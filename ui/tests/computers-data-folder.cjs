@@ -75,6 +75,15 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(bots.includes(`Ops Runs on Muse Code · Computer's login ${problem}`) || /Runs on Muse Code[^\n]*can't save sessions/.test(bots), bots);
     assert.doesNotMatch(bots, /Signed out/);
 
+    // The same computer login in a retained named home: accepted profile-rich reports select that home too.
+    box.readiness.computer_profile = 'work';
+    box.readiness.runtimes.musecode = {installed: true, authenticated: 'failed',
+      profiles: {work: {installed: true, authenticated: 'failed', data_problem: problem}}};
+    await page.evaluate(() => loadSettings());
+    assert.equal(await line.locator('[data-data-problem=musecode]').innerText(), problem);
+    assert.equal(await line.locator('.machine-chip-dot').count(), 1);
+    assert.equal(await line.locator('[data-model-login], [data-model-key-add]').count(), 0);
+
     assert.deepEqual(errors, []);
     console.log('PASS: a Muse Code data folder its turns cannot write shows on the Computers page, naming the folder');
   } finally { await browser.close(); }

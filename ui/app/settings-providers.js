@@ -39,7 +39,7 @@ function providersPresetHTML(view, dis) {
   const known = view.presets || PROVIDER_PRESETS.map(row => row.id);
   return `<div class="prov-list" role="radiogroup" aria-label="Models" data-provider-presets>${PROVIDER_PRESETS.filter(row => known.includes(row.id)).map(row =>
     `<label class="prov prov-preset"><input type="radio" name="provider-preset" data-provider-preset value="${esc(row.id)}" ${view.preset === row.id ? 'checked' : ''}${dis}>
-      <strong>${esc(row.label)}</strong>${row.recommended ? ' <span class="pill">Recommended</span>' : ''}<span class="muted">${esc(row.line)}</span></label>`).join('')}</div>`;
+      <span class="prov-preset-title"><strong>${esc(row.label)}</strong>${row.recommended ? ' <span class="pill">Recommended</span>' : ''}</span><span class="muted">${esc(row.line)}</span></label>`).join('')}</div>`;
 }
 function providersFormHTML(view, models, id, editable = true) {
   const enabled = view.enabled || [], dis = editable ? '' : ' disabled';
@@ -48,11 +48,12 @@ function providersFormHTML(view, models, id, editable = true) {
   const direct = rows.filter(row => PROVIDER_LINE[row.id]), routed = rows.filter(row => !PROVIDER_LINE[row.id]);
   return `<div id="${id}" data-providers-form>
     ${providersPresetHTML(view, dis)}
+    <div data-provider-details${id === 'onb-prov' && view.preset !== 'own-keys' ? ' hidden' : ''}>
     <div class="prov-list" role="group" aria-label="Providers">${direct.map(row =>
       `<label class="prov">${box(row)}<strong>${esc(row.label)}</strong><span class="muted">${esc(PROVIDER_LINE[row.id])}</span></label>`).join('')}
       ${routed.length ? `<div class="prov prov-routed"><span class="muted">Via OpenRouter</span>${routed.map(row =>
         `<label class="prov-chip">${box(row)}${esc(row.label)}</label>`).join('')}</div>` : ''}</div>
-    <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label>
+    <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label></div>
     ${id === 'set-prov' ? `<label class="prov"><input type="checkbox" data-provider-fallback ${view.auto_fallback !== false ? 'checked' : ''}${dis}>
       <strong>Fall back when a plan runs out</strong><span class="muted">A bot with no fallback of its own runs on another provider signed in on its computer</span></label>
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
@@ -77,6 +78,7 @@ function providersWire(root, view, models) {
   root.querySelectorAll('[data-provider]').forEach(input => input.onchange = () =>
     providersFillModels(root, view, models, root.querySelector('[data-provider-model]').value));
   root.querySelectorAll('[data-provider-preset]').forEach(input => input.onchange = () => {
+    if (root.id === 'onb-prov') root.querySelector('[data-provider-details]').hidden = input.value !== 'own-keys';
     const boxes = [...root.querySelectorAll('[data-provider]')];
     if (boxes.some(box => box.checked)) return;
     boxes.filter(box => (PRESET_PROVIDERS[input.value] || []).includes(box.value)).forEach(box => { box.checked = true; });
@@ -98,6 +100,14 @@ async function providersSave(view, chosen) {
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
     ...('preset' in chosen ? {preset: chosen.preset} : {})});
 }
+let SETTINGS_PROVIDERS_VIEW = null;
+function renderSettingsProviderNext() {
+  const root = $('#set-provider-next');
+  if (!root || !SETTINGS_PROVIDERS_VIEW) return;
+  const restoreFocus = computerFocusRestore(root);
+  patchHTML(root, providersNextHTML(SETTINGS_PROVIDERS_VIEW, S.me?.role === 'owner'));
+  restoreFocus();
+}
 async function renderSettingsProviders() {
   const el = $('#set-providers'); if (!el) return;
   const owner = S.me?.role === 'owner';
@@ -106,8 +116,9 @@ async function renderSettingsProviders() {
     if (!$('#set-providers')) return;
     const gateway = await get('/v2/providers/gateway').catch(() => null);
     if (!$('#set-providers')) return;
+    SETTINGS_PROVIDERS_VIEW = view;
     el.innerHTML = `${providersFormHTML(view, SETTINGS_DATA.models, 'set-prov', owner)}
-      ${providersNextHTML(view, owner)}
+      <div id="set-provider-next">${providersNextHTML(view, owner)}</div>
       ${owner ? '<div class="onb-actions"><button class="primary" type="button" id="set-prov-save">Save</button><span class="spacer"></span><span class="muted" id="set-prov-status"></span></div>'
         : '<p class="muted">Only the owner can change this.</p>'}
       ${gateway ? gatewayHTML(gateway, owner) : ''}`;
@@ -195,7 +206,7 @@ function providersNextHTML(view, owner) {
   const wanted = new Set(SETTINGS_DATA.models.filter(model => view.enabled.includes(model.provider)).map(model => model.runtime));
   const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at);
   const rows = machines.flatMap(machine => [...wanted].filter(runtime => machine.readiness?.runtimes?.[runtime]?.authenticated !== 'ready').map(runtime => {
-    const online = machine.last_seen && Date.now() - new Date(machine.last_seen) < 60000;
+    const online = machineOnline(machine);
     const ready = machine.readiness?.runtimes?.[runtime]?.installed;
     return `<li>${esc(machine.label)} · ${esc(runtime)}${owner && online && ready && harnessCaps(runtime).browser_sign_in
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}">Sign in</button>`

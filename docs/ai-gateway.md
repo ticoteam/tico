@@ -109,7 +109,13 @@ model list says what runs underneath, for example "Tico Mid 1.0 (Claude Sonnet 5
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
-Docker runner does, and says so when it checks in. On a computer that says it runs bots as itself (a Mac), the model
+Docker runner does, and says so when it checks in. On the current Docker runner, every Tico model turn (including
+a fallback to a Tico model) gets a separate OS user from a pool of 64. Other bots cannot read its live environment,
+open file descriptors or private temporary files, or use its Gateway connection, and it can enter only the checkouts
+its turn runs in. Workspace files remain shared through the bot group; subscription sign-ins and turns on other providers keep their existing boundary. At turn
+end the connection is revoked, remaining processes are killed and temporary files are cleaned before the user is
+reused. If all 64 users are busy, a new Gateway turn waits, before it starts, until one is free. Update the image as well as the runner binary;
+an older image without the user pool cannot start a Gateway turn. On a computer that says it runs bots as itself (a Mac), the model
 list marks the Tico models **not on this computer** and Tico doesn't save one for a bot there: the reason says
 "<computer> can't run Tico Gateway work (it needs Tico's Docker runner)". A runner from before it said either way is
 treated the same, with "<computer> hasn't said it can run Tico Gateway work": update its runner. A bot already on a
@@ -145,8 +151,8 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 |---|---|
 | **Gateway cap reached** | Waits until the next month (UTC). |
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
-| Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute, so it is back on them within about a minute of credit being added. |
-| Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
+| Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
+| Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
 | The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick Tico Cheap 1.1, Mid 1.0 or Power 1.0. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
@@ -155,3 +161,25 @@ The bot's status says why, in plain words, and the run waits or is saved for lat
 
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
+
+## Credit and the minimum balance
+
+Gateway use is charged to your company's balance once an hour: one charge for each model price line used in that hour.
+
+Each Gateway process caches the company’s balance for at most five minutes and subtracts its own metered call costs between refreshes.
+It does not read the database for every request. The hourly debit is the ledger record, not the stop-check interval.
+
+Companies approved through the waitlist have the balance enforced:
+
+- When the balance reaches the minimum, Tico models stop. The minimum is $0 unless Tico staff set another. The next
+  call is refused with "out of credit", and each bot falls back to its other models. Use can run over the minimum by
+  up to about 5 minutes before the stop takes hold.
+- A company is paused at the minimum exactly: $0.00 with a $0 minimum is paused. It runs only while the balance is
+  above the minimum.
+- Add credit, or ask Tico staff to lower the minimum, and Tico models work again within about 5 minutes.
+
+Companies that are only recorded are never stopped; their use is charged to the balance and nothing more.
+
+The stop sends no email by itself. The out-of-credit email is a separate feature, Credit notices.
+
+*Credit timing checked 2026-10-23: waitlist spec v3.4, Answer 14 and tests 9/11/12h; services#119 cached-balance behavior. Bot retry interval and Gateway balance refresh are separate.*

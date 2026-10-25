@@ -120,9 +120,16 @@ def test_tick_task_queries_read_an_index_not_the_tasks_table(api):
     with api.app.state.store.read() as c:
         due = plan(c, H.TASKS_DUE_SQL, "2026-09-11")
         assert "tasks_due_active" in due and "SCAN tasks" not in due.replace("SCAN tasks USING", ""), due
+        from backend import task_rules
+        rules = plan(c, task_rules.DUE_SQL, *("2026-09-11T00:00:00Z",) * 5, 50)
+        assert "tasks_rule_done_due" in rules and "TEMP B-TREE" not in rules, rules
+        assert "SCAN t" not in rules.replace("SCAN t USING", ""), rules
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='tasks_rule_due'").fetchone()
         from backend import quiet_work
         resume = plan(c, quiet_work.DUE_SQL, "2026-09-11T00:00:00Z")
         assert "tasks_resume_due" in resume and "SCAN tasks" not in resume.replace("SCAN tasks USING", ""), resume
+        leases = plan(c, "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id LIMIT 8", H.now())
+        assert 'attempts_live_lease' in leases and 'TEMP B-TREE' not in leases, leases
 
 
 def test_split_tick_still_fires_each_occurrence_and_reminder_once(api):

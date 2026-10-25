@@ -1,7 +1,8 @@
-/* ui/app/rails.js — The sidebar and the bot page's right rail are dragged wider or narrower
+/* ui/app/rails.js — The sidebar, the bot page's right rail and the Updates chat are dragged wider or narrower
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    It is first in the bundle and needs nothing from the others to start, so a saved width is set before the
-   page draws its content. The widths are the --rail-left and --rail-right variables (ui/styles/base.css, chat.css).
+   page draws its content. The widths are the --rail-left, --rail-right and --rail-chat variables (ui/styles/base.css,
+   chat.css, updates.css).
    A person's widths are kept on this device and with their account (preference ui.rails, stamped with when they
    last changed); the newer copy wins when a page loads or a tab comes back to the front. A double-click on an
    edge puts that rail back to its default; the arrow keys move a focused edge. A phone has no edges. */
@@ -10,10 +11,11 @@
 const RAILS = {
   left: {prop: '--rail-left', def: 236, min: 200, max: 420, label: 'Resize sidebar', controls: 'side'},
   right: {prop: '--rail-right', def: 320, min: 260, max: 560, label: 'Resize tasks panel', controls: 'pane-tasks'},
+  chat: {prop: '--rail-chat', def: 360, min: 280, max: 640, label: 'Resize chat', controls: 'upd-chat'},   // ui/app/updates-chat.js
 };
 const RAILS_KEY = 'tico.rails', RAILS_PREF = 'ui.rails';
-// The middle keeps at least this much beside the sidebar, and the bot's chat this much beside the right rail
-// (the main column's own side padding is 56px).
+// The middle keeps at least this much beside the sidebar (and the Updates feed beside its chat), and the bot's chat
+// this much beside the right rail (the main column's own side padding is 56px).
 const RAILS_MID = 480, RAILS_CHAT = 360, RAILS_MAIN_PAD = 56;
 const RAILS_STEP = 16;
 const railsShown = {};
@@ -25,8 +27,9 @@ function railsWant(side) { const n = Number(railsSaved()[side]); return n > 0 ? 
 // The widest a rail may be now: its own limit, and the room the window leaves.
 function railsMax(side) {
   const r = RAILS[side];
-  const room = side === 'left' ? innerWidth - RAILS_MID
-    : innerWidth - (railsShown.left || RAILS.left.def) - RAILS_MAIN_PAD - RAILS_CHAT;
+  const left = railsShown.left || RAILS.left.def;
+  const room = side === 'left' ? innerWidth - RAILS_MID : side === 'chat' ? innerWidth - left - RAILS_MID
+    : innerWidth - left - RAILS_MAIN_PAD - RAILS_CHAT;
   return Math.max(r.min, Math.min(r.max, room));
 }
 function railsApply(side, want) {
@@ -35,7 +38,7 @@ function railsApply(side, want) {
   railsShown[side] = w;
   document.documentElement.style.setProperty(r.prop, w + 'px');
   for (const edge of document.querySelectorAll(`.rail-edge[data-rail="${side}"]`)) railsAria(edge, side);
-  if (side === 'left') railsApply('right', railsWant('right'));   // the right rail's room follows the sidebar
+  if (side === 'left') { railsApply('right', railsWant('right')); railsApply('chat', railsWant('chat')); }   // their room follows the sidebar
 }
 function railsAria(edge, side) {
   edge.setAttribute('aria-valuenow', String(railsShown[side] || RAILS[side].def));
@@ -68,7 +71,7 @@ async function railsSync() {
   const at = Number(v?.at) || 0, localAt = Number(railsSaved().at) || 0;
   if (v && at > localAt) {
     const keep = {at};
-    for (const side of ['left', 'right']) if (Number(v[side]) > 0) keep[side] = Math.round(Number(v[side]));
+    for (const side of ['left', 'right', 'chat']) if (Number(v[side]) > 0) keep[side] = Math.round(Number(v[side]));
     railsStore(keep);
     railsApply('left', railsWant('left'));
   } else if (at < localAt) railsSave();
@@ -128,6 +131,7 @@ async function railsSync() {
     railsKeep(side, railsShown[side]);
   });
   // A narrower window squeezes the rails for now; the saved widths come back when there is room.
-  addEventListener('resize', () => railsApply('left', railsWant('left')));
+  let soon = 0;                                     // once a frame while the window is dragged
+  addEventListener('resize', () => { cancelAnimationFrame(soon); soon = requestAnimationFrame(() => railsApply('left', railsWant('left'))); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void railsSync(); });
 })();

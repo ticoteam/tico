@@ -76,25 +76,41 @@ def _task_name(row):
 
 
 # ------------------------------------------------------------------------------------------------ what it is now
+# The lookups below go through the snapshot's read cache (backend/read_cache.py), so a task list that read them for
+# all its quiet tasks together (`prime`) reads none of them again.
+OWN_JOB_COLUMNS = ("id", "attempt_id", "created", "state")
+CARRIED_SQL = "SELECT ts, detail_json FROM events WHERE action=? AND target=? ORDER BY ts"
+ATTEMPT_SQL = "SELECT id, bot, state, started, created, finished FROM attempts WHERE id=?"
+
+
+def _own_job_sql():
+    return ("SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
+            f"AND {_H().MESSAGE_TASK_SQL}=? "
+            "ORDER BY j.created LIMIT 1")
+
+
+def _last_sql(outcomes):
+    return ("SELECT ts, old, new FROM task_events WHERE task_id=? AND field=? "
+            f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY ts DESC LIMIT 1")
+
+
 def own_job(conn, row):
     """The run of its own a task has waiting or going: (job id, attempt id or None, created), or None."""
+    from .read_cache import one
     H = _H()
     try:
-        found = conn.execute(
-            "SELECT j.id, j.attempt_id, j.created, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE j.bot=? AND j.state IN ('queued','leased','running') AND {H.MESSAGE_TASK_SQL}=? "
-            "ORDER BY j.created LIMIT 1", (H.actor_id(row["owner"]), row["id"])).fetchone()
+        return one(conn, _own_job_sql(), (H.actor_id(row["owner"]), row["id"]))
     except Exception:  # noqa: BLE001 - a local hub has no jobs table
         return None
-    return found
 
 
 def carried_at(conn, aid, task_id):
     """When run `aid` was handed task `task_id` (its claim's carried event), or None."""
+    from .read_cache import rows
     try:
-        for r in conn.execute("SELECT ts, detail_json FROM events WHERE action=? AND target=? ORDER BY ts",
-                              (CARRIED, aid)):
+        for r in rows(conn, CARRIED_SQL, (CARRIED, aid)):
             if task_id in (json.loads(r["detail_json"] or "{}").get("tasks") or []):
                 return r["ts"]
     except Exception:  # noqa: BLE001 - fail quiet: the view only loses the time
@@ -103,17 +119,68 @@ def carried_at(conn, aid, task_id):
 
 
 def _attempt(conn, aid):
+    from .read_cache import one
     try:
-        return conn.execute("SELECT id, bot, state, started, created, finished FROM attempts WHERE id=?",
-                            (aid,)).fetchone()
+        return one(conn, ATTEMPT_SQL, (aid,))
     except Exception:  # noqa: BLE001 - a local hub has no attempts table
         return None
 
 
 def _last(conn, task_id, outcomes):
-    marks = ",".join("?" * len(outcomes))
-    return conn.execute(f"SELECT ts, old, new FROM task_events WHERE task_id=? AND field=? AND new IN ({marks}) "
-                        "ORDER BY ts DESC LIMIT 1", (task_id, FIELD, *outcomes)).fetchone()
+    from .read_cache import one
+    return one(conn, _last_sql(outcomes), (task_id, FIELD, *outcomes))
+
+
+def prime(conn, rows):
+    """Read what `view(history=False)` and `next_run_waiting` read for these task rows (a task list's quiet tasks):
+    their own runs, their last settled outcomes, and the runs that carried them and when, in a fixed number of queries
+    per 500 tasks. Each row's view is then built by the same code from this snapshot. Without a snapshot, or on a
+    local hub without run tables, it reads nothing and each view reads for itself."""
+    from .read_cache import cache, prime as seed, prime_rows
+    H = _H()
+    rows = [row for row in rows if row.get("next_run") and H.is_bot(row.get("owner"))
+            and row.get("status") in H.ACTIVE_STATUSES]
+    if cache(conn) is None or not rows:
+        return
+    try:
+        jobs = {}
+        for part in H.chunks(sorted({H.actor_id(row["owner"]) for row in rows})):
+            for job in conn.execute(
+                    "SELECT j.id, j.attempt_id, j.created, j.state, j.bot AS own_bot, "
+                    f"{H.MESSAGE_TASK_SQL} AS own_task FROM jobs j JOIN messages m ON m.id=j.message_id "
+                    "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot IN (%s) "
+                    f"AND j.state IN ('queued','leased','running') AND {H.unheld_sql()} ORDER BY j.created"
+                    % ",".join("?" * len(part)),
+                    part):
+                jobs.setdefault((job["own_bot"], job["own_task"]), {k: job[k] for k in OWN_JOB_COLUMNS})
+        seed(conn, _own_job_sql(), {(H.actor_id(row["owner"]), row["id"]):
+                                    jobs.get((H.actor_id(row["owner"]), row["id"])) for row in rows})
+        ids = [row["id"] for row in rows]
+        outcomes = {(RETURNED,): {}, (WORKED, HANDLED): {}}
+        for part in H.chunks(ids):
+            for event in conn.execute("SELECT task_id, ts, old, new FROM task_events WHERE task_id IN (%s) AND field=? "
+                                      "ORDER BY ts DESC" % ",".join("?" * len(part)), (*part, FIELD)):
+                for wanted, last in outcomes.items():
+                    if event["new"] in wanted:
+                        last.setdefault(event["task_id"], {k: event[k] for k in ("ts", "old", "new")})
+        for wanted, last in outcomes.items():
+            seed(conn, _last_sql(wanted), {(tid, FIELD, *wanted): last.get(tid) for tid in ids})
+        runs = sorted({aid for row in rows for aid in (row.get("carried_by"), (condition(row) or {}).get("run"))
+                       if isinstance(aid, str) and aid})
+        for part in H.chunks(runs):
+            marks = ",".join("?" * len(part))
+            found = {a["id"]: a for a in conn.execute(
+                "SELECT id, bot, state, started, created, finished FROM attempts WHERE id IN (%s)" % marks, part)}
+            seed(conn, ATTEMPT_SQL, {(aid,): found.get(aid) for aid in part})
+            seed(conn, H.NEXT_RUN_CARRIER_SQL, {(aid,): found[aid] if aid in found and found[aid]["state"]
+                                                in H.NEXT_RUN_CARRIER_STATES else None for aid in part})
+            carried = {aid: [] for aid in part}
+            for event in conn.execute("SELECT target, ts, detail_json FROM events WHERE action=? AND target IN (%s) "
+                                      "ORDER BY ts" % marks, (CARRIED, *part)):
+                carried[event["target"]].append(event)
+            prime_rows(conn, CARRIED_SQL, {(CARRIED, aid): events for aid, events in carried.items()})
+    except Exception:  # noqa: BLE001 - a local hub has no run tables: each view reads (and fails quiet) as before
+        return
 
 
 def was_quiet(conn, task_id):

@@ -6,6 +6,7 @@ with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /
 reader, the file, the version and an expiry, and every request on it (each range request too) checks again that the
 reader can still open the file. Nothing on that route reads or sets the app's cookies."""
 import base64
+import errno
 import hashlib
 import hmac
 import html
@@ -301,18 +302,37 @@ def secret(settings):
             raise RuntimeError("TICO_VISUAL_SECRET must be at least 32 characters")
         return given.encode()
     path = settings.db_path.parent / SECRET_FILE
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        if stat.S_IMODE(path.stat().st_mode) & 0o077:
-            raise RuntimeError(str(path) + " must be readable only by its owner (chmod 600)") from None
-        value = path.read_text().strip()
-        if len(value) < 32:
-            raise RuntimeError(str(path) + " is too short; delete it to generate a new one")
-        return value.encode()
-    value = secrets.token_hex(32)
-    with os.fdopen(fd, "w") as handle:
-        handle.write(value)
+    if not path.exists():
+        # Written whole, then linked into place: a request that arrives meanwhile never reads a half-made file, and
+        # of two first requests the second link loses and both use the one secret. A filesystem that cannot
+        # hard-link falls back to an exclusive create, which can still show an empty file for a moment.
+        value = secrets.token_hex(32)
+        draft = path.with_name(f".{SECRET_FILE}-{secrets.token_hex(8)}")
+        fd = os.open(draft, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(value)
+            try:
+                os.link(draft, path)
+            except FileExistsError:
+                pass
+            except OSError as exc:
+                if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS):
+                    raise
+                try:
+                    out = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    pass
+                else:
+                    with os.fdopen(out, "w") as handle:
+                        handle.write(value)
+        finally:
+            draft.unlink()
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise RuntimeError(str(path) + " must be readable only by its owner (chmod 600)")
+    value = path.read_text().strip()
+    if len(value) < 32:
+        raise RuntimeError(str(path) + " is too short; delete it to generate a new one")
     return value.encode()
 
 
@@ -345,6 +365,12 @@ def read(key, token, now=None):
     if int(now if now is not None else time.time()) >= int(expires):
         return None
     return str(actor), str(fid), int(version), str(part)
+
+
+def ancestors(settings):
+    """The frame-ancestors sources of a visual's content policy: the visual address itself, the app's own address and
+    its CORS origins (where the app's pages that frame it are)."""
+    return list(dict.fromkeys(["'self'", origin_of(settings.public_url), *settings.cors_origins]))
 
 
 def origin_of(url):
@@ -467,17 +493,19 @@ def _clean_version(c, who, files, blobs, fid, version, cleaned, mime):
 INLINE = ("image", "svg", "page", "video", "audio")
 
 
-def decorate(c, who, files, key, base, messages, full=True):
+def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     """Each visual on these messages, as this reader sees it now: the file's current version, whether it was removed,
     its size in pixels, and fresh addresses on the visual route (the picture and, for a video, its poster). `base` is
     the address the route is on: the visual address, or "" for the app's own (the fallback, `full` False). In the
     fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
-    preview (`preview_url`, a picture), and Open shows it in the file viewer."""
-    from . import task_privacy as privacy
+    preview (`preview_url`, a picture), and Open shows it in the file viewer. The exception is one `hosted(version)`
+    says shows from Tico file hosting's address (tico_storage.visual_ready): it gets a `src` on the app's own route,
+    which checks the reader and sends them there (`serve`)."""
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
-    route = token_reader(c, files.auth, privacy.actor(who)) if who.role == "bot" else who
+    # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
+    route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("kind") in INLINE for a in items):
@@ -497,9 +525,9 @@ def decorate(c, who, files, key, base, messages, full=True):
             view = {**a, "removed": removed or v is None,
                     "current_version": None if removed else row["current_version"]}
             if v is not None:
-                actor = privacy.actor(who)
+                actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                inline = full or a["kind"] in MEDIA
+                inline = full or a["kind"] in MEDIA or bool(hosted and here is not None and hosted(v))
                 view["src"] = here + "/visuals/" + mint(key, actor, fid, number) if inline and here is not None else None
                 if not inline:
                     view["open"] = True
@@ -545,9 +573,13 @@ def key_for(app, settings):
 def for_reader(app, settings, c, who, messages):
     """decorate() for any path that hands messages to a reader: the conversation page and snapshot, a single message,
     task comments, the task page, the assistant room and the live event stream all go through here."""
-    full = mode(settings) == "full"
+    from .tico_storage import visual_ready
+    full, blobs, frames = mode(settings) == "full", app.state.blobs, ancestors(settings)
+
+    def hosted(v):
+        return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
     return decorate(c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages,
-                    full)
+                    full, hosted)
 
 
 # ---------------------------------------------------------------------------------------------- serve
@@ -566,6 +598,8 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
+    if not isinstance(actor, str):
+        return None
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)
@@ -578,7 +612,10 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     """GET /visuals/<token>: one visual for the reader the token names, checked again on every request. The route
     answers on every host the server does, the app's own included, so a page or SVG is served only to a request that
     came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
-    fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused."""
+    fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused.
+    A page or SVG held in Tico file hosting's bucket is never served from here, in either mode: once the reader is
+    checked, they are sent (302) to a five-minute link to its cleaned copy on the company's address
+    (tico_storage.visual_link)."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
     gone = Response(status_code=404, headers=_headers("default-src 'none'; sandbox", "attachment"))
@@ -608,10 +645,18 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             if kind != "image":
                 return gone
             blob["content_type"] = mime
-        elif kind not in INLINE or (kind not in MEDIA and not (full and on_host(request, visual_origin))):
+        elif kind not in INLINE:
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
+    if kind in ("page", "svg") and not part:
+        from .tico_storage import visual_link
+        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        if link:
+            return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
+                                                      "Referrer-Policy": "no-referrer"})
+        if not (full and on_host(request, visual_origin)):
+            return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
         data, _ = clean(blobs.get(blob["digest"]), kind)

@@ -274,7 +274,7 @@ def mark_prompts(c, messages):
 def annotate(c, auth, who, messages):
     """Add `run` (which run handled it), `ref_tasks`, `prompted_by` on a bot's loose message to a person,
     and, on a bot's reply, what the run did to messages this reader may already see."""
-    messages[:] = [m for m in messages if privacy.message_readable(c, privacy.actor(who), m)]
+    messages[:] = privacy.readable_messages(c, privacy.actor(who), messages)
     mark_runs(c, messages)
     mark_delivery(c, messages)
     mark_prompts(c, messages)

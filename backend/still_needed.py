@@ -27,13 +27,14 @@ def _local(ts):
     return at.astimezone(ZONE)
 
 
-def crossed_at(asked_ts):
-    """When an ask written at `asked_ts` has waited BUSINESS_DAYS business days. One asked on a weekend starts
-    counting on Monday morning. Friday 10:00 -> Tuesday 10:00."""
+def crossed_at(asked_ts, days=BUSINESS_DAYS):
+    """When an ask written at `asked_ts` has waited `days` business days (BUSINESS_DAYS: the line the weekday batch sends
+    it back at; the Task Manager's report uses 1). One asked on a weekend starts counting on Monday morning.
+    Friday 10:00 -> Tuesday 10:00."""
     at = _local(asked_ts)
     if at.weekday() >= 5:
         at = datetime.combine(at.date() + timedelta(days=7 - at.weekday()), time(0), ZONE)
-    left = BUSINESS_DAYS
+    left = days
     while left:
         at += timedelta(days=1)
         if at.weekday() < 5:

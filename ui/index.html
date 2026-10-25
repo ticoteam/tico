@@ -49,10 +49,12 @@
 <link rel="stylesheet" href="/tico/ui/styles/visual-media.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
 <link rel="stylesheet" href="/tico/ui/styles/goals.css">
+<link rel="stylesheet" href="/tico/ui/styles/strategy.css">
 <link rel="stylesheet" href="/tico/ui/styles/tasks.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-pipelines.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-code.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-list.css">
+<link rel="stylesheet" href="/tico/ui/styles/task-board.css">
 <link rel="stylesheet" href="/tico/ui/styles/decide.css">
 <link rel="stylesheet" href="/tico/ui/styles/task-stats.css">
 <link rel="stylesheet" href="/tico/ui/styles/hub-v2.css">
@@ -82,7 +84,7 @@
   <header class="side-head">
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
-  <!-- The rail is Tasks, the Assistant, BotOps, Goals, Docs, Market and Meetings, then the team and
+  <!-- The rail is Tasks, the Assistant, BotOps, Goals, Docs, Strategy (with Market) and Meetings, then the team and
        the message bots. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
        The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
@@ -91,7 +93,7 @@
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome" hidden><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
-    <a class="nav-link" id="nav-assistant" href="#/bot/coo" data-nav="assistant" hidden><span class="nav-icon" aria-hidden="true">assistant</span>Assistant</a>
+    <a class="nav-link" id="nav-assistant" href="#/bot/coo" data-nav="assistant" hidden><span class="nav-icon" aria-hidden="true">assistant</span><span data-nav-name>Assistant</span></a>
     <a class="nav-link" id="nav-botops" href="#/bot/botops" data-nav="botops" hidden><span class="nav-icon" aria-hidden="true">smart_toy</span>BotOps</a>
     <a class="nav-link" href="#/goals" data-nav="goals"><span class="nav-icon" aria-hidden="true">target</span>Goals</a>
     <div class="nav-row">
@@ -99,8 +101,8 @@
       <a class="nav-librarian" id="nav-docs-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
     </div>
     <div class="nav-row">
-      <a class="nav-link" href="#/market" data-nav="market"><span class="nav-icon" aria-hidden="true">storefront</span>Market</a>
-      <a class="nav-librarian" id="nav-market-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
+      <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
+      <a class="nav-librarian" id="nav-strategy-librarian" href="#/bot/librarian/more" hidden title="Librarian settings" aria-label="Librarian settings"><span class="nav-icon" aria-hidden="true">settings</span></a>
     </div>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
     <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
@@ -135,16 +137,17 @@
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
     </div>
     <div class="side-utility">
-      <div id="heartbeat" role="status" aria-label="Connecting" title="Connecting"><span class="dot" aria-hidden="true"></span></div>
       <div class="account-wrap">
-        <button id="account" type="button" aria-expanded="false" aria-controls="account-menu" title="Account navigation"><span class="account-email">Signing in…</span><span class="hl-alert" data-hl-alert hidden></span></button>
+        <button id="account" type="button" aria-expanded="false" aria-controls="account-menu" title="Account navigation"><span id="heartbeat" class="account-dot" role="status" aria-label="Connecting" title="Connecting"></span><span class="account-email">Signing in…</span></button>
+        <div id="account-status-pop" class="account-status" hidden></div>
         <nav id="account-menu" aria-label="Account navigation" hidden>
+          <div id="account-status" class="account-status" hidden></div>
           <a class="nav-link" href="#/integrations" data-nav="integrations" id="nav-integrations"><span class="nav-icon" aria-hidden="true">api</span>Tools</a>
           <a class="nav-link" href="#/replay" data-nav="replay"><span class="nav-icon" aria-hidden="true">history</span>Replay</a>
           <a class="nav-link" href="#/learnings" data-nav="learnings"><span class="nav-icon" aria-hidden="true">psychology</span>Learnings</a>
           <a class="nav-link" href="#/usage" data-nav="usage"><span class="nav-icon" aria-hidden="true">paid</span>Usage</a>
           <a class="nav-link" href="#/changelog" data-nav="changelog"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Changelog<span id="changelog-badge" class="pill" hidden></span></a>
-          <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings<span class="hl-alert" data-hl-alert hidden></span></a>
+          <a class="nav-link" href="#/settings" data-nav="settings"><span class="nav-icon" aria-hidden="true">settings</span>Settings</a>
           <button class="nav-link" id="account-tour" type="button" data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
           <a class="nav-link" id="sign-out" href="/api/v2/logout" hidden><span class="nav-icon" aria-hidden="true">logout</span>Sign out</a>
           <a class="nav-link" id="download-app" href="/download/mac" hidden><span class="nav-icon" aria-hidden="true">download</span>Download the app</a>
@@ -153,7 +156,6 @@
       <button class="help-link" id="connect-agent" type="button" hidden aria-label="Connect an external agent" title="Connect an external agent: Grok, Dots, Muse or any MCP agent"><span class="nav-icon" aria-hidden="true">power</span></button>
       <button class="help-link" id="help-open" type="button" aria-haspopup="dialog" aria-label="Support" title="Support">?</button>
     </div>
-    <div id="heartbeat-alert" class="err" hidden></div>
   </footer>
 </aside>
 <dialog id="search-modal" class="tmodal search-modal" aria-label="Search">
@@ -185,6 +187,7 @@
 <script src="/tico/ui/docs-ask.js"></script>
 <script src="/tico/ui/docs-page.js"></script>
 <script src="/tico/ui/market-page.js"></script>
+<script src="/tico/ui/strategy-page.js"></script>
 <script src="/tico/ui/changelog.js"></script>
 <script src="/tico/ui/observability.js"></script>
 <script src="/tico/ui/github-connect.js"></script>
@@ -197,6 +200,7 @@
 <script src="/tico/ui/getting-started.js"></script>
 <script src="/tico/ui/org-builder.js"></script>
 <script src="/tico/ui/first-run.js"></script>
+<script src="/tico/ui/setup-strategy.js"></script>
 <script src="/tico/ui/runner-updates.js"></script>
 <script src="/tico/ui/health.js"></script>
 <script src="/tico/ui/goals-kpis.js"></script>
@@ -223,6 +227,7 @@
 <script src="/tico/ui/app/tooltip.js"></script>
 <script src="/tico/ui/app/needs-you.js"></script>
 <script src="/tico/ui/app/bot-tasks.js"></script>
+<script src="/tico/ui/app/bot-sidebar.js"></script>
 <script src="/tico/ui/app/chat.js"></script>
 <script src="/tico/ui/app/pill.js"></script>
 <script src="/tico/ui/app/chat-goal.js"></script>
@@ -233,6 +238,7 @@
 <script src="/tico/ui/app/meetings-granola.js"></script>
 <script src="/tico/ui/app/person-page.js"></script>
 <script src="/tico/ui/app/assistant-page.js"></script>
+<script src="/tico/ui/app/learned.js"></script>
 <script src="/tico/ui/app/bot-branches.js"></script>
 <script src="/tico/ui/app/bot-learnings.js"></script>
 <script src="/tico/ui/app/learnings.js"></script>
@@ -242,6 +248,7 @@
 <script src="/tico/ui/app/tags.js"></script>
 <script src="/tico/ui/app/tasks.js"></script>
 <script src="/tico/ui/app/task-pipelines.js"></script>
+<script src="/tico/ui/app/task-board.js"></script>
 <script src="/tico/ui/app/question-card.js"></script>
 <script src="/tico/ui/app/task-modal.js"></script>
 <script src="/tico/ui/app/roadmaps.js"></script>
@@ -265,6 +272,8 @@
 <script src="/tico/ui/app/inbound.js"></script>
 <script src="/tico/ui/app/settings.js"></script>
 <script src="/tico/ui/app/settings-recurring.js"></script>
+<script src="/tico/ui/app/settings-rules.js"></script>
+<script src="/tico/ui/app/settings-release.js"></script>
 <script src="/tico/ui/app/settings-triggers.js"></script>
 <script src="/tico/ui/app/vault.js"></script>
 <script src="/tico/ui/app/settings-devices.js"></script>
@@ -272,8 +281,13 @@
 <script src="/tico/ui/app/settings-access.js"></script>
 <script src="/tico/ui/app/settings-history.js"></script>
 <script src="/tico/ui/app/settings-storage.js"></script>
+<script src="/tico/ui/app/settings-company.js"></script>
+<script src="/tico/ui/app/settings-billing.js"></script>
+<script src="/tico/ui/app/settings-hosted.js"></script>
 <script src="/tico/ui/app/settings-ceo-bot.js"></script>
 <script src="/tico/ui/app/settings-bot-editor.js"></script>
+<script src="/tico/ui/app/bot-budget.js"></script>
+<script src="/tico/ui/app/bot-profile.js"></script>
 <script src="/tico/ui/app/settings-repositories.js"></script>
 <script src="/tico/ui/app/subscriptions.js"></script>
 <script src="/tico/ui/app/computer-detail.js"></script>
@@ -285,6 +299,7 @@
 <script src="/tico/ui/app/settings-people.js"></script>
 <script src="/tico/ui/app/welcome.js"></script>
 <script src="/tico/ui/app/updates.js"></script>
+<script src="/tico/ui/app/updates-chat.js"></script>
 <script src="/tico/ui/app/goals.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>

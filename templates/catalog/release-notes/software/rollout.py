@@ -89,7 +89,7 @@ def wait_release(repo, version):
             return {"release": json.loads(found.stdout).get("url")}
         runs = gh("run", "list", "-R", repo, "--branch", name, "--json", "name,status,conclusion,url", check=False)
         for run in json.loads(runs.stdout or "[]") if runs.returncode == 0 else []:
-            if run.get("name") in ("Release", "Docker") and run.get("conclusion") in ("failure", "cancelled", "timed_out"):
+            if run.get("name") == "Release" and run.get("conclusion") in ("failure", "cancelled", "timed_out"):
                 raise Stop("the %s workflow for %s ended %s: %s" % (run["name"], name, run["conclusion"], run.get("url")))
         time.sleep(POLL)
     raise Stop("no GitHub release for %s after %d minutes" % (name, RELEASE_WAIT // 60))

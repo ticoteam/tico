@@ -35,7 +35,12 @@ function tfLazy(root = document) {
     if (TF_THUMBS.has(img.dataset.tfSrc) || !TF_IO) tfShow(img); else TF_IO.observe(img);
   }
 }
-new MutationObserver(() => tfLazy()).observe(document.documentElement, {childList: true, subtree: true});
+let TF_LAZY_QUEUED = false;
+new MutationObserver(() => {
+  if (TF_LAZY_QUEUED) return;
+  TF_LAZY_QUEUED = true;
+  setTimeout(() => { TF_LAZY_QUEUED = false; tfLazy(); }, 60);
+}).observe(document.documentElement, {childList: true, subtree: true});
 
 // ---- what a file is and how it shows
 function tfKind(name, mime) {

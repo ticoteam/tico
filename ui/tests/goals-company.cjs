@@ -1,8 +1,8 @@
-// The Company section at the top of Goals and each goal's Why line (ui/goals-kpis.js goalCompanyHtml, goalWhyHtml), on every
-// install (backend/company.py): empty, it asks the owner what the company is for with the two fields; the owner saves
-// them; an admin or a member reads them with no Edit; History lists who changed what and when. A goal with no Why says
-// "Not tied to the vision"; the CEO Bot's proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has
-// since replaced is refused and shows the new one. At level 2 a recovery in Needs you is approved one option at a time.
+// The Strategy line at the top of Goals and each goal's Why line (ui/goals-kpis.js goalStrategyHtml, goalWhyHtml): with no
+// published strategy the owner gets a link to write it on Strategy and anyone else gets nothing; once published everyone
+// reads its version and summary, linking to Strategy. A goal with no Why says "Not tied to the vision"; the CEO Bot's
+// proposal is accepted as it is or edited, and an Accept on a line the CEO Bot has since replaced is refused and shows
+// the new one. At level 2 a recovery in Needs you is approved one option at a time.
 // Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -10,19 +10,16 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-const PROMPT = 'Tell your CEO Bot what this company is for.';
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
   bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 
-async function open(browser, {role = 'owner', company = {vision: '', description: ''}, history = [], needs = []} = {}) {
+async function open(browser, {role = 'owner', strategy = null, needs = []} = {}) {
   const server = {};
   const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
   const errors = [], posted = [];
   page.on('pageerror', e => errors.push(e.message));
   const state = {
-    company: {...company, updated: null, updated_by: null, updated_by_name: ''},
-    history: [...history],
     goals: [
       {id: 'g-top', title: 'Grow rentals 30%', owner: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: [], why: ''},
       {id: 'g-cmo', title: 'Double organic signups', owner: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [],
@@ -50,19 +47,8 @@ async function open(browser, {role = 'owner', company = {vision: '', description
     if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending')});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
-    if (p === '/api/v2/company' && req.method() === 'GET') {
-      return json({company: state.company, may_edit: role === 'owner'});
-    }
-    if (p === '/api/v2/company' && req.method() === 'POST') {
-      const body = req.postDataJSON();
-      posted.push(['company', body]);
-      const ts = new Date().toISOString();
-      for (const field of ['vision', 'description']) if (body[field] !== undefined && body[field] !== state.company[field])
-        state.history.unshift({id: 'e' + state.history.length, ts, actor: 'human:ana', actor_name: 'Ana Silva', field, old: state.company[field], new: body[field]});
-      state.company = {...state.company, ...body, updated: ts, updated_by: 'human:ana', updated_by_name: 'Ana Silva'};
-      return json({company: state.company, may_edit: true});
-    }
-    if (p === '/api/v2/company/history') return json({events: state.history});
+    if (p === '/api/v2/strategy') return json({...(role === 'owner' ? {draft: {n: null, status: 'draft', summary: '', vision: '', sections: {}, bets: [], revision: 1}} : {}),
+      current: strategy, bets: strategy?.bets || [], label: 'Bets', label_one: 'Bet', may_edit: role === 'owner', goals_by_bet: {}, health_by_bet: {}});
     const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
     if (decide) {
       const body = req.postDataJSON(), prop = state.proposals.find(x => x.id === decide[1]);
@@ -102,69 +88,31 @@ const panelFor = async (page, owner) => {
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // Spec test 1: no vision yet, the owner sees the prompt and the two empty fields above the goals.
+    // No strategy yet: the owner gets one line linking to Strategy, above the goals; a member gets nothing.
     {
-      const {page, errors, posted} = await open(browser);
-      const section = page.locator('#goal-company');
-      await section.waitFor();
-      assert.equal(await section.locator('h2').textContent(), 'Company');
-      assert.equal(await section.locator('.gco-prompt').innerText(), PROMPT);
-      assert.equal(await section.locator('textarea[name="vision"]').inputValue(), '');
-      assert.equal(await section.locator('textarea[name="description"]').inputValue(), '');
-      const above = await page.evaluate(() => {
-        const co = document.getElementById('goal-company'), tree = document.getElementById('goal-tree');
-        return Boolean(co.compareDocumentPosition(tree) & Node.DOCUMENT_POSITION_FOLLOWING);
-      });
-      assert.ok(above, 'the Company section is above the goals');
-      // The owner saves both; the section reads them back with Edit, and History says who and when.
-      await section.locator('textarea[name="vision"]').fill('Every small landlord runs their rentals on Tico.');
-      await section.locator('textarea[name="description"]').fill('Tico runs a rental business with bots, for landlords with 1-20 units.');
-      await section.locator('button[type="submit"]').click();
-      await section.locator('[data-gco-vision]').waitFor();
-      assert.deepEqual(posted[0], ['company', {vision: 'Every small landlord runs their rentals on Tico.',
-        description: 'Tico runs a rental business with bots, for landlords with 1-20 units.'}]);
-      assert.equal(await section.locator('[data-gco-vision]').innerText(), 'Every small landlord runs their rentals on Tico.');
-      assert.equal(await section.locator('.gco-prompt').count(), 0, 'the prompt goes once it is written');
-      assert.equal(await section.locator('[data-gco-edit]').count(), 1);
-      // A draft survives a redraw: typing, then something else redraws the page, the words stay.
-      await section.locator('[data-gco-edit]').click();
-      await section.locator('textarea[name="vision"]').fill('Every landlord, any size.');
-      await page.evaluate(() => goalsRender(GOALS_ST));
-      assert.equal(await page.locator('#goal-company textarea[name="vision"]').inputValue(), 'Every landlord, any size.');
-      await page.locator('#goal-company [data-gco-cancel]').click();
-      await page.locator('#goal-company [data-gco-history]').click();
-      await page.locator('#goal-company [data-gco-event]').first().waitFor();
-      const events = await page.locator('#goal-company [data-gco-event]').allInnerTexts();
-      assert.equal(events.length, 2);
-      assert.match(events.join('\n'), /Vision changed by Ana Silva/);
-      assert.match(events.join('\n'), /Description changed by Ana Silva/);
-      assert.ok(await page.locator('#goal-company [data-gco-event] time[datetime]').count() === 2, 'each change says when');
+      const {page, errors} = await open(browser);
+      const line = page.locator('#goal-strategy');
+      assert.match(await line.innerText(), /^No strategy yet\s*·?\s*Write it$/);
+      assert.equal(await line.getAttribute('href'), '#/strategy');
+      assert.ok(await page.evaluate(() => Boolean(document.getElementById('goal-strategy').compareDocumentPosition(document.getElementById('goal-tree')) & Node.DOCUMENT_POSITION_FOLLOWING)),
+        'the Strategy line is above the goals');
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Spec test 2 (v3): an admin or a member reads both, with no Edit and no form; History is theirs to read.
+    // Published: an admin or a member reads its version and summary; a member sees the CEO Bot's proposal with no buttons.
     for (const role of ['admin', 'member']) {
-      const {page, errors} = await open(browser, {role,
-        company: {vision: 'Every small landlord runs their rentals on Tico.', description: 'Bots that run rentals.'},
-        history: [{id: 'e1', ts: new Date(Date.now() - 3600000).toISOString(), actor: 'human:ana', actor_name: 'Ana Silva', field: 'vision', old: '', new: 'Every small landlord runs their rentals on Tico.'}]});
-      const section = page.locator('#goal-company');
-      await section.waitFor();
-      assert.equal(await section.locator('[data-gco-vision]').innerText(), 'Every small landlord runs their rentals on Tico.');
-      assert.equal(await section.locator('[data-gco-description]').innerText(), 'Bots that run rentals.');
-      assert.equal(await section.locator('[data-gco-edit]').count(), 0);
-      assert.equal(await section.locator('textarea').count(), 0);
-      await section.locator('[data-gco-history]').click();
-      await section.locator('[data-gco-event]').waitFor();
-      assert.match(await section.locator('[data-gco-event]').innerText(), /Vision changed by Ana Silva · 1h ago/);
-      // A member sees the CEO Bot's proposal on a goal but has no buttons for it.
-      const panel = await panelFor(page, 'company');
-      assert.equal(await panel.locator('[data-why-prop] [data-why-accept]').count(), 0);
+      const {page, errors} = await open(browser, {role, strategy: {n: 3, summary: 'Every small landlord runs their rentals on Tico.', bets: []}});
+      assert.match(await page.locator('#goal-strategy').innerText(), /^Strategy v3\s*·?\s*Every small landlord runs their rentals on Tico\.$/);
+      if (role === 'member') {
+        const panel = await panelFor(page, 'company');
+        assert.equal(await panel.locator('[data-why-prop] [data-why-accept]').count(), 0);
+      }
       assert.deepEqual(errors, []);
       await page.close();
     }
     // Spec test 4: "Not tied to the vision" until a Why is accepted; accepted as it is, or edited.
     {
-      const {page, errors, posted} = await open(browser, {company: {vision: 'Every landlord on Tico.', description: ''}});
+      const {page, errors, posted} = await open(browser);
       assert.match(await page.locator('#goal-tree .gt-row[data-goal="g-top"] .gt-goal').getAttribute('title'), /Why: Not tied to the vision/);
       let panel = await panelFor(page, 'company');
       const why = panel.locator('[data-why="g-top"]');
@@ -197,7 +145,7 @@ const panelFor = async (page, owner) => {
     }
     // Accepted as it is.
     {
-      const {page, errors, posted} = await open(browser, {company: {vision: 'Every landlord on Tico.', description: ''}});
+      const {page, errors, posted} = await open(browser);
       const panel = await panelFor(page, 'company');
       await panel.locator('[data-why-prop="p-why"] [data-why-accept]').click();
       await panel.locator('[data-why="g-top"] [data-why-text]').waitFor();
@@ -210,7 +158,7 @@ const panelFor = async (page, owner) => {
     // is saved as them) and the panel shows the line now waiting, which they accept; an edit typed against the old
     // line keeps their words when it is refused.
     {
-      const {page, errors, posted, state} = await open(browser, {company: {vision: 'Every landlord on Tico.', description: ''}});
+      const {page, errors, posted, state} = await open(browser);
       const panel = await panelFor(page, 'company');
       await panel.locator('[data-why-prop="p-why"] [data-why-accept]').waitFor();
       const newer = replaceWhy(state, 'g-top', 'Landlords who rent more stay on Tico.');
@@ -235,7 +183,7 @@ const panelFor = async (page, owner) => {
       await page.close();
     }
     // Needs you (backend/goal_asks.py): the vision ask and the bundled Why ask read as themselves, not as empty KPI
-    // rows; the vision row takes the owner to the Vision field, a goal in the Why row opens its panel at that goal.
+    // rows; the vision row takes the owner to Strategy, a goal in the Why row opens its panel at that goal.
     {
       const needs = [{kind: 'vision', task: {id: 't-vision', title: 'Tell your CEO Bot what this company is for', status: 'open'}},
         {kind: 'why', goals: [{goal_id: 'g-top', goal_title: 'Grow rentals 30%', why: 'x'}, {goal_id: 'g-cmo', goal_title: 'Double organic signups', why: 'y'}],
@@ -246,8 +194,11 @@ const panelFor = async (page, owner) => {
       assert.match(await rows.nth(0).innerText(), /^Tell your CEO Bot what this company is for/);
       assert.match(await rows.nth(1).innerText(), /These goals need a Why line: Grow rentals 30%, Double organic signups/);
       assert.equal(await page.locator('#goal-needs [data-kpi]').count(), 0);
+      await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').waitFor();
       await rows.nth(0).click();
-      assert.equal(await page.evaluate(() => document.activeElement?.name), 'vision');
+      await page.waitForFunction(() => location.hash === '#/strategy');
+      await page.evaluate(() => { location.hash = '#/goals'; });
+      await page.locator('#goal-needs li').nth(1).waitFor();
       await rows.nth(1).locator('[data-need-why-goal="g-cmo"]').click();
       await page.locator('#goal-panel[open] .gp-body').waitFor();
       assert.match(await page.locator('#goal-panel').innerText(), /Double organic signups/);

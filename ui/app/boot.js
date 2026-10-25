@@ -13,7 +13,7 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
     reloading = true;
     location.reload();
   });
-  navigator.serviceWorker.register('/sw.js?v=40', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
+  navigator.serviceWorker.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
 (async () => {
   let configVersion = nativeVisualVersion();
@@ -23,7 +23,6 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   updPrefetch();
   // Health and sidebar counts enrich the page; a slow diagnostic must not hold up opening a chat or task.
   const status = get('/status').catch(() => null).then(st => { S.status = st; S.statusPending = false; });
-  const issues = get('/issues').catch(() => []).then(rows => { S.issues = rows; });
   const counts = v2Refresh();
   try {
     const [emps, me, people] = await roster;
@@ -53,8 +52,11 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
     return;
   }
   if (S.me?.cloud) {
+    // Its settings change seldom (an owner turning telemetry on or off): read again every ten minutes, and when a
+    // tab that was hidden is shown, not every 30 s from every open tab.
     window.TicoObservability?.start();
-    setInterval(() => window.TicoObservability?.start(), 30000);
+    setInterval(() => { if (!document.hidden) window.TicoObservability?.start(); }, 600000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) window.TicoObservability?.start(); });
   }
   void orgHistorySync();
   void railsSync();
@@ -65,14 +67,14 @@ if ('serviceWorker' in navigator) window.addEventListener('load', () => {
   if (BOOT_DEFAULT_ROUTE && S.config.onboarding_needed) history.replaceState(null, '', WELCOME);
   route(); renderHeartbeat(); renderAccount();
   sessionResume();                   // back from signing in: the task that was open opens again (session.js)
-  void Promise.all([status, issues, counts]).then(() => {
+  void Promise.all([status, counts]).then(() => {
     renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync();
     botAlertDraw();
     overviewRefresh();                 // a campus opened before the first status answer shows it now, not at the next poll
     if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
   });
   if (S.me?.cloud) void updUnreadRefresh();
-  // Tasks, bot status and Needs you arrive as they change (ui/app/live.js). The issues, the roster, computers and
+  // Tasks, bot status and Needs you arrive as they change (ui/app/live.js). The roster, computers and
   // Updates are not on that stream: they still refresh, every 30 s while the stream is down and every 2 minutes
   // while it is up. A tab in the background does not poll; coming back to a stale tab refreshes it at once.
   // Subscribe after the initial count snapshots: an older snapshot must not overwrite a live change.

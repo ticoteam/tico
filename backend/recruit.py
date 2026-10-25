@@ -11,9 +11,14 @@ answer and their "Suggestions from Tico HQ" toggle, and this module answers from
 - **The local recommender** (backend/recruit_rank.py) otherwise, and on any failure: no network at all.
 
 Either way the answer is template ids and a short "why" per bot, never text a bot would follow.
+
+The strategy draft's bets (backend/strategy.py) shape the local answer: their words count like "What you do", and the
+answer names the bet the department clearly serves (`bet`), which setup stores on the group it makes (`bet_for`,
+`Onboarding.complete`). Bets never go to Tico HQ. With no bets both work as before.
 """
 import logging
 import re
+import sqlite3
 from pathlib import Path
 
 import httpx
@@ -27,6 +32,7 @@ from .store import Problem
 log = logging.getLogger("tico.recruit")
 
 HQ_TIMEOUT = 6.0
+BET_WORDS = 2               # words a bet shares with a department before it is said to serve it
 BUNDLED_DEPARTMENTS = Path(__file__).resolve().parents[1] / "templates" / "groups.yaml"
 # Tests swap in an httpx.MockTransport; a real install always uses the network.
 TRANSPORT = None
@@ -78,9 +84,45 @@ def template_groups(settings):
 
 
 def _about(answers):
-    return {"what": re.sub(r"\s+", " ", str(answers.get("what_we_do") or "")).strip()[:R.BRIEFING_LIMIT],
+    what = answers.get("what_we_do") or answers.get("building") or ""
+    return {"what": re.sub(r"\s+", " ", str(what)).strip()[:R.BRIEFING_LIMIT],
             "sells_to": str(answers.get("customers") or ""),
             "software": str(answers.get("software_product") or "") == "yes"}
+
+
+def strategy_bets(c, who=None):
+    """The bets that are not retired, in rank order; none on a database from before Strategy. The draft's for the
+    owner (and for setup itself, `who` None); for anyone else, as a bot administrator, the published version's: the
+    draft is the owner's until they publish it."""
+    from . import goal_routes
+    from . import strategy as S
+    try:
+        if who is not None and not goal_routes.company_editor(who):
+            return [b for b in (S.current(c) or {}).get("bets") or [] if b.get("status") != "retired"]
+        return [b for b in S.bets(c) if b["status"] != "retired"]
+    except sqlite3.OperationalError:
+        return []
+
+
+def bets_text(bets):
+    return " ".join(" ".join((b["statement"], b.get("why") or "", b.get("rules_out") or "")) for b in bets)
+
+
+def bet_for(value, department_id, bets, briefing=""):
+    """The bet a department clearly serves, or None: the one sharing the most words (BET_WORDS or more) with the
+    department's description, goal and question, its cards' names and tags and the owner's answer for it, and more
+    than any other bet. A tie serves none: the owner links it on the group."""
+    dept = next((row for row in value["departments"] if row["id"] == department_id), None)
+    if not dept or not bets:
+        return None
+    parts = [dept["name"], dept["description"], dept["goal"], dept["question"], briefing]
+    for card in value["cards"]:
+        if card["department"] == department_id:
+            parts += [card["name"], *card["tags"]]
+    words = R._stems(" ".join(parts))
+    scored = sorted(((len(R._stems(bets_text([b])) & words), i) for i, b in enumerate(bets)), reverse=True)
+    best, second = scored[0][0], (scored[1][0] if len(scored) > 1 else 0)
+    return bets[scored[0][1]] if best >= BET_WORDS and best > second else None
 
 
 def _from_hq(answer, cards):
@@ -139,10 +181,13 @@ class Recruiter:
             answers = O.load(c)["answers"]
             off = off_reason(c, self.settings)
             install_id = _install_id(c) if not off else ""
+            bets = strategy_bets(c, who)
         value = catalog(self.settings)
         cards = {card["template"] for card in value["cards"] if card["department"] == body.department}
         about = _about(answers)
-        local = R.rank(value, body.department, body.briefing, about)
+        local = R.rank(value, body.department, body.briefing, {**about, "bets": bets_text(bets)})
+        served = bet_for(value, body.department, bets, body.briefing)
+        local["bet"] = {"id": served["id"], "statement": served["statement"]} if served else None
         if not body.share or off:
             return {**local, "source": "local", "shared": False, "off_by": off}
         payload = {"department": body.department, "briefing": body.briefing, "about": about,
@@ -160,4 +205,4 @@ class Recruiter:
         if answer is None:
             return {**local, "source": "local", "shared": True, "off_by": ""}
         _plain_reasons(answer, value, body.department, body.briefing, about)
-        return {**answer, "source": "hq", "shared": True, "off_by": ""}
+        return {**answer, "bet": local["bet"], "source": "hq", "shared": True, "off_by": ""}

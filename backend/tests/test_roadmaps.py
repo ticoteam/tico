@@ -29,15 +29,14 @@ def test_engineering_children_drive_approved_roadmap_and_reopen(api):
 
 
 def _dev_tickets(api):
-    """A Dev tickets type shaped like the software factory's: Done ships, Closed and Won't do do not."""
+    """A Dev tickets type shaped like the software factory's: Done ships, Closed and declined do not."""
     from backend import roadmap_flow as F
     with api.app.state.store.transaction() as c:
         dev = H.type_create(c, 'human:ana', 'Dev tickets', numbered=True, steps=[
             {'name': 'On Deck', 'status': 'open'}, {'name': 'In Progress', 'status': 'doing'},
             {'name': 'Review 1', 'status': 'review'}, {'name': 'In QA', 'status': 'review'},
             {'name': 'Pending Release', 'status': 'review'}, {'name': 'Post Release QA', 'status': 'review'},
-            {'name': 'Done', 'status': 'done'}, {'name': 'Closed', 'status': 'closed'},
-            {'name': "Won't do", 'status': 'declined'}])
+            {'name': 'Done', 'status': 'done'}, {'name': 'Closed', 'status': 'closed'}])
         F.ensure(c)     # hands the type to engineering-lead, as on a server start
     return dev
 
@@ -57,6 +56,14 @@ def _building(api, dev, title, tickets=2):
 def _step(api, task, step):
     return post(api, 'tasks/' + task['id'], {'version': get(api, 'tasks/' + task['id'])['task']['version'],
                                              'step': step})
+
+
+def _decline(api, task):
+    """Declined is not a step: a declined ticket goes to its type's Closed step and keeps its status."""
+    row = post(api, 'tasks/' + task['id'], {'version': get(api, 'tasks/' + task['id'])['task']['version'],
+                                            'status': 'declined'})
+    assert row['status'] == 'declined' and row['step']['name'] == 'Closed'
+    return row
 
 
 def _roadmap_step(api, item):
@@ -79,7 +86,7 @@ def test_a_dev_ticket_closed_without_shipping_does_not_ship_the_roadmap_item(api
 
     item, (closed, declined) = _building(api, dev, 'Sharing')
     _step(api, closed, 'Closed')
-    _step(api, declined, "Won't do")
+    _decline(api, declined)
     assert _roadmap_step(api, item) == 'Approved'
 
 
@@ -105,7 +112,7 @@ def test_a_shipped_dev_ticket_its_requester_closes_still_counts_as_shipped(api):
 
     item, (child,) = _building(api, dev, 'Dropped after Done', tickets=1)
     _step(api, child, 'Done')
-    _step(api, child, "Won't do")
+    _decline(api, child)
     assert _roadmap_step(api, item) == 'Approved'
     closed = post(api, 'tasks/' + child['id'], {'version': get(api, 'tasks/' + child['id'])['task']['version'],
                                                 'close': True})
@@ -227,6 +234,24 @@ def test_every_ticket_past_qa_makes_the_item_ready_to_ship_and_every_one_done_sh
     assert _roadmap_step(api, item) == 'Shipped'
 
 
+def test_a_roadmap_item_moved_or_closed_by_hand_stays_until_a_ticket_moves(api):
+    """Tickets closed without shipping send the item back to Approved; a person can still ship or close it."""
+    dev = _dev_tickets(api)
+    item, children = _building(api, dev, 'Chat')
+    for child in children:
+        _step(api, child, 'Closed')
+    assert _roadmap_step(api, item) == 'Approved'
+    _step(api, item, 'Shipped')
+    assert _roadmap_step(api, item) == 'Shipped'
+    _step(api, children[0], 'In Progress')          # a ticket moving takes the item back over
+    assert _roadmap_step(api, item) == 'Building'
+    row = post(api, 'tasks/' + item['id'], {'version': get(api, 'tasks/' + item['id'])['task']['version'],
+                                            'close': True})
+    assert row['status'] == 'closed' and row['step'] is None
+    _step(api, children[0], 'Closed')
+    assert get(api, 'tasks/' + item['id'])['task']['status'] == 'closed'
+
+
 def test_a_closed_ticket_counts_toward_neither_ready_to_ship_nor_shipped(api):
     dev = _dev_tickets(api)
     item, (kept, dropped) = _building(api, dev, 'Sharing')
@@ -319,6 +344,9 @@ def test_started_blocked_and_done_notices_use_fixed_templates_and_wake_nobody(ap
     url = 'https://github.com/acme/app/pull/7'
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', ticket['id'], url, mover=True)
+        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.head_sha',?) WHERE task_id=? AND kind='pr'",
+                  ('a' * 40, ticket['id']))
+        c.execute("UPDATE tasks SET note=? WHERE id=?", ('Tests: head ' + 'a' * 40 + ': 9 passed, 0 failed', ticket['id']))
         number, other_number = (H.task(c, t['id'])['number'] for t in (ticket, other))
     assert number is not None
     name = f'#{number} Build exports'
@@ -687,8 +715,7 @@ def test_manual_graduation_all_declined_and_existing_dev_type(api):
         c.execute("DELETE FROM task_steps WHERE type_id='engineering'")
         c.execute("DELETE FROM task_types WHERE id='engineering'")
         dev = H.type_create(c, 'human:ana', 'Dev tickets', steps=[{'name': 'Todo', 'status': 'open'},
-                                                        {'name': 'Done', 'status': 'closed'},
-                                                        {'name': 'Declined', 'status': 'declined'}])
+                                                        {'name': 'Done', 'status': 'closed'}])
         F.ensure(c)
         assert not c.execute("SELECT 1 FROM task_types WHERE id='engineering'").fetchone()
         assert H.type_get(c, dev['id'])['manager'] == 'engineering-lead'

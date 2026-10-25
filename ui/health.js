@@ -1,6 +1,6 @@
 /* Settings > Health: what needs attention right now (backend/health.py). Everything shown is what
-   GET /api/v2/health computed; the only local state is which page is open. The attention dot sits on
-   the way into Settings, never in the main navigation. */
+   GET /api/v2/health computed; the only local state is which page is open. What needs looking at also shows as
+   lines under the account button's one status dot (ui/app/heartbeat.js), never in the main navigation. */
 'use strict';
 let HL = null;
 let HL_LOAD = 0;
@@ -10,19 +10,21 @@ let HL_MONITOR = null;   // the owner: the Health Monitor's switch and what it f
 async function hlRefresh() {
   if (!S.me?.cloud) return null;
   const seq = ++HL_LOAD;
-  const data = await v2Get('/v2/health');
+  // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
+  // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
+  // all three are read together; the first time, the other two follow the checks.
+  const page = !!$('#hl-page');
+  const extras = hl => Promise.all([page && hl && hl.audience !== 'human' ? v2Get('/v2/system/metrics?minutes=60') : null,
+    page && hl?.audience === 'owner' ? v2Get('/v2/health-monitor') : null]);
+  const checks = data => data && Array.isArray(data.checks) ? data : null;
+  const [data, [metrics, monitor]] = HL ? await Promise.all([v2Get('/v2/health'), extras(HL)])
+    : await v2Get('/v2/health').then(async data => [data, await extras(checks(data))]);
   if (seq !== HL_LOAD) return HL;
-  HL = data && Array.isArray(data.checks) ? data : null;
-  if (HL && HL.audience !== 'human') {
-    const metrics = await v2Get('/v2/system/metrics?minutes=60');
-    if (seq !== HL_LOAD) return HL;
-    HL_METRICS = metrics && metrics.requests ? metrics : null;
-  } else HL_METRICS = null;
-  if (HL?.audience === 'owner') {
-    const monitor = await v2Get('/v2/health-monitor');
-    if (seq !== HL_LOAD) return HL;
-    HL_MONITOR = monitor && 'on' in monitor ? monitor : null;
-  } else HL_MONITOR = null;
+  HL = checks(data);
+  if (page) {
+    HL_METRICS = HL && HL.audience !== 'human' && metrics?.requests ? metrics : null;
+    HL_MONITOR = HL?.audience === 'owner' && monitor && 'on' in monitor ? monitor : null;
+  }
   // The sidebar's "New version" reads the same answer, so it never lags the page beside it.
   if (HL?.update && S.config) { S.config = {...S.config, update: HL.update}; window.renderNewVersion?.(); }
   hlNav();
@@ -31,21 +33,24 @@ async function hlRefresh() {
   return HL;
 }
 
-// The dot follows the way in: the account button, the Settings entry and the Health tab.
+// What Health says needs looking at, for the account button's one status dot and its lines (ui/app/heartbeat.js).
+// Inside Settings, the Health tab keeps its own dot.
+window.hlAttention = () => (HL?.checks || []).filter(check => check.status === 'warn' || check.status === 'bad');
+// The computers Health lists: everyone's for owners and admins; null for others, who are shown none.
+window.hlComputers = () => HL && HL.audience !== 'human' ? HL.computers : null;
 window.hlNav = function hlNav() {
   const attention = HL?.attention || 0;
   document.querySelectorAll('[data-hl-alert]').forEach(dot => { dot.hidden = !attention; });
-  const label = attention ? `Settings, ${attention} to look at in Health` : '';
-  const setting = document.querySelector('#account-menu [data-nav="settings"]');
-  if (setting) { if (label) setting.setAttribute('aria-label', label); else setting.removeAttribute('aria-label'); }
   const tab = document.querySelector('[data-settings-tab="health"]');
   if (tab) { if (attention) tab.setAttribute('aria-label', `Health, ${attention} to look at`); else tab.removeAttribute('aria-label'); }
+  window.renderAccountStatus?.();
 };
 
 const HL_ICONS = {ok: 'check_circle', warn: 'warning', bad: 'error', info: 'radio_button_unchecked', unknown: 'help'};
 let HL_CHECKING = false;
 let HL_CHECK_MSG = null;   // {text, error}: what the last "Check for updates" said, kept across redraws
 
+window.hlFixHtml = hlFixHtml;
 function hlFixHtml(fix) {
   if (fix.login) return `<button class="ghost" type="button" data-model-login data-runner="${esc(fix.login.runner_id)}" data-runtime="${esc(fix.login.runtime)}" data-machine="${esc(fix.login.computer)}">${esc(fix.label)}</button>`;
   if (fix.move) return `<button class="ghost" type="button" data-stuck-move="${esc(fix.move.bot)}" data-runner="${esc(fix.move.runner_id)}" data-machine="${esc(fix.move.computer)}">${esc(fix.label)}</button>`;
@@ -118,8 +123,10 @@ function hlSeen(f) {
 // rule that lets it file Tico bug reports without a Needs you card.
 function hlMonitorHtml(m) {
   if (!m) return '';
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page.
+  const stopped = f => { const m = /^(?:run_hold|turn_budget):(.+)$/.exec(f.key || ''); return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : ''; };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span></li>`).join('');
+    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
       <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, has BotOps fix setup problems and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
@@ -143,7 +150,7 @@ async function hlMonitorToggle(box) {
 window.hlStuckHtml = function hlStuckHtml(rows) {
   return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
     <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${row.queued ? ` · ${row.queued} queued` : ''}</span>
-    ${row.fix ? hlFixHtml(row.fix) : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
+    ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
 };
 
 async function hlStuckMove(button) {
@@ -155,7 +162,7 @@ async function hlStuckMove(button) {
   void hlRefresh();
 }
 
-// A bot stuck in setup: the same setup-done call as its page's "Mark setup done" (POST /v2/bots/{bot}/onboarded).
+// A bot stuck in onboarding: the same call as its page's "Mark onboarding complete" (POST /v2/bots/{bot}/onboarded).
 async function hlStuckFinish(button) {
   const slug = button.dataset.stuckFinish;
   button.disabled = true; button.textContent = 'Finishing…';
@@ -163,7 +170,7 @@ async function hlStuckFinish(button) {
     const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
     const bot = (S.emps || []).find(e => e.name === slug);
     if (bot) bot.onboarding_state = result.onboarding_state;
-    toast(`${botDisplayName(slug)} finished setup`);
+    toast(`${botDisplayName(slug)} finished onboarding`);
     void hlRefresh();
   } catch (error) {
     toast(error.message, true);
@@ -295,7 +302,12 @@ window.hlMount = function hlMount() {
 
 window.hlBoot = function () {
   void hlRefresh();
-  setInterval(() => { if (!document.hidden && S.me?.cloud) void hlRefresh(); }, 60000);
+  // Every minute, or every 2 while live events flow (the tab is in use and nothing is broken).
+  let at = 0;
+  setInterval(() => {
+    if (document.hidden || !S.me?.cloud || (typeof liveConnected === 'function' && liveConnected() && Date.now() - at < 119000)) return;
+    at = Date.now(); void hlRefresh();
+  }, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) void hlRefresh(); });
 };
 

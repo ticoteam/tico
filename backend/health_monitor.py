@@ -31,7 +31,7 @@ from datetime import timezone
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, models_preset, providers, runner_versions, team_rules
+from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
 from .auth import Identity
 from .models import Contract
 from .store import H, Problem
@@ -102,6 +102,11 @@ MEANING = {
     "worktree_error": "A task worktree failed on its computer.",
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
     "local_busy": "A process or container on a computer running Tico was busy in two hourly checks in a row while idle.",
+    "run_hold": "Tico stopped a bot after five runs in a row failed within a minute of starting.",
+    "turn_budget": "Tico stopped a bot that started more runs in an hour or a day than its budget allows.",
+    "reviewer_holds_tasks": "A bot with the Reviewer profile owns open tasks that are not review or QA requests.",
+    "responder_has_tasks": "A bot with the Responder profile, which takes no tasks, has open tasks.",
+    "doer_idle": "A Doer's runs for a week all did nothing: its profile may not fit what it is asked to do.",
     **{p[0]: p[4] + "." for p in LOG_PATTERNS},
 }
 # What a Tico bug report says the fix is: one constant per tico-bug check, never a finding's own text.
@@ -294,6 +299,8 @@ def out_of_quota_logins(c, settings=None):
                                                             "limits": 0, "since": "", "resets_at": None, "open": True})
         if not login["open"]:
             continue
+        if result.get("limited") and (result.get("limit_source") or {}).get("kind") == login_holds.CAPACITY_KIND:
+            continue                                                    # the provider was busy: nothing of quota
         if result.get("limited") and r["state"] != "completed":
             if not login["limits"]:
                 login["resets_at"] = result.get("limit_resets_at")    # the latest limit's reset is the one that counts
@@ -468,6 +475,8 @@ def _bot_checks(c, settings=None):
     limited = {}
     for r in c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
         detail = json.loads(r["detail_json"] or "{}")
+        if (detail.get("source") or {}).get("kind") == login_holds.CAPACITY_KIND:
+            continue                    # a busy model for two minutes, not a spent subscription or spend limit
         if detail.get("bot"):
             limited[detail["bot"]] = limited.get(detail["bot"], 0) + 1
     record = providers.load(c, settings)
@@ -525,6 +534,62 @@ def _bot_checks(c, settings=None):
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
     out.extend(_quiet_work_checks(c))
+    out.extend(_stop_checks(c))
+    out.extend(_profile_checks(c))
+    return out
+
+
+def _profile_checks(c):
+    """Profiles that do not fit the work a bot has (backend/profiles.py mismatches): one finding per bot."""
+    from . import profiles
+    say = {"reviewer_holds_tasks": (lambda name, n: (
+               f"{name} is a Reviewer but owns {n} open task{'s' if n != 1 else ''} that {'are' if n != 1 else 'is'} not review or QA requests",
+               f"A Reviewer takes review and QA requests only and does not pull other open tasks by itself, so "
+               f"these wait for a person to start them.",
+               f"BotOps: give those tasks to a bot that does the work, or change {name}'s profile to Doer.")),
+           "responder_has_tasks": (lambda name, n: (
+               f"{name} is a Responder but has {n} open task{'s' if n != 1 else ''}",
+               "A Responder wakes for people in chat only and never starts a task, so these sit untouched.",
+               f"BotOps: give those tasks to a bot that does the work, or change {name}'s profile to Doer.")),
+           "doer_idle": (lambda name, n: (
+               f"{name} did nothing in all {n} of its runs this week",
+               f"Every run {name} had in the last week ended without writing anything to Tico.",
+               f"BotOps: ask {name}'s owner what it should be doing; a Responder, Monitor or Lead profile may fit better."))}
+    out = []
+    for kind, bot, count in profiles.mismatches(c):
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        title, detail, fix = say[kind](name, count)
+        out.append(_finding(f"{kind}:{bot}", kind, SETUP, title, detail, fix))
+    return out
+
+
+def _stop_checks(c):
+    """A bot Tico stopped for failed runs or for running away (backend/bot_stops.py): one finding per bot until it is
+    released. The signature carries the error class or the window, never the bot."""
+    from . import run_backoff, turn_budgets
+    out = []
+    for hold in run_backoff.held(c):
+        bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"run_hold:{bot}", "run_hold", SETUP,
+                            f"{name} was stopped after {hold['fails']} failed runs in a row",
+                            f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
+                            f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
+                            f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
+                            f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {bot}). "
+                            "Tico also tries one run on its own at growing intervals and releases it when one completes. "
+                            "Its queued work is kept.", subject=kind, severity=BAD))
+    for hold in turn_budgets.held(c):
+        bot = hold["bot"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"turn_budget:{bot}", "turn_budget", SETUP,
+                            f"{name} was stopped: {hold['runs']} runs in the last {hold['window']}",
+                            f"{name} started {hold['runs']} runs in the last {hold['window']}, over its budget of "
+                            f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
+                            "loop, not normal work.",
+                            f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
+                            f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
+                            subject=hold["window"], severity=BAD))
     return out
 
 
@@ -549,15 +614,21 @@ def _quiet_work_checks(c):
 
 def _server_checks(c):
     from . import flight
+    from .health import runner_route_latency
+    latency = runner_route_latency(c)
+    out = ([_finding("runner_route_latency", "runner_route_latency", BUG,
+                     "Runner requests are waiting too long", latency["summary"],
+                     "Inspect the flight recorder's route wait/work times and write-lock holders; shorten the longest transactions.")]
+           if latency else [])
     try:
         seen = flight.view(c, minutes=60, sections=("requests", "process", "sql"))
     except Exception:
-        return []                                   # no flight recorder on this server
+        return out                                  # no process samples on this server
     cpu, requests = (seen.get("process") or {}).get("cpu_avg"), (seen.get("requests") or {}).get("n") or 0
     if cpu is None or cpu < SERVER_CPU or requests >= QUIET_REQUESTS:
-        return []
+        return out
     top = [q["sql"][:120] for q in (seen.get("sql") or {}).get("queries", [])[:3]]
-    return [_finding("server_cpu", "server_cpu", BUG, f"The server used {cpu:g}% CPU for an hour while idle",
+    return out + [_finding("server_cpu", "server_cpu", BUG, f"The server used {cpu:g}% CPU for an hour while idle",
                      f"Average CPU {cpu:g}% over the last hour with {requests} requests. Busiest SQL: "
                      + ("; ".join(top) or "none recorded") + ".",
                      BUG_FIX["server_cpu"])]

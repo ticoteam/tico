@@ -473,6 +473,7 @@ class Gateway:
         self.stop = threading.Event()
         self._customize_warned = False
         self._names = {}                    # Slack user id -> what a digest calls them
+        self._name_misses = {}              # Slack user id -> when to ask Slack again after a failed lookup
         self._unreadable = set()            # channels history refused (not a member, no scope)
         self.next_digest = self.clock()     # the first pass sets the readers' cursors
         self.pin_workspace = False          # tokens the owner pasted into Tico define the workspace
@@ -794,7 +795,8 @@ class Gateway:
             return used_today(c, actor, at=self.clock()) >= daily_cap(self.settings, role)
 
     def audit(self, c, actor, event, fleet, outcome):
-        """One `judge.call` per message, the way `/api/v2/decisions` audits: never the message text. A try that
+        """One `judge.call` per message, the way `/api/v2/decisions` audits: the answers' values and confidences
+        (`J.summary`), never the message text. A try that
         will be retried is not one; the message counts once, when it is routed or finally fails."""
         asked = len(fleet) + len(JUDGE_SET["questions"])
         H.event(c, actor, "judge.call", JUDGE_LABEL, {"via": "slack", "event_id": event["event_id"], "questions": asked,
@@ -1042,7 +1044,7 @@ class Gateway:
             if answers is not None:
                 decision = self.decide(answers, fleet)
                 called = {"model": self.last_model, "usage": self.last_usage, "cost_usd": round(self.last_cost, 6),
-                          "ms": round((time.monotonic() - started) * 1000),
+                          "ms": round((time.monotonic() - started) * 1000), "answers": J.summary(answers),
                           **({"provider": self.last_provider} if self.last_provider else {})}
         with self.store.transaction() as c:
             if called:
@@ -1290,9 +1292,11 @@ class Gateway:
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
         message = H.message(c, post["message_id"]) or {}
+        about = None
         if post["bot"]:
             conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-            line = visuals.elsewhere(self.settings.public_url, message, H.message_task_id(message, conv))
+            about = H.message_task_id(message, conv)
+            line = visuals.elsewhere(self.settings.public_url, message, about)
         else:
             # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
             result = completion_result(c, message)
@@ -1309,7 +1313,15 @@ class Gateway:
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
             text = text[:POST_CHARS].rstrip() + " …"
-        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + f"\n\n(sent from {name})", "username": name,
+        # A reply about a task names it and links to it, so the DM makes sense on its own.
+        task = H.task(c, about) if about else None
+        if task:
+            label = (f"#{task['number']} " if task.get("number") is not None else "") + str(task.get("title") or "").strip()
+            url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
+            footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
+        else:
+            footer = f"(sent from {name})"
+        return {"text": slack_escape(text) + ("\n" + seen if seen else "") + "\n\n" + footer, "username": name,
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 
@@ -1469,18 +1481,22 @@ class Gateway:
             LOG.info("Backfilled %d channel message(s) the socket did not deliver", stored)
         return stored
 
-    def display_name(self, row):
-        """What a digest calls the author: the roster name for a person, the bot's own name for a bot."""
+    def display_name(self, row, lookup=True):
+        """What a digest calls the author: the roster name for a person, the bot's own name for a bot.
+        `lookup=False` (inside the write transaction) answers from the cache only; a failed lookup waits five minutes."""
         if row["author"] == "bot":
             return row["author_name"] or ("the " + self.settings.assistant_name + " app" if row["user_id"] == self.bot_user_id else "a bot")
         uid = row["user_id"]
         if uid not in self._names:
+            if not lookup or time.monotonic() < self._name_misses.get(uid, 0):
+                return uid
             try:
                 user = self.slack.users_info(uid)
                 profile = user.get("profile") or {}
                 self._names[uid] = str(profile.get("real_name") or profile.get("display_name") or user.get("real_name")
                                        or user.get("name") or uid)
             except (SlackError, SlackUnreachable):
+                self._name_misses[uid] = time.monotonic() + 300
                 return uid
         return self._names[uid]
 
@@ -1492,7 +1508,7 @@ class Gateway:
             text = text[:DIGEST_LINE_CHARS].rstrip() + " …"
         text = text.replace("\n", "\n    ")
         tag = " (edited)" if row["edited"] and not row["deleted"] else ""
-        return f"- {slack_time(row['ts'])} {self.display_name(row)}{tag}{marker}: {text}"
+        return f"- {slack_time(row['ts'])} {self.display_name(row, lookup=False)}{tag}{marker}: {text}"
 
     def unread_for(self, c, channel, reader, cursor):
         """New rows past the reader's cursor (what the fast lane already gave this reader excluded),
@@ -1568,13 +1584,19 @@ class Gateway:
                     by_reader.setdefault(reader, []).append((cid, entry))
                 else:
                     LOG.debug("Reader %s of #%s is not an active bot", reader, entry["name"] or cid)
-        # Names are looked up before the write lock is taken, so Slack's latency is not the
-        # API's; what a thread's earlier lines need is usually cached by then.
+        # Names are looked up before the write lock is taken, so Slack's latency is not the API's: the
+        # digest itself reads only the cache. Unread lines' authors, then their threads' earlier lines'.
         with self.store.read() as c:
-            for r in c.execute("SELECT DISTINCT e.user_id AS uid, e.author FROM slack_events e JOIN slack_reads r "
-                               "ON r.channel=e.channel WHERE e.ts>r.last_ts OR (r.last_run IS NOT NULL AND e.updated>r.last_run) "
-                               "LIMIT 500"):
-                self.display_name({"author": r["author"], "user_id": r["uid"], "author_name": None})
+            authors = c.execute(
+                "SELECT DISTINCT e.user_id AS uid, e.author FROM slack_events e JOIN slack_reads r "
+                "ON r.channel=e.channel WHERE e.ts>r.last_ts OR (r.last_run IS NOT NULL AND e.updated>r.last_run) "
+                "LIMIT 500").fetchall()
+            authors += c.execute(
+                "SELECT DISTINCT p.user_id AS uid, p.author FROM slack_events e JOIN slack_reads r ON r.channel=e.channel "
+                "JOIN slack_events p ON p.channel=e.channel AND p.thread_ts=e.thread_ts AND p.ts<=r.last_ts "
+                "WHERE e.ts>r.last_ts AND p.author!='bot' LIMIT 500").fetchall()
+        for r in authors:
+            self.display_name({"author": r["author"], "user_id": r["uid"], "author_name": None})
         results = []
         for reader, chans in sorted(by_reader.items()):
             try:

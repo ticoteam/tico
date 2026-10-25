@@ -44,6 +44,38 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
 
 
+
+def test_the_snapshot_script_removes_parts_left_by_an_attempt_that_ran_out_of_time(monkeypatch, tmp_path):
+    import sqlite3, subprocess, sys
+    updater = load(monkeypatch, "", tmp_path)
+    db, folder = tmp_path / "hub.sqlite", tmp_path / "snapshots"
+    with sqlite3.connect(db) as conn:
+        conn.execute("create table t(x)"); conn.executemany("insert into t values (?)", [(i,) for i in range(5000)])
+    folder.mkdir(); (folder / "pre-update-v0.0.9-1.sqlite.part").write_bytes(b"x")
+    script = updater.SNAPSHOT_SCRIPT.replace("/data/hub.sqlite", str(db))
+    done = subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-1.sqlite", "3", "60"],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite"]
+    # Out of time: the server holds the database, so the copy cannot finish. The worker's SQLite deletes the copy's
+    # -journal at the end of each write transaction, so a listed part can vanish before it is removed; the listing
+    # names one that is already gone, and the process must still end with its message.
+    vanishing = ("import glob\nlisted = glob.glob\nglob.glob = lambda pattern, **kw: listed(pattern, **kw) + "
+                 "([pattern[:-1] + '-journal'] if pattern.endswith('.part*') else [])\n")
+    blocker = sqlite3.connect(db, isolation_level=None)
+    blocker.execute("begin exclusive")
+    try:
+        late = subprocess.run([sys.executable, "-c", vanishing + script, str(folder), "pre-update-v0.1.0-2.sqlite", "3",
+                               "0.2"], capture_output=True, text=True, timeout=30)
+    finally:
+        blocker.execute("rollback"); blocker.close()
+    assert late.returncode == 1 and "did not finish" in late.stderr and "Traceback" not in late.stderr, late.stderr
+    # The next attempt sweeps whatever partial copy an attempt like that reached.
+    for leftover in (".part", ".part-journal"):
+        (folder / ("pre-update-v0.1.0-2.sqlite" + leftover)).write_bytes(b"x")
+    subprocess.run([sys.executable, "-c", script, str(folder), "pre-update-v0.1.0-3.sqlite", "3", "60"], check=True)
+    assert sorted(p.name for p in folder.iterdir()) == ["pre-update-v0.1.0-1.sqlite", "pre-update-v0.1.0-3.sqlite"]
+
 def test_a_failed_health_check_restores_the_snapshot_because_migrations_may_have_run(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)
     docker = Fake(updater, monkeypatch, [False, True])

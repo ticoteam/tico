@@ -181,7 +181,7 @@ function qcardRedraw(box) {
   box.outerHTML = qcardBoxHTML({id: box.dataset.qcard});
 }
 function qcardItem(t) {
-  const it = (S.v2?.needs || []).find(x => String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
+  const it = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === String(t?.id) && ['question', 'waiting', 'task'].includes(x.kind));
   const q = it && qcardQuestion(it);
   return q ? {it, q} : null;
 }

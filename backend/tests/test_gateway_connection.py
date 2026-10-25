@@ -756,6 +756,33 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
 
 
+def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_after_a_minute(api, monkeypatch):
+    """Dev 351: the Gateway rate-limited the bot's Tico model and its other model finished the turn. The Tico login
+    is held only the Gateway's minute, not a provider login's 30 minutes, so the bot's next turn after it is on Tico
+    models again."""
+    machine, attempt = tico_run(api, monkeypatch)
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": "Tico AI Gateway: rate limited; retrying after the Gateway's "
+                                                         "requested wait (rate_limited)", "limit": True}},
+        {"seq": 2, "kind": "diagnostic", "payload": {"text": "pi hit its usage limit; running this turn on codex"}},
+    ]}, machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 2, "text": "Done.",
+                                                     "fallback": "codex", "primary_limited": True}, machine["token"])
+    with api.app.state.store.read() as c:
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+    assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
+    at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
+    ready(api, machine, ["ops"])
+    again = claim(api, machine, "ops")
+    assert again and again["config"]["model"] == "tico-mid-1.0" and not again["config"].get("primary_held")
+
+
 @pytest.mark.parametrize("code", ["revoked_key", "unknown_key"])
 def test_a_refused_key_says_the_connection_is_not_working(api, monkeypatch, code):
     machine, attempt = tico_run(api, monkeypatch)
@@ -802,6 +829,10 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "last_seq": 2, "text": ""}, machine["token"])
     status, job = ended(api, attempt)
     assert status["focus"] == error.removesuffix(" (not_isolated)") + ". This run is saved for later", status["focus"]
+    stop = get(api, "status?bot=ops")["status"]["last_stop"]
+    assert stop["attempt_id"] == attempt["id"] and stop["action"] == "review"
+    assert "never started" in stop["text"] and "changed something" not in stop["reason"]
+    assert "pick another model or move the bot" in stop["reason"]
     assert job == "uncertain" and claim(api, machine, "ops") is None
     # Nor does the review of stopped runs send it back to the same runner, sweep after sweep: it never started and
     # called no tool, so on a harness that reports its tool calls it would count as safe to resume. It waits for a
@@ -839,6 +870,8 @@ def test_a_refusal_for_want_of_isolation_is_shown_only_to_who_may_read_its_run(a
     post(api, f"attempts/{ordinary['id']}/complete", {"outcome": "failed", "last_seq": 2, "text": ""}, machine["token"])
     post(api, "tasks", {"owner": "ops", "title": "Ana only", "body": "Private work.", "private": True})
     ready(api, machine, ["ops"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     refused = claim(api, machine, "ops")
     assert refused and refused["id"] != ordinary["id"]
     error = ("Tico models need a runner that runs bots as their own user (Tico's Docker runner). This computer can't, "

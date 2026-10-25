@@ -26,7 +26,8 @@ SPACING_DAYS = 3          # a later moment waits this long after the person last
 # Fixed labels: Getting started's own labels can name a bot ("Set up Payroll").
 STEPS = {"signed_in": "signing in", "computer": "a computer online", "model": "a model signed in",
          "github": "GitHub", "botops": "BotOps active", "first_bot": "a first bot", "next_bot": "a bot waiting in Needs setup",
-         "first_output": "a first approved output", "first_update": "a first update"}
+         "first_output": "a first approved output", "first_update": "a first update",
+         "strategy": "a published strategy"}
 ASKED_FROM = {"wizard": "the setup wizard", "health": "Health", "bot": "a bot in Needs setup"}
 
 

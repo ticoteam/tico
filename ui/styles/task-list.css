@@ -13,9 +13,14 @@
 .task-status{flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-xs);font-weight:400}
 .tl-row > .task-status{width:65px;text-align:right}
 .tl-row > .tl-status-pad{flex:none;width:65px}
+/* a row's status chip: quiet until the row is hovered, then a thin outline; it opens the status (or step) menu */
+.tl-row > .tl-status{width:auto;min-width:65px;height:20px;padding:0 6px;border:1px solid transparent;border-radius:6px;background:none;font:inherit;font-size:var(--t-xs);cursor:pointer}
+.tl-row:hover > .tl-status,.tl-status[aria-expanded=true]{border-color:var(--line)}
+.tl-status:hover{background:var(--surface2);color:var(--ink)}
+.tl-status:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 
 /* ---- toolbar: title, labelled tabs with counts, search, new task */
-.tl-head{display:flex;align-items:center;gap:12px;min-height:44px}
+.tl-head{display:flex;flex-wrap:wrap;align-items:center;gap:12px;row-gap:8px;min-height:44px}
 .tl-head h1{flex:none;font-size:var(--t-lg);margin:0 4px 0 0;white-space:nowrap}
 .tl-head .spacer,.tl-bar .spacer{flex:1}
 .tl-tabs{flex:none;display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
@@ -24,8 +29,8 @@
 .tl-tabs [role=tab][aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
 .tl-tabs [role=tab]:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
 .tl-tabs .cnt{font-size:var(--t-xs);color:var(--muted);font-weight:500}
-.tl-tabs .cnt.hot{color:var(--wait);font-weight:600}
-.tl-type-search{display:flex;align-items:center;gap:10px;flex:0 1 380px;min-width:0}
+.tl-tabs .cnt.hot{color:var(--wait-ink);font-weight:600}
+.tl-type-search{display:flex;align-items:center;gap:10px;flex:1 1 auto;max-width:380px;min-width:0}
 .tl-types{display:inline-flex;align-items:center;flex:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .tl-types[hidden]{display:none}
 .tl-types button{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-base)/1 var(--sans);white-space:nowrap;cursor:pointer}
@@ -68,6 +73,22 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-groupchip{gap:6px;padding:0 8px;color:var(--muted)}
 .tl-groupchip .v{color:var(--ink)}
 .tl-groupchip:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-who-wrap{flex:none;display:inline-flex}
+.tl-who-wrap[hidden]{display:none}
+.tl-who{gap:6px;padding:0 8px}
+.tl-who .v{max-width:18ch}
+.tl-who svg:last-child{color:var(--muted)}
+.tl-who:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-seg{display:flex;gap:2px;margin:0 0 6px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.tl-seg button{flex:1;height:24px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:500 var(--t-sm)/1 var(--sans);white-space:nowrap;cursor:pointer}
+.tl-seg button[aria-pressed=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+.tl-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.tl-who-menu .tl-menu-h{padding-top:8px}
+.tl-who-team[hidden],.tl-who-more[hidden],.tl-menu-none[hidden]{display:none}
+.tl-who-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-mi-n{margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
+.tl-mi-n+.tl-mi-on{margin-left:6px}
+.tl-who-more{color:var(--muted)}
 .tl-selmode[aria-pressed=true]{color:var(--accent);border-color:var(--line)}
 @media (min-width:761px){#task-select-mode{display:none!important}}
 
@@ -117,7 +138,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-note{flex:1 1 0;min-width:0;display:flex;align-items:center;gap:5px;margin-left:4px;color:var(--muted);font-size:var(--t-sm);overflow:hidden}
 .tl-note-ic{flex:none;display:inline-flex;opacity:.8}
 .tl-note-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tl-row.mine .tl-note{color:var(--wait)}
+.tl-row.mine .tl-note{color:var(--wait-ink)}
 .tl-fill{flex:1 1 0}
 .tl-chips{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:45%;overflow:hidden}
 .tl-chips:empty{display:none}
@@ -139,6 +160,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-parent{flex:0 1 auto;min-width:0;max-width:28%;display:inline-flex;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden}
 .tl-parent-t{overflow:hidden;text-overflow:ellipsis}
 .tl-due.late{color:var(--fail)}
+.tl-due.soon{color:var(--wait-ink)}
 .tl-people{flex:none;display:inline-flex;align-items:center;justify-content:flex-end;min-width:20px}
 .tl-asker{display:inline-flex;margin-right:-3px;position:relative;z-index:1}
 .tl-asker .av{box-shadow:0 0 0 2px var(--bg)}
@@ -172,6 +194,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-title{min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .bcard-foot{display:flex;align-items:center;gap:6px;min-height:18px;margin-top:6px;color:var(--muted);font-size:var(--t-sm)}
 .bcard-foot .spacer{flex:1}
+.bcard-owner{padding:0;border:0;border-radius:50%;background:none;cursor:pointer}
+.bcard-owner:hover,.bcard-owner[aria-expanded="true"]{box-shadow:0 0 0 2px var(--g4)}
+.bcard-owner:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .bcard-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}
@@ -282,7 +307,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check{display:inline-block;width:18px;height:18px;opacity:1}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
-  .tl-filters{flex-wrap:nowrap}
+  .tl-filters{flex-wrap:nowrap;flex:none}
   .tl-groupchip .k{display:none}
   .tl-addf.tl-ic{width:32px;height:32px}
   .tl-parent{display:none}
@@ -314,7 +339,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal:has(.task-layout) .tmodal-title{font-size:var(--t-lg);line-height:1.3;margin:12px 16px 2px;overflow-wrap:anywhere}
 .tmodal:has(.task-layout)>.tmeta{margin:0 16px 8px;font-size:var(--t-sm)}
 /* a bot's task set waiting on you (`--on`) */
-.tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait)}
+.tl-waiting{flex:none;font-size:var(--t-xs);font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
 .tchip-blocked{flex:none;font-size:var(--t-xs);line-height:16px;padding:0 6px;border-radius:8px;background:var(--idle-bg);color:var(--muted)}
 .peek-pos{flex:none;font-size:var(--t-sm);color:var(--muted);cursor:default}
 .tmodal-age{flex:none}
@@ -363,3 +388,12 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
+/* Release now on the Pending Release column (ui/app/settings-release.js) */
+.board-release-slot:empty{display:none}
+.board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
+
+/* A refused move says why where it was tried (tasks.js taskRefused), so it keeps its words at every width. */
+.tl-row .tl-note.tl-refused{color:var(--fail)}
+.tl-refused .tl-note-text{display:block}
+@media (max-width:760px){.tl-refused .tl-note-text{display:-webkit-box}}
+.bcard-err{margin:6px 0 0;color:var(--fail);font-size:var(--t-sm);line-height:1.35;overflow-wrap:anywhere}

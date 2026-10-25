@@ -15,7 +15,8 @@ DEV_NAME = r'dev(?:[ -]?tickets?)?'
 def role_type(c, role):
     """The id of the first type with this role, or None. Only one type is the Product roadmap; Engineering and a
     Dev tickets type made later may both carry the engineering role."""
-    row = c.execute('SELECT id FROM task_types WHERE role=? ORDER BY created,id LIMIT 1', (role,)).fetchone()
+    from .read_cache import one
+    row = one(c, 'SELECT id FROM task_types WHERE role=? ORDER BY created,id LIMIT 1', (role,))
     return row[0] if row else None
 
 
@@ -65,6 +66,9 @@ def claim(c):
                         'ORDER BY id=? DESC LIMIT 1', (PRODUCT, 'Product roadmap', PRODUCT)).fetchone()
         if row:
             c.execute('UPDATE task_types SET role=? WHERE id=?', (PRODUCT, row[0]))
+    # A Dev tickets type gets its hand-off wake rules once (rules.seed_dev); they are rows a person can edit.
+    from .rules import seed_dev
+    seed_dev(c)
 
 
 def ensure(c):
@@ -76,8 +80,8 @@ def ensure(c):
             ('Suggested', 'open'), ('Exploring', 'doing'), ('Spec', 'review'),
             ('Approved', 'review'), ('Building', 'doing'), ('Shipped', 'done'), ('Declined', 'declined')]),
         (ENGINEERING, 'Engineering', LEGACY_MANAGERS[ENGINEERING], [
-            ('Todo', 'open'), ('Doing', 'doing'), ('Waiting', 'waiting'),
-            ('In review', 'review'), ('Ready to ship', 'ready'), ('Done', 'closed'), ('Declined', 'declined')]),
+            ('Todo', 'open'), ('Doing', 'doing'),
+            ('In review', 'review'), ('Ready to ship', 'ready'), ('Done', 'closed')]),
     ):
         existing = role_type(c, ident)
         if not existing and ident == ENGINEERING:
@@ -229,10 +233,12 @@ def ready_step(c):
         c.execute('RELEASE roadmap_ready_step')
 
 
-def changed(c, task_id):
-    """A task changed: sync it, its parent and every task it blocks (a roadmap item waits on its Dev tickets)."""
+def changed(c, task_id, itself=True):
+    """A task changed: sync it, its parent and every task it blocks (a roadmap item waits on its Dev tickets).
+    `itself=False` leaves the task's own step alone: someone just moved it there by hand."""
     from . import task_relations as TR
-    sync(c, task_id)
+    if itself:
+        sync(c, task_id)
     for item in dict.fromkeys([TR.parent_of(c, task_id), *TR.blocked_ids(c, task_id)]):
         if item:
             sync(c, item)

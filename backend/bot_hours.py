@@ -88,8 +88,10 @@ def sampled(c, rid):
     times = {}
 
     def at(seq):
+        # The first event at or after `seq`: an old run's text pieces are swept (store.sweep_deltas), leaving gaps.
         if seq not in times:
-            row = c.execute("SELECT created FROM attempt_events WHERE attempt_id=? AND seq=?", (rid, seq)).fetchone()
+            row = c.execute("SELECT created FROM attempt_events WHERE attempt_id=? AND seq>=? ORDER BY seq LIMIT 1",
+                            (rid, seq)).fetchone()
             times[seq] = H.parse_ts(row[0]) if row else None
         return times[seq]
 

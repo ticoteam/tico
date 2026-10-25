@@ -395,6 +395,55 @@ class Oidc:
                   (digest(sid), human, email, now, now, H.shift(now, seconds=self.settings.session_absolute_seconds)))
         return sid
 
+    # ---- invites (backend/invites.py) ---------------------------------------------------
+
+    def invite(self, email):
+        """Ask the issuer to mail `email` an invite to sign in here: (HTTP status, answer), or None when the issuer
+        sends no invites. Only a Tico account issuer does: its discovery names `tico_invite_endpoint` on its own host,
+        so this client's secret never goes anywhere the token exchange would not send it. A rehearsal asks nothing,
+        discovery included: it is a copy of real data, and the issuer would mail a real person."""
+        return self._tico_call("tico_invite_endpoint", email, "Invites are off in a rehearsal: this server is a copy of "
+                                                              "real data and sends no mail")
+
+    def make_account(self, email):
+        """Ask the issuer to make `email` a Tico account with a generated password (backend/invites.py
+        `make_password`): (HTTP status, answer), or None when the issuer makes none. Same rules as `invite`: only a
+        Tico account issuer's own `tico_accounts_endpoint`, never in a rehearsal. The answer carries the password once;
+        the caller hands it to the owner and keeps nothing."""
+        return self._tico_call("tico_accounts_endpoint", email, "Accounts aren't made in a rehearsal: this server is a "
+                                                                "copy of real data")
+
+    def offers(self, field):
+        """Whether the issuer's discovery names a usable `field` endpoint (the cached copy, or a fresh read). For the
+        People page, so it never raises."""
+        try:
+            return self._endpoint(self._discover(), field) is not None
+        except (SignInError, Problem):
+            return False
+
+    def _endpoint(self, doc, field):
+        endpoint = doc.get(field)
+        if not isinstance(endpoint, str) or urlparse(endpoint).netloc != urlparse(self.issuer).netloc or (
+                urlparse(endpoint).scheme != "https" and not (_loopback(self.issuer) and _loopback(endpoint))):
+            return None
+        return endpoint
+
+    def _tico_call(self, field, email, rehearsal):
+        from .invites import rehearsing
+        if rehearsing(self.settings):
+            raise Problem("rehearsal", rehearsal, 422)
+        endpoint = self._endpoint(self._discover(), field)
+        if endpoint is None:
+            return None
+        data = {"client_id": self.settings.oidc_client_id, "client_secret": self.settings.oidc_client_secret,
+                "email": email}
+        try:
+            reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
+            answer = reply.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise SignInError(field.split("_")[1] + " failed: " + type(exc).__name__, 502) from exc
+        return reply.status_code, answer if isinstance(answer, dict) else {}
+
     def email(self, headers, c):
         """The signed-in person's email, or None when the request has no live session."""
         from .auth import cookies
@@ -412,12 +461,10 @@ class Oidc:
         if row["expires_at"] <= now or row["last_seen"] < H.shift(now, seconds=-self.settings.session_idle_seconds):
             return None
         if row["last_seen"] < H.shift(now, seconds=-TOUCH_EVERY):
-            # A hint for the idle clock: a locked database must not turn a read into a refusal.
-            try:
-                with self.store.transaction() as w:
-                    w.execute("UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
-            except Exception:
-                pass
+            # A hint for the idle clock, written only if the database is free right now (auth.touch): a sign-in never
+            # queues behind writers for it, and a skipped one is retried by the next request a minute on.
+            from .auth import touch
+            touch(c, "UPDATE oidc_sessions SET last_seen=? WHERE id_hash=?", (now, row["id_hash"]))
         return str(row["email"] or "").lower()
 
     def logout(self, headers):

@@ -26,9 +26,9 @@ import logging
 
 from .batch_work import isolated
 from . import ceo_bot
-from . import company as C
 from . import goals as G
 from . import kpis as K
+from . import strategy as S
 from . import views
 from .store import H
 
@@ -74,7 +74,8 @@ def wanted(conn, owner_id, at=None):
     # At Passive nothing new is asked, but an ask filed above it stays until its cause is resolved.
     filed = set() if ceo else {(r[0], r[1]) for r in conn.execute(
         "SELECT kind, owner FROM goal_asks WHERE kind IN ('vision','why')")}
-    if owner_id and not C.profile(conn)["vision"] and (ceo or ("vision", H.human_actor(owner_id)) in filed):
+    # The vision is the strategy's, and the owner is asked about their own draft (backend/strategy.py).
+    if owner_id and not S.vision(conn, editor=True) and (ceo or ("vision", H.human_actor(owner_id)) in filed):
         items.append({"kind": "vision", "ref": "company", "owner": H.human_actor(owner_id)})
     live = G.goals(conn, live_only=True)
     for goal_id, rows in K.goal_views(conn, [g["id"] for g in live], at).items():
@@ -115,6 +116,8 @@ def wanted(conn, owner_id, at=None):
         if p["kind"] == "goal_why":
             # Never one task per goal: each person who decides Why lines is asked once for all of theirs.
             goal = G.goal(conn, p["goal_id"]) if (ceo or filed) and p["goal_id"] else None
+            if goal and goal.get("bet_id"):
+                continue            # a goal that serves a bet has its why: the bet
             if goal:
                 org = org or _org(conn)
                 who = _person(conn, goal["owner"], owner_id, org)
@@ -162,7 +165,21 @@ def _change(p, kpi_name):
         return f"measure it by {name}"
     if p["kind"] == "flag":
         return f"flagged as {payload.get('issue')}"
+    if p["kind"] == "strategy_draft":
+        parts = [k for k in ("summary", "vision", "sections") if payload.get(k)]
+        if payload.get("bets"):
+            parts.append(f"{len(payload['bets'])} bet{'s' if len(payload['bets']) != 1 else ''}")
+        return "change the strategy draft: " + ", ".join(parts)
     return p["kind"]
+
+
+def urgent(item):
+    """A card a tripped bet or a publish brought: filed now, at every level, outside the CEO Bot's 5 a day. Trips
+    are rare (once per bet per version) and a wrong bet should not wait a day."""
+    p = item.get("proposal") or {}
+    return item.get("kind") == "proposal" and (
+        p.get("kind") == S.REALIGN or (p.get("kind") == "strategy_draft"
+                                       and (p.get("payload") or {}).get("source") == S.TRIPPED))
 
 
 def _ask(item, manager=ceo_bot.NAME):
@@ -170,10 +187,10 @@ def _ask(item, manager=ceo_bot.NAME):
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
     closes = "This closes by itself once "
     if item["kind"] == "vision":
-        title = f"Tell your {manager} what this company is for"
-        body = (f"{title}: write the company's Vision (one or two sentences: where it is going) and Description (what "
-                f"it does, for whom) in the Company section at the top of Goals. The {manager} ties every goal to the "
-                f"vision. {closes}a vision is saved.")
+        title = f"Tell your {manager} what this team is for"
+        body = (f"{title}: write the team's Vision (one or two sentences: where it is going) and what it sells (for "
+                f"whom) on the Strategy page (#/strategy). The {manager} ties every goal to the vision. {closes}a "
+                f"vision is saved.")
         return title, body
     if item["kind"] == "recovery":
         return item["ask"]
@@ -199,7 +216,22 @@ def _ask(item, manager=ceo_bot.NAME):
              "goal_kpi": f"Confirm or reject a new KPI for {goal}",
              "kpi_definition": f"Confirm or reject a change to how {name} is defined",
              "kpi_target": f"Confirm or reject a new {name} target on {goal}",
-             "flag": f"Confirm or reject a flag on {goal}"}.get(p["kind"], "Confirm or reject a goal proposal")
+             "flag": f"Confirm or reject a flag on {goal}",
+             "strategy_draft": "Confirm or reject a change to the strategy"}.get(p["kind"], "Confirm or reject a goal proposal")
+    if p["kind"] == S.REALIGN:
+        payload = p.get("payload") or {}
+        lines = "\n".join(f"- {g['title']} (its bet was {g['change']}: \"{g['statement']}\")" for g in payload["goals"])
+        title = f"Realign {len(payload['goals'])} goal{'s' if len(payload['goals']) != 1 else ''} with strategy v{payload['n']}"
+        body = (f"{title}. Publishing v{payload['n']} retired or rewrote the bets these goals serve:\n{lines}\n"
+                f"For each one choose retire goal, move to another bet, or keep, under Needs you on the Goals page. "
+                f"{closes}it is decided.")
+        return title, body
+    if p["kind"] == "strategy_draft":
+        body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
+                + (f" because {p['reason'].rstrip('.')}" if p.get("reason") else "")
+                + f": {_change(p, name)}. Confirming writes it to the draft; publishing stays your click on the "
+                  f"Strategy page (#/strategy). {closes}it is decided.")
+        return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
     body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
             f"under Needs you on the Goals page. {closes}it is decided.")
@@ -216,7 +248,7 @@ def _relist(conn, task, item):
 
 def _resolved(conn, kind, ref):
     if kind == "vision":
-        return "Resolved: the company's vision is set."
+        return "Resolved: the team's vision is set."
     if kind == "why":
         return "Resolved: no Why line is waiting on you."
     if kind == "kpi_stale":
@@ -300,7 +332,8 @@ def sync(conn, owner_id, at=None):
     for key, item in want.items():
         if key in have:
             continue
-        if not has_room(item["owner"]):
+        rush = urgent(item)
+        if not rush and not has_room(item["owner"]):
             continue        # the next day's room, most important first (ORDER)
         with isolated(conn, "goal_ask_file", ":".join(key)):
             title, body = _ask(item, ceo_bot.name(conn))
@@ -309,11 +342,12 @@ def sync(conn, owner_id, at=None):
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
-                                 lint=False, lane="company", top=item["kind"] == "vision")
+                                 lint=False, lane="company", top=item["kind"] == "vision", capped=not rush)
             conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
-            room[item["owner"]] -= 1
+            if not rush:
+                room[item["owner"]] -= 1
     return {"created": created, "closed": closed}
 
 
@@ -330,7 +364,7 @@ def for_person(conn, actor, items):
         task = H.task(conn, task_id) if task_id else None
         if task_id and not (task and task["status"] in H.ACTIVE_STATUSES):
             continue
-        if not task_id:
+        if not task_id and not urgent(item):
             if room <= 0:
                 continue
             room -= 1

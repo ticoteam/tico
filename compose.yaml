@@ -17,6 +17,9 @@ services:
     <<: *hardening
     image: *image
     command: server
+    # A runner on the same host (docker/runner.compose.yaml, cpu_shares 512) yields the CPU to the server and its
+    # front doors when they compete; the weights are relative, so they suit any machine size and cost nothing idle.
+    cpu_shares: 4096
     read_only: true
     tmpfs: [/tmp]
     environment:
@@ -97,6 +100,8 @@ services:
       TICO_INSTALL_PRESET:
       TICO_SAMPLE_COMPANY:
       TICO_COMPANY_FILE_B64:
+      # A starter plan too big for the env (Tico's hosted servers): the file setup copied to ./company-file, mounted below.
+      TICO_COMPANY_FILE:
       TICO_MODELS_PRESET:
       TYPESAFE_API_KEY:
       TICO_TYPESAFE_SECRET_ARN:
@@ -109,6 +114,7 @@ services:
       TICO_DECISIONS_IDEA_TRIAGE:
       TICO_STALE_REVIEW:
       TICO_TOPIC_FRESH:
+      TICO_STALL_TRIAGE:
       TICO_UPDATER_URL:
       TICO_UPDATE_CHECK:
       TICO_SUPPORT:
@@ -141,6 +147,11 @@ services:
       - tico-tunnel:/tunnel
       # Complete Caddy generations and its supervisor, produced before the server becomes healthy.
       - tico-caddy:/caddy-generated
+      # The starter plan setup copied here at first boot, when it was too big for the env (TICO_COMPANY_FILE). A folder,
+      # read-only, so a server without one (or an update from before it) still starts. Setup names the host folder by
+      # its absolute path: the updater runs Compose with another project directory, where ./ is not this folder.
+      # Without the setting it is an empty volume, so no install gets a host folder it never asked for.
+      - ${TICO_COMPANY_FILE_DIR:-tico-company-file}:/run/tico/company-file:ro
     # Loopback only: for health checks and TICO_AUTH_PROXY=none test installs.
     ports: ["127.0.0.1:${TICO_PORT:-8765}:8765"]
     networks: [default, edge]
@@ -234,6 +245,7 @@ services:
   caddy:
     <<: *hardening
     profiles: [caddy]
+    cpu_shares: 4096
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     entrypoint: ["/bin/sh", "/generated/supervisor.sh"]
     command: []
@@ -263,6 +275,7 @@ services:
   cloudflared:
     <<: *hardening
     profiles: [cloudflared]
+    cpu_shares: 4096
     image: cloudflare/cloudflared:2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf
     command: tunnel --no-autoupdate --config /tunnel/cloudflared.yml run
     environment:
@@ -311,6 +324,7 @@ networks:
 
 volumes:
   tico-data:
+  tico-company-file:
   tico-backups:
   tico-control:
   tico-tunnel:

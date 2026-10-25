@@ -166,3 +166,22 @@ def test_the_draft_writer_sends_only_its_two_texts_to_the_companys_model():
     assert write("Draft it.", "Ana's facts")["bucket"]
     body = opener.requests[-1]["body"]
     assert [m["content"] for m in body["messages"]] == ["Draft it.", "Ana's facts"] and "tools" not in body
+
+
+def test_a_caller_records_one_outcome_for_its_own_decision_call(api):
+    fake(api)
+    r, msg, attempt = setup_attempt(api)
+    err, asked = call(api, "hub_decision_ask", {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS,
+                                               "label": "mail-triage@1"}, token=attempt["token"])
+    assert not err and asked["ref"]
+    said = {"ref": asked["ref"], "verdict": "reply 0.8", "action": "replied"}
+    err, first = call(api, "hub_decision_outcome", said, token=attempt["token"])
+    assert not err and first["recorded"] and first["label"] == "mail-triage@1"
+    err, again = call(api, "hub_decision_outcome", {**said, "action": "archived"}, token=attempt["token"])
+    assert not err and not again["recorded"] and again["id"] == first["id"] and again["action"] == "replied"
+    # Another caller cannot write an outcome onto the bot's call.
+    assert api.post("/api/v2/decisions/outcome", json=said, headers=headers()).status_code == 404
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT actor, target, detail_json FROM events WHERE action='decision.outcome'").fetchall()
+    assert [(a, t, json.loads(d)) for a, t, d in rows] == [
+        ("bot:ops", asked["ref"], {"label": "mail-triage@1", "verdict": "reply 0.8", "action": "replied"})]

@@ -41,17 +41,19 @@ button.linkish{border:0;background:none;padding:0;color:var(--accent);cursor:poi
    and the goal folds to one line under it that opens on a tap. */
 .bot-top{display:flex;align-items:stretch;gap:var(--s3);margin:0 0 var(--s3);flex:none}
 .bot-back-arrow{display:none}
-.bot-ident{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;max-width:340px;order:1}
+.bot-ident{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;order:1}
 .bot-ident .botid{min-width:0;flex:1}
 .bot-ident h1{font-size:var(--t-lg);line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bot-ident .meta{margin-top:2px;min-width:0}.bot-ident .meta:empty{display:none}
 .bot-limit{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 var(--s3);padding:8px 14px;border:1px solid color-mix(in srgb,var(--fail) 35%,var(--line));border-radius:var(--radius);background:var(--fail-bg);color:var(--fail);font-weight:600}
 .bot-limit a{color:inherit;text-decoration:underline}
 .bot-alert{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:1px 7px;border-radius:9px;background:var(--fail-bg);color:var(--fail);font-size:var(--t-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bot-stop{display:inline-block;border:0;cursor:pointer;white-space:normal;text-align:left;line-height:1.35;font-family:inherit}
+.bot-stop.soft{background:var(--surface2);color:var(--muted);font-weight:500}
 .bot-alert-resume{margin-left:8px;padding:1px 10px;font-size:var(--t-sm)}
 .bot-quarantine-text{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--line);background:var(--surface2);font-family:var(--mono);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
-.bot-goal{order:2;flex:0 1 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
-.bot-goal[data-status=none]{display:block;flex:0 1 auto}
+.bot-goal{order:2;flex:0 1000000 auto;min-width:0;display:flex;align-items:center;align-self:center;padding:0;font-size:var(--t-base);color:var(--muted)}
+.bot-goal[data-status=none]{display:block;flex:0 1000000 auto}
 .bot-goal-main{display:flex;align-items:center;gap:7px;min-width:0;color:inherit}
 a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title{color:var(--accent)}
 .bot-goal-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-weight:600}
@@ -86,11 +88,15 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .rail-age{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .rail-ico{display:inline-grid;place-items:center;flex:none;width:22px;height:22px;margin:-2px -4px -2px 0;border-radius:5px;color:var(--muted);opacity:.7}
 .rail-ico:hover,.rail-ico:focus-visible{opacity:1;color:var(--ink);background:var(--surface2);text-decoration:none}
+button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-ico .nav-icon{font-size:16px;width:16px;height:16px;color:inherit}
 .rail-empty{font-size:var(--t-sm);color:var(--muted);padding:1px 0}
+.bot-task-tail{padding:6px 0 2px}
 /* The Tasks section's tabs: one row that scrolls sideways when it overflows, never wraps. */
-.bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:2px 0 6px;gap:2px}
-.bot-task-tabs::-webkit-scrollbar{display:none}
+/* No cap on a bot's tabs: past the rail's width the bar scrolls sideways, and a thin scrollbar says there is more. */
+.bot-task-tabs.tabs.slim{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;margin:2px 0 6px;gap:2px}
+.bot-task-tabs::-webkit-scrollbar{height:4px}
+.bot-task-tabs::-webkit-scrollbar-thumb{border-radius:2px;background:var(--line)}
 .bot-task-tabs.tabs.slim button{flex:none;white-space:nowrap;padding:3px 8px;font-size:var(--t-sm)}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
@@ -105,6 +111,55 @@ a.bot-goal-main:hover{text-decoration:none}a.bot-goal-main:hover .bot-goal-title
 .rail-fold[open]>summary::before{transform:rotate(90deg)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
+/* The sidebar's widgets (ui/app/bot-sidebar.js), in the bot's order. A hidden one is not drawn; a set height is the
+   most it grows to, scrolling inside past that. Tasks stops at 500px unless set, and a short list stays short. */
+#pane-tasks{position:relative}
+.bot-w>.rail-sec{border-top:1px solid var(--line)}
+#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden])):not(#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))~.bot-w)>.rail-sec{border-top:0}
+#pane-tasks:not(.editing)>.bot-w[data-off],#pane-tasks[data-loading]>.bot-w{display:none}
+.bot-w[data-h]>.rail-sec{max-height:var(--w-max);overflow-y:auto;overscroll-behavior:contain}
+.bot-w[data-widget=tasks]>.rail-sec{display:flex;flex-direction:column;max-height:var(--w-max,500px);overflow:hidden}
+.bot-w[data-widget=tasks]>.rail-sec>:not(.bot-task-panes){flex:none}
+.bot-task-panes{flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.no-cnt .cnt{display:none}
+/* One edit icon at the sidebar's top right, beside the first widget's own icons. */
+.bot-sidebar-edit{position:absolute;z-index:1;top:var(--s2);right:4px}
+#main.bot-split-layout .bot-sidebar-edit{top:calc(6px + var(--s2));right:8px}
+#pane-tasks:has(>.bot-sidebar-edit:not([hidden]))>.bot-w:not([data-off]):has(>.rail-sec:not([hidden])):not(#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))~.bot-w)>.rail-sec>:is(.rail-head,.rail-h):first-child{padding-right:24px}
+/* Edit mode, where the sidebar sits: Done and Cancel on top, each widget with a handle, an eye and a bottom edge. */
+.bot-rail-editbar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:6px;padding:6px 0;background:var(--bg);border-bottom:1px solid var(--line)}
+.bot-rail-editbar[hidden],.bot-w-bar,.bot-w-foot{display:none}
+.bot-rail-editbar .spacer{flex:1}
+.bot-rail-editbar button{padding:3px 12px}
+.editing>.bot-w{margin:8px 0;border:1px dashed var(--line);border-radius:8px}
+.editing>.bot-w>.rail-sec{border-top:0}
+.editing .bot-w-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 0;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.bot-w-bar .spacer{flex:1}
+.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
+.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))>.bot-w-bar>.bot-w-name{visibility:hidden}   /* its own heading says it, just below */
+.bot-w-grip{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:grab;touch-action:none}
+.bot-w-grip:hover,.bot-w-grip:focus-visible{color:var(--ink);background:var(--surface2)}
+.bot-w-eye[aria-pressed=true]{color:var(--ink);opacity:1}
+.bot-w.dragging{opacity:.6}
+.editing>.bot-w[data-off]>:is(.rail-sec,.bot-w-foot){display:none}
+.editing>.bot-w[data-off]>.bot-w-bar{opacity:.6;padding-bottom:4px}
+.editing>.bot-w[data-h]>.rail-sec{height:var(--w-max)}
+.editing .bot-w-foot{display:flex;align-items:center;gap:6px;padding:0 6px}
+.bot-w-size{flex:1;position:relative;height:12px;cursor:ns-resize;touch-action:none;border-radius:4px}
+.bot-w-size::after{content:"";position:absolute;left:calc(50% - 16px);width:32px;top:5px;height:2px;border-radius:1px;background:var(--muted);opacity:.5}
+.bot-w-size:hover::after,.bot-w-size:focus-visible::after{opacity:1}
+.bot-w-size:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* While Done saves, nothing in the draft moves (bot-sidebar.js botDrafting). */
+#pane-tasks[data-saving] :is(.bot-w-size,.bot-w-bar,.bot-task-tabs){pointer-events:none;opacity:.6}
+.bot-w-reset{flex:none;padding:0 6px;font-size:var(--t-sm)}
+.bot-w-reset[hidden]{display:none}
+.editing .bot-task-tabs [data-bot-task-tab]{cursor:grab;touch-action:none;outline:1px dashed var(--line);outline-offset:-1px}
+.editing .bot-task-tabs [data-bot-task-tab].dragging{opacity:.6}
+.bot-tab-add{flex:none;min-width:24px;padding:3px 8px;border:1px dashed var(--line);border-radius:6px;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.bot-tab-add:hover,.bot-tab-add:focus-visible{color:var(--ink)}
+#main.bot-split-layout :is(.bot-rail-editbar,.bot-rail-loading){padding-left:14px;padding-right:12px}
+#main.bot-split-layout .editing>.bot-w{margin-left:8px;margin-right:6px}
+#main.bot-split-layout .editing>.bot-w>.rail-sec{padding-left:6px;padding-right:6px}
 /* Updates: the latest one's text in small type; a long one folds behind "More". */
 .bot-latest .upd-body{margin:0;font-size:var(--t-sm);line-height:1.5;cursor:auto;max-height:9em;overflow:hidden}
 .bot-latest .upd-body.open{max-height:none}

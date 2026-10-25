@@ -31,6 +31,8 @@ EBS_GB_MONTH, PUBLIC_IPV4_HOUR, HOURS = 0.08, 0.005, 730
 
 # --name: what slug() makes, so tico-<name> fits every AWS name limit (IAM roles allow 64).
 NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")
+BUCKET_RE = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
+REGION_RE = re.compile(r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}")
 POLICY_ARN_RE = re.compile(r"arn:aws[a-z-]*:iam::\d{12}:policy/[A-Za-z0-9+=,.@/_-]{1,512}")
 SSM_CORE = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 
@@ -52,6 +54,7 @@ class AwsPlan:
     role: str = "server"
     warnings: list[str] = field(default_factory=list)
     boundary: str = ""      # the permissions boundary the IAM role is created under, when the account requires one
+    plan_bucket: str = ""   # --plan-bucket: the role may read its own starter plan there, plans/<name>/*
 
     @property
     def volume_gib(self) -> int:
@@ -76,6 +79,8 @@ class AwsPlan:
             "Instance metadata: IMDSv2 required, hop limit 1 (containers and bots cannot reach the instance role)",
             "Shell access through SSM (IAM role tico-%s with AmazonSSMManagedInstanceCore); no SSH key, no port 22" % self.name,
             *([f"The IAM role is created under the permissions boundary {self.boundary}"] if self.boundary else []),
+            *([f"The starter plan goes to the server by S3 bucket {self.plan_bucket} (plans/{self.name}/, read by the "
+               "server's role once at first boot, deleted once it is up)"] if self.plan_bucket else []),
             f"SSM SecureString /tico/{self.name}/env holds the " + ("one-time join code" if self.role == "runner" else ".env") + " for the instance to fetch at boot",
             ("Elastic IP so the DNS record survives a stop/start" if self.elastic_ip else "No Elastic IP: nothing connects in"),
             f"Tags on everything: {MANAGED_TAG[0]}={MANAGED_TAG[1]}, {NAME_TAG}={self.name}",
@@ -84,13 +89,15 @@ class AwsPlan:
 
 
 def plan_aws(*, domain: str, front_door: str, region: str, instance_type: str = "t4g.small",
-             os_family: str = "ubuntu", name: str = "", role: str = "server", boundary: str = "") -> AwsPlan:
+             os_family: str = "ubuntu", name: str = "", role: str = "server", boundary: str = "",
+             plan_bucket: str = "") -> AwsPlan:
     if instance_type not in HOURLY:
         raise ValueError(f"instance type must be one of {', '.join(HOURLY)}")
     if os_family not in AMI_PARAMS:
         raise ValueError("os must be ubuntu or al2023")
     p = AwsPlan(name or slug(domain), region, instance_type, os_family, front_door, domain,
-                ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role, boundary=boundary)
+                ports=[80, 443] if front_door == "caddy" else [], elastic_ip=front_door == "caddy", role=role, boundary=boundary,
+                plan_bucket=plan_bucket)
     if role == "runner":
         p.warnings.append(f"Plan on about 0.5-1 GiB of RAM per bot working at the same time: {instance_type} "
                           f"({MEMORY_GIB[instance_type]} GiB) suits roughly {max(1, MEMORY_GIB[instance_type] - 1)} at once.")
@@ -147,9 +154,56 @@ class Deployer:
         # instance role. Explicit Advanced avoids an attempted downgrade on retry.
         tier = {"Tier": "Advanced"} if company_file else {}
         if company_file and len(env_text.encode()) > 8192:
-            raise SystemExit("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit")
+            from backend.company_file import starter
+            raise SystemExit("The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
+                             + starter.IMPORT_IN_APP)
         self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
         self.ssm.add_tags_to_resource(ResourceType="Parameter", ResourceId=self.param_name, Tags=tags(self.p.name))
+
+    def ensure_plan_bucket(self, s3, region: str) -> None:
+        """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
+        Every safety setting precedes the first chart upload. Re-running repairs an interrupted configuration.
+        """
+        bucket = self.p.plan_bucket
+        owned = {"Bucket": bucket, "ExpectedBucketOwner": self.account_id}
+        try:
+            s3.head_bucket(**owned)
+        except Exception as exc:
+            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if code not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
+            # A collision is an error, never permission to reuse someone else's name.
+            s3.create_bucket(Bucket=bucket, **location)
+            s3.put_bucket_tagging(**owned, Tagging={"TagSet": tags(self.p.name)})
+        else:
+            if not is_ours(s3.get_bucket_tagging(**owned).get("TagSet"), self.p.name):
+                raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.")
+        s3.put_public_access_block(**owned, PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
+        s3.put_bucket_ownership_controls(**owned, OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]})
+        s3.put_bucket_encryption(**owned, ServerSideEncryptionConfiguration={
+            "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]})
+        s3.put_bucket_lifecycle_configuration(**owned, LifecycleConfiguration={"Rules": [{
+            "ID": "expire-starter-plans", "Status": "Enabled", "Filter": {"Prefix": f"plans/{self.p.name}/"},
+            "Expiration": {"Days": 1}, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]})
+
+    def put_plan(self, s3, key: str, data: str) -> None:
+        """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
+        the env names the key and its sha256, never the plan."""
+        if not key.startswith(f"plans/{self.p.name}/"):
+            raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
+        s3.put_object(Bucket=self.p.plan_bucket, Key=key, Body=data.encode("ascii"), ContentType="text/plain")
+
+    def delete_plan(self, s3, key: str) -> str:
+        """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
+        already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
+        expires it."""
+        try:
+            s3.delete_object(Bucket=self.p.plan_bucket, Key=key)
+        except Exception as e:  # botocore ClientError, a network error; without importing botocore here
+            return str(getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__)
+        return ""
 
     def ensure_role(self) -> str:
         n = f"tico-{self.p.name}"
@@ -166,6 +220,10 @@ class Deployer:
         self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
         pol = {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Action": "ssm:GetParameter", "Resource": arn}]}
+        if self.p.plan_bucket:
+            # Its own plan only; a boundary, when there is one, only limits this and grants nothing.
+            pol["Statement"].append({"Effect": "Allow", "Action": "s3:GetObject",
+                                     "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*"})
         self.iam.put_role_policy(RoleName=n, PolicyName="tico-env", PolicyDocument=json.dumps(pol))
         try:
             self.iam.create_instance_profile(InstanceProfileName=n, Tags=tags(self.p.name))
@@ -267,6 +325,8 @@ class Deployer:
         if inst:
             self.say(f"  instance {inst['InstanceId']} already exists; reusing it.")
             iid, created = inst["InstanceId"], False
+            if self.p.plan_bucket:
+                self.ensure_role()  # a server set up before --plan-bucket gets the read of its own plan
         else:
             iid, created = self.launch(user_data, self.ensure_role(), prep["sg"], prep.get("subnet", "")), True
             self.say(f"  launched {iid}")
@@ -279,11 +339,20 @@ class Deployer:
         """Waits for the SSM agent and the bootstrap script to finish."""
         iid = self.find_instance()["InstanceId"]
         runner = remote.SSMShell(self.ssm, iid, self.sleep)
+        self.boot_failed = False
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             info = self.ssm.describe_instance_information(Filters=[{"Key": "InstanceIds", "Values": [iid]}])
             if info["InstanceInformationList"] and runner.run(f"test -f {self.p.marker}").returncode == 0:
                 return True
+            # A boot that stopped itself (the starter plan's sha256, say) never writes the marker: no need to wait it out.
+            # Its log's last tico-setup line says so; a re-run of setup can then finish it (remote.rerun_script).
+            if info["InstanceInformationList"]:
+                failed = runner.run(f"grep 'tico-setup:' {remote.BOOT_LOG} | tail -n 1 | grep 'tico-setup: FAILED'")
+                if failed.returncode == 0:
+                    self.say("  " + failed.stdout.strip()[:300])
+                    self.boot_failed = True
+                    return False
             self.sleep(15)
         return False
 

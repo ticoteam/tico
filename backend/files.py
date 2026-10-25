@@ -174,6 +174,11 @@ class Files:
             raise Problem("validation", "scope is task or bot", 422)
         if who.role == "runner":
             task, wanted = "", ""            # what the runner publishes stays where the turn ran
+        if attempt and privacy.private_meetings(c, privacy.meeting_sources(c).attempt(attempt)):
+            # Reusing unchanged bytes must not retitle an older, wider-scoped file version.
+            if task or wanted == "bot" or not conversation:
+                raise Problem("privacy", "Private meeting files stay in their meeting conversation", 403)
+            return "conversation:" + conversation, None, conversation, attempt
         if task:
             acting = who if who.role == "bot" else Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=attempt)
             self.auth.task(c, acting, task)
@@ -413,7 +418,10 @@ class Files:
         return self.write(request, who, body, work)
 
     def write(self, request, who, body, work):
-        result = self.store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body, work)
+        # File mutations use their own wrapper, so repeat the current fence under Store's lock too.
+        source = getattr(request.state, "privacy_source", who)
+        result = self.store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body, work,
+                                  check=lambda c: privacy.guard_write(c, source, request.url.path, self.auth))
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
             raise Problem(refusal["code"], refusal["detail"], refusal["status"])

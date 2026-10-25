@@ -1,6 +1,6 @@
 /* After the wizard: the tour, and one line under the org list while there are no bots of your own
    (docs/onboarding.md). Whether that line shows comes from GET /api/v2/setup/getting-started; the only thing
-   kept per person is whether they saw the tour. The Market page's empty state (ui/market-page.js) is
+   kept per person is whether they saw the tour. Strategy's Market tab, when empty (ui/market-page.js), is
    where the market is asked for. */
 'use strict';
 let GS = null;                     // the last answer, or null when the server has none to give
@@ -37,7 +37,7 @@ const GS_STEPS = [
   ['[data-nav="tasks"]', 'Tasks', 'Work for bots and humans. Give a task an owner and it gets done, or comes back with a question.'],
   ['#nav-organisation', 'Team', 'Your team is listed here. Open a bot to chat, see its work and change its settings.'],
   ['[data-nav="docs"]', 'Docs', 'Your docs, searchable, with questions answered from them.'],
-  ['[data-nav="market"]', 'Market', 'A map of your competitors, customers and channels that a bot keeps current.'],
+  ['[data-nav="strategy"]', 'Strategy', 'How your team means to win, and a map of the market that a bot keeps current.'],
   ['[data-nav="meetings"]', 'Meetings', 'Connect a source or add notes, and bots pull out the tasks and follow-ups.'],
 ];
 let GS_TOUR = null;
@@ -141,7 +141,8 @@ window.gsBoot = function () {
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });
-  setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 60000);
+  // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
+  setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);
 };
 
 // ---------------------------------------------------------------- one listener for all of it

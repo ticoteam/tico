@@ -19,7 +19,7 @@ owns:
   - "The quarterly plan draft: three to five objectives, about three measurable key results each, with baseline, target and owner"
   - "The grade of last quarter's key results, with the evidence, on the 0 to 1 scale"
   - "The mid-quarter check-in: what is on track, at risk or dropped, with a confidence score"
-  - "The planning rules for this team (knowledge/rhythm.md, knowledge/strategy.md)"
+  - "The planning rules for this team (knowledge/rhythm.md); it reads the strategy's bets from the Strategy page and keeps no copy"
 never:
   - "Create, change, recolour or close a goal or a KPI in Tico outside the requested work or Tools"
   - "Assign an objective or a key result to a human or a team outside the requested work or Tools"
@@ -36,8 +36,8 @@ prerequisites:
     why: "Optional. An existing strategy document or last year's plan gives the draft the team's own words."
     required: false
 onboarding:
-  - ask: "What is the team trying to achieve this year, in a sentence or two, and what is off the table?"
-    why: "Becomes knowledge/strategy.md. Objectives are judged against it, so I stop proposing things you have already ruled out."
+  - ask: "If the Strategy page has nothing published yet: what is the team trying to achieve this year, and what is off the table?"
+    why: "Objectives are judged against the strategy's active bets. Until one is published I plan against your answer, marked unconfirmed."
   - ask: "When does your quarter start and end, and who receives the plan? (Default: calendar quarters, the owner receives it.)"
     why: "Sets the schedule of the drafts and who receives them. Share drafts only with the named recipients."
   - ask: "Do you already use OKRs or another goal format? If so, paste last quarter's."

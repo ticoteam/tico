@@ -279,6 +279,7 @@ class Tally:
         self.engine, self.lock = engine, threading.Lock()
         self.calls, self.fallbacks, self.models = 0, 0, Counter()
         self.usage, self.cost, self.routes, self.fallback = Counter(), 0.0, Counter(), None
+        self.answers = []       # one `J.summary` per call, for the readout's answer spread
 
     def __call__(self, state, questions, label=None):
         result = self.engine(state, questions, label)
@@ -293,12 +294,13 @@ class Tally:
             self.usage.update({k: v for k, v in (result.get("usage") or {}).items()
                                if isinstance(v, int) and not isinstance(v, bool)})
             self.cost += result.get("cost_usd") or 0.0
+            self.answers.append(J.summary(result.get("answers")))
         return result
 
     def detail(self):
         return {"calls": self.calls, "fallbacks": self.fallbacks, "models": dict(self.models),
                 "model": self.models.most_common(1)[0][0] if self.models else "", "usage": dict(self.usage),
-                "cost_usd": round(self.cost, 6)}
+                "cost_usd": round(self.cost, 6), "answers": list(self.answers)}
 
 
 def question_set(settings):
@@ -553,14 +555,45 @@ def claim(c, night):
     return run_id
 
 
+def starts_at(c, at):
+    """Tonight's start (company time) on Settings > Routines (03:00 by default), or None while the run is off there."""
+    from . import system_routines as SR
+    cfg = SR.config_of(c, "learnings")
+    if not cfg["on"]:
+        return None
+    hour, minute = (int(x) for x in (cfg["at"] or f"{HOUR:02d}:00").split(":"))
+    return local(at).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def claim_tonight(c):
+    """Run now (the Learnings page, Settings > Routines): tonight's run id, claimed now. 409 while it runs or once it
+    ran; an unconfigured, capped or failed night is tried again under the same key."""
+    night = night_of(datetime.now(timezone.utc))
+    found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
+    if found and found["status"] == "running":
+        raise Problem("conflict", "Tonight's learning run is still running", 409)
+    if found and found["status"] not in ("unconfigured", "capped", "failed"):
+        raise Problem("conflict", "Tonight's learning run already ran", 409)
+    if found:
+        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
+                  (H.now(), found["id"]))
+        return found["id"]
+    return claim(c, night)
+
+
 def nightly(store, at):
-    """From the scheduler's tick: once a night, at or after 03:00 local. Off in rehearsal and test servers."""
+    """From the scheduler's tick: once a night, at or after its time (03:00 local unless Settings > Routines says
+    otherwise), and not while switched off there. Off in rehearsal and test servers."""
     settings = store.settings
-    if settings.rehearsal or settings.test_identities or local(at).hour < HOUR:
+    if settings.rehearsal or settings.test_identities:
         return None
     night = night_of(at)
     # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
     if store.__dict__.get("learnings_night") == night:
+        return None
+    with store.read() as c:
+        start_at = starts_at(c, at)
+    if start_at is None or local(at) < start_at:
         return None
     with store.transaction() as c:
         run_id = claim(c, night)
@@ -710,23 +743,17 @@ def readable(c, auth, who, item, mailboxes):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/learnings/run")
     def run_now(request: Request, body: M.Empty):
-        """Owner only: tonight's learning run, now. 409 when tonight's has already started."""
+        """Tonight's learning run, now: who may press Run now on Nightly learnings in Settings > Routines (an owner or
+        an admin), and refused, as there, while it is switched off. 409 when tonight's has already started."""
+        from . import system_routines
         who = request.state.identity
-        if who.role != "owner":
-            raise Problem("forbidden", "Only the owner starts the learning run", 403)
+        system_routines.may_change(auth, who, "learnings")
+        with store.read() as c:
+            if not system_routines.config_of(c, "learnings")["on"]:
+                raise Problem("conflict", "Nightly learnings is off. Switch it on to run it.", 409)
 
         def work(c):
-            night = night_of(datetime.now(timezone.utc))
-            found = c.execute("SELECT id,status FROM learning_runs WHERE night=?", (night,)).fetchone()
-            if found and found["status"] == "running":
-                raise Problem("conflict", "Tonight's learning run is still running", 409)
-            if found and found["status"] not in ("unconfigured", "capped", "failed"):
-                raise Problem("conflict", "Tonight's learning run already ran", 409)
-            if found:          # an unconfigured, capped or failed night is tried again under the same key
-                c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
-                          (H.now(), found["id"]))
-                return {"id": found["id"], "night": night}
-            return {"id": claim(c, night), "night": night}
+            return {"id": claim_tonight(c), "night": night_of(datetime.now(timezone.utc))}
         result = mutate(request, body, work)
         start(store, result["id"])
         return result

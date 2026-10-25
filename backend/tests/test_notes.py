@@ -5,6 +5,7 @@ stack up without waking it, and its daily report, which runs after every monitor
 reads them all in one prompt, each with the time it was sent.
 """
 
+from backend import hubdb as H
 from backend.tests.test_api import api, assign, get, post, ready, runner  # noqa: F401
 
 
@@ -52,6 +53,7 @@ def test_a_failed_run_gives_them_back_and_a_finished_one_does_not(api):
     post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE run_backoff SET wait_until=NULL")        # the fast failure's wait is over
     post(api, "chat/ops", {"text": "Second"})
     second = claim(api, r)
     assert [x["id"] for x in second["notes"]] == [n["id"]]
@@ -99,3 +101,88 @@ def test_the_note_a_lifted_quarantine_leaves_reaches_the_next_run_ahead_of_a_bac
     first = claim(api, r)["notes"]
     assert len(first) == 50 and first[0]["from"] == H.KEEPER
     assert "lane is a person's (identity)" in first[0]["text"] and first[0]["text"].endswith(H.QUARANTINE_LIFTED)
+
+
+def settled(api, nid):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT settled_at FROM notes WHERE id=?", (nid,)).fetchone()[0]
+
+
+def test_a_completed_run_settles_its_notes_and_a_failed_one_does_not(api):
+    r = setup(api)
+    n = note(api)
+    post(api, "chat/ops", {"text": "First"})
+    first = claim(api, r)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
+    assert settled(api, n["id"]) is None                      # carried by a run still going
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    assert settled(api, n["id"]) is None                      # the failed run gave it back, so it waits again
+    with api.app.state.store.read() as c:
+        assert [x["id"] for x in H.notes_waiting(c, "ops")] == [n["id"]]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled' WHERE state='uncertain'")
+        c.execute("UPDATE run_backoff SET wait_until=NULL")
+    post(api, "chat/ops", {"text": "Second"})
+    second = claim(api, r)
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
+    post(api, f"attempts/{second['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    assert settled(api, n["id"])
+    with api.app.state.store.read() as c:
+        assert H.notes_waiting(c, "ops") == [] and H.notes_waiting_counts(c, ["ops"]) == {"ops": 0}
+    shown = next(x for x in get(api, "notes")["notes"] if x["id"] == n["id"])
+    assert shown["waiting"] is False and shown["carried"] is True and shown["carried_by"] == second["id"]
+
+
+def test_an_unsettled_note_with_a_completed_carrier_is_still_read_and_the_catch_up_settles_it(api):
+    r = setup(api)
+    n = note(api)
+    post(api, "chat/ops", {"text": "First"})
+    first = claim(api, r)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    store = api.app.state.store
+    with store.transaction() as c:                            # a path that missed it, or a database from before the column
+        c.execute("UPDATE notes SET settled_at=NULL WHERE id=?", (n["id"],))
+    with store.read() as c:
+        assert H.notes_waiting(c, "ops") == [] and not H.note_waiting(c, H.note(c, n["id"]))
+    with store.transaction() as c:
+        assert H.notes_settle_catch_up(c, 500) == 1 and H.notes_settle_catch_up(c, 500) == 0
+    assert settled(api, n["id"])
+    store.initialize()                                        # a repeated start leaves it settled
+    assert settled(api, n["id"])
+
+
+def test_the_migration_settles_old_notes_of_completed_runs_only(api):
+    r = setup(api)
+    done, failed = note(api, "one"), None
+    post(api, "chat/ops", {"text": "First"})
+    first = claim(api, r)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t1"}, token=r["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "ok", "last_seq": 0}, token=r["token"])
+    failed = note(api, "two")
+    post(api, "chat/ops", {"text": "Second"})
+    second = claim(api, r)
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "t2"}, token=r["token"])
+    post(api, f"attempts/{second['id']}/complete", {"outcome": "failed", "text": "boom", "last_seq": 0}, token=r["token"])
+    waiting = note(api, "three")
+    store = api.app.state.store
+    with store.transaction() as c:                            # a database from before the column
+        c.execute("DROP INDEX notes_waiting")
+        c.execute("DROP INDEX notes_unsettled_carried")
+        c.execute("ALTER TABLE notes DROP COLUMN settled_at")
+    store.initialize()
+    assert settled(api, done["id"]) and settled(api, failed["id"]) is None and settled(api, waiting["id"]) is None
+    with store.read() as c:
+        assert {x["id"] for x in H.notes_waiting(c, "ops")} == {failed["id"], waiting["id"]}
+
+
+def test_the_waiting_scan_reads_only_the_unsettled_index(api):
+    store = api.app.state.store
+    with store.read() as c:
+        for sql, args in ((f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} "
+                           "ORDER BY NOT (n.from_actor=? AND n.message_id IS NULL),n.created,n.id LIMIT ?",
+                           ("bot:ops", "tico", 50)),
+                          (f"SELECT n.to_actor,count(*) FROM notes n WHERE n.to_actor IN (?) AND {H.NOTE_WAITING_SQL} "
+                           "GROUP BY n.to_actor", ("bot:ops",))):
+            plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
+            assert "notes_waiting" in plan, plan

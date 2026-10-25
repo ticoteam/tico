@@ -36,7 +36,7 @@ const data = JSON.parse(fs.readFileSync(path.join(dir, 'fixtures.json')));
       await page.goto('http://market.test');
       await page.addStyleTag({content: ['tokens.css', 'hub-v2.css'].map(f => fs.readFileSync(path.join(root, 'ui/styles', f), 'utf8')).join('\n') + '\n#main{height:860px}.market-shell{height:100%}'});
       await page.evaluate(() => {
-        window.S = {route: '#/market', status: {}, me: {role: 'owner'}};
+        window.S = {route: '#/strategy/market', status: {}, me: {role: 'owner'}};
         window.$ = selector => document.querySelector(selector);
         window.esc = text => String(text).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
         window.get = async url => { const response = await fetch('/api' + url); if (!response.ok) throw Error('API failed'); return response.json(); };

@@ -97,7 +97,38 @@ function taskPropsHTML(t, opts = {}) {
     const step = type.steps.find(s => s.id === t.step_id);
     rows.push(row('step', 'Step', step ? txt(step.name) : txt('Add step'), {edit: r.edit || (!r.live && r.reopen), empty: !step, words: step?.name || 'none'}));
   }
+  if (t.verdict) rows.push(row('verdict', 'Verdict', taskVerdictHTML(t), {words: VERDICT_WORDS[t.verdict]?.[0] || t.verdict}));
+  if (S.me?.cloud && t.id) rows.push(taskWakeRulesRowHTML(t));
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
+}
+// Wake rules: the rules set on this task alone (backend/rules.py, scope task), which beat the bot, department, type and
+// team ones. Read once a minute per task, not on each of the modal's redraws; the link opens Settings > Rules narrowed
+// to this task, where its parties and movers add or change one.
+const TASK_WAKE_RULES = new Map();   // task id -> {rules, at}
+function taskWakeRulesWords(id) {
+  const seen = TASK_WAKE_RULES.get(id);
+  if (!seen) return '…';
+  if (!seen.rules.length) return 'Defaults';
+  const then = r => r.then === 'action' ? (RULE_ACTIONS[r.params?.action] || 'action') : (RULE_OUTCOMES[r.then] || r.then);
+  return seen.rules.map(r => `${r.event === '*' ? 'anything' : r.event.replace(/_/g, ' ')}: ${then(r)}${r.enabled ? '' : ' (off)'}`).join('; ');
+}
+function taskWakeRulesRowHTML(t) {
+  return `<div class="prop" data-prop-row="wake-rules"><span class="prop-k" aria-hidden="true">Wake rules</span><span class="prop-vwrap">`
+    + `<a class="prop-v" href="#/settings/rules?task=${encodeURIComponent(t.id)}" data-wake-rules aria-label="Wake rules: ${esc(taskWakeRulesWords(t.id))}">`
+    + `<span class="prop-txt" data-wake-rules-words>${esc(taskWakeRulesWords(t.id))}</span></a></span></div>`;
+}
+async function taskWakeRulesFill(d, id) {
+  const seen = TASK_WAKE_RULES.get(id);
+  if (!seen || Date.now() - seen.at > 60000) {
+    try {
+      const data = await get(`/v2/rules?scope_kind=task&scope_id=${encodeURIComponent(id)}`);
+      TASK_WAKE_RULES.set(id, {rules: (data.rules || []).filter(r => !r.built_in), at: Date.now()});
+    } catch { if (!seen) TASK_WAKE_RULES.set(id, {rules: [], at: Date.now(), failed: true}); }
+  }
+  const words = $('[data-wake-rules-words]', d);
+  if (!words) return;
+  const text = TASK_WAKE_RULES.get(id)?.failed ? 'See rules' : taskWakeRulesWords(id);
+  words.textContent = text; words.closest('[data-wake-rules]').setAttribute('aria-label', 'Wake rules: ' + text);
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
 const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
@@ -221,6 +252,7 @@ function taskPropLoops(t, key, rows) {
 function taskPropsBind(d, task, change) {
   const box = $('[data-task-props]', d); if (!box) return;
   taskPropsMsgPaint(d);
+  if (task?.id && $('[data-wake-rules]', box)) void taskWakeRulesFill(d, task.id);
   const save = (key, body) => { d.focusProp = key; return change(body); };
   const type = pipelineType(task), typed = !!type && pipelineTypeId(task) !== 'general';
   box.onclick = async ev => {
@@ -345,7 +377,7 @@ function taskPropsBind(d, task, change) {
       : {text: 'Snooze…', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     const stepsOnly = pipelineStepsOnly(task);
     if (!r.live && r.reopen && !stepsOnly) items.push({text: 'Reopen', run: () => save('status', {status: 'open'})});
-    if (task.status !== 'closed' && (r.mover || r.party) && !stepsOnly) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
+    if (task.status !== 'closed' && (r.mover || r.party)) items.push({text: 'Close task', danger: true, run: () => save('status', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;

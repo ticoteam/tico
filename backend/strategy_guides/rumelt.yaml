@@ -1,0 +1,34 @@
+# Rumelt's kernel (Good Strategy / Bad Strategy): a diagnosis, a guiding policy, coherent actions. The policy is
+# the bets list; the three suggested sections hold the reasoning around it.
+# Not listed until the page can switch guides (docs/strategy.md); the stored shape is the same for every guide.
+id: rumelt
+name: Rumelt's kernel
+description: 'In the style of Rumelt''s kernel: a diagnosis, a guiding policy, and coherent actions.'
+listed: false
+bets_label: Guiding policy
+bet_label: Guiding policy
+questions:
+  - key: q1
+    ask: What is the single biggest obstacle between the team and where it wants to be in two years?
+  - key: q2
+    ask: If that obstacle were gone tomorrow, what would become easy that is hard today?
+  - key: q3
+    ask: What advantage do you have that the obstacle does not neutralise? A relationship, a cost position, a piece of knowledge, a position in a channel?
+  - key: q4
+    ask: What is the team doing today that does not follow from any guiding policy, and only happens because it always has?
+  - key: q5
+    ask: Name two actions you are taking that pull in different directions.
+  - key: q6
+    ask: What would you stop doing this quarter if you took the diagnosis seriously?
+  - key: q7
+    ask: Which of your actions would a competitor find it hardest to copy, and why?
+suggested_sections:
+  - key: diagnosis
+    title: Diagnosis
+    prompt: The one or two obstacles that matter most right now, named plainly. What is the crux that, if solved, makes the rest easier? Not a list of everything that is hard.
+  - key: policy
+    title: Guiding policy
+    prompt: The overall approach to the diagnosis, in a paragraph. Which advantage you lean on and which fights you avoid. The individual choices are listed under the policy label; this is the thread through them.
+  - key: actions
+    title: Coherent actions
+    prompt: The handful of actions that follow from the policy and reinforce each other. Each one should be something a team can start on Monday; a goal that cannot be acted on is not an action.

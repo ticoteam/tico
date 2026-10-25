@@ -20,7 +20,8 @@ one PostHog project between several apps by filtering on the `app` property (Tic
 | `TICO_POSTHOG_HOST` | Exactly `https://us.i.posthog.com` or `https://eu.i.posthog.com`, matching the chosen project's region |
 | `TICO_SENTRY_DSN` | Public HTTPS Sentry ingestion DSN for the Tico project; enables browser errors with the required common settings |
 | `TICO_SENTRY_SERVER_DSN` | Public HTTPS ingestion DSN for the same Tico project; enables API/scheduler errors with the environment setting |
-| `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters |
+| `TICO_INSTANCE_NAME` | Optional name for this install on its error reports (`instance` tag, made a lowercase slug such as `acme-co`); unset: the team's name is sent (`TICO_TEAM_NAME`), or the opaque `TICO_ENVIRONMENT_ID` when it has none |
+| `TICO_RELEASE` | Optional release label; only letters, numbers, dots, underscores and hyphens, up to 100 characters; unset: the Tico version |
 
    Public DSNs must use a Sentry ingestion host, numeric project path, and public hexadecimal
    key; legacy password-bearing DSNs and custom/self-hosted endpoints are rejected. Only
@@ -115,13 +116,40 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
   or distinguish useful reading from unproductive effort on its own.
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
-exceptions and scheduler failures. Defaults, request/context capture, logs, tracing, replay,
+exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
+Defaults, request/context capture, logs, tracing, replay,
 breadcrumbs and local/source variables are disabled. Events are reconstructed before sending:
 fixed error labels, app/environment, status/source on the server and allowlisted stack
 locations; frontend events include the same opaque identity. Exception messages, customer
 values, URLs, headers, tokens, payload bodies and arbitrary SDK enrichment are discarded.
 Server events intentionally have no person identity. Coarse error labels trade diagnostic
 richness for privacy; stack locations are the primary grouping evidence.
+
+## Server and runner errors
+
+To report one install's server and runner errors, and no other install's, set on that install only:
+`TICO_SENTRY_SERVER_DSN` (the Sentry project's public DSN), `TICO_OBSERVABILITY_ENVIRONMENT` (`production`), and
+optionally `TICO_INSTANCE_NAME`; forward them with the [compose override](#docker-configuration) and recreate the
+server. With either of the first two unset or empty, the Sentry SDK is never started and nothing is sent. Several
+installs can share one Sentry project: every event carries `release` (the Tico version, or `TICO_RELEASE`) and an
+`instance` tag. Runners need no setting: each sends the file and line of a panic to its own server with its next
+heartbeat, and the server forwards it only when reporting is on (`source` `runner`, with the runner's version). A
+runner reports the same file and line at most once an hour, and at most five panics between two heartbeats. Panics are
+held in memory until the next pass, so a panic that stops the runner is not reported. The server also sends at most
+one report per runner, file and line an hour, and at most 20 per runner an hour, whatever a runner posts.
+
+To see that reports arrive, and what they hold, send a harmless test error from the server:
+
+```bash
+docker compose exec server python -m backend.observability test   # a native install: in the server's environment
+```
+
+It prints the event id to look for in Sentry, or says reporting is off. Each event holds only: the exception's class
+(`KeyError`, `RunnerPanic`), its stack frames inside Tico's own code (file, function, line), the route's template
+(`POST /api/v2/tasks/{tid}/comments`, never the address with its values), the status, `source`, `release`,
+`instance` and environment. It never holds the exception's message, local variables, source lines, request bodies,
+headers, cookies, query strings, addresses, emails, tokens or any message, task, document or comment text: each
+event is rebuilt from those fields before the SDK sees it and again in its last hook, and breadcrumbs are off.
 
 PostHog autocapture, replay, heatmaps, dead/rage clicks, error capture, surveys, performance,
 remote flags and external dependency loading are disabled. The last-mile hook allows only
@@ -150,6 +178,7 @@ services:
       TICO_POSTHOG_HOST: ${TICO_POSTHOG_HOST:-}
       TICO_SENTRY_DSN: ${TICO_SENTRY_DSN:-}
       TICO_SENTRY_SERVER_DSN: ${TICO_SENTRY_SERVER_DSN:-}
+      TICO_INSTANCE_NAME: ${TICO_INSTANCE_NAME:-}
       TICO_RELEASE: ${TICO_RELEASE:-}
 ```
 
@@ -189,7 +218,7 @@ the same rows to a local file that can be read without the server (below).
 | Table | What | Kept |
 | --- | --- | --- |
 | `flight_requests` | Per minute (`span` 60), per route template (`GET /api/v2/tasks`) and caller kind (`human`, `bot`, `runner`, `service`, `anonymous`): count, 5xx errors, response bytes, total, p50, p95 and max milliseconds. A caller that hangs up while its request body is read is recorded as 499 (client closed request), not as a 5xx. After two days, minutes become hours (`span` 3600). | 14 days |
-| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status (at most 50 a minute). | 14 days, 5,000 rows |
+| `flight_slow` | Each request over one second: route, caller kind, actor id, milliseconds, bytes, status, SQL milliseconds, write-lock wait milliseconds and query count (at most 50 a minute). | 14 days, 5,000 rows |
 | `flight_process` | Per minute: CPU (% of one core), memory, threads, open files and sockets, event-loop lag (p95, max), SQL statements and time, write transactions with the longest lock wait and hold, `database is locked` errors, and `dropped`: samples lost because the background thread fell behind (a gap in that minute's numbers). | 14 days |
 | `flight_sql` | Per hour, per statement shape (literals folded): count, total, p95 and max milliseconds, from the statement's start through its last row fetched (rows read by iterating, `fetchone`, `fetchmany` or `fetchall`; never the caller's own work between rows); the top 100 by time, the rest as `(other)`. | 90 days |
 | `flight_db` | Hourly: file, WAL and free bytes, row counts of the growing tables and their oldest row. Table/index sizes (when SQLite has `dbstat` aggregate mode) refresh at most once per 24 hours and are reused between scans, including across restarts. | 90 days |
@@ -211,6 +240,11 @@ leave out who made them; `section`: any of `requests,slow,process,sql,db,events`
 last hour under **Performance** on the Health page. `GET /api/v2/ops/timing` still answers with the last 300 requests per
 route since the start.
 
+With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
+Slow metrics retain `sql_ms`, `wait_ms` and `queries`; rows recorded before the upgrade have null values.
+These are elapsed timings, so time waiting for CPU can also appear within SQL time. Compare the same
+window's CPU and event-loop lag before attributing the remaining request time to a lock.
+
 ```sql
 -- Where the last hour went, by route
 SELECT route, sum(n) AS calls, round(sum(total_ms) / 1000) AS seconds, max(p95) AS worst_p95
@@ -221,6 +255,14 @@ WHERE ts > strftime('%s','now') - 3 * 3600 ORDER BY ts;
 -- Stalls and what the event loop was doing
 SELECT datetime(ts,'unixepoch'), detail_json FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
 ```
+
+Runner polls and writer admission use the same lock accounting: `wait_ms` includes the FIFO queue for
+writers in this server process and SQLite's wait behind another process. Only the next writer is woken;
+a scheduler's next transaction joins behind queued requests. SQLite WAL and FULL durability stay unchanged.
+A renew with at least two thirds of its lease remaining reads its actual deadline without writing; its reply
+reports the remaining seconds, never a fictitious extension. It still checks current assignment and credentials.
+Input polls and renewals near their deadline use short queued transactions. Heartbeat prepares live-run provenance in a read snapshot and reuses it only when
+`data_version` is unchanged under the write lock; otherwise it recomputes current state.
 
 ### The flight file
 
@@ -288,3 +330,5 @@ seconds or more and every timeout, the scrub's included: verb, checkout folder n
 lost because the writer fell behind). Turns never wait on the disk. `TICO_FLIGHT_RECORDER=0` turns it off.
 `tico-runner flight summary --since 1h` (or `--dir <folder>` for a copied state folder) prints recent turns with their
 phase timings, the slowest phases, slow heartbeats and slow git commands.
+
+In-process writers wait FIFO for at most 30 seconds before reporting the existing database-locked error; SQLite's own 30-second busy timeout still covers a writer in another process. A request that exhausts both waits can therefore fail after about 60 seconds, rather than 30. Fresh lease polls can answer without a write. Diagnostic heartbeats are coalesced with lease writes, at most one minute apart while polling continues; a stalled diagnostic forces the next renewal through the write path to clear it.

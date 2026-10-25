@@ -123,6 +123,13 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
                  (eid, kind, subject, H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new),
                   insight_id, note or ""))
+    if actor != SEED_ACTOR:
+        # The strategy's fit check: a change to an entity or page a bet cites may show the bet is wrong.
+        from . import strategy
+        from .batch_work import isolated
+        if strategy.watched(conn, subject):
+            with isolated(conn, "strategy_watch", subject):
+                strategy.watch(conn, market_id=subject)
     return eid
 
 

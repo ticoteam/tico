@@ -583,6 +583,13 @@ run_local() {
   say "Add a domain and sign-in for your humans later: docs/install.md, \"Add a domain and sign-in later\"."
 }
 
+# A fresh value for each write to the Tico API: the server keeps its answer under the key, so a retry reuses the value
+# and a new request gets another.
+idempotency_key() {
+  if [ -r /proc/sys/kernel/random/uuid ]; then cat /proc/sys/kernel/random/uuid
+  else printf 'tico-install-%s-%s-%s\n' "$(date +%s)" "$$" "$(od -An -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"; fi
+}
+
 # The recommended setup's computer: a runner on the server's own Docker network (docs/install.md, "A computer on the
 # server"), joined with a one-time code the owner token asks the server for. The token goes to curl on stdin, never on a
 # command line. A failure here leaves the server running and says how to add the computer by hand.
@@ -590,10 +597,16 @@ add_server_computer() {
   step "Adding a computer on this server"
   later="Add it later: Settings > Computers > Add computer, then the --runner command it shows with --server-network tico_default."
   if [ -z "$token" ]; then warn "No owner token to ask for a computer code. $later"; return 0; fi
-  code=$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
-    | curl -fsS --config - -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:${PORT:-8765}/api/v2/enrollments" 2>/dev/null \
-    | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p') || code=
-  if [ -z "$code" ]; then warn "The server did not give a computer code. $later"; return 0; fi
+  # No -f: an error answer's body holds the short reason the warning repeats. The server refuses a write without an Idempotency-Key.
+  reply=$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+    | curl -sS --config - -X POST -H 'Content-Type: application/json' -H "Idempotency-Key: $(idempotency_key)" -d '{}' \
+      "http://127.0.0.1:${PORT:-8765}/api/v2/enrollments" 2>/dev/null) || reply=
+  # An error answer has a "code" of its own ({"error": {"code": ..., "detail": ...}}), which is not a computer code.
+  case $reply in *'"error"'*) code= ;; *) code=$(printf '%s' "$reply" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p') ;; esac
+  if [ -z "$code" ]; then
+    detail=$(printf '%s' "$reply" | sed -n 's/.*"detail"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | tr -d '\r\n' | cut -c1-160)
+    warn "The server did not give a computer code${detail:+ ($detail)}. $later"; return 0
+  fi
   rm -rf "$work"
   # A subshell: the runner install sets its own directory and options, and its failure must not stop this one.
   ( server_computer_runner "$code" ) || warn "The server computer did not start. $later"

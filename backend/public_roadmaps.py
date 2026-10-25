@@ -154,7 +154,8 @@ def suggestions_full(c, manager, mine=None):
                              "WHERE value_json!=excluded.value_json", (json.dumps(day),)).rowcount:
         H.notice(c, H.KEEPER, 'bot:' + manager,
                  f'The public roadmap is refusing new suggestions: {waiting} are waiting at Suggested, the limit is '
-                 f'{limit}. Review or decline them to reopen the form, or raise suggestion_limit in roadmap settings.')
+                 f'{limit}. Review or decline them to reopen the form, or raise suggestion_limit in roadmap settings.',
+                 refs={'wake': 'blocker'})
     return True
 
 

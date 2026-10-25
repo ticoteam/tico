@@ -100,13 +100,11 @@ const {unrouted} = require('./support/routes.cjs');
     await botSearch.press('Escape');
     assert.equal(await botSearch.inputValue(), '');
     assert.equal(await page.locator('[data-settings-bot]').count(), 1);
-    const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.dataset.botsFiltersToggle !== undefined ? 'filters' : a?.dataset.botsPicking !== undefined ? a.textContent : a?.dataset.botsSearch !== undefined ? 'search' : a?.tagName; });
+    const focused = () => page.evaluate(() => { const a = document.activeElement; return a?.dataset.botsPicking !== undefined ? a.textContent : a?.dataset.botsSearch !== undefined ? 'search' : a?.tagName; });
     assert.equal(await focused(), 'search', 'Escape keeps the cursor in the search box');
-    // On a phone, Filters, Select and Done redraw the list and keep the keyboard on the same control.
+    // On a phone, Select and Done redraw the list and keep the keyboard on the same control.
     await page.setViewportSize({width: 390, height: 844});
-    await page.locator('[data-bots-filters-toggle]').press('Enter');
-    assert.equal(await focused(), 'filters');
-    assert.equal(await page.locator('[data-bots-filter=model]').isVisible(), true);
+    assert.equal(await page.locator('[data-bots-filter],[data-bots-filters-toggle]').count(), 0, 'one search replaces the filters');
     await page.locator('[data-bots-picking]').press('Enter');
     assert.equal(await focused(), 'Done');
     await page.locator('[data-bots-pick-all]').press('Enter');
@@ -152,6 +150,8 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('[data-computer-remove]').click();
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
+    // The presence read can expose revoked_at before the action's remaining Settings reads finish.
+    await page.locator('#machine-enroll-status code', {hasText: 'docker compose'}).waitFor();
     assert.match(await page.locator('#machine-enroll-status').innerText(), /docker compose/);
     await page.locator('#set-machines .machine-card').waitFor({state: 'detached'});
     const showRevoked = page.getByRole('checkbox', {name: 'Show revoked computers (1)', exact: true});

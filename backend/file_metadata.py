@@ -135,6 +135,12 @@ class Metadata:
         mime = blob["content_type"]
         if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
             return self.save(blob, result, [])
+        if not (mime in ("image/png", "image/jpeg", "image/gif", "image/webp")
+                or mime in ("video/mp4", "video/webm", "video/quicktime") and shutil.which("ffprobe") and shutil.which("ffmpeg")
+                or mime == "application/pdf" and shutil.which("pdftoppm")):
+            # Nothing can be derived from it here (an SVG, or no tool for it), so it is never read: a file in Tico's
+            # bucket is read through the company's address, and every byte read there is charged as delivery.
+            return self.save(blob, result | {"media_state": "ready" if result["poster_blob_id"] else "none"}, [])
         derived = []
         try:
             self.blobs.directory.mkdir(parents=True, mode=0o700, exist_ok=True)

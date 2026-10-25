@@ -19,6 +19,7 @@ mod declared_access;
 mod env;
 mod events;
 mod drive;
+mod drain;
 mod execute;
 mod fallback;
 mod flight;
@@ -41,11 +42,14 @@ mod lock;
 mod login;
 mod profiles;
 mod isolation;
+mod turn_users;
+mod checkout_groups;
 mod mail_key;
 mod manifest;
 mod memory_history;
 mod mcp;
 mod op;
+mod panics;
 mod perbot;
 mod perf;
 mod placement;
@@ -53,12 +57,14 @@ mod playbook;
 mod product_files;
 mod prompt;
 mod reap;
+mod rotate;
 mod readiness;
 mod readiness_extra;
 mod redact;
 mod relays;
 mod repositories;
 mod worktrees;
+mod run_diagnostics;
 mod runner;
 mod sessions;
 mod safegit;
@@ -66,6 +72,7 @@ mod screen;
 mod sidejobs;
 mod signin;
 mod state;
+mod tls;
 mod subscription_refresh;
 mod watchers;
 mod util;
@@ -201,20 +208,17 @@ enum ProfileAction {
         #[arg(long)]
         share_operator: bool,
     },
-    /// Print the profiles, the default and each bot's.
+    /// Print the profiles and the default (the computer's login).
     List,
-    /// Sign a profile in to one runtime, interactively.
+    /// Sign the computer's login (its default profile) in to one runtime, interactively.
     Login { name: String, runtime: String },
-    /// Run a bot on a profile here.
-    Assign { bot: String, name: String },
 }
 
-/// `profile add|list|assign|login` (runner/__main__.py profile_command): local to this computer, no network.
+/// `profile add|list|login` (runner/__main__.py profile_command): local to this computer, no network.
 fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
     let result = match action {
-        ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator, None),
-        ProfileAction::List => profiles::command(config, "list", None, false, None),
-        ProfileAction::Assign { bot, name } => profiles::command(config, "assign", Some(&name), false, Some(&bot)),
+        ProfileAction::Add { name, share_operator } => profiles::command(config, "add", Some(&name), share_operator),
+        ProfileAction::List => profiles::command(config, "list", None, false),
         ProfileAction::Login { name, runtime } => {
             let choices = harness_tools::profile_runtimes();
             if !choices.contains(&runtime) {
@@ -222,6 +226,10 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             }
             let entry = config.data.get("profiles").and_then(|p| p.get(&name)).filter(|e| util::truthy(Some(e))).cloned();
             let Some(entry) = entry else { fail("No such profile on this registration; add it with `profile add`") };
+            // One login per tool per computer: only the computer's own (its default profile) signs in here.
+            if config.data.get("default_profile").map(util::text_of).as_deref() != Some(name.as_str()) {
+                fail(&format!("Profile {name} is not this computer's login: each computer has one login per AI tool, used by all its bots; for a different account, add another runner"));
+            }
             let profile = profiles::Profile::new(&name, &util::text_of(&entry["dir"]), util::truthy(entry.get("share_operator")));
             if profile.share_operator {
                 fail(&format!("Profile {name} shares the operator's own logins; sign in normally"));
@@ -386,13 +394,15 @@ async fn start(command: Command, config: config::Config) -> i32 {
     }
     let _lock = lock::acquire(&state_dir.join("runner.lock")).unwrap_or_else(|e| fail(&e));
     flight::init(&state_dir);
+    panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);
     if isolation::enabled() {
         // Sign-ins a person ran as root (`docker exec`) go to the bot user, who runs the harnesses.
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-        isolation::adopt(&[".codex", ".claude", ".claude.json", ".gemini", ".config"].map(|p| home.join(p)));
+        isolation::adopt_store(&[".codex", ".claude", ".claude.json", ".gemini", ".config"].map(|p| home.join(p)));
+        hosts::grok::hand_login_to_bot();
         // Subscription profiles made before their homes were the bot user's, or by `profile add` without isolation.
         for profile in profiles::configured(&config.data) {
             if let Err(e) = profiles::hand_to_bot(&profile) {
@@ -421,6 +431,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
         stopper.events.wake.notify_one();
     });
     util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_VERSION, service.config.runner_id()));
+    tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());

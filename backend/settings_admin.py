@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from clients.catalog import free_slug, slug_from_name
 
 from . import access as Access
+from . import ceo_acts as CA
 from . import ceo_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
@@ -17,7 +18,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import update_feeds, wake_presets
+from . import auto_tasks, profiles, task_models, update_feeds, wake_presets
 from .auth import Identity
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
@@ -195,10 +196,14 @@ class SettingsAdmin:
                 "compact_at": compact_at(effective),
                 # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
                 "wake": wake_presets.effective(_json(config["config_json"], {}) or {}),
+                "profile": profiles.effective(_json(config["config_json"], {}) or {}),
                 "session": effective.get("session"),
                 "subtask_session": effective.get("subtask_session"),
                 "task_goal": effective.get("task_goal"),
                 "review_model": effective.get("review_model"),
+                # What the bot's tasks run on; null is the same as the bot (backend/task_models.py).
+                "task_model": task_models.of(effective),
+                "keep_tasks_going": auto_tasks.of(_json(config["config_json"], {}) or {}),
                 "capture_stream": (_json(config["config_json"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config_json"], {}) or {}),
                 "update_feeds": update_feeds.status(),
@@ -246,6 +251,7 @@ class SettingsAdmin:
         return next((card["name"] for card in read_cards(self.settings) if card["template"] == template), template)
 
     def create_bot(self, c, who, body):
+        CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
         if not body.slug:
             body = body.model_copy(update={"slug": self.pick_slug(c, body.display_name)})
@@ -323,7 +329,8 @@ class SettingsAdmin:
                   "harness": harness, "reasoning_effort": effort, "thread_mode": body.thread_mode, "shared": body.shared,
                   "private_tasks_default": (body.private_tasks_default if "private_tasks_default" in body.model_fields_set
                                             else body.template == "general-counsel"),
-                  "model_managed_by": "cloud", "wake_preset": wake_presets.NEW_BOT_PRESET}
+                  "model_managed_by": "cloud"}
+        profiles.apply(config, profiles.DOER, {})
         if body.template:
             config["template"] = body.template
             if privileged:
@@ -367,6 +374,7 @@ class SettingsAdmin:
         """Register a bot with the server, planned, as `who`: the record BotOps then builds the repository for.
         Idempotent for the bot's own owners; a slug someone else holds is a 409. The model is the company's
         default until the bot's owner picks one."""
+        CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
         if not body.slug:
             name = body.display_name or (self.template_name(body.template) if body.template else "")
@@ -454,10 +462,12 @@ class SettingsAdmin:
         return {**self.definition(c, body.slug), "owners": self._people(c, body.owners)[0], "assignment": None}
 
     def archive(self, c, who, bot, body):
-        # The assistant, BotOps, the Librarian and the CEO Bot are built in: nobody archives them, the owner included.
-        if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager"):
+        CA.gate(c, who.actor, "bots", f"remove {bot}")
+        # The assistant, BotOps, the Librarian, the CEO Bot and the Task Manager are built in: nobody archives them, the owner included.
+        if bot in (self.settings.assistant_bot, "botops", "librarian", "goal-manager", "task-manager"):
             raise Problem("system_bot", (self.settings.assistant_name if bot == self.settings.assistant_bot
                                          else "BotOps" if bot == "botops" else "The Librarian" if bot == "librarian"
+                                         else "The Task Manager" if bot == "task-manager"
                                          else "The " + ceo_bot.name(c))
                           + " is built in to every team and cannot be archived or deleted; you can pause or rename it", 409)
         self._manager(c, who, bot)
@@ -470,6 +480,7 @@ class SettingsAdmin:
     def restore(self, c, who, bot):
         """Bring an archived bot back: to the status it had when it was archived (active, paused or planned),
         else planned. Its routines and computer are not restored; an active bot is placed the way any is."""
+        CA.gate(c, who.actor, "bots", f"bring back {bot}")
         row = H.bot(c, bot)
         if not row:
             raise Problem("not_found", "Bot not found", 404)
@@ -515,6 +526,9 @@ class SettingsAdmin:
     BOTOPS_OWN_DEFINITION = {"bot_contact"}
 
     def update_bot(self, c, who, bot, body):
+        asked = body.model_dump(exclude_unset=True, exclude={"expected_revision", "on_behalf_of"})
+        CA.gate(c, who.actor, "instructions", f"change {bot}'s instructions or settings: "
+                + "; ".join(f"{k} to \"{v}\"" for k, v in asked.items()))
         own_run = not (who.role == "owner" or self.auth.bot_manager(c, who, bot))
         self._manager(c, who, bot, botops=True)
         changed = body.model_fields_set - {"expected_revision", "on_behalf_of"}
@@ -649,10 +663,16 @@ class SettingsAdmin:
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == "fallback":
             return normalize_fallback((_json(config["config_json"], {}) or {}).get("fallback"))
+        if field == "task_model":
+            return task_models.of(_json(config["config_json"], {}) or {})
         if field == "compact_at":
             return compact_at(_json(config["config_json"], {}))
+        if field == auto_tasks.KEY:
+            return auto_tasks.of(_json(config["config_json"], {}) or {})
         if field == "wake_preset":
             return wake_presets.preset_of(_json(config["config_json"], {}))
+        if field == "profile":
+            return profiles.snapshot(_json(config["config_json"], {}) or {})
         if field == "placement":
             row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator AS runner_operator "
                             "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
@@ -750,6 +770,7 @@ class SettingsAdmin:
         return {"runner_id": runner["id"], "label": runner["label"], "operator": runner["operator"]}
 
     def begin(self, c, who, bot, body, undo_change_id=None):
+        CA.gate(c, who.actor, "cost", f"change {bot}'s model or harness")
         self._manager(c, who, bot)
         if body.kind == "model":
             shared_bots.refuse_copy(c, bot)
@@ -801,6 +822,8 @@ class SettingsAdmin:
         c.execute("SAVEPOINT apply_bot_transition")
         try:
             if field == "model":
+                from .execution import lift_after_model_change, model_choice
+                was = model_choice(c, self.settings, bot)
                 declared = _json(config["config_json"], {})
                 # A Settings choice is the live authority. The checked-in manifest remains
                 # the bootstrap default, but must not make the runner reject an intentional
@@ -814,14 +837,9 @@ class SettingsAdmin:
                           (target["model"], target["runtime"], target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
-                if (H.status(c, bot) or {}).get("state") == "limited":
-                    # The limit was the old model's: the new one starts on the queued work now. A turn still out on
-                    # the old model keeps the bot at work (execution.settle_status).
-                    out = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1",
-                                    (bot,)).fetchone()
-                    H.status_set(c, who.actor, bot, state="running" if out else "idle",
-                                 focus="Working on other tasks" if out else "Model changed; queued work resumes",
-                                 reason="Model changed")
+                # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
+                # same spent login or Gateway key.
+                lift_after_model_change(c, self.settings, who.actor, bot, was)
             else:
                 runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:
@@ -921,8 +939,10 @@ class SettingsAdmin:
             except (ValueError, Problem, TypeError, KeyError):
                 # A field an older release wrote, or a bot deleted since: history still shows it.
                 current = None
-            value["can_undo"] = (row["field"] in ("owners", "co_owners", "model", "placement", "fallback", "access")
-                                 and not row["undone_at"] and current == value["after"])
+            value["can_undo"] = (row["field"] in ("owners", "co_owners", "model", "placement", "fallback", "access", "profile")
+                                 and not row["undone_at"] and current == value["after"]
+                                 # A profile change from a bot that had none has nothing to go back to (undo: 409).
+                                 and (row["field"] != "profile" or bool((value["before"] or {}).get("profile"))))
             changes.append(value)
         transitions = [self.get(c, who, row[0]) for row in c.execute(
             "SELECT id FROM bot_transitions ORDER BY created DESC LIMIT ?", (limit,))]
@@ -989,6 +1009,28 @@ class SettingsAdmin:
             return self.set_fallback(c, who, bot, SimpleNamespace(
                 fallback=SimpleNamespace(**before) if before else None,
                 expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == auto_tasks.KEY:
+            return self.set_keep_tasks_going(c, who, bot, SimpleNamespace(
+                keep_tasks_going=before, expected_revision=body.expected_revision), undo_change_id=change_id)
+        if change["field"] == "profile":
+            if not (before or {}).get("profile"):
+                raise Problem("not_reversible", "The bot had no profile before this change", 409)
+            if before["profile"] == profiles.CUSTOM and self.snapshot(c, bot, "profile")["profile"] != profiles.CUSTOM:
+                raise Problem("not_reversible", "Its own wake rules were deleted when it left Custom; choose Custom "
+                              "again to start from a profile's rows", 409)
+            return profiles.set_profile(self, c, who, bot, SimpleNamespace(
+                profile=before["profile"], expected_revision=body.expected_revision, confirm_drop_rules=True,
+                **{k: v for k, v in (before.get("options") or {}).items()}), undo_change_id=change_id)
+        if change["field"] == "turn_budget":
+            from . import turn_budgets
+            return turn_budgets.set_bot(self, c, who, bot, SimpleNamespace(
+                model_fields_set=set(turn_budgets.KEYS), expected_revision=body.expected_revision,
+                **{key: (before or {}).get(key) for key in turn_budgets.KEYS}), undo_change_id=change_id)
+        if change["field"] == "task_model":
+            return self.set_task_model(c, who, bot, SimpleNamespace(
+                task_model=SimpleNamespace(effort=before.get("reasoning_effort"), **{
+                    k: before[k] for k in ("harness", "model")}) if before else None,
+                expected_revision=body.expected_revision), undo_change_id=change_id)
         raise Problem("not_reversible", "This settings change cannot be undone", 409)
 
     def team_names(self, c):
@@ -1033,6 +1075,7 @@ class SettingsAdmin:
         return {"bot": bot, **doc, "revision": config["revision"] + 1}
 
     def set_fallback(self, c, who, bot, body, undo_change_id=None):
+        CA.gate(c, who.actor, "cost", f"change {bot}'s fallback model")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1076,9 +1119,52 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.fallback_changed", bot, {"before": before, "after": after})
         return {"bot": bot, "fallback": after, "revision": config["revision"] + 1}
 
+    def set_task_model(self, c, who, bot, body, undo_change_id=None):
+        """The harness, model and effort the bot's tasks run on (backend/task_models.py); None clears it to the same
+        as the bot. Only the one key changes: the bot's own model, and so its sessions, stay as they are. A model the
+        bot's computer cannot run is saved all the same, and its tasks run on the bot's model until it can: the
+        answer's `readiness` says so now."""
+        CA.gate(c, who.actor, "cost", f"change the model {bot}'s tasks run on")
+        self._manager(c, who, bot)
+        shared_bots.refuse_copy(c, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        if body.task_model is None:
+            target = None
+        else:
+            choice = self.models.get(body.task_model.model)
+            if not choice:
+                raise Problem("model", "Choose one of the supported models", 422)
+            self.refuse_retired(choice)
+            harness = self._harness(choice, body.task_model.harness)
+            target = {"harness": harness, "model": choice["id"],
+                      "reasoning_effort": self._effort(choice, body.task_model.effort),
+                      "runtime": runtime_of(harness) or choice["runtime"]}
+        before = self.snapshot(c, bot, "task_model")
+        if before == target:
+            raise Problem("unchanged", "That task model is already selected", 409)
+        declared = _json(config["config_json"], {}) or {}
+        if target is None:
+            declared.pop(task_models.KEY, None)
+        else:
+            declared[task_models.KEY] = target
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        after = self.snapshot(c, bot, "task_model")
+        self.record(c, who.actor, bot, "task_model", before, after)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
+        readiness = task_models.readiness(c, bot, after) if after else None
+        warning = task_models.warning(c, self.settings, bot, declared, after) if after else ""
+        return {"bot": bot, "task_model": after, "revision": config["revision"] + 1, "readiness": readiness,
+                "warning": warning}
+
     def set_compact_at(self, c, who, bot, body):
         """Where the bot's conversation compacts. The runner passes it every turn, so unlike a model change the
         session is kept: the next turn simply compacts at the new size."""
+        CA.gate(c, who.actor, "cost", f"change where {bot}'s conversation compacts")
         self._manager(c, who, bot)
         shared_bots.refuse_copy(c, bot)
         config = self._config(c, bot)
@@ -1092,10 +1178,28 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
 
+    def set_keep_tasks_going(self, c, who, bot, body, undo_change_id=None):
+        self._manager(c, who, bot)
+        config = self._config(c, bot)
+        if config["revision"] != body.expected_revision:
+            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
+        declared = _json(config["config_json"], {}) or {}
+        before = auto_tasks.of(declared)
+        declared[auto_tasks.KEY] = body.keep_tasks_going
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+        self.record(c, who.actor, bot, auto_tasks.KEY, before, body.keep_tasks_going)
+        if undo_change_id:
+            c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
+                      (who.actor, H.now(), undo_change_id))
+        H.event(c, who.actor, "bot.keep_tasks_going_changed", bot,
+                {"before": before, "after": body.keep_tasks_going})
+        return {"bot": bot, "keep_tasks_going": body.keep_tasks_going, "revision": config["revision"] + 1}
+
     def set_wake_preset(self, c, who, bot, body):
         """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
         one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
         picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
+        CA.gate(c, who.actor, "cost", f"change how soon {bot} wakes")
         self._manager(c, who, bot)
         config = self._config(c, bot)
         if config["revision"] != body.expected_revision:
@@ -1105,6 +1209,9 @@ class SettingsAdmin:
         # Old clients may still send `current`; it now selects Performance.
         chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
         declared["wake_preset"] = chosen
+        if profiles.name_of(declared):
+            # A bot with a profile keeps it: the old setting only changes the profile's window (backend/profiles.py).
+            profiles.apply_preset(declared, chosen)
         c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
         wake_presets.replan(c, bot)
         self.record(c, who.actor, bot, "wake_preset", before, chosen)

@@ -31,7 +31,8 @@ def routine_run(api, machine, slug):
 def wake(api, machine, slug):
     with api.app.state.store.transaction() as c:
         room = rooms.work_room(c, api.app.state.auth, slug, H.KEEPER)
-        H.say(c, H.KEEPER, "bot:" + slug, "Prices moved.", kind="say", conversation_id=room["id"])
+        H.say(c, H.KEEPER, "bot:" + slug, "Prices moved.", kind="say", conversation_id=room["id"],
+               refs={"wake": "update"})
     return claim(api, machine, slug)
 
 

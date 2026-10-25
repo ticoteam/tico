@@ -16,6 +16,52 @@ function settingsVisualsLine() {
 // Teams come from the team's data; a name reads as its words (`customer-success` is Customer Success).
 const teamLabel = t => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 let SETTINGS_DATA = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
+// Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
+const SETTINGS_PRESENCE = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
+function settingsMachinesSnapshot(machines, request = ++SETTINGS_PRESENCE.request) {
+  if (request < SETTINGS_PRESENCE.applied) return;
+  SETTINGS_PRESENCE.applied = request;
+  SETTINGS_PRESENCE.at = Date.now();
+  SETTINGS_PRESENCE.failed = false;
+  SETTINGS_DATA.machines = machines;
+}
+async function settingsMachinesRead() {
+  const request = ++SETTINGS_PRESENCE.request;
+  let timer;
+  try {
+    const operations = await Promise.race([
+      get('/v2/operations', {fresh: true}),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
+    ]);
+    if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
+    settingsMachinesSnapshot(operations.machines, request);
+    return operations;
+  } finally { clearTimeout(timer); }
+}
+const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'devices' && !!$('#set-machines');
+function settingsMachinesWatch() {
+  clearTimeout(SETTINGS_PRESENCE.timer);
+  SETTINGS_PRESENCE.timer = null;
+  if (!settingsMachinesVisible() || !S.me?.cloud) return;
+  SETTINGS_PRESENCE.timer = setTimeout(() => {
+    if (!settingsMachinesVisible()) return;
+    void settingsMachinesRefresh().finally(settingsMachinesWatch);
+  }, SETTINGS_PRESENCE.interval);
+}
+function settingsMachinesRefresh() {
+  if (!S.me?.cloud) return Promise.resolve();
+  if (SETTINGS_PRESENCE.pending) return SETTINGS_PRESENCE.pending;
+  SETTINGS_PRESENCE.checking = true;
+  if (settingsMachinesVisible()) renderSettingsMachines();
+  SETTINGS_PRESENCE.pending = settingsMachinesRead().catch(() => {
+    SETTINGS_PRESENCE.failed = true;
+  }).finally(() => {
+    SETTINGS_PRESENCE.pending = null;
+    SETTINGS_PRESENCE.checking = false;
+    if (settingsMachinesVisible()) renderSettingsMachines();
+  });
+  return SETTINGS_PRESENCE.pending;
+}
 // Each model CLI's capabilities, from its manifest (GET /v2/models `harnesses`, runner/harnesses/*.toml): what the UI
 // asks instead of naming CLIs. Fetched once; until then, or if the fetch fails, every capability reads as unknown.
 let HARNESS_ROWS = [];
@@ -34,7 +80,7 @@ let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
 // The old tabs that are now sections of General.
-const SETTINGS_GENERAL = {team: '#settings-team', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
+const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
@@ -53,10 +99,10 @@ function pageSettings() {
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
-  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
+  if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin()) && built.dataset.ceo === String(settingsCeoBotShown())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
     <div id="settings-issues"></div>
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
+    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
@@ -67,20 +113,17 @@ function pageSettings() {
       <button type="button" data-settings-tab="inbox" role="tab">Inbox</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
-        <button type="button" data-settings-tab="recurring" role="tab">Routines</button>
+        <button type="button" data-settings-tab="recurring" role="tab">Rules</button>
         <button type="button" data-settings-tab="triggers" role="tab">Triggers</button>
         <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
         <button type="button" data-settings-tab="history" role="tab">History</button>
+        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
       </div></details>
     </div>
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
-        <label class="settings-team-rule">${peopleSwitch('id="settings-stale-review"', false, true, 'Stale ticket review')}
-          <span><strong>Stale ticket review</strong><span class="settings-cell-note">Hourly, suggests what to do with tasks that look finished or forgotten. Nothing changes until the owner accepts.</span></span></label>
-        <p id="settings-stale-review-status" class="settings-cell-note" role="status"></p>
-        <label class="settings-team-rule">${peopleSwitch('id="settings-topic-fresh"', false, true, 'Start fresh when the topic changes')}
-          <span><strong>Start fresh when the topic changes</strong><span class="settings-cell-note">In a direct chat, a message on a new topic starts a fresh session, like Clear.</span></span></label>
-        <p id="settings-topic-fresh-status" class="settings-cell-note" role="status"></p>
+        <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
+          <a href="#/settings/routines" data-settings-moved>Moved to Settings &gt; Rules</a></p>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
           <div><strong>Team icon</strong><p class="settings-cell-note">PNG, JPEG or WebP, up to 1 MB.</p>
@@ -89,7 +132,8 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>` : ''}
+        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
+      <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot((S.emps || []).find(e => e.name === assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
@@ -100,19 +144,26 @@ function pageSettings() {
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>' : ''}
+      ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
       <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-repos" role="tabpanel" hidden><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
       <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
+    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-billing" role="tabpanel" hidden><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
     <div class="settings-pane" id="settings-recurring" role="tabpanel" hidden>
-      <section class="card" id="set-system-card"><header><h2>System</h2><span class="muted">What Tico runs on its own</span></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-rules-card"><header><h2>What wakes a bot</h2></header><div id="set-rules">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
+      <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
       <section class="card"><header><h2>Bot routines</h2></header><div id="set-recurring">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>
     <div class="settings-pane" id="settings-triggers" role="tabpanel" hidden>
@@ -138,7 +189,6 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
-  void settingsTeamRulesBind();
   $('#settings-history-view')?.addEventListener('click', event => {
     const button = event.target.closest('[data-history-view]');
     if (button) settingsHistoryShow(button.dataset.historyView);
@@ -186,10 +236,10 @@ function settingsShow(tab) {
   const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), ceo: settingsCeoBotShown()};
+  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), ceo: settingsCeoBotShown()};
   SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
-  if (['health', 'history', 'recurring', 'triggers', 'inbound'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
+  if (['health', 'history', 'recurring', 'triggers', 'inbound', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
@@ -201,27 +251,34 @@ function settingsShow(tab) {
   taskTypesSettingsShow(SETTINGS_TAB);
   if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
-  if (bots) bots.hidden = SETTINGS_TAB !== 'bots';
+  if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
+  settingsMachinesWatch();
+  if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
   // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) void renderSettingsProviders();
+  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) { void renderSettingsProviders(); void renderSettingsTurnLevels(); }
   if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
   const general = $('#settings-general');
   if (general) {
     general.hidden = SETTINGS_TAB !== 'general';
     // Drawn for the role this person had; one lost since keeps its sections hidden.
     const team = $('#settings-team'), privacy = $('#settings-privacy'), storage = $('#settings-storage');
+    const company = $('#settings-company');
     if (team) team.hidden = !settingsIsAdmin();
+    if (company) company.hidden = !settingsIsAdmin();
     if (privacy) privacy.hidden = storage.hidden = !owner;
     if (SETTINGS_TAB === 'general') {
       void Promise.all([renderSettingsAssistantApprovals(),
         // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
-        privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage()]).then(() => settingsReveal(SETTINGS_REVEAL));
+        privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
+        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
     }
   }
   const peoplePane = $('#settings-people');
   if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
+  const billingPane = $('#settings-billing');
+  if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const ceoPane = $('#settings-ceo');
   if (ceoPane) { ceoPane.hidden = SETTINGS_TAB !== 'ceo'; if (SETTINGS_TAB === 'ceo') void renderSettingsCeoBot(); }
   const healthPane = $('#settings-health');
@@ -233,7 +290,7 @@ function settingsShow(tab) {
   const reposPane = $('#settings-repos');
   if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
   const recurring = $('#settings-recurring');
-  if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
+  if (recurring) { recurring.hidden = SETTINGS_TAB !== 'recurring'; if (SETTINGS_TAB === 'recurring') { void renderSystemRoutines(); void renderSettingsRules(); void renderReleaseCard(); void renderTaskManagerCard(); if (!formBusy(recurring)) renderSettingsRecurring(); } }
   const triggersPane = $('#settings-triggers');
   if (triggersPane) { triggersPane.hidden = SETTINGS_TAB !== 'triggers'; if (SETTINGS_TAB === 'triggers' && !formBusy(triggersPane)) void renderSettingsTriggers(); }
 }
@@ -245,25 +302,6 @@ function settingsTabIntoView(target) {
   const box = bar.getBoundingClientRect(), tab = cur.getBoundingClientRect(), pad = 24;
   if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
   else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
-}
-// Settings > General: the team rules an owner or an admin turns (backend/team_rules.py ADMIN_RULES): Stale ticket review
-// (backend/stale_review.py) and Start fresh when the topic changes (backend/topic_change.py).
-const SETTINGS_TEAM_RULES = {stale_review: 'settings-stale-review', topic_fresh: 'settings-topic-fresh'};
-async function settingsTeamRulesBind() {
-  const boxes = Object.entries(SETTINGS_TEAM_RULES).map(([rule, id]) => [rule, $('#' + id), $(`#${id}-status`)]).filter(([, box]) => box);
-  if (!boxes.length) return;
-  let rules;
-  try { rules = (await get('/v2/access')).rules || {}; }
-  catch (e) { for (const [, , status] of boxes) { status.textContent = e.message; status.classList.add('err'); } return; }
-  for (const [rule, box, status] of boxes) {
-    box.checked = !!rules[rule]; box.disabled = false;
-    box.onchange = async () => {
-      box.disabled = true; status.classList.remove('err'); status.textContent = 'Saving…';
-      try { box.checked = !!(await put('/v2/access/rules', {[rule]: box.checked}))[rule]; status.textContent = 'Saved'; }
-      catch (e) { box.checked = !box.checked; status.textContent = e.message; status.classList.add('err'); }
-      finally { box.disabled = false; }
-    };
-  }
 }
 function settingsTeamIconBind() {
   const input = $('#settings-team-icon-file'), button = $('#settings-team-icon-change');
@@ -347,11 +385,46 @@ async function renderSettingsPrivacy() {
     void renderSettingsPrivacy();
   };
 }
+async function renderSettingsTurnLevels() {
+  const host = $('#set-turn-levels');
+  if (!host || !settingsIsAdmin() || formBusy(host) || host.dataset.loading) return;
+  host.dataset.loading = 'true';
+  try {
+    const value = await get('/v2/settings/turn-levels', {fresh: true});
+    if (!host.isConnected || !settingsIsAdmin() || formBusy(host)) return;
+    host.innerHTML = `<form id="turn-levels-form">
+      <p>Levels are per person who can sign in, across all company computers. Guests do not count.</p>
+      <label>Warning level per person <input name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"></label>
+      <p class="settings-cell-note">At warning, Tico opens a Health incident. New turns still start.</p>
+      <label>Stop level per person <input name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"></label>
+      <p class="settings-cell-note">At stop, new turns wait. Running turns continue; waiting work starts in order when the count drops.</p>
+      <p>${value.people} ${value.people === 1 ? 'person' : 'people'}: warning at ${value.warning}, stop at ${value.stop}. ${value.in_use} turns in use.</p>
+      <button class="primary" type="submit">Save turn levels</button><p data-turn-levels-status role="status"></p>
+    </form>`;
+    const form = host.querySelector('form');
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const status = form.querySelector('[data-turn-levels-status]'), button = form.querySelector('button');
+      const warning = Number(form.elements.warning_per_person.value), stop = Number(form.elements.stop_per_person.value);
+      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; return; }
+      button.disabled = true;
+      try {
+        const saved = await post('/v2/settings/turn-levels', {warning_per_person: warning, stop_per_person: stop});
+        status.textContent = `Saved. Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
+      } catch (error) { status.textContent = error.message; }
+      finally { button.disabled = false; }
+    };
+  } catch (error) { host.textContent = error.message; }
+  finally { delete host.dataset.loading; }
+}
 async function loadSettings() {
   try {
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me?.cloud ? get('/v2/operations') : Promise.resolve({machines: [], services: []}),
+      S.me?.cloud ? settingsMachinesRead().catch(() => {
+        SETTINGS_PRESENCE.failed = true;
+        return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
+      }) : Promise.resolve({machines: [], services: []}),
       S.me?.cloud ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
       S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
@@ -360,7 +433,7 @@ async function loadSettings() {
     ]);
     S.emps = namedRoster(employees);
     setPeople(people);
-    SETTINGS_DATA = {people: (people.people || []).filter(p => !p.hidden), machines: operations.machines || [],
+    SETTINGS_DATA = {people: (people.people || []).filter(p => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],
@@ -374,6 +447,8 @@ async function loadSettings() {
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
     if (!formBusy($('#set-recurring'))) renderSettingsRecurring();   // not while its search box has the cursor
     void renderSettingsTokens();
+    void renderSettingsHosted();
+    void renderSettingsTurnLevels();
     if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
@@ -412,9 +487,11 @@ const STOPPED_PICK = {
   unknown: {retry: false, what: () => 'before answering',
     say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
 };
-async function executionReview(bot) {
-  const dialog = document.createElement('dialog'); dialog.className = 'tmodal';
-  dialog.innerHTML = `<header><h2>Stopped runs</h2><button class="ghost" data-close>Close</button></header><div data-review>Loading…</div>`;
+// `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
+async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {
+  const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
+  dialog.setAttribute('aria-label', 'Stopped runs');
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
   document.body.appendChild(dialog); dialog.showModal();
@@ -422,7 +499,7 @@ async function executionReview(bot) {
   try {
     const {jobs} = await get(`/v2/bots/${encodeURIComponent(bot)}/execution-review`);
     host.innerHTML = jobs.length ? jobs.map(job => {
-      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('\n');
+      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
       const pick = STOPPED_PICK[job.stopped] || STOPPED_PICK.unknown, retry = pick.retry;
       const tools = (job.acted || []).join(', ');
       const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
@@ -430,37 +507,59 @@ async function executionReview(bot) {
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
       <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
-      <div class="row">${retry ? button('resume', 'Try again') + button('dismiss', 'Don’t retry') : button('dismiss', 'Don’t retry') + button('resume', 'Try again')}</div>
-      <p data-result role="status"></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
         <p class="muted">${esc(job.reason)}</p>
         <details><summary>Original request</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(job.request)}</div></details>
-        <details><summary>${saved ? 'What the run saved' : 'No answer was saved'}</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(saved || 'The run ended without saving an answer.')}</div></details>
+        <details><summary>${saved ? 'What the run saved' : 'No answer was saved'}</summary><div data-saved style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(saved || 'The run ended without saving an answer.')}</div></details>
         ${job.tools?.length ? `<details><summary>Tool calls (${job.tools.length})</summary><ul class="review-tools">${job.tools.map(call => `<li${call.nested ? ' class="nested"' : ''}><code>${esc(call.tool)}</code>${call.summary ? ` ${esc(call.summary)}` : ''}${call.status ? ` <span class="muted">· ${esc(call.status)}</span>` : ''}</li>`).join('')}</ul></details>` : ''}
         <label>Note for the bot <span class="muted">Optional</span><textarea name="note" aria-label="Details for Tico" maxlength="4000" placeholder="For example: the draft exists, but nothing was sent."></textarea></label>
       </details>
+      <div class="stopped-run-actions">
+        ${retry ? '' : '<p data-retry-warning>Trying again could repeat work that already finished.</p>'}
+        <div class="row">${retry ? button('resume', 'Try again') + button('dismiss', 'Don’t retry') : button('dismiss', 'Don’t retry') + button('resume', 'Try again')}</div>
+        <p data-result role="status" aria-live="polite"></p>
+      </div>
     </form>`; }).join('') : '<p>No stopped runs remain.</p>';
-    host.querySelectorAll('form').forEach(form => form.onsubmit = async event => {
-      event.preventDefault();
-      const job = jobs.find(row=>row.id === form.dataset.job), decision = event.submitter?.value;
-      if (!decision) return;
-      const buttons = form.querySelectorAll('button'); buttons.forEach(button=>button.disabled=true);
-      try {
-        const detail = form.elements.note.value.trim();
-        const note = decision === 'resume'
-          ? 'The human said no outside action completed. Retry this request and check existing work before repeating any step.'
-          : 'The human said an outside action may have completed. Do not retry this delivery; inspect the task separately.';
-        await post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
-          attempt_id:job.attempt_id, decision, note:detail ? `${note} Details: ${detail}` : note,
-          acknowledge_uncertain_effects:true
-        });
-        form.innerHTML = `<p role="status">${decision === 'resume' ? 'Got it. Tico will try this request again.' : 'Got it. Tico won’t retry it; the task stays as it is.'}</p>`;
-        await loadSettings();
-      } catch(error) {
-        form.querySelector('[data-result]').textContent=error.message;
-        buttons.forEach(button=>button.disabled=false);
+    const outcome = (decision, deferred) => deferred
+      ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
+      : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
+    host.querySelectorAll('form').forEach(form => {
+      const job = jobs.find(row => row.id === form.dataset.job);
+      const result = form.querySelector('[data-result]'), buttons = form.querySelectorAll('button');
+      if (job.pending_decision) {
+        result.textContent = outcome(job.pending_decision.decision, true);
+        buttons.forEach(button => button.disabled = true);
       }
+      form.onsubmit = async event => {
+        event.preventDefault();
+        const decision = event.submitter?.value;
+        if (!decision || form.dataset.resolved || job.pending_decision) return;
+        buttons.forEach(button => button.disabled = true);
+        result.classList.remove('err'); result.textContent = 'Saving choice…';
+        result.scrollIntoView({block: 'nearest'});
+        try {
+          const detail = form.elements.note.value.trim();
+          const note = decision === 'resume'
+            ? 'The human chose to retry this request. Check existing work and external effects before repeating any step.'
+            : 'The human chose not to retry this delivery. Inspect the task separately.';
+          const done = await post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
+            attempt_id: job.attempt_id, decision, note: detail ? `${note} Details: ${detail}` : note,
+            acknowledge_uncertain_effects: true
+          });
+          form.dataset.resolved = 'true';
+          form.querySelector('[data-details]').open = false;
+          result.textContent = outcome(decision, done.deferred);
+        } catch(error) {
+          result.classList.add('err'); result.textContent = error.message;
+          buttons.forEach(button => button.disabled = false);
+          result.scrollIntoView({block: 'nearest'});
+          return;
+        }
+        // Refreshing another page is independent of recording the decision. Keep the receipt if it fails.
+        try { await after(); }
+        catch { toast('Choice saved. Refresh the page to update the list.', true); }
+      };
     });
   } catch(error) { host.textContent=error.message; }
 }

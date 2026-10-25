@@ -66,6 +66,7 @@ BUNDLE = os.environ.get("TICO_UPDATER_BUNDLE", "always")   # "never" only in doc
 SUPERVISOR_UID = SUPERVISOR_GID = 10002   # ticorun, the runner supervisor (docker/runner-entrypoint.sh)
 SNAPSHOTS = "/data/snapshots"   # inside the server container: the data volume
 KEEP_SNAPSHOTS = int(os.environ.get("TICO_UPDATER_KEEP_SNAPSHOTS", "3"))
+SNAPSHOT_SECONDS = int(os.environ.get("TICO_UPDATER_SNAPSHOT_SECONDS", "900"))
 SELF_UPDATE = os.environ.get("TICO_UPDATER_SELF", "always")   # "never" leaves this updater on its image
 SWAP_HELPER = "tico-updater-swap"
 STATUS_FILE = ".updater-status.json"   # the outcome survives the updater being replaced
@@ -483,16 +484,46 @@ def reconcile_caddy(tag):
 
 
 SNAPSHOT_SCRIPT = """
-import glob, os, sqlite3, sys
-folder, name, keep = sys.argv[1], sys.argv[2], int(sys.argv[3])
+import glob, os, sqlite3, sys, threading, time
+folder, name, keep, seconds = sys.argv[1], sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
+deadline = time.monotonic() + seconds   # the whole attempt, copy and check, ends inside the updater's own timeout
 os.makedirs(folder, exist_ok=True)
+def remove_all(pattern):
+    # SQLite deletes the copy's -journal at the end of each write transaction, so a file listed here can be gone by the
+    # time it is removed while a worker is still copying.
+    for path in glob.glob(pattern):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+remove_all(os.path.join(folder, "pre-update-*.sqlite.part*"))   # an earlier attempt that ran out of time; each is as large as the database
 part, final = os.path.join(folder, name + ".part"), os.path.join(folder, name)
-source, target = sqlite3.connect("/data/hub.sqlite", timeout=30), sqlite3.connect(part)
-source.backup(target)     # a consistent copy while the server keeps writing
-ok = target.execute("PRAGMA integrity_check").fetchone()[0]
-target.close(); source.close()
-if ok != "ok":
-    os.remove(part); sys.exit("the snapshot fails its integrity check")
+def remove_part():
+    remove_all(part + "*")
+result = []
+def copy_and_check():
+    try:
+        source, target = sqlite3.connect("/data/hub.sqlite", timeout=30), sqlite3.connect(part)
+        source.backup(target)     # a consistent copy while the server keeps writing
+        # quick_check reads every page and b-tree but skips integrity_check's index-against-table cross-check, which on
+        # a multi-gigabyte database is disk-bound for longer than an update can wait.
+        result.append(target.execute("PRAGMA quick_check").fetchone()[0])
+        target.close(); source.close()
+    except sqlite3.Error as exc:
+        result.append("the snapshot copy failed: %s" % exc)
+# Neither backup() nor a check that has not started yet can be interrupted, so the copy and check run on a worker
+# and this thread keeps the one deadline: past it, the process ends, worker included, inside the updater's own
+# timeout. The worker may still create the partial copy after it is removed here; the next attempt sweeps it above.
+worker = threading.Thread(target=copy_and_check, daemon=True)
+worker.start()
+worker.join(max(0.0, deadline - time.monotonic()))
+if worker.is_alive():
+    remove_part()
+    print("the snapshot did not finish within %d seconds" % seconds, file=sys.stderr, flush=True)
+    os._exit(1)
+if result != ["ok"]:
+    remove_part()
+    sys.exit(result[0] if result and result[0].startswith("the snapshot") else "the snapshot fails its integrity check")
 os.replace(part, final)
 for old in sorted(glob.glob(os.path.join(folder, "pre-update-*.sqlite")))[:-keep]:
     os.remove(old)
@@ -562,7 +593,8 @@ sync_dir(folder)
 def take_snapshot(previous):
     """A consistent copy of the database, made by the running server's own container. Returns its file name."""
     name = "pre-update-%s-%s.sqlite" % (re.sub(r"[^0-9A-Za-z.-]", "", previous) or "unknown", time.strftime("%Y%m%d%H%M%S"))
-    compose("exec", "-T", SERVICE, "python", "-c", SNAPSHOT_SCRIPT, SNAPSHOTS, name, str(KEEP_SNAPSHOTS))
+    compose("exec", "-T", SERVICE, "python", "-c", SNAPSHOT_SCRIPT, SNAPSHOTS, name, str(KEEP_SNAPSHOTS),
+            str(max(SNAPSHOT_SECONDS - 60, SNAPSHOT_SECONDS * 4 // 5)), timeout=SNAPSHOT_SECONDS)
     return name
 
 

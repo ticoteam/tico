@@ -13,7 +13,8 @@ the app. On a narrower screen, such as a phone, Support comes first: your
 requests, **New request** and the composer are at the top without scrolling. A **Read the Tico docs** link sits right under
 Support, and the short overview follows below it.
 
-- **Your requests** is a list, newest activity first. Each row shows the start of your first message, a status badge
+- **Your requests (N)** is a list of all N requests, newest activity first. Each row shows the first line of your first message
+  as its title and the rest of it as a muted preview, a status badge
   (**Open**: waiting for Tico support; **Answered**: they replied; **Closed**; **Removed**: the team deleted it at HQ), when it
   last changed, and a dot when it has a reply you haven't read. **New request** starts another.
 - Opening a request shows the conversation as bubbles, yours on the right and **Tico support**'s on the left, each with its
@@ -141,7 +142,8 @@ No email and no diagnostics bundle go this way: diagnostics need a person to pre
 When a reply is not enough, an owner or an admin can let the Tico team into their app for a while. It is off until you
 start it, it always starts from one of your own open requests, and it ends on its own.
 
-1. Open the request in Help > Support and press **Let Tico support in**.
+1. Open the request in Help > Support and press **Let Tico support in**. Where it is off, the same place says why in one line (the server's
+   `TICO_SUPPORT_ACCESS`, or the team rule).
 2. Choose what support may do:
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'

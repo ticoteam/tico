@@ -4,7 +4,7 @@
 
 // ---- status on hover: one tooltip, moved to whichever bot the pointer or focus is on ----
 const TIP_HOVER_DELAY_MS = 650;
-let TIP = null, TIP_EL = null, TIP_TIMER = null, TIP_PENDING = null;
+let TIP = null, TIP_EL = null, TIP_SLUG = null, TIP_TIMER = null, TIP_PENDING = null;
 function tipBox() {
   if (!TIP) {
     TIP = document.createElement('div');
@@ -58,11 +58,20 @@ function tipShow(el, slug) {
   if (TIP_EL && TIP_EL !== el) TIP_EL.removeAttribute('aria-describedby');
   el.setAttribute('aria-describedby', 'bot-tip');
   TIP_EL = el;
+  TIP_SLUG = slug;
+}
+function tipRefresh(slug = TIP_SLUG) {
+  if (!TIP || TIP.hidden || !TIP_SLUG || slug !== TIP_SLUG) return;
+  // Sidebar redraws can replace the anchor while the tooltip is open. Follow its current bot row.
+  const el = TIP_EL?.isConnected ? TIP_EL : [...document.querySelectorAll('[data-tip-bot]')]
+    .find(e => e.dataset.tipBot === TIP_SLUG && e.getClientRects().length);
+  if (el) tipShow(el, TIP_SLUG); else tipHide();
 }
 function tipHide() {
   clearTimeout(TIP_TIMER); TIP_TIMER = null; TIP_PENDING = null;
   if (TIP) TIP.hidden = true;
   if (TIP_EL) { TIP_EL.removeAttribute('aria-describedby'); TIP_EL = null; }
+  TIP_SLUG = null;
 }
 function tipSchedule(el, slug) {
   if (TIP_EL === el && TIP && !TIP.hidden || TIP_PENDING === el) return;

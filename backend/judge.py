@@ -28,6 +28,13 @@ off. Each of them gets its model from `server_engine`, so Jev's one short try an
 (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 
+Each answer carries `ref`, its `judge.call` event's id. The caller that then acts on the answer writes what it did with
+`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `hub decision outcome`, `hub_decision_outcome`): one
+`decision.outcome` event per call, target the ref, with the call's label, so a month of a set's answers can be read
+against what was done with them. Only the caller that asked records it, and a second write for the same ref returns the
+first. Short words only, never the state. Decisions Tico makes on the server (stale suggestions, listening, live
+meetings, topic change, idea triage) keep their own outcome records.
+
 `GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, Jev or fallback, answer spread
 and the month's spend against the cap (backend/decide_readout.py).
 """
@@ -418,6 +425,29 @@ def audit_detail(result):
     return detail
 
 
+class Outcome(Contract):
+    ref: str = Field(min_length=1, max_length=64)
+    verdict: str = Field(min_length=1, max_length=60)
+    action: str = Field(min_length=1, max_length=200)
+    label: str | None = Field(default=None, max_length=J.MAX_LABEL)
+
+
+def record_outcome(c, actor, body):
+    """The one `decision.outcome` for the caller's own `judge.call` `body.ref`: written once, the first returned after."""
+    call = c.execute("SELECT target FROM events WHERE id=? AND action='judge.call' AND actor=?",
+                     (body.ref, actor)).fetchone()
+    if not call:
+        raise Problem("not_found", f"no decision call {body.ref} of yours to record an outcome for", 404)
+    done = c.execute("SELECT id, detail_json FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
+                     (body.ref,)).fetchone()
+    if done:
+        return {"id": done[0], "ref": body.ref, **json.loads(done[1] or "{}"), "recorded": False}
+    detail = {"label": body.label or call[0] or "", "verdict": " ".join(body.verdict.split()),
+              "action": " ".join(body.action.split())}
+    row = H.event(c, actor, "decision.outcome", body.ref, detail)
+    return {"id": row["id"], "ref": body.ref, **detail, "recorded": True}
+
+
 class Ask(Contract):
     state: Any
     questions: dict[str, dict] = Field(min_length=1, max_length=J.MAX_QUESTIONS)
@@ -511,7 +541,15 @@ def install_judge(app, store, auth):
             # audit row above keeps the real code for an admin.
             raise Problem("judge_unavailable", f"{FAILED[code]}. Decide is off for this call; carry on without it.", 503)
         with store.transaction() as c:
-            H.event(c, who.actor, "judge.call", label, {
+            call = H.event(c, who.actor, "judge.call", label, {
                 **detail, **audit_detail(result), "answers": J.summary(result["answers"])})
         return {"model": result["model"], "answers": result["answers"], "usage": result.get("usage") or {},
-                "ms": result["ms"], "label": body.label}
+                "ms": result["ms"], "label": body.label, "ref": call["id"]}
+
+    @app.post("/api/v2/judge/outcome")
+    def outcome(request: Request, body: Outcome):
+        """What the caller did with one of its decision calls (`ref`, from the call's answer): one `decision.outcome`."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.transaction() as c:
+            return record_outcome(c, who.actor, body)

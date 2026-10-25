@@ -144,6 +144,21 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     post(api, f"assistant/actions/{other['id']}/confirm", {}, token="ana-test", expected=409)
 
 
+def test_owner_confirms_a_group_of_recruiting_seats_before_any_are_added(api):
+    as_member(api, "ben@acme.example")
+    body = {"seats": [{"title": "Engineering reviewer", "description": "Reviews changes.",
+                        "reports_to": "coo", "team": "engineering"}]}
+    operation = {"summary": "Add the engineering reviewer seat", "path": "/api/v2/seats/batch", "body": body}
+    post(api, "assistant/actions", operation, token="ben-test", expected=403)
+
+    action = post(api, "assistant/actions", operation, token="ana-test")["action"]
+    assert action["status"] == "pending" and get(api, "seats")["seats"] == []
+    done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
+    assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
+    assert [(seat["title"], seat["stage"], seat["reports_to"])
+            for seat in get(api, "seats")["seats"]] == [("Engineering reviewer", "recruiting", "coo")]
+
+
 def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
     for path in ("/api/v2/me/tokens", "/api/v2/tasks/../me/tokens"):
         post(api, "assistant/actions", {"summary": "Do it", "path": path}, token="ana-test", expected=422)

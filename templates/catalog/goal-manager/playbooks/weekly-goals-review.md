@@ -12,8 +12,13 @@ interpretation, labelled:
 3. **Suggestions**: colours a human set that the arithmetic disagrees with.
 4. **What owners said**: check-ins from the last 7 days, in their words, marked as their words.
 5. **Needs a decision**: `hub proposal list` pending, one line each.
-6. First, one line on the vision (or that it is still empty), and how many goals still have
-   no Why line. At level 2, one line on the recoveries waiting and what the approved ones changed.
+6. First, one line on the strategy: the published version and its note, or that none is published yet
+   (`hub strategy show`), and how many goals with no bet still have no Why line. Then each active bet with no
+   KPI-backed goal, and each bet whose health is gray (`goals_by_bet`, `health_by_bet`), one line each, with the
+   goal and KPI you would suggest; a bet in both is one line, and none is a line too. At level 2, one line on
+   the recoveries waiting and what the approved ones changed. At level 3, one
+   line per decision you made this week (from `state.md`: the goal, what you did, why), and that each has an Undo in
+   the CEO Bot log.
 7. The level-3 offer, at level 2 only when `level3_offer.due` in `hub goal ceo-bot` is true (10 recoveries approved in
    a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
    can raise the level in Settings > CEO Bot if they want. Then record it with `hub goal ceo-bot-level3-offer`, so it

@@ -43,7 +43,7 @@ def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts
     # A person's comment and Tico's own notice wake the owner; while its turn runs, each waits for that turn.
     person = post(api, f"tasks/{task['id']}/comments", {"text": "One installer only."})["comment"]
     with api.app.state.store.transaction() as c:
-        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.")
+        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
     assert queued(api) == [person["id"], notice["id"]] and claim(api, machine) is None
     assert inputs(api, machine, active) == [person["id"], notice["id"]]
     assert ops_turns(api, task["id"]) == 1

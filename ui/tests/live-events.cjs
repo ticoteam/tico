@@ -2,7 +2,9 @@
 // what changed, as the server does when a write commits.
 //  - the chat follows its conversation on the page's one stream and reads its snapshot once per change, not on a timer;
 //  - the Needs-you count beside a bot follows the `needs` topic: the event names what changed, and only that is read;
-//  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again;
+//  - the task board takes a task changed or created elsewhere from the event itself, without reading the list again,
+//    and does not redraw for a write that shows nothing new (a worktree heartbeat); a bot's page is sent only its tasks',
+//    a page with no task on it none;
 //  - each reconnect resumes from the last change number;
 //  - the 2-minute refresh asks only for the tasks changed since the list's cursor and applies them, and asks for the
 //    labels with the tag it was given (a 304 then).
@@ -86,6 +88,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:ops', body: 'The notes are in the doc.', created: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   assert.deepEqual(first.searchParams.get('topics').split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'tasks']);
+  assert.equal(first.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
   await page.getByText('The notes are in the doc.').waitFor();
   // Settled: no snapshot read queued, running or asked for again.
   await page.waitForFunction(() => !LIVE_SOON.has('chat:c-ops') && !V2C.reading && !V2C.readAgain, null, {timeout: t(5000)});
@@ -98,16 +101,41 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   assert.equal(first.searchParams.get('needs'), 'changes');
   await page.locator('.cnt.needs', {hasText: '1'}).first().waitFor();
   assert.equal(reads.needs.filter(q => !q.includes('ids=')).length, fullReads, 'only the changed item is read');
+  // Only some pages held: a changed item past them stays unread, the count moves, the next page starts after them.
+  const mended = await page.evaluate(async () => {
+    const real = v2Get, held = {needs: S.v2.needs, version: S.v2.needsVersion, next: S.v2.needsNext, count: S.v2.needsCount, bots: S.v2.needsBots};
+    v2Get = async () => ({version: 'p2', count: 5, positions: {a: 0, z: 4}, items: [{id: 'a', kind: 'task', title: 'A2'}, {id: 'z', kind: 'task'}]});
+    Object.assign(S.v2, {needs: [{id: 'a', kind: 'task'}, {id: 'b', kind: 'task'}], needsVersion: 'p1', needsNext: 'p1.2', needsCount: 4});
+    try {
+      await v2NeedsMend({version: 'p2', base: 'p1', count: 5, changed: ['a', 'z'], removed: [], bots: {'bot:ops': 3}});
+      return {ids: S.v2.needs.map(x => x.id), title: S.v2.needs[0].title, next: S.v2.needsNext, count: S.v2.needsCount, ops: needsMeCount('ops')};
+    } finally {
+      v2Get = real;
+      Object.assign(S.v2, {needs: held.needs, needsVersion: held.version, needsNext: held.next, needsCount: held.count, needsBots: held.bots});
+    }
+  });
+  assert.deepEqual(mended, {ids: ['a', 'b'], title: 'A2', next: 'p2.2', count: 5, ops: 3});
 
   // The task board: a task changed elsewhere is redrawn from the event; the list is not read again.
   await page.evaluate(() => { location.hash = '#/board'; });
-  // Done's page lands after the list: wait for both.
-  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.doneLoaded && !TASKS_ST.doneLoading
+  // The board shows working steps only, so Done's page is not read.
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)})
     .catch(async e => { throw new Error(e.message + ' ' + JSON.stringify(errors) + (await page.evaluate(() => document.querySelector('#main')?.innerText.slice(0, 400)))); });
   const listed = reads.tasks;
   const third = await send(() => true, block(13, 'tasks', {id: 't1', actor: 'human:ben', task: task({title: 'Draft the final release notes', version: 4})}));
   assert.equal(third.searchParams.get('after'), '12');
+  assert.equal(third.searchParams.get('party'), null, 'a task list is sent every task');
+  // A page with no task on it is sent no task changes; one open task there, only its own.
+  assert.deepEqual(await page.evaluate(() => {
+    const route = S.route, open = TASK_CHAT;
+    S.route = '#/meetings';
+    const none = new URL(liveUrl(), location.href).searchParams.get('topics').split(',');
+    TASK_CHAT = {id: 't9'};
+    const one = new URL(liveUrl(), location.href).searchParams;
+    S.route = route; TASK_CHAT = open; LIVE.taskKey = liveTaskKey(liveTaskScope());
+    return [none.includes('tasks'), one.get('task'), one.get('topics').includes('tasks')];
+  }), [false, 't9', true]);
   await page.locator('#task-body', {hasText: 'Draft the final release notes'}).waitFor();
   assert.equal(reads.tasks, listed, 'the change came with the event');
   // A new task arrives whole too: a busy team's bots create tasks every few seconds, and every open tab gets each one.
@@ -116,6 +144,25 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   await page.locator('#task-body', {hasText: 'Check the release links'}).waitFor();
   await page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // the batch is applied
   assert.equal(reads.tasks, listed, 'a new task does not read the list again');
+  // A computer's heartbeat on a worktree rewrites only the link's own time: the board is not drawn again.
+  const link = updated => ({kind: 'worktree', ref: 'wt-1', label: 'release-notes', updated});
+  const settled = () => page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // a throttled draw still due would count below
+  await send(() => true, block(15, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('a')]})}));
+  await settled();
+  // Only draws the event itself makes count: on a loaded machine a page read started earlier (types, labels) can
+  // still land and draw the board for its own reason.
+  await page.evaluate(() => {
+    window.boardDraws = 0;
+    let applying = false;
+    const draw = tasksRender, apply = liveTasksApply;
+    tasksRender = (...a) => { if (applying) window.boardDraws++; return draw(...a); };
+    liveTasksApply = (...a) => { applying = true; try { return apply(...a); } finally { applying = false; } };
+  });
+  await send(() => true, block(16, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('b')]})}));
+  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated === 'b', null, {timeout: t(5000)});   // settled alone can pass before the event is queued
+  await settled();
+  assert.equal(await page.evaluate(() => window.boardDraws), 0, 'a heartbeat-only change does not redraw the board');
+  assert.equal(await page.evaluate(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0].updated), 'b', 'the list keeps the newest copy');
 
   // The 2-minute refresh: only what changed since the list's cursor, applied in place; the labels come back as a 304.
   const active = reads.active;
@@ -128,6 +175,26 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   assert.deepEqual(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id).sort()), ['t1', 't3'], 'an unchanged task stays');
   assert.deepEqual(reads.labels.slice(-1), ['W/"l1"']);
   assert.deepEqual(await page.evaluate(() => TASKS_ST.labels), ['launch']);
+  // An already-open status tooltip follows wait start and clear, including a first turn with no stored row.
+  let seq = 15;
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({width, height: 820});
+    // Each viewport gets a fresh stream: these finite fixture responses otherwise accumulate reconnect backoff.
+    await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops/chat`);
+    await page.waitForFunction(() => V2C?.rendered && V2C.liveOff);
+    await page.locator('.bot-ident [data-tip-bot="ops"]').focus();
+    await page.locator('#bot-tip:not([hidden])').waitFor();
+    assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
+    const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
+    await send(following, block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+      waiting, since: now, open_tasks: 1, needs_human: 0}}));
+    await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
+      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting);
+    await send(following, block(seq++, 'bots', {bot: 'ops', status: null}));
+    await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
+      && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));
+    assert.equal(await page.evaluate(() => S.v2.status.ops), undefined);
+  }
   assert.deepEqual(errors, []);
   console.log('live events: chat, Needs you and the task board follow one stream; the refresh reads only what changed: ok');
   await browser.close();

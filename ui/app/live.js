@@ -9,7 +9,7 @@
 // (liveFallback); everywhere else nothing polls for what this stream carries.
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs'];
 const LIVE = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map()};
+              handlers: new Map(), conversations: new Map(), taskKey: ''};
 const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
@@ -76,14 +76,35 @@ function liveRestart() {
   clearTimeout(LIVE.restart);
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
+// The task changes this page shows (refresh.js liveTasksApply): every task's on a task list, a bot's or a person's
+// own on their page, the open task's anywhere, and none elsewhere. Every open tab was sent every task's change.
+function liveTaskScope() {
+  const r = typeof S !== 'undefined' && S.route || '';
+  if (isTasksRoute(r) || r.startsWith('#/task/')) return {all: true};
+  const open = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
+  const party = r.startsWith('#/bot/') ? 'bot:' + decodeURIComponent(r.slice(6).split(/[/?]/)[0])
+    : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(r.slice(9).split(/[/?]/)[0]) : '';
+  return {task: open, party: party ? [party] : []};
+}
+const liveTaskKey = scope => scope.all ? 'all' : scope.task.join(',') + '|' + scope.party.join(',');
+// A new page, or a task opened or closed: the stream reconnects (from where it was) only when that changes what it
+// should send.
+function liveTasksSync() {
+  if (LIVE.started && LIVE.taskKey !== liveTaskKey(liveTaskScope())) liveRestart();
+}
 function liveUrl() {
   const conversations = [...LIVE.conversations.keys()];
+  const scope = liveTaskScope();
+  LIVE.taskKey = liveTaskKey(scope);
   // Without a conversation on screen, no messages or runs: those are every room's, and only one is shown.
-  const topics = conversations.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs');
+  const topics = (conversations.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
+    .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
+  if (!scope.all && scope.task.length) q.set('task', scope.task.join(','));
+  if (!scope.all && scope.party.length) q.set('party', scope.party.join(','));
   return `${API}/v2/events?${q}`;
 }
 const liveData = ev => { try { return JSON.parse(ev.data); } catch { return null; } };
@@ -128,7 +149,7 @@ function liveEventsConnect() {
     liveDown(es);
     liveAfterProbe(30000);
   });
-  // The server ends each stream after about five minutes; the browser would reconnect on its own, but with the
+  // The server ends each stream after about fifteen minutes; the browser would reconnect on its own, but with the
   // first URL's `after`. This reconnects with the newest one: at once after a full stream, backing off while
   // the connection keeps failing.
   // A second failure in a row, while the browser says it is online, asks whether a proxy signed the person out: its

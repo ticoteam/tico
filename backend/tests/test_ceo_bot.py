@@ -9,7 +9,7 @@ from backend import ceo_bot
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_goal_manager import BASE, with_goal_manager
-from backend.tests.test_onboarding import (SUPPORT_AGENT, SUPPORT_CARD, as_person, draft,  # noqa: F401
+from backend.tests.test_onboarding import (SUPPORT_AGENT, SUPPORT_CARD, as_person, build_team, draft,  # noqa: F401
                                            environment, machine, signed_in)
 
 LEAD_CARD = {"template": "sales-lead", "slug": "sales-lead", "name": "Head of Sales", "required": False,
@@ -37,8 +37,7 @@ def company(environment):
     machine(api)
     draft(api, selected={slug: {"template": template, "display_name": slug.title(), "instructions": "Work.",
                                 "reports_to": boss} for slug, (template, boss) in TEAM.items()})
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    assert done.status_code == 200, done.text
+    build_team(api)
     # The team builder put the Heads and their reports in the Heads' department (Sales); the owner has a group too.
     assert {g["id"]: g["bots"] for g in api.get("/api/v2/groups", headers=signed_in()).json()} == \
         {"sales": ["eng-lead", "sales-lead", "support"]}
@@ -177,9 +176,12 @@ def test_only_the_owner_renames_it_and_the_new_name_shows_everywhere(environment
     refused (a built-in bot is the owner's alone, backend/auth.py `bot_manager`). The new name is what the chart, the
     bot list, its settings and its messages say, and it survives a setup run again and an update."""
     api = company(environment)
-    for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops"), as_bot(api, "goal-manager")):
+    for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops")):
         refused = definition(api, {"display_name": "Atlas"}, headers)
         assert refused.status_code == 403, refused.text
+    # The CEO Bot itself is refused too, and its try becomes a proposal to the owner (backend/ceo_acts.py `gate`).
+    refused = definition(api, {"display_name": "Atlas"}, as_bot(api, "goal-manager"))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "proposed", refused.text
     assert stored(api)[1]["goal-manager"] == "CEO Bot"
     renamed = definition(api, {"display_name": "Atlas"})
     assert renamed.status_code == 200, renamed.text

@@ -1,4 +1,4 @@
-/* ui/styles/rails.css — The dragged edges of the sidebar and the bot page's right rail (ui/app/rails.js).
+/* ui/styles/rails.css — The dragged edges of the sidebar, the bot page's right rail and the Updates chat (ui/app/rails.js).
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* An 8px strip over the rail's border; a line shows on hover, while dragging and on keyboard focus. */
 .rail-edge{position:fixed;top:0;bottom:0;left:calc(var(--rail-left) - 4px);width:8px;z-index:21;cursor:col-resize;touch-action:none;outline:none}
@@ -8,6 +8,9 @@ html.demo .rail-edge[data-rail="left"]{top:var(--demo-h)}
 /* The bot page's right rail runs the page's full height beside the chat, on a wide window only; its edge is its left border. */
 .rail-edge[data-rail="right"]{display:none}
 #main.bot-split-layout .rail-edge[data-rail="right"]{display:block;position:absolute;left:auto;right:calc(var(--rail-right) - 4px)}
+/* The Updates chat's edge is its left border too (ui/app/updates-chat.js). */
+.rail-edge[data-rail="chat"]{display:none}
+#main.upd-chat-layout .rail-edge[data-rail="chat"]{display:block;position:absolute;left:auto;right:calc(var(--rail-chat) - 4px)}
 body.rail-dragging,body.rail-dragging *{cursor:col-resize!important;user-select:none}
 /* A phone keeps its drawer and one column. */
 @media (max-width:760px){.rail-edge{display:none!important}}

@@ -42,6 +42,12 @@ class Provider:
 
     def __init__(self, prefix=""):
         self.prefix, self.codes, self.jwks_fetches, self.token_calls = prefix, {}, 0, []
+        # A Tico account issuer also sends invites (backend/invites.py): set to a list of (status, answer) to answer.
+        self.invites, self.invite_calls = None, []
+        # Where discovery says invites go (default: this issuer's /oauth2/invite), and where an invite POST is redirected.
+        self.invite_endpoint = self.invite_redirect = None
+        # It may also make accounts with a generated password (POST /oauth2/accounts): a list of (status, answer).
+        self.accounts, self.account_calls = None, []
         self.keys = []
         self.rotate()
         provider = self
@@ -63,7 +69,11 @@ class Provider:
                 if path.endswith("/.well-known/openid-configuration"):
                     self.reply({"issuer": provider.issuer, "authorization_endpoint": provider.issuer + "/authorize",
                                 "token_endpoint": provider.issuer + "/token", "jwks_uri": provider.issuer + "/keys",
-                                "id_token_signing_alg_values_supported": ["RS256"]})
+                                "id_token_signing_alg_values_supported": ["RS256"],
+                                **({"tico_invite_endpoint": provider.invite_endpoint or provider.issuer + "/oauth2/invite"}
+                                   if provider.invites is not None else {}),
+                                **({"tico_accounts_endpoint": provider.issuer + "/oauth2/accounts"}
+                                   if provider.accounts is not None else {})})
                 elif path.endswith("/keys"):
                     provider.jwks_fetches += 1
                     self.reply({"keys": [provider.jwk(kid, key) for kid, key in provider.keys]})
@@ -73,6 +83,19 @@ class Provider:
             def do_POST(self):
                 form = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
                 one = {k: v[0] for k, v in form.items()}
+                if urlparse(self.path).path.endswith("/oauth2/invite"):
+                    provider.invite_calls.append(one)
+                    if provider.invite_redirect:
+                        self.send_response(307)
+                        self.send_header("Location", provider.invite_redirect)
+                        self.send_header("Content-Length", "0")
+                        return self.end_headers()
+                    status, answer = provider.invites.pop(0)
+                    return self.reply(answer, status)
+                if urlparse(self.path).path.endswith("/oauth2/accounts"):
+                    provider.account_calls.append(one)
+                    status, answer = provider.accounts.pop(0)
+                    return self.reply(answer, status)
                 provider.token_calls.append(one)
                 self.reply(*provider.token(one))
 

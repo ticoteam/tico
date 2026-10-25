@@ -59,19 +59,20 @@ def test_invalid_or_oversize_transport_fails_before_cloud_changes():
     ec2, iam, ssm, account = aws_clients()
     deployer = aws.Deployer(aws.plan_aws(domain="tico.example.com", front_door="caddy", region="us-east-1"),
                             ec2, iam, ssm, account, say=lambda _: None, sleep=lambda _: None)
-    with pytest.raises(SystemExit, match="8 KB"):
+    with pytest.raises(SystemExit, match="8 KB") as refused:
         deployer.put_env("x" * 8193, company_file=True)
+    assert str(refused.value).endswith(starter.IMPORT_IN_APP)
     assert not ssm.called("put_parameter")
 
 
-def test_a_whole_model_chart_is_refused_plainly_before_cloud_changes_until_the_plan_bucket_lands(tmp_path):
+def test_a_whole_model_chart_is_accepted_before_choosing_its_file_transport(tmp_path):
     draft = C.Turn(C.blank()).finish()
     draft["company"]["name"] = "Acme Books"
     path = tmp_path / "tico.company.yaml"
     path.write_text(C.to_yaml(draft))
-    with pytest.raises(MissingInput, match="without --company-file.*Already chose your team.*Use this team"):
-        wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None),
-                                   settings.Settings(preset="recommended"))
+    s = settings.Settings()
+    wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None), s)
+    assert len(starter.unpack(s.company_file_data)["bots"]) == 73
 
 
 def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path, monkeypatch):

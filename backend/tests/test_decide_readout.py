@@ -214,6 +214,20 @@ def test_a_named_sets_label_shows_only_a_version_the_set_defines(api):
     assert "support-triage v1: 4 calls" in out["text"] and "learnings-route vrun: 2 calls" in out["text"]
 
 
+def test_a_nightly_learnings_row_spreads_each_calls_answers(api):
+    """The night's one `judge.call` row keeps a list of answers, one per call: each counts, a bot's relevance under
+    (other questions), and anything that is not a call's answers is skipped."""
+    per_call = lambda p: {"learnable": {"type": "noul", "value": p, "confidence": 0.8},          # noqa: E731
+                          "rel_ops": {"type": "noul", "value": 0.2, "confidence": 0.6}}
+    audit(api, "judge.call", "learnings-route@run", {"label": "learnings-route@run", "items": 3, "calls": 3,
+                                                     "models": {"jev-1.14": 3}, "cost_usd": 0.001,
+                                                     "answers": [per_call(0.9), per_call(0.95), per_call(0.1), "x"]})
+    out = get(api, "decisions/readout")
+    (row,) = [r for r in out["sets"] if r["set"] == "learnings-route"]
+    assert row["answers"] == {"(other questions)": {"under 0.3": 3}, "learnable": {"0.7 and over": 2, "under 0.3": 1}}
+    assert "learnable: 0.7 and over 2, under 0.3 1" in out["text"] and "not kept" not in out["text"]
+
+
 def test_a_tico_decide_answer_from_the_gateway_counts_as_jev_and_the_team_llm_after_it_as_fallback(api):
     audit(api, "judge.call", "support-triage@1", {**answered("support-triage@1", "tico-decide-1.0", 0.001, {}),
                                                   "provider": "Tico AI Gateway"})

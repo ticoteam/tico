@@ -1,160 +1,182 @@
-# A pushed version tag becomes a GitHub release: the CHANGELOG section as notes and the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
-# The server release is published the moment the Docker workflow's images for the tag exist; it never waits for desktop builds.
+# A pushed version tag becomes a GitHub release: the one-line installers (install.sh and the Windows install-wsl.ps1 with this tag baked in, the compose bundle, SHA256SUMS), and the Rust runner for Mac and Linux checkouts (tico-runner-<os>-<arch>.gz, tico-runner-SHA256SUMS).
+# Nothing is built here: the runner binaries and the three images are the ones the tag's Release validation run built
+# and tested (ci.yml). This workflow publishes those binaries and points the version tags at those image digests, after
+# checking each image says it is this version. The server release never waits for desktop builds.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. See docs/releasing.md.
+# Linux jobs run on RunsOn in Tico's own AWS account, on-demand rather than Spot: an interruption must never leave
+# a release half-published. macOS builds stay on GitHub-hosted runners.
 name: Release
 
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
-  workflow_dispatch:   # run from a tag to rebuild its desktop apps (a new company, a failed build)
+  # From a tag: rebuild its desktop apps (a new company, a failed build). From a branch with validation_run: a dry
+  # run of the publication from that Release validation run, which downloads and checks everything and publishes nothing.
+  workflow_dispatch:
     inputs:
       desktop:
         description: Build the desktop apps even if the shell did not change
         type: boolean
         default: true
+      validation_run:
+        description: Dry run only (from a branch), the Release validation run ID to check publication from
+        type: string
+        default: ''
 
 # Read-only by default; only the two jobs that write to the GitHub release (release, desktop-assets) get contents: write.
 permissions:
   contents: read
 
 jobs:
-  # A tag publishes only a commit that passed Release validation (ci.yml) exactly. v0.2.10 to v0.2.12 shipped while main's
-  # checks were red; since Oct 16 the Release Manager tags only a validated candidate by hand, and this makes that a check.
-  # A manual rebuild may reuse an already published release; an unpublished tag still needs exact-commit validation.
+  # A tag publishes only a commit that passed Release validation (ci.yml) exactly, as this version, and only what that
+  # run built. A manual rebuild may reuse an already published release; an unpublished tag still needs its validation.
   # The job always runs (never skipped), because a skipped job would also skip every job after it.
   validated:
-    runs-on: ubuntu-24.04
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       actions: read   # lists Release validation runs
       contents: read  # verifies an existing release before allowing a manual rebuild
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+      sha: ${{ steps.find.outputs.sha }}
+      version: ${{ steps.find.outputs.version }}
+      dry_run: ${{ steps.find.outputs.dry_run }}
+      published: ${{ steps.find.outputs.published }}
     steps:
-      - name: A successful Release validation of this exact commit
+      - name: A successful Release validation of this exact commit as this version
+        id: find
         env:
           GH_TOKEN: ${{ github.token }}
+          DRY_RUN_RUN: ${{ inputs.validation_run }}
         run: |
           if [ "$GITHUB_REF_TYPE" != tag ]; then
-            echo "::error::Release must run from a version tag."
-            exit 1
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || ! [[ "$DRY_RUN_RUN" =~ ^[0-9]+$ ]]; then
+              echo "::error::Release must run from a version tag, or from a branch as a dry run with validation_run."
+              exit 1
+            fi
+            view="$(gh run view "$DRY_RUN_RUN" -R "$GITHUB_REPOSITORY" --json workflowName,conclusion,displayTitle)"
+            title="$(jq -r .displayTitle <<<"$view")"
+            [ "$(jq -r '"\(.workflowName) \(.conclusion)"' <<<"$view")" = "Release validation success" ] \
+              || { echo "::error::Run $DRY_RUN_RUN is not a successful Release validation."; exit 1; }
+            [[ "$title" =~ ^Validate\ ([0-9a-f]{40})\ as\ (v[^ ]+)\ from\  ]] \
+              || { echo "::error::Run $DRY_RUN_RUN predates build-once validation: $title"; exit 1; }
+            { echo "run=$DRY_RUN_RUN"; echo "sha=${BASH_REMATCH[1]}"; echo "version=${BASH_REMATCH[2]}"; echo "dry_run=true"; } >> "$GITHUB_OUTPUT"
+            echo "Dry run of ${BASH_REMATCH[2]} from Release validation run $DRY_RUN_RUN."
+            exit 0
           fi
+          { echo "sha=$GITHUB_SHA"; echo "version=$GITHUB_REF_NAME"; echo "dry_run=false"; } >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             published="$(gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || true)"
             if [ "$published" = false ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
               echo "Rebuilding an already published release."
               exit 0
             fi
           fi
-          titles="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --status success --limit 200 --json displayTitle -q '.[].displayTitle')"
-          if grep -q "^Validate $GITHUB_SHA " <<<"$titles"; then
-            echo "Release validation passed for $GITHUB_SHA."
-          else
-            echo "::error::No successful Release validation of $GITHUB_SHA. Validate this exact commit before tagging (docs/releasing.md)."
+          # Only a validation dispatched from main counts: one from another branch runs that branch's edited ci.yml
+          # under the same title, and its binaries and images would skip the frozen-main gate.
+          run="$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event workflow_dispatch --status success --limit 200 --json databaseId,displayTitle \
+            | jq -r --arg want "Validate $GITHUB_SHA as $GITHUB_REF_NAME from " 'first(.[] | select(.displayTitle | startswith($want)) | .databaseId) // empty')"
+          if [ -z "$run" ]; then
+            echo "::error::No successful Release validation of $GITHUB_SHA as $GITHUB_REF_NAME. Validate this exact commit as this version before tagging (docs/releasing.md)."
             exit 1
           fi
-
-  # The Rust runner for computers that run from a checkout (Mac, Linux): runner/engine.py downloads the one for its
-  # platform and checks it against tico-runner-SHA256SUMS. Linux builds are static (musl), so any distribution runs them.
-  runner-binaries:
-    needs: validated
-    strategy:
-      matrix:
-        include:
-          - {os: macos-latest, name: macos-arm64, target: aarch64-apple-darwin}
-          - {os: macos-latest, name: macos-x86_64, target: x86_64-apple-darwin}
-          - {os: ubuntu-latest, name: linux-x86_64, target: x86_64-unknown-linux-musl}
-          - {os: ubuntu-24.04-arm, name: linux-arm64, target: aarch64-unknown-linux-musl}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - name: Rust toolchain (the image's)
-        env:
-          TARGET: ${{ matrix.target }}
-        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
-      # No build cache here: the shipped runner binaries always build clean from the tag, so a poisoned cache entry
-      # can never end up in a release.
-      - name: Build tico-runner
-        env:
-          TARGET: ${{ matrix.target }}
-          NAME: ${{ matrix.name }}
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update -q && sudo apt-get install -y -q musl-tools
-            export CC_x86_64_unknown_linux_musl=musl-gcc CC_aarch64_unknown_linux_musl=musl-gcc
-          fi
-          (cd runner-rs && cargo build --release --locked --target "$TARGET")
-          (cd relay-rs && cargo build --release --locked --target "$TARGET")
-          mkdir -p dist
-          gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
-          gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runner-${{ matrix.name }}
-          path: |
-            dist/tico-runner-${{ matrix.name }}.gz
-            dist/tico-screen-relay-${{ matrix.name }}.gz
-          if-no-files-found: error
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Release validation run $run passed for $GITHUB_SHA as $GITHUB_REF_NAME."
 
   release:
-    needs: runner-binaries
-    runs-on: ubuntu-latest
+    needs: validated
+    if: needs.validated.outputs.published != 'true'
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
+      actions: read     # downloads the validation run's binaries and image digests
       contents: write   # creates the GitHub release
+      packages: write   # points the version tags at the validated image digests
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN: ${{ needs.validated.outputs.run }}
+      VERSION: ${{ needs.validated.outputs.version }}
+      DRY_RUN: ${{ needs.validated.outputs.dry_run }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ needs.validated.outputs.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: runner-*
-          path: dist/runner
-          merge-multiple: true
+      - name: Download the validated runner binaries and image digests
+        run: |
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'runner-*' -D "$RUNNER_TEMP/runner"
+          gh run download "$RUN" -R "$GITHUB_REPOSITORY" -p 'image-*' -D "$RUNNER_TEMP/images"
+          mkdir -p dist/runner
+          find "$RUNNER_TEMP/runner" -name '*.gz' -exec mv {} dist/runner/ \;
+          for platform in macos-arm64 macos-x86_64 linux-x86_64 linux-arm64; do
+            for name in tico-runner tico-screen-relay; do
+              test -s "dist/runner/$name-$platform.gz" || { echo "::error::Run $RUN has no $name-$platform.gz"; exit 1; }
+            done
+          done
       - name: Checksum the runner binaries
         run: |
           (cd dist/runner && sha256sum tico-runner-*.gz > tico-runner-SHA256SUMS)
           (cd dist/runner && sha256sum tico-screen-relay-*.gz > tico-screen-relay-SHA256SUMS)
-      - name: Build the notes
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          python3 scripts/changelog_notes.py "$version" > dist/notes.md
+          cat dist/runner/*SHA256SUMS
       - name: Build the installer and its compose bundle
         run: |
-          python3 scripts/build_install_bundle.py --version "$GITHUB_REF_NAME" --output dist/install
+          python3 scripts/build_install_bundle.py --version "$VERSION" --output dist/install
           shellcheck -s sh dist/install/install.sh
-          grep -q "TICO_VERSION_BAKED='$GITHUB_REF_NAME'" dist/install/install.sh
-          grep -q "Baked = '$GITHUB_REF_NAME'" dist/install/install-wsl.ps1
-      # The Docker workflow builds the images from the same tag; an installer that runs before they exist fails on pull.
-      - name: Wait for the images of this tag
+          grep -q "TICO_VERSION_BAKED='$VERSION'" dist/install/install.sh
+          grep -q "Baked = '$VERSION'" dist/install/install-wsl.ps1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Before the release exists, so an installer never runs against a tag whose images are missing. A prerelease
+      # (v1.2.0-rc1) never moves latest; a dry run only prints the manifests it would push.
+      - name: Point the version tags at the validated images
         run: |
           for image in tico tico-runner tico-updater; do
-            for _ in $(seq 1 360); do
-              docker buildx imagetools inspect "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME" >/dev/null 2>&1 && continue 2
-              sleep 5
+            sources=()
+            for platform in amd64 arm64; do
+              digest="$(cat "$RUNNER_TEMP/images/image-$image-$platform/$image-$platform")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::bad $image-$platform digest"; exit 1; }
+              built="$(docker buildx imagetools inspect "ghcr.io/ticoteam/$image@$digest" \
+                --format '{{index .Image.Config.Labels "org.opencontainers.image.version"}}')"
+              [ "$built" = "$VERSION" ] || { echo "::error::$image $platform says $built, not $VERSION"; exit 1; }
+              sources+=("ghcr.io/ticoteam/$image@$digest")
             done
-            echo "ghcr.io/ticoteam/$image:$GITHUB_REF_NAME was not published within 30 minutes" >&2
+            tags=(-t "ghcr.io/ticoteam/$image:$VERSION")
+            case "$VERSION" in *-*) ;; *) tags+=(-t "ghcr.io/ticoteam/$image:latest") ;; esac
+            flags=()
+            [ "$DRY_RUN" = true ] && flags+=(--dry-run)
+            # The registry sometimes drops the manifest upload; retry instead of failing the release.
+            for attempt in 1 2 3 4; do
+              timeout 120 docker buildx imagetools create "${flags[@]}" "${tags[@]}" "${sources[@]}" && continue 2
+              echo "imagetools create failed (attempt $attempt); retrying"; sleep $((attempt * 5))
+            done
             exit 1
           done
       - name: Publish the release
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && { echo "The $GITHUB_REF_NAME release already exists."; exit 0; }
+          files=(dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$VERSION.tar.gz" dist/install/SHA256SUMS
+                 dist/runner/tico-runner-*.gz dist/runner/tico-runner-SHA256SUMS
+                 dist/runner/tico-screen-relay-*.gz dist/runner/tico-screen-relay-SHA256SUMS)
+          if [ "$DRY_RUN" = true ]; then
+            ls -l "${files[@]}"
+            echo "Dry run: $VERSION would be published with the files above."
+            exit 0
+          fi
+          gh release view "$VERSION" >/dev/null 2>&1 && { echo "The $VERSION release already exists."; exit 0; }
           flags=()
-          case "$GITHUB_REF_NAME" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/install/install.sh dist/install/install-wsl.ps1 "dist/install/tico-bundle-$GITHUB_REF_NAME.tar.gz" dist/install/SHA256SUMS \
-            dist/runner/tico-runner-*.gz dist/runner/tico-runner-SHA256SUMS \
-            dist/runner/tico-screen-relay-*.gz dist/runner/tico-screen-relay-SHA256SUMS \
-            --title "$GITHUB_REF_NAME" --notes-file dist/notes.md --verify-tag "${flags[@]}"
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$VERSION" "${files[@]}" --title "$VERSION" --notes "" --verify-tag "${flags[@]}"
 
   # Does this tag need new desktop apps? Only when what the shell is built from changed since the previous release.
   desktop-changes:
     needs: validated
-    runs-on: ubuntu-latest
+    if: needs.validated.outputs.dry_run != 'true'
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:
@@ -198,8 +220,11 @@ jobs:
   # files carried forward. latest.json goes last, so a desktop updater never sees a manifest whose files are missing.
   desktop-assets:
     needs: [release, desktop-changes, desktop]
-    if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    if: >-
+      ${{ !cancelled() && needs.desktop-changes.result == 'success'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+      && (needs.desktop.result == 'success' || needs.desktop.result == 'skipped') }}
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: write   # uploads the desktop files to the published release
     steps:
@@ -245,7 +270,7 @@ jobs:
   company-matrix:
     needs: desktop-changes
     if: needs.desktop-changes.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/spot=false
     permissions:
       contents: read
     outputs:

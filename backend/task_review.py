@@ -17,11 +17,15 @@ def readable_text(value):
 
 
 def comment_rights(c, auth, who, task_id):
+    """Whether the caller may write on the task: every comment, answer, review question, edit and file goes through here."""
     row = auth.task(c, who, task_id)
+    from . import lifecycle
+    lifecycle.refuse_send(c, who, None, what="task comments")
     if who.role == "bot" and who.actor not in (row["owner"], row["requester"]):
         delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                               (task_id, who.actor, H.now())).fetchone()
-        if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.type_bot_reads(c, who.actor, row):
+        if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.type_bot_reads(c, who.actor, row) \
+                and not H.task_manager_acts(c, who.actor, row):
             raise Problem("forbidden", "Reading a task does not grant permission to comment", 403)
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
     others = [a for a in dict.fromkeys([row["owner"], row["requester"], origin])
@@ -186,6 +190,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
 
 
 def answer_task(c, auth, who, task_id, body, wake):
+    mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
     version = None
@@ -264,7 +269,8 @@ def answer_task(c, auth, who, task_id, body, wake):
                          extra_refs={"answer": value}, answer_to=asked["id"], answer_text=body.other or "")
     still_wanted.act(c, who.actor, task_id, picked)
     return {"comment": {**msg, "answer": value}, "answer": value,
-            "comments": H.task_comments(c, task_id, actor=privacy.actor(who)), "woke": bool(wake)}
+            "comments": H.task_comments(c, task_id, actor=privacy.actor(who)),
+            **H.comment_delivery(c, msg, since=mark)}
 
 
 def task_covers(c, task_ids):

@@ -12,6 +12,7 @@ person confirms.
 from fastapi import Request
 
 from . import botkpis
+from . import ceo_acts as CA
 from . import ceo_bot
 from . import ceo_merge as CM
 from . import ceo_suggest as CS
@@ -21,8 +22,40 @@ from . import goals as G
 from . import kpis as K
 from . import models as M
 from . import names as N
+from . import strategy as S
 from . import views
 from .store import H, Problem
+
+
+def company_editor(who):
+    """The owner, on their own click: never an admin or a member, never a bot (the CEO Bot proposes), never someone
+    acting for the owner. The CEO Bot's level, its regular checks, the vision and the strategy are theirs."""
+    return who.role == "owner" and not who.via
+
+
+def strategy_visible(who, proposal):
+    """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
+    (strategy_realign): the owner reads it, and the bot that proposed it; no one else."""
+    if proposal["kind"] not in ("strategy_draft", "strategy_realign"):
+        return True
+    return company_editor(who) or proposal.get("proposed_by") == who.actor
+
+
+def _hidden_owners(c, auth, who):
+    """The bots whose goals this caller may not read, as owner actors. The CEO Bot reads every goal."""
+    if who.role == "bot" and who.actor == G.AUTO_ACTOR:
+        return set()
+    return {"bot:" + slug for slug in auth.unreadable_bots(c, who)}
+
+
+def readable_goals(c, auth, who, rows):
+    """A bot's goals are its work: a caller sees them only when they may Read the bot (People's goals stay the
+    team's, as before). The CEO Bot reads every goal, as it keeps every KPI."""
+    hidden = _hidden_owners(c, auth, who)
+    return [row for row in rows if row["owner"] not in hidden] if hidden else list(rows)
+
+
+_readable_goals = readable_goals          # install's closures of the same name call these
 
 
 def install(app, store, auth, mutate, settings):
@@ -103,15 +136,10 @@ def install(app, store, auth, mutate, settings):
         return row
 
     def hidden_owners(c, who):
-        if is_manager(who):
-            return set()
-        return {"bot:" + slug for slug in auth.unreadable_bots(c, who)}
+        return _hidden_owners(c, auth, who)
 
     def readable_goals(c, who, rows):
-        """A bot's goals are its work: a caller sees them only when they may Read the bot (People's goals stay the
-        company's, as before). The CEO Bot reads every goal, as it keeps every KPI."""
-        hidden = hidden_owners(c, who)
-        return [row for row in rows if row["owner"] not in hidden] if hidden else list(rows)
+        return _readable_goals(c, auth, who, rows)
 
     def kpi_or_404(c, who, kpi_id):
         record = K.kpi(c, kpi_id)
@@ -119,8 +147,12 @@ def install(app, store, auth, mutate, settings):
             raise Problem("not_found", "Unknown KPI", 404)
         return record
 
-    def refuse_manager(c, who, what):
+    def refuse_manager(c, who, what, gated=""):
+        """`gated` says what was tried when it changes a goal or a target: the CEO Bot's try becomes the owner's
+        proposal (backend/ceo_acts.py)."""
         if is_manager(who):
+            if gated:
+                CA.gate(c, who.actor, "target", gated)
             raise Problem("forbidden", f"The {ceo_bot.name(c)} proposes {what}; the owner confirms it "
                           "(POST /api/v2/goal-proposals)", 403)
 
@@ -146,6 +178,8 @@ def install(app, store, auth, mutate, settings):
         """Whether this person may confirm the proposal: a person's own decision, by whoever owns what changes."""
         if who.role not in ("owner", "human") or who.via:
             return False
+        if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
+            return company_editor(who)
         goal = G.goal(c, item["goal_id"]) if item["goal_id"] else None
         record = K.kpi(c, item["kpi_id"]) if item["kpi_id"] else None
         by_goal = bool(goal) and may_colour(c, who, goal)
@@ -156,18 +190,14 @@ def install(app, store, auth, mutate, settings):
             return by_kpi
         return by_goal or by_kpi
 
-    def company_editor(who):
-        """The owner, on their own click: never an admin or a member, never a bot (the CEO Bot proposes), never
-        someone acting for the owner. The CEO Bot's level, its regular checks and the Company section are theirs."""
-        return who.role == "owner" and not who.via
-
     def refuse_bot_why(who):
         if who.role not in ("owner", "human") or who.via:
             raise Problem("forbidden", "A person sets a goal's Why on their own click; a bot proposes one "
                           "(POST /api/v2/goal-proposals, kind goal_why)", 403)
 
     def company_view(c, who):
-        record = C.profile(c)
+        # The vision has one source, the strategy: the owner reads the draft's, everyone else the published one.
+        record = {**C.profile(c), "vision": S.vision(c, editor=company_editor(who))}
         by = record.get("updated_by")
         known = N.lookup(c, {by}) if by else {}
         return {"company": {**record, "updated_by_name": known.get(by, H.actor_id(by or "") or "")},
@@ -188,11 +218,17 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         def work(c):
             auth.domain(who)
+            asked = body.model_dump(exclude_none=True)
+            CA.gate(c, who.actor, "vision", "change the company's " + (" and ".join(
+                f"{k} to \"{v}\"" for k, v in asked.items()) or "vision or description"))
             if not company_editor(who):
                 raise Problem("forbidden", "Only the owner writes the company's Vision and Description, on their own "
                               f"click; an admin or a member asks them, and a bot, the {ceo_bot.name(c)} included, "
                               "proposes", 403)
-            C.update(c, who.actor, vision=body.vision, description=body.description)
+            if body.vision is not None:
+                S.update_draft(c, who.actor, vision=body.vision)
+            if body.description is not None:
+                C.update(c, who.actor, description=body.description)
             return company_view(c, who)
         return mutate(request, body, work)
 
@@ -253,6 +289,58 @@ def install(app, store, auth, mutate, settings):
             return {"level3_offer": CS.offer_made(c, who.actor)}
         return mutate(request, body, work)
 
+    # ------------------------------------------------------------------ what the CEO Bot does alone (level 3)
+    @app.post("/api/v2/ceo-bot/decisions")
+    def ceo_bot_decide(request: Request, body: M.CeoBotDecision):
+        """The CEO Bot only, at level 3: one decision made alone, with its reason: bot tasks created, moved to the top
+        of their queue, given to another bot or closed, all under one action id in the CEO Bot log. What it may not do
+        alone (a person's task, a bot offline, a refusal) becomes one proposal in the owner's Needs you, never dropped."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            ceo_itself(c, who, "decides alone, at level 3")
+            def give(owner, task_id):
+                # The checks a task create or reassign by this caller passes (POST /api/v2/tasks, /tasks/{id}).
+                try:
+                    auth.require_bot_contact(c, who, auth.target(c, who, owner, need="write"), task_id=task_id,
+                                             kind="task")
+                except Problem as exc:
+                    return exc.detail
+                return None
+            made = CA.decide(c, who.actor, body.reason, [x.model_dump(exclude_none=True) for x in body.changes],
+                             body.goal_id or None, visible=auth.task_sql(c, who), give=give,
+                             sees=lambda owner: auth.bot_access(c, who, H.actor_id(owner))["see"])
+            return CA.receipt(CA.entry(c, made, auth.task_sql(c, who)))
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/ceo-bot/log")
+    def ceo_bot_log(request: Request, before: str | None = None, limit: int = CA.LOG_PAGE):
+        """The CEO Bot log, newest first: each decision it made alone with its reason and what it changed, and each
+        thing it proposed instead because it stays the owner's. The owner reads it, who decides on its proposals and
+        undoes its decisions: an entry shows bot task activity (owners, status, queue places) that a person or bot may
+        not be allowed to read, so nobody else does."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if who.role != "owner":
+                raise Problem("forbidden", f"Only the owner reads the {ceo_bot.name(c)} log", 403)
+            out = CA.log(c, auth.task_sql(c, who), before, limit)
+            out["can_undo"] = company_editor(who)
+            return out
+
+    @app.post("/api/v2/ceo-bot/log/{action_id}/undo")
+    def ceo_bot_undo(request: Request, action_id: str, body: M.Empty):
+        """The owner, on their own click, undoes one decision the CEO Bot made alone: the tasks it changed go back
+        where nobody changed them since, a later change is kept and named, and each bot whose task changed is told."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            if not company_editor(who):
+                raise Problem("forbidden", f"Only the owner undoes what the {ceo_bot.name(c)} did, on their own click",
+                              403)
+            return CA.entry(c, CA.undo(c, who.actor, action_id), auth.task_sql(c, who))
+        return mutate(request, body, work)
+
     @app.get("/api/v2/company/history")
     def company_history(request: Request):
         """Every change to the Vision and the Description, newest first, with who made it."""
@@ -264,12 +352,18 @@ def install(app, store, auth, mutate, settings):
             return {"events": [{**r, "actor_name": known.get(r["actor"], H.actor_id(r["actor"]))} for r in rows]}
 
     # ------------------------------------------------------------------ goals
+    def mark_read(who, due):
+        if due:
+            with store.transaction() as c:
+                G.mark_read(c, who.actor, due)
+
     @app.get("/api/v2/goals")
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
         """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal."""
         who = request.state.identity
         auth.domain(who)
-        with store.transaction() as c:
+        due = []
+        with store.read() as c:
             if all:
                 statuses = tuple(status.split(",")) if status else None
                 rows = readable_goals(c, who, G.goals(c, status=statuses, live_only=not statuses))
@@ -278,8 +372,9 @@ def install(app, store, auth, mutate, settings):
             roster, entries, archived = org_shape(c)
             out = G.for_actor(c, actor, roster, entries, archived)
             if who.role == "bot" and actor == who.actor:
-                G.mark_read(c, who.actor, [g["id"] for g in out["goals"] + out["chain"]])
-            return out
+                due = G.reads_due(c, who.actor, [g["id"] for g in out["goals"] + out["chain"]])
+        mark_read(who, due)
+        return out
 
     @app.get("/api/v2/goals/tree")
     def goals_tree(request: Request):
@@ -316,7 +411,8 @@ def install(app, store, auth, mutate, settings):
             other = [K.view(r, data.get(r["id"], []), None) for r in loose]
             names.update(owner_names(c, other))
             visible = {r["id"] for r in rows}
-            pending = [p for p in G.proposals(c, "pending") if not p["goal_id"] or p["goal_id"] in visible]
+            pending = [p for p in G.proposals(c, "pending") if (not p["goal_id"] or p["goal_id"] in visible)
+                       and strategy_visible(who, p)]
             return {"goals": rows, "owners": names, "unaligned": unaligned, "other_kpis": other,
                     "proposals": [{**p, "may_decide": decider(c, who, p)} for p in pending]}
 
@@ -359,13 +455,14 @@ def install(app, store, auth, mutate, settings):
     def goal_show(request: Request, gid: str):
         who = request.state.identity
         auth.domain(who)
-        with store.transaction() as c:
+        with store.read() as c:
             row = goal_or_404(c, gid)
             if not readable_goals(c, who, [row]):
                 raise Problem("not_found", "Unknown goal", 404)
-            if who.role == "bot":
-                G.mark_read(c, who.actor, [gid])
-            return {"goal": G.view(c, row, auth.task_sql(c, who))}
+            due = G.reads_due(c, who.actor, [gid]) if who.role == "bot" else []
+            out = {"goal": G.view(c, row, auth.task_sql(c, who))}
+        mark_read(who, due)
+        return out
 
     @app.post("/api/v2/goals")
     def goal_create(request: Request, body: M.GoalCreate):
@@ -378,7 +475,8 @@ def install(app, store, auth, mutate, settings):
                 if not (owner == who.actor or (parent and parent["owner"] == who.actor) or stands_above(c, who, owner)):
                     raise Problem("forbidden", "You can set a goal for yourself, under a goal you own, "
                                   "or for someone below you on the org chart", 403)
-            row = G.create(c, who.actor, body.title, owner, body.parent_id, body.body, top=body.top)
+            row = G.create(c, who.actor, body.title, owner, body.parent_id, body.body, top=body.top,
+                           bet_id=body.bet_id)
             return {"goal": G.view(c, row)}
         return mutate(request, body, work)
 
@@ -422,7 +520,9 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(c, who, "clearer wording or a change of goal")
+            refuse_manager(c, who, "clearer wording or a change of goal",
+                           gated=f"change the goal \"{row['title']}\""
+                                 + (f" to \"{body.title}\"" if body.title and body.title != row["title"] else ""))
             # Handing a goal to someone else is for whoever sits above; linking it to the goal it
             # supports is also its owner's (the link icon on the Goals page), and the new goal's owner
             # sees it there.
@@ -430,7 +530,8 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("forbidden", "Moving a goal is for the owner of the goal it serves or someone "
                               "above its owner", 403)
             structural = body.parent_id is not None or body.owner is not None
-            if body.parent_id is not None and not may_colour(c, who, row):
+            # Linking it to the goal it serves, or to the strategy bet it serves, is the same right.
+            if (body.parent_id is not None or body.bet_id is not None) and not may_colour(c, who, row):
                 raise Problem("forbidden", "Linking a goal is for its owner, the owner of the goal it serves, "
                               "or someone above its owner", 403)
             if not structural and not may_colour(c, who, row):
@@ -438,7 +539,7 @@ def install(app, store, auth, mutate, settings):
             owner = goal_owner(c, who, body.owner) if body.owner else None
             return {"goal": G.view(c, G.update(c, who.actor, gid, title=body.title, body=body.body,
                                                parent_id=body.parent_id, owner=owner, rank=body.rank,
-                                               top=body.top))}
+                                               top=body.top, bet_id=body.bet_id))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/goals/{gid}/why")
@@ -517,7 +618,9 @@ def install(app, store, auth, mutate, settings):
         def work(c):
             auth.domain(who)
             row = goal_or_404(c, gid)
-            refuse_manager(c, who, "a target it is judged against")
+            refuse_manager(c, who, "a target it is judged against",
+                           gated=f"change the target of the goal \"{row['title']}\" to "
+                                 + ", ".join(f"{k} {v}" for k, v in body.model_dump(exclude_none=True).items()))
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner or someone above them sets a target", 403)
             kpi_or_404(c, who, kid)
@@ -705,6 +808,8 @@ def install(app, store, auth, mutate, settings):
             hidden = hidden_owners(c, who)
             rows = []
             for p in G.proposals(c, status if status != "all" else None, goal_id, kpi_id):
+                if not strategy_visible(who, p):
+                    continue
                 goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                 record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
                 if (goal and goal["owner"] in hidden) or (record and record["owner"] in hidden):
@@ -738,5 +843,6 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("not_found", "Unknown proposal", 404)
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
-            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option)}
+            return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
+                                         moves=body.moves)}
         return mutate(request, body, work)

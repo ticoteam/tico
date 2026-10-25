@@ -59,7 +59,7 @@ def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallbac
                 "usage": {"input_tokens": 1_000_000, "output_tokens": 0}}
     api.app.state.judge = as_jev
     out = post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
-    assert set(out) == {"model", "answers", "usage", "ms", "label"}, "the reply's shape is unchanged"
+    assert set(out) == {"model", "answers", "usage", "ms", "label", "ref"}, "the reply's shape is unchanged but for its ref"
     detail = events(api, "human:ana")[-1][1]
     assert (detail["model"], detail["usage"]["input_tokens"], detail["ms"], detail["cost_usd"]) == \
         ("jev-1.14", 1_000_000, 180, 0.5)
@@ -190,6 +190,8 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         audit = json.loads(c.execute("SELECT detail_json FROM events WHERE target=? ORDER BY rowid DESC LIMIT 1",
                                      (f"{L.QUESTION_SET}@run",)).fetchone()[0])
         assert audit["calls"] == 1 and audit["cost_usd"] == 0.6, "the call it did make is counted"
+        assert audit["answers"] == [{"learnable": {"type": "noul", "value": 0.9, "confidence": 0.8},
+                                     "rel_ops": {"type": "noul", "value": 0.9, "confidence": 0.8}}], "and what it answered"
     assert len(night.calls) == 1
     with store.transaction() as c:                     # a capped night may be run again
         c.execute("UPDATE learning_runs SET night=? WHERE id=?", (L.night_of(L.datetime.now(L.timezone.utc)), run_id))
@@ -433,6 +435,8 @@ def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind
     tally({"team": "Acme"}, QUESTIONS)
     tally({"team": "Acme"}, QUESTIONS)
     detail = tally.detail()
+    assert detail.pop("answers") == [{"bucket": {"type": "choice", "value": "reply", "confidence": 0.8},
+                                      "is_ask": {"type": "noul", "value": 0.9, "confidence": 0.8}}] * 2, "one per call"
     assert detail.pop("cost_usd") == pytest.approx(2 * B.cost_usd(store.settings, "judge-1.13.0", {"input_tokens": 90}))
     assert detail == {"calls": 2, "fallbacks": 0, "models": {"judge-1.13.0": 2}, "model": "judge-1.13.0",
                       "usage": {"input_tokens": 180, "output_tokens": 0}}

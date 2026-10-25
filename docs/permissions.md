@@ -10,7 +10,8 @@ team, readable by one group and open to requests from everyone.
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
 Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
-is back; a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
+is back, except that a bot's send is refused as `queue_full` once the queue held for it is full (it never counts as a
+repeat; [How it works](how-it-works.md)); a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
 never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
 
 An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
@@ -122,7 +123,7 @@ refused. Built-in bots stay outside groups.
 **The built-in bots** (the Assistant, BotOps, the Librarian and the CEO Bot) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
-The CEO Bot's level, regular checks and name, and the Company section on Goals, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
+The CEO Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
@@ -206,7 +207,7 @@ created by a member has Instructions the Team has not reviewed, so it does not g
 A computer still hosts its owner's bots and the team owner's; taking members' bots adds members' bots, it does not move anyone else's.
 
 Every person sees every working computer in Settings > Computers (`GET /api/v2/operations`): its connections and their
-sign-in state, its named subscriptions' usage, and the bots on it that they may see. Only an admin or the computer's
+sign-in state, and the bots on it that they may see. Only an admin or the computer's
 operator also sees the signed-in accounts and the usage of the computer's own login, sees revoked computers, and changes
 anything on it (sign in, rename, usage readings, screen, tools, performance, inbox-only, revoke); the API refuses anyone else.
 
@@ -259,7 +260,7 @@ against the session again.
 
 > **Beta**: behaviour replay and the computer Performance page work today and may still change. See [Beta features](support.md#beta-features).
 
-Every computer reports its CPU, memory, swap, disk and its busiest processes every 30 seconds, so a slow or overloaded
+Every computer reports its CPU, memory, swap, disk and its busiest processes every 60 seconds, so a slow or overloaded
 computer can be debugged afterwards. It is on by default. The computer's operator or an admin turns it off in
 **Performance diagnostics** in the computer's pop-up in Settings > Computers (`POST /api/v2/computers/<id>/performance {"mode": "off"}`); Off
 stops the reports, and what was recorded stays until it is 14 days old. **Delete history** on the page, or
@@ -271,9 +272,29 @@ or `GET /api/v2/computers/<id or label>/performance?hours=24` (1 to 336). A repo
 program's own name, never its arguments), and the turns shown are the server's own record of what ran. A bot the
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
 
-Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%; on a Mac, whose swap grows as it needs, memory alone) or under 5%
+`hub computer list` is readable by company bots, including computers closed to placement of members' bots.
+Computers a bot could not otherwise read expose only discovery fields and load, without operator identity,
+repositories or recent logs. Full detail, placement and change controls keep their existing permissions. Each row includes `latest_sample` (timestamp,
+`cpu_pct`, `mem_pct`, memory used/total, swap used/total and running turns) and a plain `overloaded` flag.
+CPU here is the one-minute load divided by available cores, times 100; it may exceed 100%. These minute
+samples are retained for 48 hours. Six consecutive readings spanning five minutes above 90% CPU or memory
+set the flag and a Health warning. A missing minute, a calm reading, a sample older than two minutes, or
+turning diagnostics off clears it and hides `latest_sample`.
+
+**Unreleased:** this sustained-load flag holds new starts on that computer, including reservations that have not
+started yet. Running turns continue, and new starts resume when the flag clears
+([Turn counts](computers.md#turn-counts)).
+
+Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
+`hub run list`. Current computers take a reading at start and completion; older computers use a recent
+sample with its original timestamp. Unavailable readings are null. A run's saved snapshots remain after
+rolling samples expire. Diagnostics off suppresses new readings and snapshots; deleting computer history
+also removes saved snapshots for that computer.
+
+Ten minutes in a row of CPU or memory over 90%, heavy swapping (half the swap in use with memory over 80%) or under 5%
 disk free record an overload: when, why, which bots' turns were running and the busiest processes. Health shows it as a
-warning for a day afterwards. An overload changes nothing on its own; it is there to explain a slow day.
+warning for a day afterwards. macOS swap is reported as raw bytes in `latest_sample`, but does not feed this
+diagnostic swapping rule because its swap total grows with use. This ten-minute diagnostic record explains past load; the separate five-minute flag above controls new starts.
 
 ## BotOps uses the requester’s rights
 
@@ -358,8 +379,8 @@ it as one sentence and the link.
 
 **Checking the result.** A model change answers with `readiness` (`backend/readiness.py` `can_run`, the one check
 behind a prepared change, `POST bots/<slug>/model` and Health): whether **this bot** can run the new runtime on its
-computer, judged by its own subscription profile's sign-in, its own API-key Credential for the runtimes that take one
-per bot (Gemini CLI, Pi), and otherwise the computer's shared sign-in. Another bot's missing key never blocks it.
+computer, judged by its computer's login for that runtime, its own API-key Credential for the runtimes that take one
+per bot (Gemini CLI, Pi). Another bot's missing key never blocks it.
 `can_run` is true, false (with `fix` and `link`), or null when nothing says (offline, an older computer). A bot an
 external agent runs (Hermes, OpenClaw, Grok Bot) answers `applicable: false`: no computer check applies. A change is
 refused only on false. `reported` turns true once the bot's own readiness row reflects the new runtime, after the
@@ -393,6 +414,9 @@ The commands (with MCP tools of the same names):
 | `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
 | `hub bot go-live <bot> [--computer C] [--routines-file F]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. `--help` shows the `--routines-file` shape (docs/routines.md) |
 | `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart |
+| `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
+| `hub bot budget <bot> [--hour N\|default] [--day N\|default]`, `hub bot budget <bot> release`, `hub bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `hub team budget [--hour N] [--day N]` sets the team default (owner and admins) |
+| `hub bot scope <bot> <task>`, `hub bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
 | `hub routine on\|off <key> --bot <bot>` | a routine on or off |
 | `hub computer list [--computer C [--section S --offset N]]`, `hub health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
 | `hub computer performance <computer> [--hours 24]` | the computer's CPU and memory over the window, its overloads and what ran in them, and its busiest processes |

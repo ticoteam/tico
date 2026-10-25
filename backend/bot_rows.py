@@ -3,7 +3,7 @@ of them, then lookups, so a request costs about the same for 7 bots as for 90. P
 are per task, job or message stay per row (backend/task_privacy.py); only the reading is shared."""
 
 from . import task_privacy as privacy
-from . import read_cache
+from . import auto_tasks, pipeline_stats, read_cache
 from .harnesses import is_external, resolve_harness
 from .shared_bots import _json, source_of
 from .store import H
@@ -33,11 +33,20 @@ class BotRows:
                                   "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                                   "WHERE a.bot IN ({})", read)
         self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
+        self.scopes = {bot: row["claim_task"] for bot, row in _by(
+            c, "SELECT bot,claim_task FROM bot_control WHERE claim_task IS NOT NULL AND bot IN ({})", read).items()}
         self.statuses = _by(c, "SELECT * FROM bot_status WHERE bot IN ({})", read)
         self.status_inputs = privacy.status_inputs(c, list(self.statuses))
-        self.queued = privacy.job_counts(c, who, read)
+        # The queued number of hub pipeline: work that will run, not work fenced behind a run nobody reviewed.
+        self.queued = {slug: q["queued"] for slug, q in pipeline_stats.job_queues(c, who, read).items()}
         self.next_run = H.next_run_tasks_by(c, read)
         self.notes = H.notes_waiting_counts(c, read, limit=500)
+        tasks = {}
+        for part in H.chunks(read):
+            for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ','.join('?' * len(part)) +
+                                          ") AND status IN ('open','doing')", ['bot:' + slug for slug in part])):
+                tasks.setdefault(H.actor_id(task['owner']), []).append(task)
+        self.task_flow = {slug: auto_tasks.counts(c, slug, who, tasks.get(slug, [])) for slug in read}
         self.goals = {}
         for part in H.chunks(slugs):
             for row in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active' AND bot IN "

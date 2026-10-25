@@ -11,6 +11,7 @@ bot's missing key or another profile's sign-in never decides it.
     can_run      True, False, or None when nothing says (offline, an older computer, not checked yet, not applicable)
     applicable   False for a bot an external agent runs (Hermes, OpenClaw, Grok Bot): no computer check applies
     problem      one plain sentence when can_run is not True
+    warning      an API-key computer login bills separately from a subscription; can_run stays True
     fix, link    what the person does and where (a relative `#/...` link), only when can_run is False or the bot has no
                  computer
     computer     {"id", "label"} or None; online
@@ -19,7 +20,6 @@ bot's missing key or another profile's sign-in never decides it.
 
 Callers refuse only on can_run False; None never blocks.
 """
-import json
 
 from . import models_preset
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
@@ -32,6 +32,30 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 def _config(c, bot):
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return H._json(row["config_json"], {}) or {} if row else {}
+
+
+def computer_login(readiness, runtime):
+    """The physical default's report, never a dormant subscription's aggregate verdict."""
+    state = (readiness.get("runtimes") or {}).get(runtime) or {}
+    profile = (state.get("profiles") or {}).get(readiness.get("computer_profile") or "") or {}
+    # Account/key metadata lives on the runtime row; per-home rows carry only the sign-in check.
+    return {**state, **profile}
+
+
+def login_warning(readiness, runtime, harness=""):
+    """An API login has separate billing; a missing plan reading says nothing about its API credit."""
+    caps = harness_caps(harness, runtime)
+    if not caps.get("subscription_profiles") or caps.get("api_keys") != "computer":
+        return ""
+    state = computer_login(readiness, runtime)
+    if state.get("authenticated") != "ready":
+        return ""
+    if ((state.get("account") or {}).get("kind") == "api_key" or state.get("key")
+            or "api key" in str(state.get("detail") or "").lower()):
+        return ("This computer uses an API key, not a subscription allowance. API credit is not checked here. "
+                "Check the provider's API billing, or switch this computer to the intended subscription "
+                "in Settings > Computers before running its bots.")
+    return ""
 
 
 def own_harness(c, bot, runtime):
@@ -56,9 +80,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         return {"can_run": None, "applicable": False, "computer": None, "runtime": runtime,
                 "problem": "An external agent runs this bot outside Tico, so no computer check applies"}
     if runner:
-        row = c.execute("SELECT id,label,last_seen,revoked_at,readiness_json FROM runners WHERE id=?", (runner,)).fetchone()
+        row = c.execute("SELECT id,label,last_seen,revoked_at,readiness_json,capabilities_json FROM runners WHERE id=?", (runner,)).fetchone()
     else:
-        row = c.execute("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
+        row = c.execute("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
                         "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
     if not row or row["revoked_at"]:
         return {"can_run": None, "applicable": True, "computer": None, "runtime": runtime,
@@ -87,6 +111,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
 
     if not online:
         return verdict(None, label + " is offline, so it has not checked " + str(runtime))
+    from .subscriptions import login_upgrade
+    if problem := login_upgrade(row, readiness, bot=bot):
+        return verdict(False, problem, "Update the runner in Settings > Computers")
     # A harness the runner does not report on (`readiness = false`, Antigravity) has no row to judge.
     if readiness.get("schema_version") != 1 or harness_caps(harness, runtime).get("readiness") is False:
         return verdict(None, label + " does not report its AI tools; update it to check")
@@ -127,23 +154,16 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
                            " Credential in Credentials", "#/credentials")
         return verdict(True)
-    from .subscriptions import covers, effective
-    profile = effective(c, bot)[0]
-    if profile and covers({"runtime": runtime, "harness": harness}):
-        stored = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?",
-                           (row["id"], profile)).fetchone()
-        signed = (json.loads(stored[0] or "{}") if stored else {}).get(runtime, {}).get("signed_in")
-        if signed is None:
-            signed = {"ready": True, **{k: False for k in SIGNED_OUT}}.get(
-                ((state.get("profiles") or {}).get(profile) or {}).get("authenticated"))
-        if signed is None:
-            return verdict(None, "The " + profile + " subscription has not reported " + str(runtime) + " on " + label)
-        return verdict(True) if signed else verdict(
-            False, "The " + profile + " subscription is not signed in to " + str(runtime) + " on " + label,
-            "Sign in the " + profile + " subscription to " + str(runtime) + " on " + label + " in Settings > Computers", sign_in=True)
-    shared = (state.get("profiles") or {}).get("") or state
+    # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
+    shared = computer_login(readiness, runtime)
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
+        if warning := login_warning(readiness, runtime, harness):
+            out["warning"] = warning
+        return verdict(True)
+    key_caps = harness_caps(own if runtime_of(own) == runtime else runtime, runtime)
+    if signed != "rejected" and key_caps.get("api_key_in_turn") and set(key_caps.get("api_key_env") or ()) & _held(c, bot):
+        # A granted per-turn key does not depend on the computer's subscription login.
         return verdict(True)
     if signed in SIGNED_OUT and (line := models_preset.gateway_line(
             c, bot, readiness, config={"runtime": runtime, "model": model or config.get("model")})):

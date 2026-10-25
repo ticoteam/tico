@@ -51,9 +51,12 @@ REFRESH_MARGIN = TURN_START_REFRESH_MARGIN
 TURN_PERMISSIONS = {"contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read"}
 READ_PERMISSIONS = {"contents": "read", "metadata": "read"}
 # What a bot reads beside its code in any repository it can reach: workflow runs (a deploy's result), check runs
-# and commit statuses (a pull request's checks; `gh pr checks` needs both). GitHub refuses a token naming a
-# permission the installation has not accepted, so turns narrow to the ones it has accepted (mint_turn).
-TURN_READS = {"actions": "read", "checks": "read", "statuses": "read"}
+# and commit statuses (a pull request's checks; `gh pr checks` needs both), pull requests and their comments
+# (`gh pr view`, `gh pr diff`; a PR's conversation is its issue), and deployments (a preview's link). A write token
+# keeps its own write on pull requests and issues. GitHub refuses a token naming a permission the installation has
+# not accepted, so turns narrow to the ones it has accepted (mint_turn).
+TURN_READS = {"actions": "read", "checks": "read", "statuses": "read", "pull_requests": "read", "issues": "read",
+              "deployments": "read"}
 # A write grant an Owner or admin lets run workflows (start, rerun, cancel) gets its own token: GitHub permissions are
 # token-wide, so the bot's other repositories never carry it. Never Workflows: write, so workflow files stay unedited.
 WORKFLOW_PERMISSIONS = {**TURN_PERMISSIONS, "actions": "write"}
@@ -841,7 +844,7 @@ def _said(response):
 
 def manifest(settings, name, administration):
     public = settings.public_url
-    permissions = {**TURN_PERMISSIONS, **TURN_READS}
+    permissions = {**TURN_READS, **TURN_PERMISSIONS}       # a write a bot needs wins over the same read
     if administration:
         permissions["administration"] = "write"
     return {"name": name[:34], "url": public, "redirect_url": public + "/api/v2/github/app/callback",
@@ -877,6 +880,9 @@ def install_github_app(app, settings, store):
 
     from . import repositories as R
     R.install(app, store, service)
+    from .github_reviews import ReviewerApp, install_reviews
+    reviewer = app.state.github_reviewer_app = ReviewerApp(settings, store, service)
+    install_reviews(app, store, service, reviewer)
 
     def owner(request):
         who = request.state.identity
@@ -1124,6 +1130,7 @@ def install_github_app(app, settings, store):
                             and name.split("/")[0].lower() == row["org"].lower() and name.lower() not in missing):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
+        issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
         read_repos = [r['full_name'] for r in grants if r['access'] == 'read']
@@ -1135,12 +1142,17 @@ def install_github_app(app, settings, store):
             write_repos = [grant['full_name']] if grant['access'] == 'write' else []
             read_repos = [grant['full_name']] if grant['access'] == 'read' else []
             repos = [grant['full_name']]
+        if issuer is reviewer:
+            # A reviewer's everyday credential may write its own memory repository only. Product approvals
+            # use the server-side review endpoint; the runner cannot author product commits as that App.
+            read_repos += [name for name in write_repos if name.lower() != repo.lower()]
+            write_repos = [name for name in write_repos if name.lower() == repo.lower()]
         flagged = {g['full_name'].lower() for g in grants if g['access'] == 'write' and g.get('run_workflows')}
         workflow_repos = [name for name in write_repos if name.lower() in flagged]
         withheld = None
         if workflow_repos:
-            live = service.live_permissions()
-            if live is not None:
+            live = issuer.live_permissions()
+            if live is not None and issuer is service:
                 # Accepted clears the setting warning at once, whatever the mint below does; whether GitHub refuses
                 # the token is learned there.
                 R.workflow_health(service, live.get("actions") == "write", refused=None)
@@ -1156,7 +1168,7 @@ def install_github_app(app, settings, store):
         try:
             # GitHub permissions are token-wide. Never put read grants in a write token.
             if write_repos:
-                value, expires, write_repos, cached, reachability_changed = service.mint_turn(
+                value, expires, write_repos, cached, reachability_changed = issuer.mint_turn(
                     write_repos, TURN_PERMISSIONS, diagnose_empty=write_repos == [repo], own=repo,
                     refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
                 if value:
@@ -1167,10 +1179,10 @@ def install_github_app(app, settings, store):
                 run_actions = {}
                 # A refusal seen within LIVE_TTL falls back at once: each git call asks for a token, and would
                 # otherwise repeat three refused mints and two permission reads.
-                reason = WORKFLOWS_REFUSED if service.workflows_refused() else None
+                reason = WORKFLOWS_REFUSED if issuer.workflows_refused() else None
                 if not reason:
                     try:
-                        run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                        run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
                             workflow_repos, WORKFLOW_PERMISSIONS, narrow=False, own=repo,
                             refresh_margin=refresh_margin, include_cache_status=True, missing=missing)
                         run_actions = {'actions': 'write'}
@@ -1180,11 +1192,11 @@ def install_github_app(app, settings, store):
                         # Either Actions: write went away within LIVE_TTL, or a read (Checks, Commit statuses) the
                         # installation lacks: GitHub says which now.
                         reason = WORKFLOWS_WITHHELD
-                        if (service.live_permissions(refresh=True) or {}).get("actions") == "write":
-                            with service.lock:
-                                narrowed = service.live.get("turn-reads")
+                        if (issuer.live_permissions(refresh=True) or {}).get("actions") == "write":
+                            with issuer.lock:
+                                narrowed = issuer.live.get("turn-reads")
                             try:
-                                run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                                run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
                                     workflow_repos, WORKFLOW_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
                                     include_cache_status=True, missing=missing)
                                 run_actions = {'actions': 'write'}
@@ -1194,21 +1206,23 @@ def install_github_app(app, settings, store):
                                 # The installation reports Actions: write yet refuses it: not the setting Health
                                 # names. The reads the retry narrowed away on the way come back for the other
                                 # tokens, unless the webhook or Check permissions reset them meanwhile.
-                                with service.lock:
-                                    current = service.live.get("turn-reads")
+                                with issuer.lock:
+                                    current = issuer.live.get("turn-reads")
                                     if current is not narrowed and current and current[1] == {}:
                                         if narrowed:
-                                            service.live["turn-reads"] = narrowed
+                                            issuer.live["turn-reads"] = narrowed
                                         else:
-                                            service.live.pop("turn-reads", None)
-                                    service.live["workflows-refused"] = time.time() + LIVE_TTL
+                                            issuer.live.pop("turn-reads", None)
+                                    issuer.live["workflows-refused"] = time.time() + LIVE_TTL
                                 reason = WORKFLOWS_REFUSED
                 if run_actions:
-                    R.workflow_health(service, True)
+                    if issuer is service:
+                        R.workflow_health(service, True)
                 else:
-                    R.workflow_health(service, reason != WORKFLOWS_WITHHELD, refused=reason == WORKFLOWS_REFUSED)
+                    if issuer is service:
+                        R.workflow_health(service, reason != WORKFLOWS_WITHHELD, refused=reason == WORKFLOWS_REFUSED)
                     withheld = {"repositories": workflow_repos, "reason": reason}
-                    run_value, run_expires, workflow_repos, cached, reachability_changed = service.mint_turn(
+                    run_value, run_expires, workflow_repos, cached, reachability_changed = issuer.mint_turn(
                         workflow_repos, TURN_PERMISSIONS, own=repo, refresh_margin=refresh_margin,
                         include_cache_status=True, missing=missing)
                 if run_value:
@@ -1216,7 +1230,7 @@ def install_github_app(app, settings, store):
                                    'access': 'write', **run_actions, 'cached': cached,
                                    'reachability_changed': reachability_changed})
             if read_repos:
-                read_value, read_expires, read_repos, cached, reachability_changed = service.mint_turn(
+                read_value, read_expires, read_repos, cached, reachability_changed = issuer.mint_turn(
                     read_repos, READ_PERMISSIONS, refresh_margin=refresh_margin,
                     include_cache_status=True, missing=missing)
                 if read_value:
@@ -1228,20 +1242,21 @@ def install_github_app(app, settings, store):
             repos = write_repos + workflow_repos + read_repos
             value, expires = tokens[0]['token'], tokens[0]['expires_at']
         except Problem as problem:
-            if problem.code not in BOT_SCOPED:
+            if issuer is service and problem.code not in BOT_SCOPED:
                 note_github_token(store, problem.detail, "Open Settings > Tools and check the GitHub connection.")
             raise
         newly_minted = [item for item in tokens if not item["cached"]]
-        if newly_minted or any(item["reachability_changed"] for item in tokens):
+        if issuer is service and (newly_minted or any(item["reachability_changed"] for item in tokens)):
             R.repository_health(service)
         if newly_minted:
             for item in newly_minted:
-                if service.should_audit_token(body.bot, item["token"]):
+                if issuer.should_audit_token(body.bot, item["token"]):
                     with store.transaction() as c:
                         # Whose rights shaped a BotOps token: its own run's, a person's, or none beyond its own.
                         H.event(c, who.actor, "github.token", body.bot,
                                 {"repository": repo, "repositories": item["repositories"],
-                                 "attempt": who.attempt_id or None, **({"runs": runs} if body.bot == BOTOPS else {})})
+                                 "attempt": who.attempt_id or None, **({"identity": "reviewer"} if issuer is reviewer else {}),
+                                 **({"runs": runs} if body.bot == BOTOPS else {})})
         response_tokens = [{key: value for key, value in item.items() if key != "cached"} for item in tokens]
         # A BotOps answer is shaped by the runs live right now (botops_extra_repos): a runner must not hand it
         # to a later run, which may be allowed less.

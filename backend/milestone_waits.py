@@ -58,7 +58,7 @@ def ensure(c):
 
 
 def _present(c):
-    return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_milestone_waits'").fetchone())
+    return _H()._has_table(c, "task_milestone_waits")
 
 
 # ------------------------------------------------------------------------------------------------ parsing
@@ -117,7 +117,7 @@ def parse(c, actor, spec, release_repo="", resolve_task=None):
     if kind_word == "release":
         parsed = release_target(value, release_repo)
         if not parsed:
-            H.refuse(c, actor, "milestone", "release: takes a tag like v0.3.64, or <owner>/<repo>@v0.3.64 when this "
+            H.refuse(c, actor, "milestone", "release: takes a version tag like v0.3.64 (major.minor at least), or <owner>/<repo>@v0.3.64 when this "
                                             "server has no release repository")
         return ("release_published", *parsed, None)
     H.refuse(c, actor, "milestone", "wait on pr:<url|task>, release:<tag> or task:<id>")
@@ -212,11 +212,17 @@ def _why(wait):
         (f": {wait['url']}" if wait.get("url") else ".") + " The task it came from keeps its own step."
 
 
-def happened(c, kind, target, source=""):
-    """A milestone happened (the GitHub webhook): record it, and wake each task waiting for it once. Returns their ids."""
+def happened(c, kind, target, source="", release_repo=""):
+    """A milestone happened (the GitHub webhook): record it, and wake each task waiting for it once. Returns their ids.
+    The first time a release is recorded it also follows up the Dev tickets it carries (backend/release_flow.py)."""
     H = _H()
     ensure(c)
-    c.execute("INSERT OR IGNORE INTO milestones(kind,target,at,source) VALUES(?,?,?,?)", (kind, target, H.now(), source))
+    new = c.execute("INSERT OR IGNORE INTO milestones(kind,target,at,source) VALUES(?,?,?,?)",
+                    (kind, target, H.now(), source)).rowcount == 1
+    if new and kind == "release_published":
+        from . import release_flow
+        with isolated(c, "release_published", target):
+            release_flow.published(c, target, source if str(source).startswith("https://") else "", release_repo)
     woken = []
     for wait in H._rows(c.execute("SELECT * FROM task_milestone_waits WHERE kind=? AND target=? AND woke_at IS NULL "
                                   "ORDER BY created, task_id", (kind, target))):
@@ -307,7 +313,9 @@ def recover(service):
                 return
             org = str(app["org"] or "").lower()
             reachable = {r[0].lower() for r in c.execute("SELECT full_name FROM repositories WHERE reachable=1")}
-            targets = [t for t in _pending_targets(c) if t not in _met(c, [t])]
+            pending = _pending_targets(c)
+            met = _met(c, pending)
+            targets = [t for t in pending if t not in met]
         def repo_of(kind, target):
             return (target.rpartition("#")[0] if kind == "pr_merged" else target.partition("@")[0]).lower()
         due = sorted((t for t in targets if repo_of(*t) in reachable and repo_of(*t).split("/")[0] == org
@@ -330,7 +338,7 @@ def recover(service):
                         response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/"
                                                         f"{int(target.rpartition('#')[2])}", headers=auth)
                         body = response.json() if response.status_code == 200 else {}
-                        found = bool(body.get("merged")) and str(body.get("html_url") or "")
+                        found = bool(body.get("merged")) and str(body.get("html_url") or "github")
                     else:
                         tag = target.partition("@")[2]
                         response = service._call("GET", f"/repos/{quote(repo, safe='/')}/releases/tags/"
@@ -340,7 +348,7 @@ def recover(service):
                             str(body.get("html_url") or "github")
                     if found:
                         with service.store.transaction() as c:
-                            happened(c, kind, target, found)
+                            happened(c, kind, target, found, release_repo=service.settings.release_repo)
                 except Exception:
                     logging.getLogger("tico.milestone_waits").exception("Milestone check failed for %s", target)
                 with service.lock:

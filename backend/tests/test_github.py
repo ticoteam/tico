@@ -149,9 +149,9 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Repair checks', 'body': 'x', 'links': [PR]})
     with api.app.state.store.transaction() as c:
         before = c.execute('SELECT count(*) FROM messages').fetchone()[0]
-    for name in ('Unit tests', 'Lint'):
-        hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
-            'name': name, 'conclusion': 'failure', 'pull_requests': [{'number': 412}]}})
+    for n in (1, 2):
+        hook(api, 'pull_request_review_comment', {'action': 'created', 'pull_request': {'html_url': PR},
+                                                  'comment': {'id': n, 'user': {'login': 'sam'}}})
     with api.app.state.store.transaction() as c:
         key = 'github-task-wake:' + task['id']
         burst = R.metadata(c, key)
@@ -161,7 +161,7 @@ def test_webhook_burst_is_durable_and_sends_one_specific_wake(api):
         assert G.flush_wakes(c) == []
         assert c.execute('SELECT count(*) FROM messages').fetchone()[0] == before + 1
         message = c.execute('SELECT body FROM messages ORDER BY created DESC LIMIT 1').fetchone()[0]
-        assert 'Unit tests' in message and 'Lint' in message and 'tico#412' in message
+        assert '2 review comments' in message and 'tico#412' in message
         job = c.execute("SELECT held,wake_preset FROM jobs WHERE bot='cpo' ORDER BY rowid DESC LIMIT 1").fetchone()
         assert job['held'] and job['wake_preset'] == 'performance'
 
@@ -234,11 +234,13 @@ def test_reviewer_who_pushes_is_not_the_bot_and_changes_requests_always_wake(api
     with api.app.state.store.transaction() as c:
         assert 'Review commented' in metadata(c, 'github-task-wake:' + task['id'])['items'][0]
         c.execute("DELETE FROM registry_metadata WHERE key=?", ('github-task-wake:' + task['id'],))
-    for n, login in enumerate(['sam', 'engineer[bot]']):
+    for n, login in enumerate(['sam', 'reviewer[bot]']):
         hook(api, 'pull_request_review', {'action': 'submitted', 'pull_request': payload['pull_request'],
             'review': {'id': n + 10, 'state': 'changes_requested', 'user': {'login': login}}})
         with api.app.state.store.transaction() as c:
-            assert 'changes requested' in metadata(c, 'github-task-wake:' + task['id'])['items'][0]
+            burst = metadata(c, 'github-task-wake:' + task['id'])
+            # A person's change request wakes; an App's is a note for the next run.
+            assert 'changes requested' in (burst.get('items') or burst['notes'])[0] and bool(burst.get('items')) == (login == 'sam')
             c.execute("DELETE FROM registry_metadata WHERE key=?", ('github-task-wake:' + task['id'],))
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO github_app(id,app_id,slug,client_id,org,administration,ciphertext,nonce,created,created_by) "
@@ -387,9 +389,11 @@ def test_a_review_request_puts_the_person_in_the_configured_role(api):
 
 
 def _burst(api, task_id):
+    """What a task's PR burst will send: grouped items, then each head's finished checks."""
     from backend import repositories as R
     with api.app.state.store.transaction() as c:
-        return R.metadata(c, 'github-task-wake:' + task_id).get('items', [])
+        burst = R.metadata(c, 'github-task-wake:' + task_id)
+        return burst.get('items', []) + [d['item'] for d in burst.get('done', [])]
 
 
 def _app(api):
@@ -414,7 +418,8 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on CI', 'body': 'x', 'links': [PR]})
     hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
     _suite(api, 'github-actions', 'completed', 'success')
-    assert _burst(api, task['id']) == []                      # unarmed: a passing suite wakes nobody
+    # Unarmed, the head's one result is queued all the same; backend/rules.py decides whether it wakes or is a note.
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
     links = _arm(api, task['id'])
     assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
     assert _arm(api, task['id']) == links                     # arming twice changes nothing
@@ -426,15 +431,15 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
     hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
         'name': 'Deploy preview', 'status': 'in_progress', 'conclusion': None, 'head_sha': 'a' * 40,
         'pull_requests': [{'number': 412}]}})
-    _suite(api, 'github-actions', 'completed', 'failure')    # the usual failing-check notice, not the one wake
-    assert _burst(api, task['id']) == ['Checks failing on tico#412: suite:github-actions']
+    _suite(api, 'github-actions', 'completed', 'failure')    # a failing check alone says nothing: one is still pending
+    assert len(_burst(api, task['id'])) == 1 and 'passed' in _burst(api, task['id'])[0]
     # The last pending run finishing after the suites have is the end of the checks.
     hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
         'name': 'Deploy preview', 'status': 'completed', 'conclusion': 'success', 'head_sha': 'a' * 40,
         'pull_requests': [{'number': 412}]}})
     _suite(api, 'github-actions', 'completed', 'failure')     # a redelivery
-    assert _burst(api, task['id'])[1:] == [
-        f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
+    # The result that was still waiting to be sent is replaced, so one head gives one wake.
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
     assert get(api, 'tasks/' + task['id'])['task']['status'] == task['status']
@@ -474,10 +479,9 @@ def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
     _suite(api, 'github-actions', 'completed', 'failure', id=1)   # another workflow, its own suite
     run('build', 'completed', 'success')                      # its workflow has more jobs to come
     run('deploy', 'completed', 'failure')
-    assert _burst(api, task['id']) == ['Checks failing on tico#412: suite:github-actions',
-                                       'Checks failing on tico#412: deploy']
+    assert _burst(api, task['id']) == []                      # no single check is news
     _suite(api, 'github-actions', 'completed', 'failure', id=2)
-    assert _burst(api, task['id'])[2:] == [
+    assert _burst(api, task['id']) == [
         f"Checks finished on tico#412: failed (github-actions, deploy) {PR}/checks at {'a' * 12}"]
     run('deploy', 'completed', 'failure')                     # delivered late: does not reopen its suite
     detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
@@ -491,7 +495,7 @@ def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
     run('deploy', 'completed', 'success')
     assert _burst(api, task['id']) == before
     _suite(api, 'github-actions', 'completed', 'success', id=2)
-    assert _burst(api, task['id'])[len(before):] == [
+    assert _burst(api, task['id']) == [
         f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
 
 
@@ -810,6 +814,38 @@ def _reconciler(api, monkeypatch, fetch, mint=None):
     return service, run
 
 
+def test_opened_non_engineering_pr_does_not_need_creation_qa(api):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    assert not _prs(api, task['id'])[412]['detail'].get('qa_default_pending')
+
+
+def test_stale_non_engineering_qa_marker_settles_without_repeated_github_reads(api, monkeypatch):
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
+    # Existing links can carry the marker written by the old opened-webhook path.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+                  (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), task['id']))
+    calls = []
+
+    def fetch(method, path, **kw):
+        calls.append(path)
+        assert path == '/repos/ticoteam/tico/pulls/412'
+        return SimpleNamespace(status_code=200, json=lambda: _branch_pr(412, 'planning-notes'))
+
+    service, run = _reconciler(api, monkeypatch, fetch)
+    run(fresh=True)
+    detail = _prs(api, task['id'])[412]['detail']
+    assert not detail.get('qa_default_pending')
+    assert detail['kept'] == 'metadata'
+    assert calls == ['/repos/ticoteam/tico/pulls/412']
+    # Ignore both caches: the settled link itself must exclude the next pass.
+    run(fresh=True)
+    assert calls == ['/repos/ticoteam/tico/pulls/412']
+    with service.store.read() as c:
+        assert H.task_labels(H.task(c, task['id'])) == []
+
+
 def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_from_a_fork(api):
     """A bot that opens a PR and never links it still gets the link its worktree's release waits on."""
     _app(api)
@@ -995,7 +1031,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     _app(api)
     with api.app.state.store.transaction() as c:
         dev = H.type_create(c, H.KEEPER, 'Dev tickets', [
-            {'name': 'In Progress', 'status': 'doing'}, {'name': 'Waiting', 'status': 'waiting'},
+            {'name': 'In Progress', 'status': 'doing'},
             {'name': 'Review 1', 'status': 'review'}, {'name': 'Review 2', 'status': 'review'},
             {'name': 'Done', 'status': 'done'}])
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
@@ -1025,12 +1061,15 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     refused = move(step='Review 2')
     assert all(f'{repo} branch {branch}' in refused for repo in repos)
     assert move(note='still working') == 'review'
-    assert move(step='Waiting') == 'waiting'
+    assert move(status='waiting') == 'waiting'
     assert 'ticoteam/tico branch' in move(step='Review 1')
     hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
     still = move(step='Done')
     assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
     post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(16, branch, repo='ticoteam/tico-services')})
+    # Linking is necessary; the review gate also needs a current passing receipt.
+    assert move(note='Tests: head ' + 'b' * 40 + ': 9 passed, 0 failed') == 'waiting'
     assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
 
 

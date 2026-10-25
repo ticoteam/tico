@@ -149,7 +149,7 @@ function visualFullDialog() {
   if (d) return d;
   d = document.createElement('dialog');
   d.id = 'vcard-full'; d.className = 'vcard-full';
-  d.innerHTML = `<div class="vcard-full-bar"><span class="vcard-full-title"></span><button type="button" class="ghost vcard-full-close" data-vfull-close aria-label="Close">Close</button></div><div class="vcard-full-body"></div>`;
+  d.innerHTML = `<div class="vcard-full-bar"><span class="vcard-full-title"></span><span class="pic-zoom-bar" hidden>${PIC_ZOOM_BAR}</span><button type="button" class="ghost vcard-full-close" data-vfull-close aria-label="Close">Close</button></div><div class="vcard-full-body"></div>`;
   d.addEventListener('click', ev => { if (ev.target.closest('[data-vfull-close]')) d.close(); });
   d.addEventListener('close', () => visualFullClosed(d));
   visualFullSwipe(d);
@@ -177,7 +177,12 @@ function visualExpand(card) {
     : `<img class="vcard-full-img" alt="${esc(title)}" src="${esc(src)}" draggable="false">`;
   d.visualFrom = {card, opener: document.activeElement, scroll: visualScrollers(card)};
   visualZoomReset(d);
-  if (kind !== 'page') visualZoom(d, body.querySelector('img'));
+  d.querySelector('.pic-zoom-bar').hidden = kind === 'page';
+  if (kind !== 'page') {
+    d.zoomAbort = new AbortController();
+    picZoom(body, body.querySelector('img'), {signal: d.zoomAbort.signal, bar: d.querySelector('.pic-zoom-bar'),
+      onZoom: zoomed => { d.zoomed = zoomed; d.classList.toggle('zoomed', zoomed); }});
+  }
   history.pushState({...(history.state || {}), vcardFull: 1}, '');
   d.showModal();
   d.querySelector('.vcard-full-close').focus({preventScroll: true});
@@ -221,34 +226,99 @@ function visualFullSwipe(d) {
   });
   d.addEventListener('pointercancel', () => { start = null; });
 }
-// Fitted at 1; a click or tap toggles 2x at that point; pinch and ctrl+wheel (a trackpad pinch) scale between 1 and 6.
-function visualZoom(d, img) {
-  const body = d.querySelector('.vcard-full-body'), signal = (d.zoomAbort = new AbortController()).signal;
-  let scale = 1;
-  const set = (next, x = body.clientWidth / 2, y = body.clientHeight / 2) => {
+// ---- A picture in a viewer (Expand here, and the file viewer, ui/app/viewer.js): it opens whole, fitted to the box
+// (CSS: contain, never bigger than the box), and zooms from there, 1x (fitted) to 6x: the wheel or a trackpad pinch
+// and a two-finger pinch at that point, a click or tap toggles 2x there, + and - (keys or buttons) at the middle,
+// 0 or Fit back to fitted. Zoomed, a drag or a two-finger scroll pans, and the picture always covers the box.
+// The picture only moves by transform, so the box never scrolls. `signal` ends every gesture (the next picture, close).
+const PIC_ZOOM_BAR = '<button type="button" class="ghost" data-zoom="out" aria-label="Zoom out" title="Zoom out (-)">\u2212</button>'
+  + '<button type="button" class="ghost" data-zoom="fit" aria-label="Fit to screen" title="Fit (0)">Fit</button>'
+  + '<button type="button" class="ghost" data-zoom="in" aria-label="Zoom in" title="Zoom in (+)">+</button>';
+function picZoom(box, img, {signal, bar = null, onZoom = () => {}}) {
+  let scale = 1, tx = 0, ty = 0, drag = null, moved = 0;
+  img.style.transformOrigin = '0 0';
+  const draw = () => { img.style.transform = scale > 1 ? `translate(${tx}px,${ty}px) scale(${scale})` : ''; };
+  // The picture's place in the box with no zoom: its layout box, which the transform does not change.
+  const base = () => {
+    const b = box.getBoundingClientRect(), r = img.getBoundingClientRect();
+    return {l: r.left - b.left - tx, t: r.top - b.top - ty, w: r.width / scale, h: r.height / scale, bw: box.clientWidth, bh: box.clientHeight};
+  };
+  // Bigger than the box: an edge never comes inside it. Smaller: centred.
+  const clamp = g => {
+    const w = g.w * scale, h = g.h * scale;
+    tx = w <= g.bw ? (g.bw - w) / 2 - g.l : Math.min(-g.l, Math.max(g.bw - w - g.l, tx));
+    ty = h <= g.bh ? (g.bh - h) / 2 - g.t : Math.min(-g.t, Math.max(g.bh - h - g.t, ty));
+  };
+  const set = (next, x, y) => {
+    const g = base();
+    if (x === undefined) { x = g.bw / 2; y = g.bh / 2; }
     const was = scale;
     scale = Math.max(1, Math.min(6, next));
-    d.zoomed = scale > 1;
-    d.classList.toggle('zoomed', d.zoomed);
-    const fx = (body.scrollLeft + x) / was, fy = (body.scrollTop + y) / was;
-    img.style.width = scale > 1 ? `${scale * 100}%` : '';
-    img.style.height = scale > 1 ? `${scale * 100}%` : '';
-    body.scrollLeft = fx * scale - x; body.scrollTop = fy * scale - y;
+    if (scale === 1) { tx = ty = 0; } else {
+      // the point of the picture under (x, y) stays there
+      const px = (x - g.l - tx) / was, py = (y - g.t - ty) / was;
+      tx = x - g.l - px * scale; ty = y - g.t - py * scale;
+      clamp(g);
+    }
+    draw();
+    if ((was > 1) !== (scale > 1)) onZoom(scale > 1);
   };
-  const at = ev => { const r = body.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
-  img.addEventListener('click', ev => set(scale > 1 ? 1 : 2, ...at(ev)), {signal});
-  body.addEventListener('wheel', ev => { if (!ev.ctrlKey) return; ev.preventDefault(); set(scale * Math.exp(-ev.deltaY / 200), ...at(ev)); }, {passive: false, signal});
-  const touches = new Map(); let pinch = null;
-  body.addEventListener('pointerdown', ev => { if (ev.pointerType === 'touch') touches.set(ev.pointerId, ev); }, {signal});
-  body.addEventListener('pointermove', ev => {
-    if (!touches.has(ev.pointerId)) return;
-    touches.set(ev.pointerId, ev);
-    if (touches.size !== 2) return;
-    const [a, b] = [...touches.values()], dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-    if (!pinch) { pinch = {dist, scale}; return; }
-    const r = body.getBoundingClientRect();
-    set(pinch.scale * dist / pinch.dist, (a.clientX + b.clientX) / 2 - r.left, (a.clientY + b.clientY) / 2 - r.top);
+  const at = ev => { const r = box.getBoundingClientRect(); return [ev.clientX - r.left, ev.clientY - r.top]; };
+  // On the box: a captured drag's click lands there, not on the picture. A drag is not a click.
+  box.addEventListener('click', ev => {
+    const r = img.getBoundingClientRect();
+    if (moved < 5 && ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) set(scale > 1 ? 1 : 2, ...at(ev));
   }, {signal});
-  const up = ev => { touches.delete(ev.pointerId); if (touches.size < 2) pinch = null; };
-  body.addEventListener('pointerup', up, {signal}); body.addEventListener('pointercancel', up, {signal});
+  // A trackpad pinch arrives as a ctrl wheel. A plain wheel zooms a fitted picture and moves a zoomed one, so a
+  // two-finger scroll looks around it.
+  box.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    if (ev.ctrlKey || scale === 1) { set(scale * Math.exp(-ev.deltaY / 200), ...at(ev)); return; }
+    tx -= ev.deltaX; ty -= ev.deltaY; clamp(base()); draw();
+  }, {passive: false, signal});
+  const touches = new Map(); let pinch = null;
+  box.addEventListener('pointerdown', ev => {
+    if (ev.pointerType === 'touch') touches.set(ev.pointerId, ev);
+    moved = 0;
+    drag = scale > 1 && touches.size < 2 && ev.button === 0 ? {x: ev.clientX, y: ev.clientY, id: ev.pointerId} : null;
+    if (!drag) return;
+    ev.preventDefault();                              // no native image drag or text selection while panning
+    // Captured: let go over the bar or the backdrop and the drag still ends here, and the click with it (the file
+    // viewer closes on a click on its backdrop).
+    try { box.setPointerCapture(ev.pointerId); } catch {}
+  }, {signal});
+  box.addEventListener('pointermove', ev => {
+    if (touches.has(ev.pointerId)) touches.set(ev.pointerId, ev);
+    if (touches.size === 2) {
+      drag = null;
+      const [a, b] = [...touches.values()], dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      if (!pinch) { pinch = {dist, scale}; return; }
+      const r = box.getBoundingClientRect();
+      set(pinch.scale * dist / pinch.dist, (a.clientX + b.clientX) / 2 - r.left, (a.clientY + b.clientY) / 2 - r.top);
+      moved = 99;
+      return;
+    }
+    if (!drag || drag.id !== ev.pointerId) return;
+    if (ev.pointerType === 'mouse' && ev.buttons === 0) { drag = null; return; }   // the release was lost
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    drag.x = ev.clientX; drag.y = ev.clientY; moved += Math.abs(dx) + Math.abs(dy);
+    tx += dx; ty += dy; clamp(base()); draw();
+  }, {signal});
+  const up = ev => {
+    touches.delete(ev.pointerId);
+    if (touches.size < 2) pinch = null;
+    if (drag?.id === ev.pointerId) drag = null;
+    // one finger lifted from a pinch: the other pans on
+    if (touches.size === 1 && scale > 1) { const [f] = touches.values(); drag = {x: f.clientX, y: f.clientY, id: f.pointerId}; }
+  };
+  box.addEventListener('pointerup', up, {signal}); box.addEventListener('pointercancel', up, {signal});
+  // A resize or a turned phone moves the fitted place: keep the zoomed picture covering the box.
+  window.addEventListener('resize', () => { if (scale > 1) { clamp(base()); draw(); } }, {signal});
+  const step = what => what === 'in' ? set(scale * 1.5) : what === 'out' ? set(scale / 1.5) : set(1);
+  bar?.addEventListener('click', ev => { const b = ev.target.closest('[data-zoom]'); if (b) step(b.dataset.zoom); }, {signal});
+  document.addEventListener('keydown', ev => {
+    if (!box.isConnected || ev.ctrlKey || ev.metaKey || ev.altKey || ev.target.closest?.('input, textarea, [contenteditable]')) return;
+    const what = {'+': 'in', '=': 'in', '-': 'out', '_': 'out', '0': 'fit'}[ev.key];
+    if (what) { ev.preventDefault(); step(what); }
+  }, {signal});
 }

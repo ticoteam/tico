@@ -11,7 +11,8 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
 const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Head of Product'], ['builder', 'Builder'],
-  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer']].map(([slug, display_name]) => ({slug, display_name,
+  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'CEO Bot'],
+  ['librarian', 'Librarian']].map(([slug, display_name]) => ({slug, display_name,
   status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
@@ -48,21 +49,24 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
         samples.push(request.postDataJSON());
         await samplesHeld;
         record = {...record, names: {...record.names, company_name: 'Sample Co'}, completed: '2026-10-18T10:00:00Z', needed: false,
-                  bots: SAMPLE_BOTS, sample: {loaded: '2026-10-18T10:00:00Z', by: 'human:owner', bots: SAMPLE_BOTS.map(b => b.slug), tasks: ['t1']}};
+                  bots: SAMPLE_BOTS, sample: {loaded: '2026-10-18T10:00:00Z', by: 'human:owner', bots: SAMPLE_BOTS.map(b => b.slug), tasks: ['t1', 't2', 't3', 't4', 't5']}};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/company/preview') {
         previews.push(request.postDataJSON());
         return json({fingerprint: 'a'.repeat(64), company_name: 'Acme Finance', builtins: ['coo', 'botops'],
-          employees: [{id: 'bookkeeping', title: 'Acme <Bookkeeper>', start: 'later', reports_to: 'finance-lead'}],
+          employees: [{id: 'coo', title: 'Assistant', start: 'now', reports_to: 'human:owner'}],
+          seats: [{id: 'bookkeeping', title: 'Acme <Bookkeeper>', template: 'bookkeeping', reports_to: 'finance-lead'}],
           deferred: ['tool_connections']});
       }
       if (p === '/api/v2/setup/company/import') {
         imports.push(request.postDataJSON());
         record = {...record, names: {...record.names, company_name: 'Acme Finance'},
           completed: '2026-10-20T10:00:00Z', needed: false,
-          company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], later: ['bookkeeping']},
-          bots: [{...SAMPLE_BOTS[0], slug: 'bookkeeping', display_name: 'Acme <Bookkeeper>', status: 'paused'}]};
+          company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], seats: 1,
+                           people: [{id: 'dana', name: 'Dana', title: 'Controller', seats: [], invited_at: null}]},
+          company_import_failed: null, seats: {bookkeeping: 's-1'},
+          bots: [{...SAMPLE_BOTS[0], slug: 'coo', display_name: 'Assistant', status: 'active'}]};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: false, cards: [], skipped: []});
@@ -76,10 +80,10 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     page.on('pageerror', e => errors.push(e.message));
     await page.goto('https://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/welcome');
-    await page.locator('#onb-company').waitFor();
+    await page.locator('#onb-website').waitFor();
     // The first screen offers it, in plain words.
     assert.equal(await page.locator('#onb-sample').textContent(), 'Start with a sample company');
-    assert.match(await page.locator('#onb-sample-box').textContent(), /five bots.*approve it\. Nothing is sent outside\./s);
+    assert.match(await page.locator('#onb-sample-box').textContent(), /five bots plus the built-in helpers.*approve it\. Nothing is sent outside\./s);
     // One click: the Next buttons wait, a second click does nothing, and the post is made once with no draft saved.
     samplesHeld = new Promise(resolve => { releaseSample = resolve; });
     await page.locator('#onb-sample').click();
@@ -94,14 +98,20 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
     assert.equal(await page.evaluate(() => [S.config.company_name, S.config.onboarding_needed, S.config.providers_configured].join('|')),
                  'Sample Co|false|true');
     assert.equal(await page.locator('[data-onb-bot=builder]').count(), 1);
+    assert.match(await page.locator('.fr-sample-created').textContent(), /Five bots plus the built-in helpers/);
+    assert.equal(await page.locator('.fr-starter-tasks summary').textContent(), '5 starter tasks created');
+    assert.deepEqual(await page.locator('.fr-starter-tasks a').evaluateAll(links => links.map(link => link.getAttribute('href'))),
+      ['#/task/t1', '#/task/t2', '#/task/t3', '#/task/t4', '#/task/t5']);
+    assert.equal(await page.locator('#fr-owners summary').textContent().then(text => text.replace(/\s+/g, ' ').trim()), 'You own all 8 bots. Change');
 
     // A company that has begun the wizard is past the offer: it shows on the first screen only.
     const later = await context.newPage();
     record = {...record, completed: null, needed: true, sample: null, bots: []};
     await later.goto('https://tico-ui.test/');
-    await later.locator('#onb-company').waitFor();
+    later.on('pageerror', e => errors.push(e.message));
+    await later.locator('#onb-website').waitFor();
     await later.locator('#onb-next').click();
-    await later.locator('#onb-what').waitFor();
+    await later.locator('#ss').waitFor();
     assert.equal(await later.locator('#onb-sample').count(), 0);
 
     // A picker file is previewed first. Applying it uses its own endpoint once,
@@ -112,14 +122,16 @@ const SAMPLE_BOTS = [['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-produ
       mimeType: 'text/yaml', buffer: Buffer.from('version: 0.2\ncompany:\n  name: Acme Finance\n')});
     await imported.locator('#onb-company-file-use').waitFor();
     assert.equal(imports.length, 0);
-    assert.match(await imported.locator('#onb-company-file-box').innerText(), /Acme <Bookkeeper>.*starts paused/s);
+    // The built-ins work from day one; every other role is a Recruiting seat.
+    assert.match(await imported.locator('#onb-company-file-box').innerText(), /Assistant — works from day one.*Acme <Bookkeeper> — Recruiting/s);
     assert.equal(await imported.locator('#onb-company-file-box bookkeeper').count(), 0);
     await imported.locator('#onb-company-file-use').click();
     await imported.locator('#onb-tasks').waitFor();
     assert.equal(imports.length, 1);
     assert.deepEqual(imports[0], {...previews[0], fingerprint: 'a'.repeat(64)});
     assert.equal(samples.length, 1);
-    assert.match(await imported.locator('#onb').innerText(), /Your selected starter team was imported/);
+    assert.match(await imported.locator('#onb').innerText(), /Your chosen org chart is laid out: 1 role marked Recruiting/);
+    assert.match(await imported.locator('#onb').innerText(), /Invite the people it names from Settings › Humans/);
     assert.match(await imported.locator('#onb').innerText(), /Saved for later setup: tool connections/);
     assert.deepEqual(errors, []);
     console.log('sample-company: ok');

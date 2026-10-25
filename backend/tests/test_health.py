@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend import onboarding, releases
+from backend import releases, replication
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -23,8 +23,8 @@ def health_of(api, headers=None):
 
 
 def with_backup(monkeypatch, backup):
-    real = onboarding.config_view
-    monkeypatch.setattr(onboarding, "config_view", lambda *a, **k: {**real(*a, **k), **({"backup": backup} if backup else {})})
+    if backup:
+        monkeypatch.setattr(replication, "status", lambda: backup)
 
 
 def test_all_good(environment, monkeypatch):
@@ -35,7 +35,7 @@ def test_all_good(environment, monkeypatch):
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
-        "github": "info", "backups": "ok", "failed": "ok"}
+        "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
 
@@ -131,7 +131,8 @@ def test_a_computer_stops_on_all_its_queued_work_not_what_the_viewer_may_read(en
     from backend.tests.test_people_access import person_headers
     api = environment()
     silent_computer(api, 1900)
-    monkeypatch.setattr(views.privacy, "job_count", lambda *a, **k: 0)      # someone else's private request
+    monkeypatch.setattr(views.pipeline_stats, "job_queues",                  # someone else's private request
+                        lambda c, who, bots, now=None: {b: {"queued": 0, "uncertain": 0} for b in bots})
     issue = machine_issue(api, person_headers(api, "riley"))
     assert issue["title"] == "Owner Mac stopped checking in" and issue["needs_person"]
 
@@ -151,7 +152,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -168,8 +169,9 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "last_seen", "platform", "disk", "update"}
-    assert body["failures"] == [] and set(checks) == {"computers", "waiting", "queue", "failed"}
+        "id", "label", "online", "last_seen", "platform", "disk", "update", "turn_counts", "turn_summary"}
+    assert body["failures"] == [] and set(checks) == {
+        "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 
@@ -276,7 +278,11 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
         conversation = H.open_conversation(c, owner, [owner, "bot:release"], kind="chat")
         H._write_message(c, owner, "bot:release", "ship it", conversation, "say", {}, None, None)
     body, checks = health_of(api)
-    assert checks["queue"]["status"] == "bad" and checks["queue"]["summary"] == "1 bot with work that is not starting."
+    assert checks["queue"]["status"] == "bad"
+    assert "release" in checks["queue"]["summary"] and checks["queue"]["fixes"]
+    [issue] = [i for i in api.get("/api/v2/health/issues", headers=signed_in()).json()["issues"] if i["kind"] == "queue"]
+    assert issue["bot"] == "release" and issue["queued"] == 1 and issue["oldest_minutes"] == 0
+    assert issue["reason"] == "not_ready" and "Claude login required" in issue["text"] and issue["fixes"]
     [row] = body["stuck"]
     assert row["bot"] == "release" and row["why"] == "Claude login required on Team box"
     assert row["fix"]["login"] == {"runner_id": runner, "runtime": "claude", "computer": "Team box"}
@@ -437,14 +443,15 @@ def test_a_bot_that_has_not_finished_setup_warns_once_its_held_work_is_old(envir
     api = environment()
     add_bot(api, "support")
     with api.app.state.store.transaction() as c:
+        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")    # from before an upgrade
         c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state) VALUES('support','{}','ana','needs_setup') "
                   "ON CONFLICT(bot) DO UPDATE SET onboarding_state='needs_setup'")
-        task = H.task_create(c, H.KEEPER, "Ticket 42", "", "bot:support")
     assert "setup:support" not in health_of(api)[1]                 # just filed: setup may be under way
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created='2026-01-02T03:04:05Z' WHERE id=?", (task["id"],))
     check = health_of(api)[1]["setup:support"]
-    assert check["status"] == "warn" and check["summary"] == "support hasn't finished setup; 1 task waiting since 2026-01-02."
+    assert check["status"] == "warn" and check["summary"] == "support is still onboarding; 1 task waiting since 2026-01-02."
+    assert check["label"] == "Onboarding not finished"
     assert check["fixes"][0]["href"] == "#/bot/support"
     assert "setup:support" not in health_of(api, as_person(api, "quinn"))[1]
 
@@ -465,7 +472,7 @@ def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(en
     _parked(api, "sales", 0)                        # added today: setup may be under way
     stuck = {row["bot"]: row for row in health_of(api)[0]["stuck"]}
     assert set(stuck) == {"support"} and stuck["support"]["reason"] == "setup"
-    assert stuck["support"]["why"] == "Stuck in setup for 14 days"
+    assert stuck["support"]["why"] == "Stuck in onboarding for 14 days"
     assert stuck["support"]["fix"]["finish"] == {"bot": "support"}
     quinn = as_person(api, "quinn")                 # neither an owner of it nor an administrator
     assert all(row["fix"] is None for row in health_of(api, quinn)[0]["stuck"])
@@ -475,7 +482,7 @@ def test_a_bot_left_in_setup_for_a_day_is_stuck_and_its_manager_may_finish_it(en
 
 
 def test_a_bot_left_in_setup_is_nudged_once_to_whoever_its_setup_reminder_goes_to(environment):
-    """The same person as the "Finish setting up" reminder, and nobody while that reminder is open: one ask per bot."""
+    """The same person as the "Finish onboarding" reminder, and nobody while that reminder is open: one ask per bot."""
     from backend import setup_stuck
     api = environment()
     as_person(api, "quinn")
@@ -856,3 +863,103 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
     assert label(chosen="ops", ops="archived", pm="archived") == "No bot receives roadmap suggestions"
     assert health(chosen="ops", pm="archived") is None           # choosing an active bot clears it
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
+
+
+def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
+    api = environment()
+    runner = enrolled(api)
+    add_bot(api, "helper")
+    add_bot(api, "observer")
+    api.app.state.store.settings.test_identities["observer-bot"] = Identity("bot:observer", "bot", agent="hermes")
+    old = H.shift(H.now(), hours=-3)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('observer','hermes','x',?,'human:ana')", (H.now(),))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')", (runner, H.now()))
+        c.execute("UPDATE runners SET last_seen=? WHERE id=?", (H.now(), runner))
+        cv = H.open_conversation(c, 'human:morgan', ['human:morgan', 'bot:helper'], kind='chat')
+        H._write_message(c, 'human:morgan', 'bot:helper', 'check the queue', cv, 'say', {}, None, None)
+        c.execute("UPDATE jobs SET created=? WHERE bot='helper'", (old,))
+        tasks = [H.task_create(c, 'human:morgan', title, '', 'bot:helper', private=False)
+                 for title in ('Repair the queue', 'Check the diagnosis')]
+        for task in tasks:
+            c.execute("UPDATE tasks SET updated=? WHERE id=?", (old, task['id']))
+            H.event(c, H.KEEPER, 'task.stall_escalated', task['id'], {'wakes': 3})
+        c.execute("UPDATE bots SET state='paused' WHERE slug='helper'")
+    headers = signed_in('observer-bot')
+    body, checks = health_of(api, headers)
+    [queued] = checks['queue']['items']
+    assert (queued['bot'], queued['queued'], queued['oldest'], queued['oldest_minutes'], queued['reason']) == ('helper', 3, old, 180, 'paused')
+    assert queued['fix'] == 'hub run list helper' and queued['fixes']
+    issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
+    assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
+    assert {i['task'] for i in issues if i['kind'] == 'stalled_tasks'} == {t['id'] for t in tasks}
+    assert all(t['title'] in checks['stalled_tasks']['summary'] for t in tasks)
+
+    # Capacity stays an explained queue; bots no longer receive a no-slot alert.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='helper'")
+        claimable(c, runner, 'helper')
+        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        H._write_message(c, 'human:morgan', 'bot:helper', 'one more request', cv, 'say', {}, None, None)
+        job = c.execute("SELECT id FROM jobs WHERE bot='helper' ORDER BY created DESC LIMIT 1").fetchone()[0]
+        c.execute("UPDATE jobs SET state='running' WHERE id=?", (job,))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
+                  (job, runner, H.shift(H.now(), hours=1), H.now()))
+    queue = health_of(api, headers)[1]['queue']
+    assert queue['status'] == 'info' and not queue.get('items')
+    issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
+    assert not any(i['kind'] == 'queue' and i['reason'] == 'no_slot' for i in issues)
+
+
+def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(environment, monkeypatch):
+    from backend import github as G
+    from backend import task_relations
+    api = environment()
+    add_bot(api, 'builder')
+    add_bot(api, 'reviewer')
+    add_bot(api, 'hidden-reviewer')
+    old = H.shift(H.now(), hours=-13)
+    young = H.shift(H.now(), hours=-11)
+    urls = [f'https://github.com/AcmeCorp/atlas/pull/{n}' for n in range(1, 6)]
+    tasks = []
+    with api.app.state.store.transaction() as c:
+        for i, url in enumerate(urls):
+            task = H.task_create(c, 'human:morgan', f'Build change {i + 1}', '', 'bot:builder', private=i == 3)
+            tasks.append(task)
+            H.task_link(c, 'human:morgan', task['id'], url)
+            payload = {'action': 'refresh', 'pull_request': {'html_url': url, 'state': 'open',
+                       'mergeable': i != 0, 'head': {'sha': str(i + 1) * 40, 'ref': f'change-{i + 1}'}}}
+            with monkeypatch.context() as clock:
+                clock.setattr(H, 'now', lambda: young if i == 2 else old)
+                G.pull_request(c, payload)
+                if i != 0:
+                    G.pr_signal(c, 'status', {'sha': str(i + 1) * 40, 'state': 'success', 'context': 'tests',
+                                            'repository': {'full_name': 'AcmeCorp/atlas'}})
+        child = H.task_create(c, 'human:morgan', 'Review 1: PR #2', '', 'bot:reviewer', private=False)
+        task_relations.set_parent(c, 'human:morgan', child['id'], tasks[1]['id'])
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (child['id'],))
+        hidden = H.task_create(c, 'human:morgan', 'Review 2: PR #2', '', 'bot:hidden-reviewer', private=True)
+        task_relations.set_parent(c, 'human:morgan', hidden['id'], tasks[1]['id'])
+        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (hidden['id'],))
+        # Refreshes do not reset a wait, and a fresh check on the same head does not either.
+        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': False, 'state': 'open', 'head': {'sha': '1' * 40}}})
+        G.pr_signal(c, 'status', {'sha': '2' * 40, 'state': 'success', 'context': 'tests', 'repository': {'full_name': 'AcmeCorp/atlas'}})
+        # A human-owned task is outside the bot PR check.
+        c.execute("UPDATE tasks SET owner='human:morgan' WHERE id=?", (tasks[4]['id'],))
+    _, checks = health_of(api)
+    items = checks['aged_prs']['items']
+    assert {i['pr'] for i in items} == set(urls[:2])
+    assert all(i['age_minutes'] == 780 and i['fixes'] and i['task'] in {t['id'] for t in tasks[:2]} for i in items)
+    assert items[0]['reason'] == 'conflict' and items[0]['whose_move'] == 'bot:builder'
+    assert items[1]['reason'] == 'review' and items[1]['whose_move'] == 'bot:reviewer'
+    issues = api.get('/api/v2/health/issues', headers=signed_in()).json()['issues']
+    assert {i['pr'] for i in issues if i['kind'] == 'aged_prs'} == set(urls[:2])
+    assert next(i for i in issues if i.get('pr') == urls[1])['whose_move'] == 'bot:reviewer'
+    assert 'hidden-reviewer' not in json.dumps({'check': checks['aged_prs'],
+                                               'issues': [i for i in issues if i['kind'] == 'aged_prs']})
+    with api.app.state.store.transaction() as c:
+        G.pull_request(c, {'action': 'refresh', 'pull_request': {'html_url': urls[0], 'mergeable': True, 'state': 'open', 'head': {'sha': '1' * 40}}})
+        G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},
+                    'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}}})
+    assert 'aged_prs' not in health_of(api)[1]

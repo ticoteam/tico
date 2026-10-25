@@ -32,7 +32,7 @@ Nothing here talks to Google. A GitHub approval-Issue check shells out to `gh` t
 seam; a Tico approval or owner message is read through `HUB_GET`. Tests replace both.
 """
 
-import csv, json, os, re, subprocess
+import csv, hashlib, json, os, re, subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -493,8 +493,21 @@ def file_set(files):
     return out
 
 
+def body_digests(body):
+    """The sha256 values an approval's `body_sha256` may hold for this text. `mail draft` hashes the
+    body it wrote (trimmed, LF line ends); Gmail hands a draft back with CRLF line ends, and
+    `sha256sum` of a body file counts its final newline. Line ends and the space around the whole
+    text are all that may differ: one changed character anywhere else is another hash."""
+    text = _plain_text(body)
+    return {hashlib.sha256(t.encode()).hexdigest() for t in (str(body), text, text + "\n")}
+
+
+def _plain_text(body):
+    return str(body).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
 def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", attachments=None,
-                   draft=""):
+                   draft="", body=None):
     """Read one per-message yes and say how far it reaches.
 
     `--approval-issue` is a GitHub Issue number, a Tico `send` approval id, or the id of a
@@ -508,13 +521,17 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
     file by name, size and sha256, or a GitHub Issue whose `Send to:` line matches and whose text
     names each file and its sha256 and no other hash. The owner's message telling the bot to send
     names no files, so it never approves a message with attachments.
+
+    `body` is the text the send carries. A Tico send approval is for one exact text: its
+    `body_sha256` must be this body's (`body_digests`), with or without files, so a draft changed
+    after the yes needs a new one. A GitHub Issue and the owner's message carry no hash.
     """
     n = str(number or "").strip()
     if attachments:
         if n.isdigit():
             return _github_approval_check(n, to, cc, thread_id, repo, attachments)
         if HUB_ID.match(n):
-            row = _hub_approval_check(n, to, cc, slug, attachments, draft)
+            row = _hub_approval_check(n, to, cc, slug, attachments, draft, body)
             if row:
                 return row
         out = _blank_approval(n)
@@ -526,7 +543,7 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
     if n.isdigit():
         return _github_approval_check(n, to, cc, thread_id, repo)
     if HUB_ID.match(n):
-        return _hub_approval_check(n, to, cc, slug) or _hub_message_check(n, slug)
+        return _hub_approval_check(n, to, cc, slug, body=body) or _hub_message_check(n, slug)
     out = _blank_approval(n)
     out["detail"] = (f"--approval-issue {number!r} is not an Issue number or a Tico id "
                      "(a send approval, or the owner's message telling this employee to send)")
@@ -585,9 +602,10 @@ def _github_approval_check(n, to, cc, thread_id, repo, attachments=None):
     return out
 
 
-def _hub_approval_check(n, to, cc, slug, attachments=None, draft=""):
-    """A decided Tico `send` approval whose payload names every external address and, for a
-    message with files, this draft and exactly its files by name, size and sha256."""
+def _hub_approval_check(n, to, cc, slug, attachments=None, draft="", body=None):
+    """A decided Tico `send` approval whose payload names every external address and this exact
+    text (`body_sha256`) and, for a message with files, this draft and exactly its files by name,
+    size and sha256."""
     row = _hub_row("approvals", n)
     if not row:
         return None
@@ -609,6 +627,18 @@ def _hub_approval_check(n, to, cc, slug, attachments=None, draft=""):
     if not ext_to or got_to != ext_to or got_cc != ext_cc:
         out["detail"] = (f"Tico approval {n} names to={sorted(got_to)} cc={sorted(got_cc)}, "
                          f"not this message's to={sorted(ext_to)} cc={sorted(ext_cc)}")
+        return out
+    # Every send approval Tico takes carries body_sha256 (hubdb.lint_approval refuses one without it).
+    approved = str(payload.get("body_sha256") or "").strip().lower()
+    if body is None:
+        out["detail"] = (f"Tico approval {n} is for one exact text, and this send did not say "
+                         "which text it carries")
+        return out
+    if approved not in body_digests(body):
+        now = hashlib.sha256(_plain_text(body).encode()).hexdigest()
+        out["detail"] = (f"Tico approval {n} is for another text: the draft changed after it was "
+                         f"approved; ask for a new yes (approved body sha256 {approved[:12] or '(none)'}, "
+                         f"this draft {now[:12]})")
         return out
     if attachments:
         want, got = file_set(attachments), file_set(payload.get("attachments"))
@@ -730,13 +760,15 @@ def _server_row(slug):
 
 
 def switch(slug, manifest=None):
-    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward}.
+    """The effective sending switch for `slug`: {on, forward_to, source, detail, asks, asks_forward, read, onboarding}.
 
     `on` and `forward_to` come from the server only. With no server value (none set yet, or no Tico reachable from
-    this run) sending without approval is off. `asks` / `asks_forward` are what bot.yaml requests, for messages."""
+    this run) sending without approval is off. `read` says Tico answered, so `onboarding` is known; a run that
+    cannot read it cannot tell an onboarding bot from an Active one. `asks` / `asks_forward` are what bot.yaml
+    requests, for messages."""
     if str(slug).strip().lower() == OWNER:
         return {"on": True, "forward_to": [], "source": "owner", "detail": "the owner", "asks": True,
-                "asks_forward": []}
+                "asks_forward": [], "read": True, "onboarding": False}
     try:
         from . import access                            # noqa: PLC0415 - avoids a cycle
         if manifest is None:
@@ -747,6 +779,8 @@ def switch(slug, manifest=None):
     asks = bool((manifest or {}).get("outbound_send", False))
     out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
     row = _server_row(slug)
+    out["read"] = row is not None
+    out["onboarding"] = bool((row or {}).get("onboarding"))
     hint = SETTING_HINT.format(slug=slug)
     if row is None or not row.get("set"):
         out["detail"] = (("no person has turned sending on for " + slug + " in Tico yet"
@@ -755,7 +789,7 @@ def switch(slug, manifest=None):
                          + (". bot.yaml asks for outbound_send: true, which has no effect by itself" if asks else ""))
         return out
     out["source"] = "server"
-    out["on"] = bool(row.get("outbound_send"))
+    out["on"] = bool(row.get("outbound_send")) and not out["onboarding"]
     out["forward_to"] = [a for a in access.forward_to({"forward_to": row.get("forward_to") or []})]
     who = str(row.get("updated_by") or "a person")
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
@@ -855,7 +889,7 @@ def _decide(checks, gate="", reason=""):
 
 def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
                approval=None, manifest=None, verbs=None, conn=None, now=None,
-               root=None, repo=HUB_REPO, thread_senders=(), draft=""):
+               root=None, repo=HUB_REPO, thread_senders=(), draft="", body=None):
     """The whole chain. Never raises for a policy problem - the caller downgrades to a draft.
 
     `verbs` is the employee's declared gmail verbs on this mailbox (access.resolve); pass None
@@ -863,7 +897,8 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
     (a --dry-run with no state). `thread_senders` are the addresses that wrote into the thread this
     message answers (`inbound_senders`); with `outbound_send: true`, a reply goes to them without an approval.
     `attachments` is [{name, size, sha256}] of the files in the draft `draft`; a bare count is
-    treated as files no approval can name.
+    treated as files no approval can name. `body` is the text the message carries, which a Tico
+    send approval must name by its sha256.
     """
     checks = []
     files = list(attachments) if isinstance(attachments, (list, tuple)) else []
@@ -901,16 +936,29 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         return no("verb", f"{slug} declares {', '.join(verbs or ['nothing'])} on {box}, not send")
     ok("verb", f"{slug} may send as {box}")
 
+    # An onboarding bot sends no email until a person above it marks onboarding complete (backend/lifecycle.py).
+    # This comes before the approval read: no approval, Issue or owner message lifts it, and neither does a run that
+    # cannot ask Tico (no credential, unreachable, a bad answer), since it cannot tell the bot is past onboarding.
+    sw = switch(slug, manifest)
+    if sw.get("onboarding"):
+        return no("onboarding", f"{slug} is still onboarding, so it sends no email yet, with or without an approval; "
+                                "a person above it on the org chart marks onboarding complete")
+    if not sw.get("read"):
+        return no("onboarding", f"this run cannot read {slug}'s mail setting from Tico, so it cannot confirm {slug} "
+                                "has finished onboarding and sends no email, with or without an approval; "
+                                "try again once Tico answers")
+    ok("onboarding", f"{slug} is not onboarding")
+
     ext = externals(pol, to)
     ext_cc = externals(pol, cc)
     # One read of the approval Issue for the whole chain. `full` means it names every external
     # address on this message, To and Cc: the owner's per-message yes.
     appr = (approval_check(approval, ext, ext_cc, thread_id, repo, slug=slug,
-                           attachments=bound or ([{}] if attachments else None), draft=draft)
+                           attachments=bound or ([{}] if attachments else None), draft=draft,
+                           body=body)
             if approval else None)
     full = bool(appr and appr["full"])
 
-    sw = switch(slug, manifest)
     if not sw["on"]:
         if full:
             ok("outbound_send", f"off ({sw['detail']}), lifted for this message "
@@ -988,7 +1036,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
         seen = appr
         if seen is not None and not seen["ok"] and not ext and not ext_cc:
             seen = approval_check(approval, to, cc, thread_id, repo, slug=slug,   # all internal
-                                  attachments=bound or [{}], draft=draft)
+                                  attachments=bound or [{}], draft=draft, body=body)
         if not (seen and seen["ok"]):
             return no("attachments", "a message with attachments needs a Tico send approval "
                       "naming this draft and its files (name, size and sha256), even to a recipient "

@@ -104,12 +104,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            Several actions: ONE card, --path /api/v2/assistant/batch
                                            --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {...}}, ...]}'
                                            (task actions, approval decisions, answers to bots' questions)
+    hub assistant learn "<line>" [--company]
+                                           in a person's own chat: save what they taught you, in their own
+                                           layer (--company: the CEO Bot, about the company, owner's chat only)
+    hub assistant learned                  what a person's chat bot has learned (What it has learned)
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
-    hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top]
+    hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, whoever owns the parent gives its first colour
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
@@ -124,8 +128,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal ceo-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
                                            the CEO Bot at level 2+: one item for several bots' same ask of a person
     hub goal ceo-bot-level3-offer          the CEO Bot: record the level-3 offer its Monday note made (when it is due)
+    hub goal ceo-bot-decide "<reason>" '<changes json>' [--goal-id ID]
+                                           the CEO Bot at level 3: one decision alone on bot tasks, logged with Undo
+    hub goal ceo-bot-log [--before CURSOR] the CEO Bot log (the owner only): what it decided alone, proposed instead
     hub goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
-                    [--rank N|--top]
+                    [--rank N|--top] [--bet ID|--bet ""]
     hub kpi list [--goal ID] [--owner me|X] [--unlinked] [--bot SLUG] [--archived]
                                            KPIs with latest reading and colour; --bot: that bot's five automatic KPIs
     hub kpi show <id> [--effective]        definition and versions, the goals using it, every reading, check-ins
@@ -144,12 +151,27 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--evidence "url or note"] [--quality measured|estimate|partial|--estimate] [--source posthog]
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
-    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery [--goal ID] [--kpi ID]
+    hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery|strategy_draft
+                        [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
     hub proposal decide <id> confirm|reject [--note "..."] [--option N]
                                            a person's own decision; a bot is refused. --option: a recovery's other option
+    hub strategy show                      the published strategy, its bets with their goals and colour, the website
+    hub strategy summary                   the text every run carries
+    hub strategy versions [N]              published versions, newest first; N: that version whole
+    hub strategy diff --from N --to N      what changed between two versions
+    hub strategy guides                    the question guides the CEO Bot drafts with
+    hub strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
+    hub strategy publish [--note "..."] [--revision N]
+    hub strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
+                         [--wrong-if-kpi ID --wrong-if-direction above|below --wrong-if-threshold N |
+                          --wrong-if-thesis MARKET-ID | --wrong-if-text "..." --check-by YYYY-MM-DD] [--cite ID ...]
+    hub strategy bet update <id> [same flags]
+    hub strategy bet retire <id>
+                                           draft, publish and bets: the owner only; a bot proposes with
+                                           proposal create --kind strategy_draft
     hub approval request --kind send|spend|publish|merge|support --payload-file f.json [--task ID] [--supersedes ID]
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
@@ -195,14 +217,23 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            --enable / --disable turn it on or off; another bot's, as the requester (BotOps)
     hub routine delete <id>
     hub trigger list                       webhooks people made; a routine runs --on webhook.<id>
+    hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
+    hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
+                                           show or change the daily release (company time; an owner or admin)
     hub bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
     hub bot status list [--team marketing]
     hub bot status history <bot> [--since 7d]
     hub bot recent [--days N] [--limit N]  the bots you have been working with lately and where each stands
     hub run list <bot> [--since 24h]       a bot's recent runs
+    hub team budget [--hour N] [--day N]    the team default runs per hour and per day (owner and admins)
     hub team show [--person ID] [--team NAME]
                                            humans and bots: who they are, Slack, what they own; each bot
                                            with its reports_to, group and template (the bots you may see)
+    hub seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
+    hub seat create <title> [--description D] [--reports-to R] [--team G]
+                                           add a seat under you or someone below you; update <seat> / close <seat>
+    hub seat draft <seat> (--text T | --file F)
+                                           CEO Bot: draft the job description of a seat the owner opened
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
     hub health check                       what is wrong with the bots, most urgent first, each with its fix
@@ -242,6 +273,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision ask --set <name> --state-file s.json [--option covered=opts.json] [--label L]
                                            ask the decision model typed questions about a state (questions/README.md);
                                            --questions-file q.json instead of --set; --list shows the sets
+    hub decision outcome --ref R --verdict V --action A [--label L]
+                                           after acting on a decision ask or hub classify answer (its `ref`):
+                                           what you did with it, once per call
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -263,7 +297,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot mail <slug> [--send|--no-send] [--forward-to a@x,b@y] [--from-bot-yaml]
                                            show or set whether the bot sends mail without approval and its forward
                                            targets; a person who manages the bot only, never a bot (docs/mail.md)
-    hub bot setup-done [slug]              a starter bot marks its setup done once its setup is done
+    hub bot setup-done [slug]              mark a bot's onboarding complete: a person above it on the org chart
+    hub bot ready --summary S              an onboarding bot says it is ready, with what it learned
     hub bot place <bot> [--computer <label|id>]
                                            put a bot on a computer: the one named, or the best one that takes it
     hub bot go-live <bot> [--computer C] [--no-setup] [--routines-file F]
@@ -272,6 +307,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot model <bot> [<model>] [--effort E]
                                            list the models, or change the bot's
     hub bot pause|resume <bot>             stop or restart a bot (resume places one that has no computer)
+    hub bot budget <bot> [--hour N] [--day N] | release
+                                           read or set a bot's runs per hour and per day (0 no limit, default follows the
+                                           team), or release it after Tico stopped it
+    hub bot release <bot>                  release a bot Tico stopped for failed runs or too many runs
+    hub bot profile <bot> [doer|reviewer|lead|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
+                                           read or set what wakes a bot and which tasks it takes (--sweeps/--pulls/--takes
+                                           are for custom; --confirm-drop-rules when leaving custom deletes its own rules)
+    hub bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
     hub bot copy <bot> [--slug S] [--name N] [--with-memory] [--computer C]
                                            copy a bot into a new one the requester owns: its instructions, skills, playbooks and
                                            tools, never a secret; notes and memory only with --with-memory (BotOps)
@@ -324,6 +367,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
+    hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
+    hub task-manager on|off                the hourly department report (the owner or an admin)
+    hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
+                                           when the report runs (business = hourly, weekdays 08:00 to 18:00)
+    hub task-manager run                   run the department check now
+    hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
+    hub stall-triage [--on|--off]          quiet task triage: Decide reads a quiet task's last messages before its stall check
+                                           stays silent (the owner or an admin; off by default)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -362,6 +413,7 @@ if __package__ in (None, ""):                          # run as a script: python
 # Mirrors of the server's vocabulary (backend/hubdb.py), so a typo is refused by the parser
 # before a request is made. The server is the authority when they disagree.
 TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
@@ -371,6 +423,12 @@ ASKED = ("Assistant: the person asked for exactly this in their own Assistant ch
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+def task_update_status(value):
+    if value == "closed":
+        raise argparse.ArgumentTypeError("use `hub task close <id>` to close a task")
+    return value
 
 
 # `hub bot go-live --routines-file`: the server's RoutineExpectation (backend/models.py). Each entry names a Routine
@@ -755,6 +813,13 @@ def parser():
     s.add_argument("--method", default="POST", choices=["POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("--body", default="{}", help="the request's JSON body")
     s.set_defaults(fn="assistant propose")
+    s = assistant.add_parser("learn", help="save one thing the person taught you (What it has learned)")
+    s.add_argument("text", help="one short line, in their words")
+    s.add_argument("--company", dest="layer", action="store_const", const="company", default="personal",
+                   help="the CEO Bot in the owner's chat: about the company, not how they like things")
+    s.set_defaults(fn="assistant learn")
+    assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
+        .set_defaults(fn="assistant learned")
     # Tags keep the existing task --label key contract.
     tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
     s = tag.add_parser("list")
@@ -819,6 +884,9 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
+    s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
+    s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
+    s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
@@ -903,7 +971,7 @@ def parser():
     visibility.add_argument("--company", dest="private", action="store_false", help="human requester publishes the task")
     s.add_argument("id")
     s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--status", choices=list(TASK_STATUSES))
+    s.add_argument("--status", choices=list(TASK_UPDATE_STATUSES), type=task_update_status)
     s.add_argument("--note")
     s.add_argument("--owner")
     s.add_argument("--due")
@@ -918,8 +986,20 @@ def parser():
     s.add_argument("--step-rank", dest="step_rank", type=float, help="its place within its step, lower first")
     s.add_argument("--number", type=int, help="movers: the number of a task that has none")
     s.add_argument("--role", action="append", help="who is on it by role, NAME=person,person (repeat for more roles; NAME= clears one)")
+    s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"],
+                   help="a review or QA subtask's verdict; the task that asked for it is woken with it")
+    s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
+    s = task.add_parser("done", help="finish a task you own with its result; a review or QA subtask adds its --verdict "
+                                     "and the --head it judged")
+    s.add_argument("id")
+    s.add_argument("--note", help="the result, in a few plain sentences")
+    s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"])
+    s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
+    s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task done")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--approval-id", dest="approval_id")
@@ -1121,6 +1201,7 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--top", action="store_true", help="put it first in the owner's order")
+    s.add_argument("--bet", dest="bet_id", help="the strategy bet it serves (hub strategy show lists them)")
     s.set_defaults(fn="goal create")
     s = goal.add_parser("status", help="set the colour by hand: red, yellow or green with one sentence, done or dropped "
                                      "when it ends; it sticks until a person hands it back (status auto)")
@@ -1137,6 +1218,7 @@ def parser():
     s.add_argument("--owner")
     s.add_argument("--rank", type=int)
     s.add_argument("--top", action="store_true")
+    s.add_argument("--bet", dest="bet_id", help='the strategy bet it serves; "" unlinks it')
     s.set_defaults(fn="goal update")
     s = goal.add_parser("refresh", help="the CEO Bot's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
@@ -1165,6 +1247,17 @@ def parser():
     s.set_defaults(fn="goal ceo-bot-merge")
     s = goal.add_parser("ceo-bot-level3-offer", help="the CEO Bot: record the level-3 offer its Monday note made")
     s.set_defaults(fn="goal ceo-bot-level3-offer")
+    s = goal.add_parser("ceo-bot-decide", help="the CEO Bot at level 3: one decision alone on bot tasks, with Undo")
+    s.add_argument("reason", help="why, in one sentence the owner reads in the log")
+    s.add_argument("changes", help='a JSON list of 1 to 10 changes: {"do": "create", "owner": "<bot>", "title": "..."}, '
+                                   '{"do": "reorder"|"close", "task_id": "..."}, {"do": "reassign", "task_id": "...", '
+                                   '"owner": "<bot>"}')
+    s.add_argument("--goal-id", dest="goal_id", help="the goal this serves")
+    s.set_defaults(fn="goal ceo-bot-decide")
+    s = goal.add_parser("ceo-bot-log", help="the CEO Bot log (the owner only): what it decided alone and what it "
+                                            "proposed instead")
+    s.add_argument("--before", help="next_before from the previous page")
+    s.set_defaults(fn="goal ceo-bot-log")
     def target_flags(s):
         s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
         s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")
@@ -1237,7 +1330,7 @@ def parser():
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
     s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why",
-                                                     "recovery"])
+                                                     "recovery", "strategy_draft"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1255,6 +1348,58 @@ def parser():
     s.add_argument("--note", default="")
     s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
     s.set_defaults(fn="proposal decide")
+
+    strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
+    s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
+    s.set_defaults(fn="strategy show")
+    s = strategy.add_parser("summary", help="the text every run's context carries")
+    s.set_defaults(fn="strategy summary")
+    s = strategy.add_parser("draft", help="owner only: change the draft; a bot proposes instead (proposal create --kind strategy_draft)")
+    s.add_argument("--summary")
+    s.add_argument("--vision")
+    s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
+                   help="serve, sell, know, not, or an extra section's key; KEY= clears it; repeatable")
+    s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
+    s.set_defaults(fn="strategy draft")
+    s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")
+    s.add_argument("--note", default="")
+    s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
+    s.set_defaults(fn="strategy publish")
+    s = strategy.add_parser("versions", help="the published versions, newest first; with N, that version whole")
+    s.add_argument("n", nargs="?", type=int)
+    s.set_defaults(fn="strategy versions")
+    s = strategy.add_parser("diff", help="what changed between two published versions")
+    s.add_argument("--from", dest="from_n", type=int, required=True)
+    s.add_argument("--to", dest="to_n", type=int, required=True)
+    s.set_defaults(fn="strategy diff")
+    s = strategy.add_parser("guides", help="the guides: their questions and the words for bets")
+    s.set_defaults(fn="strategy guides")
+    bet = strategy.add_parser("bet", help="owner only: add, change or retire a bet").add_subparsers(dest="subsub")
+
+    def bet_flags(s):
+        s.add_argument("--why")
+        s.add_argument("--rules-out", dest="rules_out")
+        s.add_argument("--wrong-if-kpi", dest="wrong_if_kpi", metavar="ID", help="wrong if this KPI crosses the threshold")
+        s.add_argument("--wrong-if-direction", dest="wrong_if_direction", choices=["above", "below"])
+        s.add_argument("--wrong-if-threshold", dest="wrong_if_threshold", type=float, metavar="N")
+        s.add_argument("--wrong-if-thesis", dest="wrong_if_thesis", metavar="MARKET_ID", help="wrong if this market entity or page changes")
+        s.add_argument("--wrong-if-text", dest="wrong_if_text", metavar="TEXT", help="wrong if this turns out true (needs --check-by)")
+        s.add_argument("--check-by", dest="check_by", metavar="DATE", help="YYYY-MM-DD: the day to look again")
+        s.add_argument("--cite", action="append", dest="cites", metavar="MARKET_ID", help="a market id the bet rests on; repeatable")
+        s.add_argument("--status", choices=["proposed", "active", "retired"])
+        s.add_argument("--rank", type=int)
+    s = bet.add_parser("add")
+    s.add_argument("--statement", required=True, help="one sentence that could turn out wrong")
+    bet_flags(s)
+    s.set_defaults(fn="strategy bet add")
+    s = bet.add_parser("update")
+    s.add_argument("id")
+    s.add_argument("--statement")
+    bet_flags(s)
+    s.set_defaults(fn="strategy bet update")
+    s = bet.add_parser("retire", help="its goals keep their link")
+    s.add_argument("id")
+    s.set_defaults(fn="strategy bet retire")
 
     market = sub.add_parser("market", help="the shared market graph: read it, report into it, curate it").add_subparsers(dest="sub")
     s = market.add_parser("show", help="one entity, its edges both ways, the evidence, the last ten events")
@@ -1418,7 +1563,7 @@ def parser():
     s.add_argument("key", help="a stable name, letters, digits, dots, dashes or underscores")
     s.add_argument("--title", required=True)
     s.add_argument("--cron", help="five fields, in --timezone (America/Los_Angeles by default)")
-    s.add_argument("--on", help="a Tico event instead of a time: meeting.ready, or webhook.<id> (hub trigger list)")
+    s.add_argument("--on", help="a Tico event instead of a time: meeting.ready, release_published, or webhook.<id> (hub trigger list)")
     s.add_argument("--text", default="", help="what the bot is told each time")
     s.add_argument("--text-file", dest="text_file")
     s.add_argument("--timezone")
@@ -1449,6 +1594,21 @@ def parser():
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
 
+    release = sub.add_parser("release", help="the team's releases: ask for one now, or set the daily hour").add_subparsers(dest="sub")
+    s = release.add_parser("now", help="ask the Release Manager to release what is at Pending Release now (hotfix, "
+                                       "midday release); one task listing the tickets")
+    s.add_argument("--note", help="why now; goes in the task; a person's note asks even with nothing at Pending Release")
+    s.set_defaults(fn="release now")
+    s = release.add_parser("schedule", help="show the daily release, or change it")
+    on = s.add_mutually_exclusive_group()
+    on.add_argument("--on", dest="on", action="store_true", default=None, help="turn the daily release on")
+    on.add_argument("--off", dest="on", action="store_false", help="turn the daily release off")
+    s.add_argument("--time", dest="times", action="append", metavar="HH:MM",
+                   help="a release time in company time; give it twice for two (replaces the times)")
+    s.add_argument("--manager", dest="bot", help="the Release Manager's bot slug; empty finds it by starter template")
+    s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
+    s.set_defaults(fn="release schedule")
+
     appr = sub.add_parser("approval").add_subparsers(dest="sub")
     s = appr.add_parser("request",
                         help="ask for a yes; if the owner already said send, mail send --approve <their message id>")
@@ -1476,6 +1636,16 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="approval decline")
 
+    s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
+                       "running, queued, held and dead jobs, and failed runs by cause")
+    s.add_argument("--type", help="task type id or name; default the engineering board")
+    s.add_argument("--owner")
+    s.add_argument("--label")
+    s.add_argument("--updated-since", help="ISO date-time or a window like 7d")
+    s.add_argument("--snoozed", choices=["all", "hide", "only"], help="default all")
+    s.add_argument("--bot", help="queues and failures for this bot only")
+    s.add_argument("--since", help="failure window: 24h (default), up to 7d, or an ISO date-time")
+    s.set_defaults(fn="pipeline")
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
     s.set_defaults(fn="brief")
@@ -1530,12 +1700,41 @@ def parser():
     s.add_argument("--person", help="that human and everyone under them")
     s.add_argument("--team", help="a group id, like engineering or sales: that group and the groups in it")
     s.set_defaults(fn="team show")
+    s = team.add_parser("budget", help="read or set the team's default runs per hour and per day for bots (owner and admins)")
+    for window in ("hour", "day"):
+        s.add_argument("--" + window, type=int, help=f"runs allowed per {window} for bots with no budget of their own; 0 for no limit")
+    s.set_defaults(fn="team budget")
+    seat = sub.add_parser("seat", help="Recruiting seats: roles on the chart with no bot yet").add_subparsers(dest="sub")
+    seat.add_parser("list", help="the Recruiting seats").set_defaults(fn="seat list")
+    s = seat.add_parser("create", help="add a seat under you or someone below you (a person)")
+    s.add_argument("title")
+    s.add_argument("--description", help="its job description")
+    s.add_argument("--reports-to", dest="reports_to", help="a bot's slug or human:<id>; you by default")
+    s.add_argument("--team", help="a group id")
+    s.set_defaults(fn="seat create")
+    s = seat.add_parser("update", help="change a seat's title, job description, reporting line or group (a person)")
+    s.add_argument("seat")
+    s.add_argument("--title")
+    s.add_argument("--description")
+    s.add_argument("--reports-to", dest="reports_to")
+    s.add_argument("--team")
+    s.set_defaults(fn="seat update")
+    s = seat.add_parser("draft", help="the CEO Bot's draft of a seat's job description, on the task asking for it")
+    s.add_argument("seat")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--text", help="the job description")
+    g.add_argument("--file", help="a file with the job description")
+    s.set_defaults(fn="seat draft")
+    s = seat.add_parser("close", help="take a seat off the chart (a person)")
+    s.add_argument("seat")
+    s.set_defaults(fn="seat close")
     org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
     s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
     s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
     s.add_argument("--set", type=lambda text: [x.strip() for x in text.split(",") if x.strip()], metavar="A,B,C",
                    help="its reports in the new order, comma-separated; the ones left out keep their places")
     s.set_defaults(fn="org order")
+    org.add_parser("models", help="the published starter org chart models that recommendations come from").set_defaults(fn="org models")
     health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
     s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
     s.set_defaults(fn="health check")
@@ -1660,6 +1859,12 @@ def parser():
     s.add_argument("--label", help="how the call is grouped in the audit; the set's id@version by default")
     s.add_argument("--list", action="store_true", help="print the question sets this checkout has")
     s.set_defaults(fn="decision ask")
+    s = decision.add_parser("outcome", help="record what you did with a decision answer, once per call (its ref)")
+    s.add_argument("--ref", required=True, help="the `ref` the decision answer returned")
+    s.add_argument("--verdict", required=True, help="the answer you acted on, in a few words")
+    s.add_argument("--action", required=True, help="what you did with it; say `overrode` when you went against it")
+    s.add_argument("--label", help="the call's label; the one it was made with by default")
+    s.set_defaults(fn="decision outcome")
     s = decision.add_parser("readout", help="per question set: the last days' calls, cost, Jev or fallback and answer "
                                             "spread, and the month's spend against the cap")
     s.add_argument("--days", type=int, help="how many days back from now (1-31, 7 by default)")
@@ -1737,9 +1942,12 @@ def parser():
     s.add_argument("--from-bot-yaml", dest="from_request", action="store_true",
                    help="take what the bot's bot.yaml asks, as its computer reported it")
     s.set_defaults(fn="bot mail")
-    s = bot.add_parser("setup-done", help="a starter bot marks its setup done, once its setup is done")
+    s = bot.add_parser("setup-done", help="mark a bot's onboarding complete, as a person above it on the org chart")
     s.add_argument("slug", nargs="?", help="the bot; the one running this command by default")
     s.set_defaults(fn="bot setup-done")
+    s = bot.add_parser("ready", help="an onboarding bot says it is ready, with what it learned")
+    s.add_argument("--summary", required=True, help="a few lines on what you learned and what you will do first")
+    s.set_defaults(fn="bot ready")
     s = bot.add_parser("place", help="put a bot on a computer, as the person who asked (BotOps)")
     s.add_argument("bot")
     s.add_argument("--computer", help="a computer's label or id; the best one that takes it by default")
@@ -1759,6 +1967,34 @@ def parser():
     s.add_argument("bot")
     s.add_argument("--successor")
     s.set_defaults(fn="bot archive")
+    s = bot.add_parser("keep-tasks-going", help="read or set automatic task starts: N, off, or unlimited")
+    s.add_argument("bot")
+    s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else 0 if v == 'off' else int(v), default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot keep-tasks-going")
+    s = bot.add_parser("budget", help="read or set a bot's runs per hour and per day, or release it from a hold")
+    s.add_argument("bot")
+    s.add_argument("action", nargs="?", choices=["release"], help="release the bot from a hold instead of changing a budget")
+    for window in ("hour", "day"):
+        s.add_argument("--" + window, type=lambda v: v if v == "default" else int(v),
+                       help=f"runs allowed per {window}: a number, 0 for no limit, or default to follow the team")
+    s.set_defaults(fn="bot budget")
+    s = bot.add_parser("profile", help="read or set a bot's profile: what wakes it and which tasks it takes")
+    s.add_argument("bot")
+    s.add_argument("profile", nargs="?", choices=["doer", "reviewer", "lead", "responder", "monitor", "custom"],
+                   help="the profile to set; leave out to read the bot's and the choices")
+    s.add_argument("--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)")
+    s.add_argument("--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep")
+    s.add_argument("--digest-hour", dest="digest_hour", type=int, help="the hour (0-23, team time) of a lead's daily digest")
+    s.add_argument("--pulls", choices=["all", "review", "none"], help="custom: which open tasks it starts by itself")
+    s.add_argument("--sweeps", type=lambda v: {"on": True, "off": False}[v], metavar="on|off",
+                   help="custom: whether stall checks and routines may wake it")
+    s.add_argument("--takes", choices=["all", "review", "watcher", "none"], help="custom: which tasks it may be given")
+    s.add_argument("--confirm-drop-rules", dest="confirm_drop_rules", action="store_true", default=None,
+                   help="leaving custom deletes the wake rules it copied into the rules table")
+    s.set_defaults(fn="bot profile")
+    s = bot.add_parser("release", help="release a bot Tico stopped (failed runs, or too many runs); its queue starts again")
+    s.add_argument("bot")
+    s.set_defaults(fn="bot release")
     s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
@@ -1769,6 +2005,11 @@ def parser():
         s = bot.add_parser(verb, help=f"{verb} a bot (BotOps)")
         s.add_argument("bot")
         s.set_defaults(fn="bot " + verb)
+    s = bot.add_parser("scope", help="limit a bot's claims to one task and its subtasks, or lift that (BotOps)")
+    s.add_argument("bot")
+    s.add_argument("task", nargs="?", help="the task it may still work on")
+    s.add_argument("--release", action="store_true", help="lift the limit; its other work becomes claimable again")
+    s.set_defaults(fn="bot scope")
     s = bot.add_parser("branch", help="make your branch of a bot that allows branches")
     s.add_argument("bot")
     s.add_argument("--computer", help="your computer's label or id")
@@ -1804,6 +2045,16 @@ def parser():
         s = repos.add_parser(verb)
         s.add_argument("full_name")
         s.set_defaults(fn="repo " + verb)
+    s = repos.add_parser("review", help="submit a GitHub review at an exact PR head; shared App falls back to COMMENT")
+    s.add_argument("repository", metavar="OWNER/REPO")
+    s.add_argument("number", type=int)
+    s.add_argument("--head", required=True, help="reviewed full 40-character commit SHA")
+    s.add_argument("--verdict", required=True, choices=("approve", "changes"))
+    text = s.add_mutually_exclusive_group(required=True)
+    text.add_argument("--body")
+    text.add_argument("--body-file", help="review text file; VERDICT is appended automatically")
+    s.add_argument("--operation-id", help="stable retry key; defaults to a hash of the review")
+    s.set_defaults(fn="repo review")
     s = repos.add_parser("product-create", help="preview, then confirm an exact private empty product repository "
                          "(the Owner, or a bot with Create product repositories)")
     s.add_argument("name", help="exact GitHub repository name, without an organization")
@@ -1962,6 +2213,22 @@ def parser():
     s.add_argument("--cpu", type=float, default=0, help="with --process: its CPU percent")
     s.add_argument("--mb", type=float, default=0, help="with --process: its memory in MB")
     s.set_defaults(fn="health-monitor report")
+    manager = sub.add_parser("task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)").add_subparsers(dest="sub")
+    manager.add_parser("status", help="bot, report switch and schedule, last run, each department's last check").set_defaults(fn="task-manager status")
+    manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="task-manager on")
+    manager.add_parser("off", help="switch the hourly report off").set_defaults(fn="task-manager off")
+    manager.add_parser("run", help="run the department check now").set_defaults(fn="task-manager run")
+    s = manager.add_parser("schedule", help="pick when the report runs")
+    s.add_argument("preset", choices=["business", "hourly", "4h", "daily"])
+    s.add_argument("--at", help="HH:MM for the daily preset")
+    s.set_defaults(fn="task-manager schedule")
+    s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
+    s.add_argument("state", choices=["on", "off"])
+    s.set_defaults(fn="task-manager bot")
+    s = sub.add_parser("stall-triage", help="quiet task triage: Decide reads a quiet task before its stall check stays silent (docs/tasks.md)")
+    s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None,
+                   help="--on switches it on, --off off; leave out to read the switch")
+    s.set_defaults(fn="stall-triage")
     roadmap = sub.add_parser("roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)").add_subparsers(dest="sub")
     s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")
     s.add_argument("--sort", choices=["requester_count", "external_requesters", "important", "organization", "size"])
@@ -1980,6 +2247,52 @@ def parser():
     who.add_argument("--suggestions-bot", dest="suggestions_bot", metavar="SLUG", help="the bot that receives visitor suggestions")
     who.add_argument("--automatic", action="store_true", help="suggestions go to the Automatic bot (Product Manager, then Head of Product)")
     s.set_defaults(fn="roadmap settings")
+    rule = sub.add_parser("rule", help="wake rules: what a message does to a bot, and which rule decided it (docs/tasks.md)").add_subparsers(dest="sub")
+    s = rule.add_parser("list", help="the built-in rules and the rules set for the team, a type, a department, a bot or a task, with 7-day runs and no-op rate")
+    s.add_argument("--scope-kind", dest="scope_kind", choices=["builtin", "team", "type", "department", "bot", "task"])
+    s.add_argument("--scope-id", dest="scope_id")
+    s.add_argument("--event")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="rule list")
+
+    def rule_fields(s):
+        s.add_argument("--event", help="the event, or * for every event that is not always-wake")
+        s.add_argument("--then", choices=["ignore", "note", "batch", "wake", "ask", "action"])
+        s.add_argument("--when", help='JSON of conditions, all must hold: {"actor":"bot","role":"owner","step":"Review 1","tag":"x","state":"waiting"}')
+        s.add_argument("--params", help='JSON, e.g. {"action":"close"} for an action rule')
+        s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None, help="--off turns the rule off")
+        s.add_argument("--position", type=int, help="order inside its scope; lower first")
+        s.add_argument("--note", help="why the rule exists")
+        s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+
+    s = rule.add_parser("set", help="make a rule: the most specific scope wins (task, bot, department, type, team, built-in)")
+    s.add_argument("--scope-kind", dest="scope_kind", required=True, choices=["team", "type", "department", "bot", "task"])
+    s.add_argument("--scope-id", dest="scope_id", help="the type, department, bot or task; not for the team")
+    rule_fields(s)
+    s.set_defaults(fn="rule set")
+    s = rule.add_parser("update", help="change a rule you may edit; built-in rules are read-only (override one with set)")
+    s.add_argument("id")
+    rule_fields(s)
+    s.add_argument("--expected-revision", dest="expected_revision", type=int, help="the revision you read; default the current one")
+    s.set_defaults(fn="rule update")
+    s = rule.add_parser("delete", help="delete a rule you may edit")
+    s.add_argument("id")
+    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+    s.set_defaults(fn="rule delete")
+    s = rule.add_parser("suggestions", help="the rules Tico suggests making a note, each with its 7-day runs and no-op share (the ones you may change)")
+    s.add_argument("--status", choices=["open", "all"], help="open (default), or all: also applied and dismissed in the last 30 days")
+    s.add_argument("--limit", type=int)
+    s.add_argument("--offset", type=int)
+    s.set_defaults(fn="rule suggestions")
+    s = rule.add_parser("apply", help="make a suggested rule a note, as the person who asked; a built-in gets a team rule")
+    s.add_argument("id", help="the suggestion's id")
+    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+    s.set_defaults(fn="rule apply")
+    s = rule.add_parser("dismiss", help="decline a suggestion, or take an applied one back")
+    s.add_argument("id", help="the suggestion's id")
+    s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
+    s.set_defaults(fn="rule dismiss")
     keys = sub.add_parser("service-key", help="keys another system uses to file tasks, or to update this install (owner and admins)").add_subparsers(dest="sub")
     s = keys.add_parser("create", help="make a key; it is shown this once")
     s.add_argument("--label", required=True, help="the system that holds it; every task it files says so")

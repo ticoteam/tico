@@ -230,7 +230,8 @@ def _apply(c, action, goal_id, approver, proposal_id):
     said = (f"The {ceo_bot.name(c)} settled a clash, approved by {who}: \"{first['title']}\" goes before "
             f"\"{then['title']}\". {action['why']}")
     for row in (first, then):
-        H.task_comment(c, CEO, row["id"], said)
+        # The order is the approved change; a paused owner's full held queue withholds only its note.
+        H.unless_queue_full(c, lambda: H.task_comment(c, CEO, row["id"], said))
     return {"task_id": first["id"], "then": then["id"]}
 
 

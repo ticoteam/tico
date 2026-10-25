@@ -13,9 +13,9 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 | 2 | Reviewer 1 | `pr-reviewer`, on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
-| 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, writes the release notes, rolls back if needed |
+| 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
 | 6 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 7 | Technical Writer | `docs-writer` (Technical Writer) | Updates the help docs for every change people will see |
+| 7 | Technical Writer | `docs-writer` (Technical Writer) | After each release, gets one task listing its tickets, updates the help docs for the changes people will see and writes the release notes |
 | 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 Two leads sit above the line. **Head of Product** (`product-lead`) decides *what* to build: it triages feature ideas,
@@ -25,7 +25,11 @@ skip Reviewer 2, or let one bot cover Security and DevOps. Start with the Builde
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
-for example. Edit each bot's instructions to match its role here, or ask BotOps to do it.
+for example. Edit each bot's instructions to match its role here, or ask BotOps to do it. When reviewers
+are authorized to submit their own reviews, configure a [separate reviewer GitHub App](github-app.md#separate-identity-for-reviewers)
+and use `hub repo review` with the full reviewed head and `approve` or `changes`. Record the GitHub receipt on
+the review task as well. Required GitHub approvals are dismissed on push, so a changed head needs a current
+approval before merge even when the team's task review policy allows a fixes-only delta.
 
 ## Models and effort
 
@@ -71,19 +75,28 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
 | Review 2 | review | Builder | Reviewer 2 comments on the updated change (skipped for small changes) |
 | Review 2 Fixes | doing | Builder | Builder acts on the feedback, then merges |
-| In QA | review | Builder | QA runs the acceptance tests; the Technical Writer updates the docs |
+| In QA | review | Builder | QA runs the acceptance tests |
 | QA Fixes | doing | QA | A test failed; the Builder fixes it and moves the ticket back to In QA |
-| Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build |
+| Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake |
 | Post Release QA | review | Release Manager | Shipped; QA runs the *check live* tests and watches the *watch live* items for 48 hours |
 | Done | done | QA | Post-release QA passed |
-| Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate or superseded ticket |
-| Won't do | declined | Head of Engineering | Dropped, with a reason |
+| Closed | closed | Head of Engineering | Closed without shipping, e.g. a duplicate, superseded or dropped ticket |
+
+Done and Closed fold into one strip at the end of the board: those tickets are under the Done and Closed tabs. A waiting
+ticket stays at its step with a Waiting tag.
 
 - **Small changes** skip Review 2. Use Reviewer 2 for sign-in, permissions, customer data, billing and anything that
   sends.
 - **Changes nobody will see** skip In QA and QA Fixes.
 - **A failure after release** goes back to QA Fixes for a hotfix, or the Release Manager rolls back.
-- **Reviewers and Security only comment.** They never move a ticket.
+- **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
+  and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
+  gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged.
+- **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
+  for the same check on the same head is refused with the open one's id.
+- **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
+  wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
+  Rules page (`hub rule list --scope-kind type --scope-id <type>`).
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 
@@ -114,7 +127,6 @@ release.
 The Release Manager keeps one checklist per release:
 - a QA pass for each change people will see
 - the security result
-- the docs updated
 - the release notes
 - the roadmap items moved to Shipped
 

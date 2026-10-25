@@ -22,6 +22,31 @@ function needsIndex() {
 }
 const needsItem = id => needsIndex().byId.get(String(id))?.it || null;
 const needsFolded = id => needsIndex().folded.has(String(id));
+// The next page of Needs you (hub-v2.js v2NeedsMore), then everything drawn from it. A list that holds only some pages
+// ends in Show more; on the Tasks page it also loads as it scrolls into view.
+const needsMoreButton = () => needsAll() ? '' : '<button class="ghost tl-more" type="button" data-needs-page>Show more</button>';
+async function needsMoreShow() {
+  if (!await v2NeedsMore()) return;
+  liveEmit('needs-list', S.v2.needs || []);
+  renderTree();
+  if (OVERVIEW_PAGE) overviewNeedsDraw();
+  if (TASKS_ST && isTasksRoute(S.route)) tasksRender(TASKS_ST);
+  if (BOT && isKeeper(BOT.slug)) botNeedsChanged(BOT.slug);
+}
+const NEEDS_IO = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+  if (entries.some(e => e.isIntersecting)) void needsMoreShow();
+}, {rootMargin: '400px'}) : null;
+function needsMoreWatch(root) {
+  NEEDS_IO?.disconnect();
+  const button = root?.querySelector('[data-needs-page]');
+  if (button) NEEDS_IO?.observe(button);
+}
+document.addEventListener('click', ev => {
+  const button = ev.target.closest('[data-needs-page]');
+  if (!button) return;
+  button.disabled = true;
+  void needsMoreShow().finally(() => { button.disabled = false; });
+});
 // "Do what you recommend": one tap answers the bot's ask with what it said it would do, and the card goes. It sends
 // the version of the task the card showed, so a task that changed meanwhile is refused, not answered unseen.
 const recommendButton = (rec, cls = 'primary', version = null) => rec?.ask
@@ -137,7 +162,7 @@ function approvalAgesTick() {
     if (node.textContent !== text) node.textContent = text;
   }
 }
-setInterval(approvalAgesTick, 30000);
+setInterval(() => { if (!document.hidden) approvalAgesTick(); }, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) approvalAgesTick(); });
 // What an approval asks for, built as elements with every payload value set as text; the markup the list
 // redraws from is this element's serialization, so a value is never parsed as HTML. A send shows its

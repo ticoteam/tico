@@ -164,16 +164,54 @@ function botRecurringPaint(e, slug) {
   host.hidden = !host.innerHTML;
   bindRecurringRail(host);
 }
+// Why the bot's last run ended without finishing (backend/execution.py last_stop), never a bare "Crashed": one plain
+// line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
+// Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
+const lastStopOf = slug => { const s = v2StatusOf(slug); return ['crashed', 'idle'].includes(s?.state) ? s.last_stop || null : null; };
+const stopReviewable = (slug, stop) => stop.action === 'review' && settingsCanManageBot(S.emps.find(x => x.name === slug));
+function lastStopHTML(slug) {
+  const stop = lastStopOf(slug); if (!stop) return '';
+  const soft = stop.tone === 'soft';
+  return `<button type="button" class="bot-alert bot-stop${soft ? ' soft' : ''}" data-last-stop${soft ? '' : ' role="status"'}>${soft ? '' : '<span aria-hidden="true">⚠</span> '}${esc(stop.text)}</button>`
+    + (stopReviewable(slug, stop) ? '<button class="primary bot-alert-resume" type="button" data-stop-review>Retry or dismiss</button>' : '');
+}
+const stopReview = slug => void executionReview(slug, async () => { await v2Refresh(); botAlertDraw(); });
+function lastStopOpen(slug) {
+  const stop = lastStopOf(slug); if (!stop) return;
+  const review = stopReviewable(slug, stop);
+  const needed = !stop.needs_person ? 'No. Nothing was lost.'
+    : stop.action === 'review' ? (review ? 'Yes: say whether to try it again or let it go.'
+                                         : 'Yes: a person who manages this bot decides whether to try it again.')
+    : 'Yes, as the line above says.';
+  const dialog = document.createElement('dialog'); dialog.className = 'tmodal'; dialog.id = 'last-stop';
+  dialog.innerHTML = `<header><h2>Last run</h2><button class="ghost" type="button" data-close>Close</button></header>
+    <p>${esc(stop.text)}</p>
+    ${stop.reason ? `<p><strong>What happened</strong><br>${esc(stop.reason)}</p>` : ''}
+    <p><strong>Is anything needed?</strong><br>${esc(needed)}</p>
+    ${stop.at ? `<p class="muted">${esc(fmt(stop.at))}</p>` : ''}
+    ${review ? '<div class="row"><button class="primary" type="button" data-stop-review>Retry or dismiss</button></div>' : ''}`;
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  const open = dialog.querySelector('[data-stop-review]');
+  if (open) open.onclick = () => { dialog.close(); stopReview(slug); };
+  dialog.addEventListener('close', () => dialog.remove());
+  document.body.appendChild(dialog); dialog.showModal();
+}
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
 function botAlertHTML(slug) {
   const e = S.emps.find(x => x.name === slug) || {}, s = v2StatusOf(slug);
   let word = '', why = '';
-  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) { word = V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || ''; }
+  if (s?.state === 'crashed' && s.last_stop) return lastStopHTML(slug);
+  // Tico stopped it (failed runs, or over its run budget): the words are the server's, Release lifts it.
+  if (s?.stopped) return `<span class="bot-alert" role="status" title="${esc(s.focus || '')}" data-bot-stopped="${esc(s.stopped)}"><span aria-hidden="true">⚠</span> Stopped</span>${botReleaseButton(slug, 'primary bot-alert-resume')}`;
+  if (s && ['crashed', 'quarantined', 'limited', 'blocked'].includes(s.state)) {
+    word = s.state === 'crashed' ? 'Last run stopped' : V2_WORD[s.state]; why = s.state === 'quarantined' ? quarantineWhy(slug) : s.focus || '';
+  }
   else if (!s && stateOf(slug) === 'failed') word = 'Last run failed';
   else if (e.agent?.synced && !e.online) { word = agentPresenceLabel(e.agent, false); why = 'Imported history needs a sync.'; }
   else if (e.agent?.credential && !e.online && ((S.status?.queued || []).some(q => (q.bot || q.employee) === slug) || s?.open_tasks))
     word = 'Offline with work waiting';
+  else if (lastStopOf(slug)) return lastStopHTML(slug);
   // The way out sits beside the warning, for a person who may take it.
   const resume = s?.bot_state === 'quarantined' && settingsCanManageBot(e) ? '<button class="primary bot-alert-resume" type="button" data-quarantine-resume>Resume bot</button>' : limitRetryButton(slug, 'primary bot-alert-resume');
   return word ? `<span class="bot-alert" role="status"${why ? ` title="${esc(why)}"` : ''}><span aria-hidden="true">⚠</span> ${esc(word)}</span>${resume}` : '';
@@ -196,15 +234,15 @@ function botQuarantineCard(slug) {
 function botLimitHTML(slug) {
   const limit = overLimit(slug); if (!limit) return '';
   const usd = n => '$' + Number(n || 0).toFixed(2);
-  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))} (${usd(limit.spent)} of ${usd(limit.limit)}). <a href="#/usage">Raise limit</a></section>`;
+  return `<section class="bot-limit" role="status"><span aria-hidden="true">⚠</span> ${esc(overLimitWord(limit))}${limit.limit != null ? ` (${usd(limit.spent)} of ${usd(limit.limit)})` : ''}. <a href="#/usage">Raise limit</a></section>`;
 }
 // The alert beside the name and the limit banner come and go with the status poll and live events.
 function botAlertDraw() {
   if (!BOT) return;
   const alert = $('#bot-alert'), limit = $('#bot-limit-host'), held = $('#bot-quarantine-host');
-  if (alert) alert.innerHTML = botAlertHTML(BOT.slug);
-  if (held) held.innerHTML = botQuarantineCard(BOT.slug);
-  if (limit) limit.innerHTML = botLimitHTML(BOT.slug);
+  if (alert) patchLiveHTML(alert, botAlertHTML(BOT.slug));
+  if (held) patchLiveHTML(held, botQuarantineCard(BOT.slug));
+  if (limit) patchLiveHTML(limit, botLimitHTML(BOT.slug));
 }
 // Files dragged over any part of a bot's chat attach to its composer, which lights up to say so
 // (#524, after bot-desk). A file dropped anywhere else on the page is swallowed: the browser's own
@@ -292,20 +330,26 @@ async function pageBot(slug, tab) {
     <div id="chat-composer"></div>
   </div>
 
-  <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden>
-    <section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2>
-      <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${BOT_TASK_TABS.map(([key, label, count]) =>
-        `<button type="button" role="tab" id="bot-tab-t-${key}" data-bot-task-tab="${key}" aria-controls="bot-${key}" aria-selected="false">${label} <span class="cnt" id="${count}"></span></button>`).join('')}</div>
+  <aside id="pane-tasks" class="bot-rail" aria-label="Tasks" hidden${keeper && !botSidebarLayout(slug) ? ' data-loading' : ''}>
+    ${keeper && !limited ? `<button type="button" class="rail-ico bot-sidebar-edit" id="bot-sidebar-edit" aria-label="Edit sidebar" title="Edit"${botSidebarLayout(slug)?.can_edit ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">edit</span></button>
+    <div class="bot-rail-editbar" hidden><span class="muted" id="bot-sidebar-status" role="status"></span><span class="spacer"></span>
+      <button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
+    <div class="bot-rail-loading rail-empty"${keeper && !botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
+    ${botWidgetsHTML(slug, {
+      tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2><span class="spacer"></span>${limited ? '' :
+        `<a class="rail-ico" id="bot-tasks-board" href="${esc(botTaskBoardHref(slug))}" aria-label="${esc(`Open ${empName(slug)}'s tasks on the board`)}" title="Board"><span class="nav-icon" aria-hidden="true">view_kanban</span></a>`}</header>
+      <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div>
+      <div class="bot-task-panes">
       <div class="bot-needs" id="bot-needs" role="tabpanel" aria-labelledby="bot-tab-t-needs" hidden><div id="t-needs" class="tpane"><div class="rail-empty">Loading…</div></div></div>
       <div class="bot-active" id="bot-active" role="tabpanel" aria-labelledby="bot-tab-t-active" hidden><div id="t-open" class="tpane"><div class="rail-empty">Loading…</div></div></div>
       <div class="bot-blocked" id="bot-blocked" role="tabpanel" aria-labelledby="bot-tab-t-blocked" hidden><div id="t-blocked" class="tpane"><div class="rail-empty">Loading…</div></div></div>
       <div class="bot-done" id="bot-done" role="tabpanel" aria-labelledby="bot-tab-t-done" hidden><div id="t-done" class="tpane"><div class="rail-empty">Loading…</div></div></div>
-    </section>
-    <details class="rail-sec rail-fold" id="bot-assigned" hidden><summary class="rail-h">Assigned to others <span class="cnt" id="cnt-assigned"></span></summary>
-      <div id="t-assigned" class="tpane"></div></details>
-    ${limited ? '' : `<section class="rail-sec bot-latest" id="bot-latest" aria-label="Updates" hidden></section>
-    <section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>
-    <section class="rail-sec bot-recurring" id="bot-recurring" aria-label="Routines" hidden></section>`}
+      <div id="bot-task-custom">${botTaskCustomPanelsHTML(slug)}</div></div>
+    </section>`,
+      ...(limited ? {} : {
+        updates: '<section class="rail-sec bot-latest" id="bot-latest" aria-label="Updates" hidden></section>',
+        files: '<section class="rail-sec bot-files" id="bot-files" aria-label="Files" hidden></section>',
+        routines: '<section class="rail-sec bot-recurring" id="bot-recurring" aria-label="Routines" hidden></section>'})})}
   </aside>
   ${railEdgeHTML('right')}
   </div>
@@ -316,6 +360,8 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
+    ${slug === GM && ceoBotLogShown() ? `<section class="card" id="ceo-bot-log-card"><header><h2>${esc(ceoBotName())} log</h2></header>
+      <div id="ceo-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
@@ -396,7 +442,12 @@ async function pageBot(slug, tab) {
   } else {
     if (BOT_PILL) chatDraftSave(BOT_PILL);
     if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    $('#chat-composer').innerHTML = `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
+    // The CEO Bot: of people, only the owner talks to it, in their menu tab; anyone's earlier chat here stays readable.
+    $('#chat-composer').innerHTML = slug === 'goal-manager' && e.my_access?.write
+      ? `<section class="card"><p class="muted">${meCeo()
+        ? `You talk to ${esc(ceoBotName())} in your own chat: <a href="${ASSISTANT}">open it</a>.`
+        : `Only the company's owner talks to ${esc(ceoBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.`}</p></section>`
+      : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
   if (!limited) {
@@ -425,6 +476,8 @@ async function pageBot(slug, tab) {
   // One click, from the warning beside the name or the card under More. Stopped runs settle on their own;
   // nothing to write or review.
   const resumeClick = async ev => {
+    if (ev.target.closest('[data-stop-review]')) { stopReview(slug); return; }
+    if (ev.target.closest('[data-last-stop]')) { lastStopOpen(slug); return; }
     const retry = ev.target.closest('[data-limit-retry]');
     if (retry && !retry.disabled) {
       retry.disabled = true;
@@ -463,8 +516,11 @@ async function pageBot(slug, tab) {
     void botGoalsCardLoad(slug);
   }
 
-  // The right rail: one Tasks section with its tabs, what it assigned to others, Updates, Files, then Recurring.
-  botTaskTabShow(slug, BOT_TASK_TAB.get(slug) || (botNeeds(slug).length ? 'needs' : 'active'));
+  // The right rail: Tasks with its tabs, Updates, Files and Routines, in the bot's own order (ui/app/bot-sidebar.js).
+  if (BOT_EDIT && BOT_EDIT.slug !== slug) BOT_EDIT = null;
+  botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
+  botSidebarApply(slug);
+  if (keeper) { botSidebarBind(slug); void botSidebarLoad(slug); }
   // A click opens a folded section without focusing it, so its ring shows only for the keyboard.
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach(sum => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   if (!limited) botRecurringPaint(e, slug);
@@ -473,6 +529,7 @@ async function pageBot(slug, tab) {
     if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', ev => botTaskTabKey(slug, ev));
+  $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
 
   if (!limited) bindRoutineExpand($('#pane-more'));
   moreClampWatch();
@@ -582,6 +639,7 @@ function showBotTab(tab) {
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
+  if (view === 'info' && BOT.slug === GM && ceoBotLogShown()) once('ceo-log', () => renderCeoBotLog($('#ceo-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {
       if (isKeeper(BOT.slug)) once('history', v2HistoryLoad);

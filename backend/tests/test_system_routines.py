@@ -16,16 +16,17 @@ from clients import judge as J
 
 def rows(api, token="ana-test"):
     data = get(api, "system-routines", token=token)
-    return {job["key"]: {**job, "group": g["key"]} for g in data["groups"] for job in g["jobs"]}, data
+    return {job["key"]: job for job in data["jobs"]}, data
 
 
-def test_every_built_in_job_is_listed_in_its_group_and_six_are_marked_controllable(api):
+def test_every_built_in_job_is_listed_with_its_group_word_and_six_are_marked_controllable(api):
     jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
-    assert [g["name"] for g in data["groups"]] == ["Checks that suggest", "Learning", "Reminders and deadlines",
-                                                   "Housekeeping"]
+    assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
+    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines"}
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings"}
+        "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
+        "propose_demotions", "stall_triage"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage"}
     assert all(j["needed"] == (j["group"] == "housekeeping") for j in jobs.values())
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
@@ -189,6 +190,9 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
                          still_needed)
     from backend import goals as G
     store = api.app.state.store
+    # The pass refreshes one live goal per transaction; an empty registry has no refresh to fail.
+    with store.transaction() as c:
+        G.create(c, "human:ana", "Exercise goal failure reporting", "company")
     store.settings.gateway_key = "synthetic"
     monkeypatch.setattr(billing_check, "env_key", lambda settings: "synthetic")
 
@@ -204,3 +208,6 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
     for name in ("goals", "goal_asks", "health_monitor", "go_live", "ask_deadlines", "approval_expiry",
                  "still_needed", "billing_check", "still_wanted", "gateway"):
         assert {name: "RuntimeError"} in failures, name
+    jobs, _ = rows(api)
+    assert jobs["goal_colours"]["last"]["ok"] is False
+    assert jobs["goal_colours"]["last"]["result"] == "Failed: unexpected error (RuntimeError)"

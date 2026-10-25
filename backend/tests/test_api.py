@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 
+import anyio
 import pytest
 import yaml
 from fastapi.testclient import TestClient
@@ -108,6 +109,41 @@ def get(api, path, token="ana-test", expected=200):
     return data
 
 
+def test_chat_refusal_receipt_distinguishes_access_before_replay(api, monkeypatch):
+    """Only a rolled-back, recorded refusal can resolve an uncertain Send's identity."""
+    from backend import task_privacy
+    from backend.store import Problem
+
+    path, body, key = "/api/v2/chat/ops", {"text": "A synthetic draft"}, str(uuid.uuid4())
+
+    def refuse(*args, **kwargs):
+        raise H.Refused("escape", "A rule refused this send")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(H, "say", refuse)
+        first = api.post(path, json=body, headers=headers(key=key))
+    assert first.status_code == 403, first.text
+    assert first.json()["error"].get("idempotency_refused") is True, first.text
+    replay = api.post(path, json=body, headers=headers(key=key))
+    assert replay.status_code == 403, replay.text
+    assert replay.json()["error"]["idempotency_refused"] is True
+    fresh_key = str(uuid.uuid4())
+    sent = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert sent.status_code == 200, sent.text
+
+    def deny(*args, **kwargs):
+        raise Problem("privacy", "Chat access refused", 403)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(task_privacy, "guard_write", deny)
+        denied = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert denied.status_code == 403, denied.text
+    assert "idempotency_refused" not in denied.json()["error"]
+    restored = api.post(path, json=body, headers=headers(key=fresh_key))
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["message"]["id"] == sent.json()["message"]["id"]
+
+
 def put(api, path, body, token="ana-test", expected=200):
     r = api.put("/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == expected, r.text
@@ -117,6 +153,15 @@ def put(api, path, body, token="ana-test", expected=200):
 def runner(api, operator="ana", label="Test Mac"):
     code = post(api, "enrollments", {"operator": operator})["code"]
     return post(api, "runners/enroll", {"code": code, "label": label, "platform": "test"})
+
+
+def test_the_installers_enrollment_request_needs_an_idempotency_key(api):
+    # scripts/install.sh asks for the server computer's code with an empty body and the owner token; without the key
+    # the server answers 422 and the install finishes with no computer.
+    bare = api.post("/api/v2/enrollments", json={}, headers={"Authorization": "Bearer ana-test"})
+    assert bare.status_code == 422 and bare.json()["error"]["code"] == "idempotency_key", bare.text
+    keyed = api.post("/api/v2/enrollments", json={}, headers=headers("ana-test", "install-" + uuid.uuid4().hex))
+    assert keyed.status_code == 200 and keyed.json()["code"], keyed.text
 
 
 def assign(api, r, bot, generation=0, operator="ana-test"):
@@ -130,7 +175,7 @@ def ready(api, r, bots):
 
 
 def claim(api, r, bot=None, key=None):
-    return post(api, "jobs/claim", {"bot": bot}, token=r["token"], key=key)["attempt"]
+    return post(api, "jobs/claim", {"bot": bot, "start_places": True}, token=r["token"], key=key)["attempt"]
 
 
 def setup_attempt(api, bot="ops", operator="ana"):
@@ -327,3 +372,24 @@ def test_busy_bot_stays_out_of_claims_after_lease_expiry(api):
     # No durable fence: once the supervisor reports the process gone, work resumes.
     replacement = post(api, "jobs/claim", {"busy_bots": []}, token=r["token"])["attempt"]
     assert replacement and replacement["id"] != first["id"]
+
+
+def test_healthz_answers_while_slow_handlers_hold_every_shared_worker(api):
+    # A one-token shared pool, held: every ordinary sync handler would queue behind it.
+    held, size = object(), {}
+
+    async def hold_all():
+        shared = anyio.to_thread.current_default_thread_limiter()
+        size["tokens"], shared.total_tokens = shared.total_tokens, 1
+        await shared.acquire_on_behalf_of(held)
+
+    async def release_all():
+        shared = anyio.to_thread.current_default_thread_limiter()
+        shared.release_on_behalf_of(held)
+        shared.total_tokens = size["tokens"]
+
+    api.portal.call(hold_all)
+    try:
+        assert api.get("/healthz").json()["ok"] is True
+    finally:
+        api.portal.call(release_all)

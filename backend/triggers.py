@@ -23,6 +23,7 @@ secret is sealed with the credential vault, since checking a signature needs the
 Refusals are logged only after the address's own secret matched, at most `HOURLY` an hour, so a
 stranger cannot fill the log.
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -237,12 +238,17 @@ def content_of(body, content_type):
             + text + "\n```" + note)
 
 
-def deliver(c, trigger_id, secret, body, headers, *, auth=None, vault=None):
-    """What one call to the address does. A refusal worth logging comes back as `{"refused": Problem}`, so the
-    transaction keeps its log row; the caller raises it after the commit."""
+def known(c, trigger_id, secret):
     found = c.execute("SELECT * FROM triggers WHERE id=? AND deleted_at IS NULL", (trigger_id,)).fetchone()
     if not found or not secret or not hmac.compare_digest(found["secret_hash"], digest(secret)):
         raise Problem("not_found", "Not found", 404)
+    return found
+
+
+def deliver(c, trigger_id, secret, body, headers, *, auth=None, vault=None):
+    """What one call to the address does. A refusal worth logging comes back as `{"refused": Problem}`, so the
+    transaction keeps its log row; the caller raises it after the commit."""
+    found = known(c, trigger_id, secret)
     sent_id = next((str(headers.get(h))[:200] for h in DELIVERY_HEADERS if headers.get(h)), "")
     if found["signing_secret"]:
         if vault is None:
@@ -326,6 +332,13 @@ def install(app, settings, store, auth, mutate):
         """Routines that listened for it stay, and fire again if the same id is made again."""
         return mutate(request, body, lambda c: {"trigger": remove(c, request.state.identity, trigger_id)})
 
+    def accept(trigger_id, secret, body, headers, vault):
+        # A wrong address or secret is answered from a read, so it never waits on (or takes) the writer.
+        with store.read() as c:
+            known(c, trigger_id, secret)
+        with store.transaction() as c:
+            return deliver(c, trigger_id, secret, body, headers, auth=auth, vault=vault)
+
     async def receive(request: Request, trigger_id: str, secret: str):
         body = await request.body()
         if len(body) > MAX_BODY:
@@ -333,9 +346,8 @@ def install(app, settings, store, auth, mutate):
         if not secret:
             bearer = request.headers.get("authorization", "")
             secret = bearer[7:].strip() if bearer[:7].lower() == "bearer " else ""
-        with store.transaction() as c:
-            result = deliver(c, trigger_id, secret, body, request.headers, auth=auth,
-                             vault=getattr(request.app.state, "vault", None))
+        result = await asyncio.to_thread(accept, trigger_id, secret, body, request.headers,
+                                         getattr(request.app.state, "vault", None))
         if "refused" in result:
             raise result["refused"]
         return JSONResponse(result, status_code=200 if result.get("duplicate") else 202)

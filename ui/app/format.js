@@ -4,16 +4,28 @@
 
 const mmss = ms => { const t = Math.max(0, Math.round((ms || 0) / 1000)); const h = Math.floor(t / 3600); const m = Math.floor(t % 3600 / 60), s = t % 60;
   return (h ? `${h}:${String(m).padStart(2,'0')}` : String(m)) + ':' + String(s).padStart(2, '0'); };
-const ago = iso => { if (!iso) return ''; const s = (Date.now() - new Date(iso)) / 1000; if (s < 0) return 'just now'; if (s < 60) return `${Math.round(s)}s ago`; if (s < 3600) return `${Math.round(s/60)}m ago`; if (s < 86400) return `${Math.round(s/3600)}h ago`; return `${Math.round(s/86400)}d ago`; };
+const ago = iso => { if (!iso) return ''; const s = (Date.now() - new Date(iso)) / 1000; if (s < 60) return 'just now'; if (s < 3600) return `${Math.round(s/60)}m ago`; if (s < 86400) return `${Math.round(s/3600)}h ago`; return `${Math.round(s/86400)}d ago`; };
 const until = iso => { if (!iso) return '—'; const s = (new Date(iso) - Date.now()) / 1000; if (s < 0) return 'due'; if (s < 3600) return `in ${Math.round(s/60)}m`; if (s < 86400) return `in ${Math.round(s/3600)}h`; return `in ${Math.round(s/86400)}d`; };
 const fmt = iso => iso ? new Date(iso).toLocaleString(undefined, {weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+// A relative time that keeps moving: the node holds its instant in data-ago and agoTick rewrites the words, so a
+// page that stays open never reads "0s ago" for minutes. `agoSpan` is the markup; the full date is its hover.
+const agoSpan = iso => `<span data-ago="${esc(iso)}" title="${esc(fmt(iso))}">${esc(ago(iso))}</span>`;
+function agoTick() {
+  for (const node of document.querySelectorAll('[data-ago]')) {
+    const text = ago(node.dataset.ago);
+    if (node.textContent !== text) node.textContent = text;
+  }
+}
+setInterval(() => { if (!document.hidden) agoTick(); }, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) agoTick(); });
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 // A routine is a row in the hub (docs/routines.md): the owner or the bot's operator edits it here.
 const routineMayEdit = r => S.me?.role === 'owner' || (!!S.me?.id && (S.emps || []).find(e => e.name === (r.employee || r.bot))?.operator === S.me.id);
 const routinePaused = r => r.enabled === false || r.enabled === 0 ? ' <span class="pill" title="kept, not running">paused</span>' : '';
 // A routine runs on a cron or `on:` a hub event (docs/routines.md); one phrase for either.
 const EVENT_WORDS = {'meeting.ready': 'when a meeting is imported', 'recording.ready': 'when a meeting is imported',
-  'market.insight.urgent': 'when an urgent market insight comes in'};
+  'market.insight.urgent': 'when an urgent market insight comes in', release_published: 'when a release is published',
+  'strategy.published': 'when a strategy version is published'};
 // An event with no words of its own still reads as words: "market.price.changed" is "when market price changed".
 const eventWords = on => EVENT_WORDS[on] || (String(on).startsWith('webhook.') ? `on the ${(typeof ROUTINE_TRIGGERS !== 'undefined' && (ROUTINE_TRIGGERS || []).find(t => t.event === on)?.name) || on.slice(8).replace(/-/g, ' ')} webhook`
   : `when ${String(on).replace(/[._-]+/g, ' ').trim()}`);

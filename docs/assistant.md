@@ -15,6 +15,8 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 ## Private to you
 
 The chat is a personal room (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
+The company's owner has the [CEO Bot](ceo-bot.md#your-chat-with-it) in its place; everyone else, administrators
+included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
 chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [CEO Bot](goals-and-kpis.md#the-ceo-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `hub` or BotOps
@@ -76,7 +78,9 @@ close|update|comment|link|label`, `hub approval decline` and `hub question answe
 server checks that message: yours, typed in your own
 Assistant chat (not written by a bot or the Assistant, not another chat), and no more than 30 minutes old. Otherwise it
 answers `403 on_behalf_of` and the assistant proposes instead. Your own rights are the ceiling: what you could not do
-yourself it cannot do for you. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
+yourself it cannot do for you. And it acts only as you: a task change, comment or link runs only on a task you are on
+(its owner, its requester or in one of its roles), never on another person's task, even when you ask (`403
+on_behalf_of`). The owner's own chat is the [CEO Bot](ceo-bot.md#your-chat-with-it), which acts as the owner. Only these routes count (`POST /api/v2/tasks/{id}`, `.../comments`, `.../links`,
 `POST /api/v2/approvals/{id}` with `"decision": "declined"`, `POST /api/v2/messages/{id}/answer`), and only for an
 approval or question addressed to you: someone else's is a `403` whatever you said. A decline is undone by the bot asking
 again. Approving stays a card unless you let it decide approvals (below). Running a task now, a message to another
@@ -175,6 +179,39 @@ Use `hub_assistant_read` and `hub_assistant_send` (CLI: `hub assistant read|send
 `hub_message_send` also accepts `assistant`; it uses your own private room. Other humans' rooms remain private,
 and Confirm and Cancel still require your own click in Tico.
 
+## What it has learned
+
+Tell it how you like things ranked and summarised ("launches matter more than hiring news", "numbers first") and it
+saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your chat
+(`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
+asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
+Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: if you become the owner, your
+[CEO Bot](ceo-bot.md#what-it-has-learned) uses the same layer, and back again.
+
+Each turn in your chat is handed the layer as it is when the turn starts, so a line you delete is not used from the
+next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant
+only adds: editing and deleting are your own clicks. Nothing about the company is in it: only the owner's CEO Bot has
+that.
+
+## On the Updates page
+
+Updates has your chat beside the feed: the same conversation as the menu tab, so a question asked here shows there too.
+It is labelled with your bot (the Assistant, or the [CEO Bot](ceo-bot.md#on-the-updates-page) for the owner). On a
+desktop it is a right rail; drag its left edge to resize it, as with other right rails, and the button at the end of the
+page's header shows or hides it. Tico remembers that for you on every device. On a phone the same button opens the chat
+full screen; its close button or Back shuts it.
+
+A question asked here is handed the recent updates you can read: the last four days' dailies and the latest week in
+review, chosen by the same rules as your Updates page. Tico leaves out any update that links or names a task, chat or
+bot you can't open, so the bot never has it to quote or link. That filter runs on the server, not in the bot's
+instructions. Ask "what's the top update today?" and it picks one and says why in a sentence. With nothing posted today
+it says so and offers the last day's top one. Until you teach it otherwise (see below), "top" means affects a goal, then
+waits on you, then newest.
+
+A link to an update in its reply stays on the page. It scrolls to that card and highlights it, switching Daily or Weekly
+and the day as needed. On a phone the chat closes first. Each question is one ordinary turn. It costs no more than any
+other message to your Assistant, and it acts only as you, as everywhere.
+
 ## API
 
 Stable v2 (`docs/openapi/v2.json`, tag **Assistant**). All signed-in humans; the confirm and cancel routes need your
@@ -183,7 +220,7 @@ own session, not a personal token.
 | Request | Answer |
 |---|---|
 | `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your room the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.fast` marks a server answer; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `409 assistant_off` when it is off. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` (the Updates chat) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"cancelled"\|"expired", "result": {...}}}` |
@@ -194,6 +231,9 @@ own session, not a personal token.
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
 | `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your chat, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |
+| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the CEO Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
+| `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their CEO Bot chat; `403` for anyone else and any Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
+| `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 
 Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see
 [custom-frontend.md](custom-frontend.md)) can embed the Assistant with these routes alone.

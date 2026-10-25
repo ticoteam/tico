@@ -213,7 +213,7 @@ async function pageComputerScreen(id, from) {
   // The first session and the View | Control switch follow the computer's mode; Settings' listing has it, else one
   // read of it. At Control the person drives at once, and View stays one tap away.
   if (!screenMachine(id)?.screen && S.me?.cloud) {
-    try { SETTINGS_DATA.machines = (await get('/v2/operations')).machines || SETTINGS_DATA.machines; } catch {}
+    try { await settingsMachinesRead(); } catch {}
     if (SCREEN !== state) return;
   }
   const machine = screenMachine(id);

@@ -866,9 +866,12 @@ def install_docs(app, store, auth, mutate):
         """A file (.md .markdown .txt .html .htm .docx .pdf, up to 20 MB) becomes an internal doc."""
         who = request.state.identity
         docs.reader(who)
-        filename, data, fields = docs.upload(request.headers.get("content-type", ""), await request.body())
+        # Parsing up to 20 MB and the write both block: off the event loop, like the conversion.
+        filename, data, fields = await asyncio.to_thread(docs.upload, request.headers.get("content-type", ""),
+                                                         await request.body())
         item, text = await asyncio.to_thread(docs.convert, filename, data, fields)
-        return mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename))
+        return await asyncio.to_thread(
+            lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename)))
 
     @app.get("/api/v2/docs/{doc_id}")
     def get_doc(request: Request, doc_id: str):

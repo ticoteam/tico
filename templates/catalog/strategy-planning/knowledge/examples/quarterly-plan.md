@@ -6,7 +6,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 Sample output for Acme, a fictional studio-software team. Nothing has been changed in Tico.
 First draft, not yet reviewed.
 
-**Headline: Q3 landed at 0.62 on aspirational key results. The Q4 bet: reach 40 paying studios by
+**Headline: Q3 landed at 0.62 on aspirational key results. The Q4 focus: reach 40 paying studios by
 2026-12-18 without adding support headcount.**
 
 ## Last quarter, graded (sources: `hub goal list --all`, readings to 2026-08-29)
@@ -26,7 +26,7 @@ First draft, not yet reviewed.
 - KR2 Repeat questions answered by a help article, from 22% to 45%. Owner: support.
 
 ## Not this quarter
-Second-country launch (ruled out in `knowledge/strategy.md`, 2026-07-10). Referral programme: no owner.
+Second-country launch (ruled out under "What we won't do", strategy version 2, 2026-07-10). Referral programme: no owner.
 
 ## Needs a decision
 KR1 of O1 needs two more sales hires at the current close rate. I did not assume them.
@@ -36,5 +36,5 @@ No Q3 readings for the waitlist launch. Two weekly updates (2026-07-11, 2026-07-
 
 ## Sources
 - `hub goal list --all`, 2026-09-01; weekly updates 2026-07-04 to 2026-08-29
-- `knowledge/strategy.md`, read 2026-09-01
+- `hub strategy show`, version 2, read 2026-09-01
 ```

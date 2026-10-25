@@ -13,14 +13,17 @@ Otherwise write the check-in (step 6). If the task names one, do that.
 
 ## 2. Read the record
 
+    hub strategy show
     hub goal list --all
     hub goal show <id>
     hub kpi show <kpi id>
     hub update list --kind weekly --limit 12
     hub meeting search --since <quarter start>
 
-Then `knowledge/strategy.md`, `knowledge/scorecard.md` and last quarter's report. A source you cannot
-read is named in the closing line.
+The strategy first: the published version's active bets are what the quarter serves, and each goal's `bet_id`
+says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. Nothing published: plan
+against the setup answer in `state.md`, marked unconfirmed. Then `knowledge/scorecard.md` and last quarter's
+report. A source you cannot read is named in the closing line.
 
 ## 3. Grade last quarter
 
@@ -28,12 +31,15 @@ Follow `playbooks/grade-a-quarter.md`. Write the result into the report and `kno
 
 ## 4. Draft next quarter
 
-1. Pick the one bet: the single outcome that would make the quarter a success, from
-   `knowledge/strategy.md` and the goals still live.
-2. Draft three to five objectives, each an outcome in plain words with about three key results.
+1. Pick the one focus: the single outcome that would make the quarter a success, from the strategy's active
+   bets (`hub strategy show`) and the goals still live. Name the bet it serves.
+2. Draft three to five objectives, each an outcome in plain words with about three key results, and each under
+   the bet it serves. An objective that serves no active bet is marked so and needs a sentence on why it is in
+   the plan; one that cuts against a bet's "rules out" is a question for the owner, not an objective. A bet with
+   no KPI-backed goal (gray health) gets a key result that could measure it.
 3. Each key result: a metric, its baseline (with source and date), a target, a date, a proposed owner
    marked "to confirm", and committed or aspirational.
-4. Carry over what did not finish only if it still serves the bet; say why.
+4. Carry over what did not finish only if it still serves an active bet; say why.
 5. List what you left out and why. A short list of what is ruled out is part of the plan.
 
 ## 5. Check it against the cap

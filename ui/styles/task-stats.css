@@ -11,11 +11,18 @@
 .flow-tile.cur{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .flow-tile-n{font-size:var(--t-xl);font-weight:600;line-height:1.1}
 .flow-tile-l{font-size:var(--t-sm);color:var(--muted)}
-.flow-chart-head{display:flex;justify-content:space-between;gap:8px;font-size:var(--t-sm);margin-bottom:4px}
+.flow-tile-d{font-size:var(--t-xs);font-weight:400;color:var(--muted);margin-left:2px;vertical-align:middle}
+.flow-chart-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:var(--t-sm);margin-bottom:4px}
+.flow-chart-head .spacer{flex:1}
+.flow-chart-head select{font-size:var(--t-sm);max-width:160px}
+.flow-avg-key{display:inline-flex;align-items:center;gap:5px}
+.flow-avg-key i{width:14px;height:0;border-top:2px solid var(--ink);opacity:.7}
 .flow-chart{display:block;width:100%;height:auto}
 .flow-grid{stroke:var(--line);stroke-width:1}
 .flow-axis{fill:var(--muted);font-size:var(--t-xs);font-family:var(--sans)}
 .flow-bar{fill:var(--accent)}
+.flow-bar.so-far{fill-opacity:.4}
+.flow-avg{fill:none;stroke:var(--ink);stroke-opacity:.7;stroke-width:2;stroke-linejoin:round;stroke-linecap:round;pointer-events:none}
 .flow-hit{fill:transparent}
 .flow-col:hover .flow-hit{fill:color-mix(in srgb,var(--ink) 6%,transparent)}
 .flow-tables{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
@@ -26,4 +33,5 @@
 .flow-table th:first-child,.flow-table td:first-child{text-align:left}
 .flow-people tbody tr{cursor:pointer}
 .flow-people tbody tr:hover,.flow-people tbody tr:focus{background:var(--surface2);outline:0}
-@media (max-width:640px){.flow-tables{grid-template-columns:1fr}.task-stats .flow-filters select{flex-basis:140px}}
+@media (max-width:640px){.flow-tables{grid-template-columns:1fr}.task-stats .flow-filters select{flex-basis:140px}
+  .flow-chart-head .spacer{flex-basis:100%;height:0}.flow-chart-head select{flex:1 1 100px;min-width:0;max-width:none}}

@@ -34,11 +34,14 @@ pub struct Runner {
     pub state: State,
     pub events: Arc<Events>,
     pub stop: AtomicBool,
+    pub(crate) drain: crate::drain::Drain,
     pub capacity: usize,
     pub tokens: Arc<TokenCache>,
     pub socket: Option<CredentialSocket>,
     /// Attempts with a live worker here; recovery leaves them alone.
     pub active: Mutex<HashSet<String>>,
+    /// Workers preparing or running, including one whose lease lapsed while its process still runs.
+    pub places: Mutex<HashSet<String>>,
     /// One push or history publish at a time on this computer.
     pub push_lock: tokio::sync::Mutex<()>,
     pub sign_in: crate::signin::SignIn,
@@ -52,6 +55,8 @@ pub struct Runner {
     pub worktrees: Arc<crate::worktrees::Worktrees>,
     /// The server takes `record_updated` on worktree reports (its heartbeat reply said so).
     worktree_stamp: AtomicBool,
+    /// The server accepts short start reservations; claims opt in only after its heartbeat says so.
+    start_places: AtomicBool,
     /// The server takes runtimes' `credential_source` (its heartbeat reply said so); until then it is left out.
     credential_source: AtomicBool,
     /// The server takes the signed-in account and the 5-hour window (its heartbeat reply said so); until then
@@ -64,7 +69,7 @@ pub struct Runner {
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
     beat: Mutex<Option<(String, Instant)>>,
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
-    /// as usual for SELF_UPDATE_DRAIN_S before it stops claiming so that moment comes (service.py restart_forced).
+    /// no new work so that moment comes; unstarted turns are handed back.
     restart: Mutex<Option<Instant>>,
     /// When that restart arrived, ISO-8601 UTC: every heartbeat says so until the runner has restarted, so Health
     /// names the restart, not a Tico bug, for the work it holds back (backend/health.py `restarting`).
@@ -118,16 +123,19 @@ impl Runner {
         let _ = crate::repositories::MIRRORS.set(repositories.clone());
         let worktrees = Arc::new(crate::worktrees::Worktrees::new(&projects_dir, client.clone()));
         let capacity = machine_capacity(config.data.get("capacity"));
+        let drain_limit = config.data.get("drain_timeout_seconds").and_then(Value::as_u64).filter(|s| *s > 0).unwrap_or(crate::drain::DEFAULT_LIMIT_S);
         Runner {
             profiles_read: Mutex::new(config.data.clone()),
             config,
             client,
             events: Events::new(),
             stop: AtomicBool::new(false),
+            drain: crate::drain::Drain::new(Duration::from_secs(drain_limit)),
             capacity,
             tokens: Arc::new(TokenCache::new()),
             socket: None,
             active: Mutex::new(HashSet::new()),
+            places: Mutex::new(HashSet::new()),
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
@@ -137,6 +145,7 @@ impl Runner {
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
             worktree_stamp: AtomicBool::new(false),
+            start_places: AtomicBool::new(false),
             credential_source: AtomicBool::new(false),
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
@@ -164,6 +173,7 @@ impl Runner {
         let mut at = self.shutdown.lock().unwrap();
         if at.is_none() {
             *at = Some(Instant::now());
+            if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
             log("Tico runner: stopping; taking no new work and letting the running turns finish");
         } else {
             self.stop.store(true, Ordering::SeqCst);
@@ -189,6 +199,40 @@ impl Runner {
     /// The last `runners/assignments` answer.
     pub fn assignments_seen(&self) -> Vec<Value> {
         self.assignments.lock().unwrap().clone()
+    }
+
+    /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
+    pub(crate) fn attempt_events(&self, aid: &str, redactor: Option<Arc<crate::redact::Redactor>>) ->
+        (crate::hosts::Events, tokio::sync::mpsc::UnboundedReceiver<Value>) {
+        let (input, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let (out, events) = tokio::sync::mpsc::unbounded_channel();
+        let state = self.state.clone();
+        let aid = aid.to_string();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
+                    let text = crate::util::text_of(&ev["stderr_tail"]);
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = crate::redact::scrub_credentials(&text, &[]);
+                    let id = aid.clone();
+                    let _ = state.off(move |s| s.stderr(&id, &text)).await;
+                } else { let _ = out.send(ev); }
+            }
+        });
+        (input, events)
+    }
+
+    async fn upload_stderr(&self, aid: Option<&str>) {
+        if !crate::follow::feature("run_diagnostics") { return; }
+        let filter = aid.map(str::to_string);
+        let pending = self.state.off(move |s| s.pending_stderr(filter.as_deref())).await.unwrap_or_default();
+        for (id, tail, revision) in pending.into_iter().take(10) {
+            // Diagnostics never hold up a run result through network retries. The capped row retries on maintenance.
+            let sent = tokio::time::timeout(Duration::from_secs(2), self.client.post(&format!("attempts/{id}/diagnostics"), &json!({"tail": tail}), None)).await;
+            if matches!(sent, Ok(Ok(_))) || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408) {
+                let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
+            }
+        }
     }
 
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
@@ -230,6 +274,7 @@ impl Runner {
 
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
+        self.upload_stderr(None).await;
         crate::files_publish::drain(&self.state, &self.client).await; // files a restart or an outage left queued
         let rows = match self.state.unfinished() {
             Ok(rows) => rows,
@@ -285,6 +330,8 @@ impl Runner {
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
+        // First, so a panic later in this pass (or one that keeps recurring here) is still sent.
+        crate::panics::report(&self.client).await;
         let repository_rows = if full { self.lanes.repositories.poll().await } else { None };
         if full {
             let assignments = self.client.get("runners/assignments").await?;
@@ -309,11 +356,16 @@ impl Runner {
         let with_repositories: Vec<Value> = candidates.iter().filter(|e| crate::appdriver::delivery(&e["config"]).is_none()).cloned().collect();
         crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
         self.fetch_missing(&with_repositories).await;
+        // A checkout fetched just now is closed to other bots' leased turns before any turn of its own runs.
+        let workspace = self.config.projects_dir();
+        let _ = tokio::task::spawn_blocking(move || crate::checkout_groups::gate_workspace(&workspace)).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
-        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates).await;
+        let computer_logins = crate::fallback::server_uses_computer_logins()
+            && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
+        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
-        let mut checks = readiness::preflight(&config, &candidates, &runtimes).await;
+        let mut checks = readiness::preflight(&config, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -321,6 +373,11 @@ impl Runner {
         let published = self.published.lock().unwrap().clone();
         let (agent_instructions, versions) = readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
+        let mut capabilities = crate::lanes::capabilities();
+        if computer_logins {
+            readiness_doc["computer_profile"] = json!(crate::profiles::computer_login(&config.data).map(|p| p.name).unwrap_or_default());
+            capabilities.push("computer_logins_v1");
+        }
         if crate::mail_key::status(&self.config) == Some("exposed") {
             readiness_doc["mail_key"] = json!("exposed"); // Health warns while bots can read the company's mail key
         }
@@ -333,7 +390,7 @@ impl Runner {
         let mut body = json!({
             "version": RUNNER_VERSION,
             "platform": platform(),
-            "capabilities": crate::lanes::capabilities(),
+            "capabilities": capabilities,
             "capacity": self.capacity,
             "readiness": readiness_doc,
             "mail_agent_instructions": readiness::mail_agent_instructions(&self.config, &assignments),
@@ -347,10 +404,16 @@ impl Runner {
             let restarting = self.restart.lock().unwrap().is_some();
             follower.follow_main(restarting).await;
             follower.fields(&mut body);
+            if crate::follow::feature("runner_drain") {
+                if let Some(progress) = self.drain.progress().filter(|_| body["update"].is_object()) {
+                    body["update"]["running"] = progress["running"].clone();
+                    body["update"]["handed_back"] = progress["handed_back"].clone();
+                }
+            }
         }
         if !crate::lanes::held_back("profiles") {
             let rejected = |runtime: &str, name: &str| {
-                let profile = crate::profiles::select(&config.data, None, Some(name));
+                let profile = crate::profiles::select(&config.data, Some(name));
                 profile.is_some_and(|p| self.sign_in.rejection(runtime, Some(&p)).is_some())
             };
             body["profiles"] = json!(crate::profiles::report(&config.data, &rejected).await);
@@ -399,6 +462,7 @@ impl Runner {
             if full || !actions.is_empty() {
                 self.worktrees.poll(host, &actions);
             }
+            self.start_places.store(beat["start_places"] == true, Ordering::SeqCst);
             self.worktree_stamp.store(beat["worktree_record_stamp"] == true, Ordering::SeqCst);
             self.credential_source.store(beat["runtime_credential_source"] == true, Ordering::SeqCst);
             self.accounts.store(beat["subscription_accounts"] == true, Ordering::SeqCst);
@@ -411,6 +475,7 @@ impl Runner {
                         follower.take_main().await;
                     }
                     *self.restart.lock().unwrap() = Some(Instant::now());
+                    if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
                     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
                     *self.restart_since.lock().unwrap() = crate::util::iso(&json!(now.as_secs())).as_str().map(String::from);
                     log("Tico runner: restart requested; restarting when no turn is running");
@@ -484,9 +549,13 @@ impl Runner {
         maintaining.sort();
         if !crate::lanes::held_back("busy_lanes") {
             // Lanes: a bot with a task turn running here can still take its other tasks' turns.
-            let body = json!({"next_run": true, "busy_bots": maintaining, "busy_lanes": self.lanes.busy_lanes()});
+            let mut body = json!({"next_run": true, "busy_bots": maintaining, "busy_lanes": self.lanes.busy_lanes()});
+            if self.start_places.load(Ordering::SeqCst) { body["start_places"] = json!(true); }
             match self.client.post("jobs/claim", &body, None).await {
-                Err(e) if e.status == 422 => crate::lanes::hold_back("busy_lanes"),
+                Err(e) if e.status == 422 => {
+                    if e.detail.contains("start_places") { self.start_places.store(false, Ordering::SeqCst); }
+                    else { crate::lanes::hold_back("busy_lanes"); }
+                },
                 other => return other,
             }
         }
@@ -521,9 +590,6 @@ fn supervised() -> bool {
     var("XPC_SERVICE_NAME").starts_with("team.tico") || var("TICO_SYSTEMD_UNIT").starts_with("tico-") || var("TICO_SUPERVISED") == "1"
 }
 
-/// A restart a person asked for keeps claiming this long, exiting the moment no turn runs; then it stops claiming.
-const RESTART_DRAIN_S: u64 = 20 * 60;
-
 /// How long a stopping container's turns may run on; under compose's 15-minute stop_grace_period, so the runner
 /// interrupts them itself (and says so) before Docker kills it.
 const STOP_DRAIN_S: u64 = 14 * 60;
@@ -534,12 +600,11 @@ pub fn drains_on_stop() -> bool {
     std::env::var("TICO_RUNNER_KIND").as_deref() == Ok("docker") || std::env::var("TICO_STOP_DRAIN").as_deref() == Ok("1")
 }
 
-/// Whether a restart asked for at `asked` has stopped this runner claiming (service.py SELF_UPDATE_DRAIN_S).
-fn drained(asked: Option<Instant>, now: Instant) -> bool {
-    asked.is_some_and(|at| now.saturating_duration_since(at) >= Duration::from_secs(RESTART_DRAIN_S))
+/// A restart under way rides on the heartbeat (an older server that refuses it gets it held back, lanes.rs ROOT_FIELDS).
+fn restart_blocks_claims(asked: Option<Instant>, now: Instant, drain: bool) -> bool {
+    asked.is_some_and(|at| drain || now.saturating_duration_since(at) >= Duration::from_secs(20 * 60))
 }
 
-/// A restart under way rides on the heartbeat (an older server that refuses it gets it held back, lanes.rs ROOT_FIELDS).
 fn add_restart(body: &mut Value, since: Option<&str>) {
     if let Some(since) = since {
         body["restart"] = json!({"since": since});
@@ -649,6 +714,14 @@ impl Clock {
 
 impl Runner {
     pub async fn run(self: Arc<Self>) {
+        if let Err(e) = tokio::task::spawn_blocking(crate::turn_users::initialize).await.unwrap_or_else(|e| Err(e.to_string())) {
+            log(&format!("Tico runner: Gateway turn users unavailable: {e}"));
+        }
+        let (state, workspace) = (self.state.directory.clone(), self.config.projects_dir());
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::checkout_groups::initialize(&state);
+            crate::checkout_groups::gate_workspace(&workspace);
+        }).await;
         let names = self.names().await;
         let _ = names;
         self.recover_output().await;
@@ -727,6 +800,12 @@ impl Runner {
         maintenance: &mut Option<JoinHandle<Result<(), ApiError>>>,
         paused_note: &mut String,
     ) -> Result<(), ApiError> {
+        if self.shutdown.lock().unwrap().is_some() || self.restart.lock().unwrap().is_some()
+            || crate::follow::shared().is_some_and(|f| f.draining()) {
+            if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
+        } else {
+            self.drain.end(); // a failed or cancelled update takes work again
+        }
         let finished: Vec<String> = workers.iter().filter(|(_, w)| w.is_finished()).map(|(a, _)| a.clone()).collect();
         for aid in finished {
             let worker = workers.remove(&aid).unwrap();
@@ -741,7 +820,9 @@ impl Runner {
                 log(&format!("Tico runner: worker {aid} failed ({why}); recovering saved attempt"));
                 let _ = self.state.interrupted(&aid, &format!("The runner stopped this turn on an error ({why}); see this computer's runner log"));
             }
+            self.drain.finish(&aid);
             self.active.lock().unwrap().remove(&aid);
+            self.places.lock().unwrap().remove(&aid);
             self.attempt_bots.lock().unwrap().remove(&aid);
             crate::lanes::forget(&aid);
             self.lanes.attempts.lock().unwrap().remove(&aid);
@@ -780,8 +861,8 @@ impl Runner {
         if self.shutdown.lock().unwrap().is_some() {
             return Ok(()); // stopping: the running turns finish, nothing new starts
         }
-        if drained(*self.restart.lock().unwrap(), Instant::now()) {
-            return Ok(()); // asked for a restart a while ago: no new work, so the running turns finish
+        if restart_blocks_claims(*self.restart.lock().unwrap(), Instant::now(), crate::follow::feature("runner_drain")) {
+            return Ok(()); // restarting: no new work, so the running turns finish
         }
         if let Some(follower) = crate::follow::shared() {
             if follower.blocks_claims(!workers.is_empty()).await {
@@ -797,13 +878,33 @@ impl Runner {
             state_dir: self.state.directory.clone(),
         };
         self.perbot.watchers.tick(&self.config, &assignments, ctx);
-        while workers.len() < self.capacity && clock.claim_due(&self.events) {
-            let result = self.claim_next().await?;
+        // The server reserves starts atomically; waiting workers do not consume computer capacity.
+        while {
+            let mut places = self.places.lock().unwrap();
+            if places.len() < self.capacity && clock.claim_due(&self.events) {
+                places.insert("<claim>".into());
+                true
+            } else {
+                false
+            }
+        } {
+            let result = self.claim_next().await;
+            {
+                let mut places = self.places.lock().unwrap();
+                places.remove("<claim>");
+                if let Ok(result) = &result {
+                    if let Some(attempt) = result.get("attempt").filter(|a| a.is_object()) {
+                        places.insert(text_of(&attempt["id"]));
+                    }
+                }
+            }
+            let result = result?;
             let attempt = result.get("attempt").cloned().filter(|a| a.is_object());
             let got = attempt.is_some();
             if let Some(attempt) = attempt {
                 let aid = text_of(&attempt["id"]);
                 mark("claimed", &aid);
+                self.drain.register(&aid);
                 self.active.lock().unwrap().insert(aid.clone());
                 self.attempt_bots.lock().unwrap().insert(aid.clone(), text_of(&attempt["bot"]));
                 crate::lanes::track(&attempt);
@@ -868,6 +969,34 @@ mod tests {
         assert!(seen[2].starts_with("POST /api/v2/jobs/claim"), "{}", seen[2]);
     }
 
+    #[tokio::test]
+    async fn a_panic_since_the_last_pass_is_the_first_thing_a_pass_sends() {
+        let _one = crate::panics::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (url, seen) = crate::client::tests::serve(vec![(200, r#"{"ok": true}"#)]).await;
+        let dir = std::env::temp_dir().join(format!("tico-panic-report-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        crate::panics::note_for_test("src/drive.rs", 4242);
+        // The rest of the pass finds no server: only what it sent first matters here.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(30), runner.maintain(false, false)).await;
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].starts_with("POST /api/v2/runners/errors") && seen[0].contains(r#"{"file":"src/drive.rs","line":4242}"#), "{}", seen[0]);
+    }
+
+    #[test]
+    fn old_servers_keep_the_restart_claim_window() {
+        let asked = Instant::now();
+        assert!(!restart_blocks_claims(None, asked, true));
+        assert!(!restart_blocks_claims(Some(asked), asked, false));
+        assert!(!restart_blocks_claims(Some(asked), asked + Duration::from_secs(1199), false));
+        assert!(restart_blocks_claims(Some(asked), asked + Duration::from_secs(1200), false));
+        assert!(restart_blocks_claims(Some(asked), asked, true));
+    }
+
     #[test]
     fn a_restart_under_way_rides_on_the_heartbeat_and_an_older_server_gets_it_held_back() {
         let mut body = json!({"version": "test"});
@@ -881,14 +1010,6 @@ mod tests {
         crate::lanes::drop_held(&mut body);
         crate::lanes::release("restart");
         assert!(body.get("restart").is_none() && body["version"] == "test");
-    }
-
-    #[test]
-    fn a_requested_restart_keeps_claiming_for_twenty_minutes_then_stops() {
-        let asked = Instant::now();
-        assert!(!drained(None, asked));
-        assert!(!drained(Some(asked), asked + Duration::from_secs(RESTART_DRAIN_S - 1)));
-        assert!(drained(Some(asked), asked + Duration::from_secs(RESTART_DRAIN_S)));
     }
 
     #[test]
@@ -934,10 +1055,10 @@ mod tests {
         let client = Client::new(&config.url(), &config.token(), 1, 0).unwrap();
         let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
         assert!(crate::profiles::configured(&runner.config_now().data).is_empty());
-        // A browser sign-in for a new named subscription writes it to runner.json (login.rs begin).
+        // A profile written to runner.json while running (`profile add`, or a hand edit).
         crate::profiles::add_profile(&runner.config, "chris-chatgpt").unwrap();
         let now = runner.config_now();
-        assert_eq!(crate::profiles::select(&now.data, Some("ops"), Some("chris-chatgpt")).unwrap().name, "chris-chatgpt");
+        assert_eq!(crate::profiles::select(&now.data, Some("chris-chatgpt")).unwrap().name, "chris-chatgpt");
         assert!(crate::profiles::configured(&runner.config.data).is_empty(), "the start-up copy is unchanged");
         // A file caught unreadable keeps the profiles last read.
         let written = std::fs::read_to_string(&path).unwrap();
@@ -952,6 +1073,32 @@ mod tests {
         assert!(crate::profiles::configured(&now.data).is_empty());
         assert_eq!(now.url(), "http://127.0.0.1:9");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn start_places_are_opt_in_and_a_server_rollback_drops_only_that_protocol() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (200, r#"{"attempt":null}"#),
+            (200, r#"{"attempt":null}"#),
+            (422, r#"{"error":{"code":"validation","detail":"body.start_places: Extra inputs are not permitted"}}"#),
+            (200, r#"{"attempt":null}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-protocol-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let runner = Runner::new(config.clone(), Client::new(&config.url(), &config.token(), 5, 0).unwrap(), State::open(&dir.join("state")).unwrap());
+        runner.claim_next().await.unwrap();
+        runner.start_places.store(true, Ordering::SeqCst);
+        runner.claim_next().await.unwrap();
+        runner.claim_next().await.unwrap();
+        let requests = seen.lock().unwrap();
+        assert!(!requests[0].contains("start_places"), "older servers get their original contract");
+        assert!(requests[1].contains("\"start_places\":true"));
+        assert!(requests[2].contains("start_places") && !requests[3].contains("start_places"));
+        assert!(!runner.start_places.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -33,7 +33,7 @@ TRIXIE_RENAMED = ('libasound2', 'libatk-bridge2.0-0', 'libatk1.0-0', 'libatspi2.
 # Pins with no wheel for the image's Python that the venv stage builds (it has a compiler and their headers).
 BUILT_IN_THE_VENV_STAGE = {'pyyaml': 'libyaml-dev'}
 DIGEST = re.compile(r'@sha256:[0-9a-f]{64}$')
-# The images ship for both (.github/workflows/docker.yml); a pin needs a wheel for each.
+# The images ship for both (Release validation builds each, .github/workflows/ci.yml); a pin needs a wheel for each.
 ARCHES = ('x86_64', 'aarch64')
 # glibc in each Debian release (packages.debian.org/<release>/libc6); a manylinux wheel needing newer won't install.
 DEBIAN_GLIBC = {'bookworm': (2, 36), 'trixie': (2, 41)}
@@ -68,7 +68,9 @@ def test_every_base_image_is_pinned_by_digest(dockerfile):
     text = (ROOT / dockerfile).read_text()
     stages = set(re.findall(r'^FROM \S+ AS (\S+)$', text, re.M))
     for image in re.findall(r'^FROM (\S+)', text, re.M):
-        if image not in stages and image != '${PYTHON_IMAGE}':
+        # A stage chosen by an argument (runner-bin-${NATIVE}) is one of the stages; scratch is empty, nothing to pin.
+        stage = re.compile(re.sub(r'\\\$\\\{\w+\\\}', r'[\\w-]+', re.escape(image)))
+        if not any(stage.fullmatch(name) for name in stages) and image not in ('${PYTHON_IMAGE}', 'scratch'):
             assert DIGEST.search(image), f'{dockerfile}: {image} is not pinned by digest'
     for image in re.findall(r'^ARG \w+_IMAGE=(\S+)$', text, re.M):
         assert DIGEST.search(image), f'{dockerfile}: {image} is not pinned by digest'

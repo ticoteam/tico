@@ -104,21 +104,25 @@ function settingsEditBranch(e, host) {
   if (e.status === 'archived') return toast('This branch is archived. Restore it in Settings.');
   const dialog = host;
   let revision = e.revision;
+  const profile = e.profile?.name || 'doer';
   dialog.innerHTML = `<form><div class="tmodal-head"><h2>${esc(botDisplayName(e.shared_from))} · ${esc(branchPersonLabel(e))}</h2><span class="spacer"></span>
     </div>
     <div class="bot-editor-body"><p>Follows <a href="${branchBotLink(e.shared_from)}">${esc(botDisplayName(e.shared_from))}</a>.</p>
     <label>Status<select name="status">${['planned', 'active', 'paused'].map(value => `<option value="${value}" ${e.status === value ? 'selected' : ''}>${value === 'planned' ? 'Setting up' : value[0].toUpperCase() + value.slice(1)}</option>`).join('')}</select></label>
-    <label>Wakes<select name="wake_preset">${SETTINGS_WAKE_PRESETS.map(([value, label]) => `<option value="${value}" ${(e.wake?.preset === 'token_saver' ? 'token_saver' : 'performance') === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
-    ${e.wake?.summary ? `<p class="muted">${esc(e.wake.summary)}</p>` : ''}
+    <label>Profile<select name="profile">${(PROFILE_LIST || Object.entries(PROFILE_LABELS).map(([name, label]) => ({name, label}))).map(p => `<option value="${esc(p.name)}" ${p.name === profile ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></label>
+    ${e.profile?.summary ? `<p class="muted">${esc(e.profile.summary)}</p>` : ''}
     <div class="row"><button class="primary" type="submit">Save</button><span role="status" data-branch-status></span></div></div></form>`;
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector('[type=submit]'), status = form.querySelector('[data-branch-status]');
     button.disabled = true;
     try {
-      // A branch's wake preset is its own (backend/settings_admin.py set_wake_preset); each save moves the revision.
-      if (form.elements.wake_preset.value !== (e.wake?.preset === 'token_saver' ? 'token_saver' : 'performance'))
-        revision = (await post(`/v2/bots/${encodeURIComponent(e.name)}/wake-preset`, {wake_preset: form.elements.wake_preset.value, expected_revision: revision})).revision;
+      // A branch's profile is its own (backend/profiles.py); each save moves the revision. Leaving Custom asks first.
+      if (form.elements.profile.value !== profile) {
+        const out = await profileSave(e.name, {profile: form.elements.profile.value}, revision);
+        if (!out) { button.disabled = false; return; }
+        revision = out.revision;
+      }
       await post(`/v2/bots/${encodeURIComponent(e.name)}/definition`, {status: form.elements.status.value, expected_revision: revision});
       const here = location.hash, tab = BOT?.tab || 'more';
       if (here.startsWith('#/bot/')) {

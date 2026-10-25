@@ -37,6 +37,8 @@ def ensure_schema(c):
     H.add_column(c, "runner_versions", "nudged", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, "runner_versions", "update_since", "TEXT")
+    H.add_column(c, "runner_versions", "update_running", "INTEGER")
+    H.add_column(c, "runner_versions", "update_handed_back", "INTEGER")
 
 
 def clean(value):
@@ -96,7 +98,8 @@ def record(c, runner_id, body):
               "update_error=excluded.update_error,reported=excluded.reported,commit_sha=excluded.commit_sha",
               (runner_id, release, body.kind or "", update.state if update else "", update.target if update else "",
                update.error if update else "", H.now(), body.commit or ""))
-    c.execute("UPDATE runner_versions SET update_since=? WHERE runner_id=?", (since, runner_id))
+    c.execute("UPDATE runner_versions SET update_since=?,update_running=?,update_handed_back=? WHERE runner_id=?",
+              (since, update.running if update else None, update.handed_back if update else None, runner_id))
     if body.checkout is None:   # it follows the server's release now, not main: an old "behind main" note is stale
         c.execute("UPDATE runners SET checkout_json=NULL WHERE id=?", (runner_id,))
     nudge(c, runner_id)
@@ -135,7 +138,7 @@ def nudge(c, runner_id, server=None):
     return True
 
 
-# runner-rs/src/follow.rs DRAIN_S: how long a computer due an update keeps claiming while its turns run.
+# Older runners keep claiming for this window; new runners report drain counts and hold immediately.
 UPDATE_DRAIN_S = 20 * 60
 
 
@@ -155,16 +158,26 @@ def update_since(c, runner_id, state):
 
 def holding_since(c, runner_id):
     """Since when this computer has taken no new work because it is updating, or None while it still takes work.
-    A computer due an update keeps claiming for UPDATE_DRAIN_S, then claims nothing until its running turns end and it
-    updates (follow.rs blocks_claims); one that reports `updating` claims nothing, whatever release it is on (a Docker
-    update still settling reports it on the new release)."""
+    New runners report drain counts as soon as they stop claiming. Older runners keep claiming for UPDATE_DRAIN_S.
+    An `updating` runner claims nothing, whatever release it is on (a Docker update still settling reports it on the
+    new release)."""
     row = c.execute("SELECT update_state,update_since FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
     if not row or row["update_state"] not in ("waiting", "updating") or not row["update_since"]:
         return None
-    if row["update_state"] == "updating":
+    progress = drain_progress(c, runner_id)
+    if row["update_state"] == "updating" or progress:
         return row["update_since"]
     since = H.shift(row["update_since"], seconds=UPDATE_DRAIN_S)
     return since if since <= H.now() else None
+
+
+def drain_progress(c, runner_id):
+    """Counts only, safe wherever a computer's update hold is already visible. Old runners report neither."""
+    row = c.execute("SELECT update_state,update_running,update_handed_back FROM runner_versions WHERE runner_id=?",
+                    (runner_id,)).fetchone()
+    if not row or row["update_state"] not in ("waiting", "updating") or row["update_running"] is None:
+        return ""
+    return f"{row['update_running']} running, {row['update_handed_back'] or 0} handed back"
 
 
 def paused(c, runner_id):
@@ -194,6 +207,7 @@ def view(row, server=None):
             "label": LABELS[found], "outdated": outdated(release, server),
             "server_release": server if releases.parse(server) else "",
             "update_state": row.get("update_state") or "", "target": row.get("update_target") or "",
+            "running": row.get("update_running"), "handed_back": row.get("update_handed_back"),
             "error": NO_SUPERVISOR if str(row.get("update_error") or "").startswith("nothing would start this runner")
             else row.get("update_error") or "", "min_runner": MIN_RUNNER_RELEASE}
 

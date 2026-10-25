@@ -87,8 +87,8 @@ async function pageNotes() {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!state.editing && !state.open) meetLoad(state, false); }, 30000);
-  state.sourcesPoll = setInterval(() => meetSources(state), 60000);
+  state.poll = setInterval(() => { if (!document.hidden && !state.editing && !state.open) meetLoad(state, false); }, 30000);
+  state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
 // Review stays personal until approval; counts are quiet and never enter Needs you.
@@ -491,7 +491,7 @@ function meetList(state) {
   const bar = $('#notes-filters'); if (bar) bar.hidden = !(state.list.length || filtered);
   const count = $('#notes-count');
   if (count) count.textContent = state.list.length ? (list.length === state.list.length ? `${list.length} total` : `${list.length} of ${state.list.length}`) : '';
-  el.innerHTML = list.length ? `<ul class="meet-list">${list.map(r => {
+  patchLiveHTML(el, list.length ? `<ul class="meet-list">${list.map(r => {
       const when = meetWhen(r.started || r.created), working = meetWorking(r), proposed = meetProposed(r);
       const meta = [when ? `<span>${esc(when)}</span>` : '', r.duration_ms ? `<span>${esc(mmss(r.duration_ms))}</span>` : '', meetWhoHTML(r)].filter(Boolean).join('');
       const fail = /fail/.test(meetPill(r)) ? meetPill(r) : '';
@@ -499,7 +499,7 @@ function meetList(state) {
         <div class="meet-main"><button class="note-title" type="button" data-rec="${esc(r.id)}">${esc(noteTitle(r))}</button><div class="meet-meta">${meta}</div></div>
         <div class="meet-side">${state.review === 'pending' ? `<button class="primary small" type="button" data-review-action="approve" data-send="auto" data-id="${esc(r.id)}" title="Share, then send to ${esc(assistantName())} to file its tasks">Share & send</button><button class="ghost small" type="button" data-review-action="dismiss" data-id="${esc(r.id)}">Dismiss</button>` : state.review === 'dismissed' ? `<button class="ghost small" type="button" data-review-action="restore" data-id="${esc(r.id)}">Restore</button>` : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
     }).join('')}</ul>`
-    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings. New imports wait here for your review.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`;
+    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings. New imports wait here for your review.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
   el.querySelectorAll('[data-note-row]').forEach(b => b.onclick = event => {
     if (event.target.closest('[data-review-check], [data-review-action], a')) return;
     state.selected = b.dataset.noteRow; state.confirmDelete = ''; state.editing = false;
@@ -665,11 +665,11 @@ function meetPaint(state, rec) {
   const send = $('#meet-send');
   if (send) send.onclick = async () => {
     const msg = $('#meet-msg');
-    send.disabled = true; msg.textContent = 'Sending…';
+    send.disabled = true; send.title = msg.textContent = 'Sending…';
     try {
       toastSent(await post(`/meetings/${encodeURIComponent(id)}/send`, {slug: $('#meet-dest').value, instructions: $('#meet-instructions').value.trim()}));
       await refresh(true); await meetLoad(state, true);
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; }
+    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; send.disabled = false; send.removeAttribute('title'); }
   };
   if (!typed && !reviewing) meetItemsWire(state, rec);
 }

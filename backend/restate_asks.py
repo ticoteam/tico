@@ -32,7 +32,7 @@ def message(row):
     person = H.actor_id(row["waiting_on"])
     return (f"{person} can't tell what you need from them on \"{row['title']}\", so it waits at the bottom of their "
             f"Needs you. Restate it in one or two plain sentences: what you need from {person} and what happens "
-            f"after, at most {H.LINT_ASK_WORDS} words, with no ids, hashes, file paths, s3:// links or tool names. "
+            f"after, at most {H.LINT_ASK_WORDS} words, with no ids, hashes, file paths, s3:// links, tool names or error output. "
             f"Set it with: hub task update {row['id']} --status waiting --on {person} --note \"<your ask>\". "
             f"Example: \"{H.LINT_ASK_EXAMPLE}\" If it no longer needs {person}, take it off them instead.")
 

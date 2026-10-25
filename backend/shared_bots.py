@@ -5,11 +5,13 @@ import re
 from types import SimpleNamespace
 
 from .store import H, Problem, encode, repo_url
-from .wake_presets import NEW_BOT_PRESET
+from . import profiles
 
 # What a branch takes from its original at every claim. Everything else (its name, its person,
 # its computer) is the branch's own.
-FOLLOWED = ("model", "runtime", "harness", "reasoning_effort", "compact_at", "session", "subtask_session", "task_goal", "review_model", "fallback",
+FOLLOWED = ("model", "runtime", "harness", "reasoning_effort", "compact_at", "rotate_at", "rotate_after_turns",
+            "session", "subtask_session", "task_goal", "review_model", "fallback",
+            "task_model",
             "max_run_minutes", "bot_contact", "private_tasks_default")
 
 
@@ -126,7 +128,8 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   "description": original_row["description"] or "", "reports_to": "human:" + person,
                   "status": status, "repo": repo, "repo_url": repo_url(repo, github_owner),
                   "host": "keeper", "tasks": "hub", "thread_mode": "personal",
-                  "shared_from": source, "model_managed_by": "cloud", "wake_preset": NEW_BOT_PRESET}
+                  "shared_from": source, "model_managed_by": "cloud"}
+        profiles.apply(config, profiles.DOER, {})
         config.update({key: original[key] for key in FOLLOWED if key in original})
         team = settings_admin._team(c, slug, config)
         now = H.now()
@@ -300,4 +303,4 @@ def retire_assignments(c):
                 except H.Refused:
                     pass
             c.execute("UPDATE tasks SET owner=?,updated=? WHERE id=?", (owner, H.now(), task_id))
-            H._wake(c, H.task(c, task_id), owner, f"Open: {title}")
+            H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})

@@ -75,7 +75,10 @@
     if (isNaN(d)) return '';
     return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) : d.toLocaleDateString([], {month: 'short', day: 'numeric'});
   };
-  const title = t => (t.message || '').replace(/\s+/g, ' ').trim().slice(0, 90) || 'Request';
+  // A request has no subject: its first line is the title and the lines after it are the preview.
+  const lines = t => (t.message || '').split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const title = t => lines(t)[0]?.slice(0, 90) || 'Request';
+  const preview = t => lines(t).slice(1).join(' ').slice(0, 140);
   const last = t => (t.messages || []).at(-1)?.created || t.created;
   const newestFirst = list => [...list].sort((a, b) => (Date.parse(last(b)) || 0) - (Date.parse(last(a)) || 0));
   const ended = t => ['closed', 'gone'].includes(t.status);
@@ -187,16 +190,18 @@
   // View docs · What's new (N) · Your requests (N)
   function renderLinks() {
     const news = Number(typeof S === 'undefined' ? 0 : S.config?.changelog?.unread_count) || 0;
-    const unread = state.tickets.filter(t => t.unread).length;
+    const total = state.tickets.length;
     pop.querySelector('[data-whats-new]').textContent = news ? `What's new (${news})` : "What's new";
     const mine = pop.querySelector('[data-mine]');
-    mine.textContent = unread ? `Your requests (${unread})` : 'Your requests';
+    // The number of requests the list shows; the unread replies are the dots in it and the count on the ?.
+    mine.textContent = total ? `Your requests (${total})` : 'Your requests';
     mine.setAttribute('aria-pressed', String(view === 'list'));
   }
   function renderTickets() {
     const list = pop.querySelector('[data-requests]'), items = newestFirst(state.tickets);
     list.innerHTML = items.map(t => `<li><button type="button" class="support-item${t.unread ? ' unread' : ''}" data-id="${escape(t.id)}">
-      <span class="support-item-top"><span class="support-item-title">${escape(title(t))}</span>${t.unread ? `<span class="support-dot" role="img" aria-label="${t.unread} new ${t.unread === 1 ? 'reply' : 'replies'}"></span>` : ''}</span>
+      <span class="support-item-top"><span class="support-item-title">${escape(title(t))}</span>${t.unread ? `<span class="support-dot" role="img" aria-label="${t.unread} new ${t.unread === 1 ? 'reply' : 'replies'}"></span>` : ''}</span>${preview(t) ? `
+      <span class="support-item-body">${escape(preview(t))}</span>` : ''}
       <span class="support-item-meta">${badge(t.status)}<time datetime="${escape(last(t))}" title="${escape(when(last(t)))}">${escape(short(last(t)))}</time></span></button></li>`).join('');
     pop.querySelector('[data-none]').hidden = !!items.length;
     renderAccess();
@@ -236,6 +241,9 @@
   let access = {available: false, active: null, last: null, at: 0}, accessTimer = 0;
   const accessLogs = new Map();
   const TIERS = {app: 'App only', full: 'Full access'};
+  // Why the backend says support access is off (backend/support_access.py off_reason).
+  const ACCESS_OFF = {TICO_SUPPORT_ACCESS: 'Support access is turned off on this server.', team_rule: 'Support access is turned off for this team.',
+    other: 'Support access is not available here.'};
   const remaining = () => access.active ? access.active.seconds_left - (Date.now() - access.at) / 1000 : 0;
   const timeLeft = () => {
     const m = Math.max(1, Math.ceil(remaining() / 60)), h = Math.floor(m / 60);
@@ -268,6 +276,7 @@
     if (live) html = `<p class="support-access-on">Tico support has access (${escape(TIERS[live.tier] || live.tier)}), ${escape(timeLeft())} left${canStop() ? ' · <button type="button" class="ghost" data-access-stop>Stop</button>' : ''}</p>`;
     else if (t && access.available && access.can_start && !access.active)
       html = `<p class="support-sent">For ${escape(title(t))}</p><button type="button" class="ghost" data-access-start>Let Tico support in</button>`;
+    else if (t && !access.available && access.off_reason) html = `<p class="support-sent">${escape(ACCESS_OFF[access.off_reason] || ACCESS_OFF.other)}</p>`;
     if (shown && access.can_start) {
       const items = accessLogs.get(shown.id)?.items;
       if (!items) void loadLog(shown.id);
@@ -289,7 +298,9 @@
       try { access = {...await call('GET', '/support/access'), at: Date.now()}; } catch (_) { /* the next poll asks again */ }
       renderBanner(); renderAccess();
     }
-    accessTimer = setTimeout(pollAccess, typeof S !== 'undefined' && S.me ? 30000 : 2000);
+    // Every 30 s while support is in, for the time left; otherwise every 5 minutes (access is given from this app, and a
+    // tab that gives it asks again at once).
+    accessTimer = setTimeout(pollAccess, typeof S !== 'undefined' && S.me ? (access.active ? 30000 : 300000) : 2000);
   }
   async function stopAccess() {
     if (!access.active) return;
@@ -730,7 +741,14 @@
   });
   window.supportPoll = refresh;
   // Replies are checked when the app comes back into view or focus, and on the poll above; there is no Refresh button.
-  const wake = () => { if (state.enabled) { void refresh(); schedule(); } };
+  // Only with a ticket still open (as the poll above), and once for a focus and a visibilitychange that come together.
+  let wokeAt = 0;
+  const wake = () => {
+    if (!state.enabled || Date.now() - wokeAt < 30000) return;
+    wokeAt = Date.now();
+    if (state.tickets.some(t => !ended(t))) void refresh();
+    schedule();
+  };
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { wake(); void pollAccess(); } });
   window.addEventListener('focus', wake);
   window.addEventListener('load', () => setTimeout(async () => {

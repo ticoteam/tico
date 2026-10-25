@@ -325,9 +325,15 @@ fn query(row: &Row, extra: &[(&str, &str)]) -> String {
 }
 
 static DRAINING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(test)]
+static TEST_DRAINING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Upload what is queued. Safe any time: a retry is the same request. Returns how many went.
 pub async fn drain(state: &State, client: &Client) -> usize {
+    // The production try-lock may skip a concurrent drain; tests serialize callers so parallel test cases cannot
+    // make an upload assertion fail merely because another test owns the process-wide lock.
+    #[cfg(test)]
+    let _test_one = TEST_DRAINING.lock().await;
     let Ok(_one) = DRAINING.try_lock() else { return 0 };
     let rows: Vec<Row> = state
         .with(|c| {

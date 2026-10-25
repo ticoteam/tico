@@ -41,16 +41,16 @@ def review_enabled(api):
 
 
 def test_every_install_starts_at_passive_and_says_what_each_level_does(api):
-    """Spec test 16 (v3): an install is at Passive, with its regular checks on. Each level has its one sentence; level
-    3, not arrived yet, says it does what level 2 does until then."""
+    """Spec test 16 (v3): an install is at Passive, with its regular checks on. Each level has its one sentence, and
+    every level has arrived: level 3 says what it does alone, with no "not yet"."""
     with_ceo_bot(api)
     shown = get(api, "ceo-bot")
     assert "on" not in shown and shown["level"] == 1 and shown["level_history"] == []
     assert shown["regular_checks"] is True and shown["name"] == "CEO Bot"
     assert [(lv["level"], lv["name"], lv["ready"]) for lv in shown["levels"]] == \
-        [(1, "Passive", True), (2, "Suggests actions", True), (3, "Acts on its own", False)]
+        [(1, "Passive", True), (2, "Suggests actions", True), (3, "Acts on its own", True)]
     assert "regular checks" in shown["levels"][0]["sentence"] and "changes nothing" in shown["levels"][0]["sentence"]
-    assert shown["levels"][2]["sentence"].endswith(ceo_bot.NOT_YET)
+    assert "decides on its own" in shown["levels"][2]["sentence"] and "Not yet" not in str(shown["levels"])
     assert shown["daily_cap"] == 5 and get(api, "ceo-bot", token="cara-test")["level"] == 1    # everyone reads it
 
 
@@ -115,7 +115,7 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     raise_level(api, 2)
     sync(api)
     vision = [a for a in asks(api, OWNER) if a["kind"] == "vision"]
-    assert [(a["title"], a["status"]) for a in vision] == [("Tell your CEO Bot what this company is for", "open")]
+    assert [(a["title"], a["status"]) for a in vision] == [("Tell your CEO Bot what this team is for", "open")]
     with api.app.state.store.read() as c:
         mine = H.tasks(c, owner=OWNER, status=H.ACTIVE_STATUSES)
     assert mine[0]["id"] == vision[0]["id"]                                 # first in the owner's queue

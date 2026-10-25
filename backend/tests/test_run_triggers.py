@@ -1,5 +1,6 @@
 """What woke each run, its tokens and whether it acted, and the weekly table of them in hub sql
 (backend/run_triggers.py; token saving 1/9)."""
+import json
 from datetime import timedelta
 
 import pytest
@@ -130,6 +131,40 @@ def test_the_claim_puts_the_wake_on_the_run(api):
         assert c.execute("SELECT count(*) FROM turns WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
 
+def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
+    r = machine(api)
+    post(api, "chat/ops", {"text": "Summarize the week."})
+    attempt = claim(api, r)
+    assert turn(api, attempt)["purpose"] == "answer person message"
+    start(api, r, attempt)
+    finish(api, r, attempt)
+    with api.app.state.store.transaction() as c:
+        H.say(c, H.KEEPER, "bot:ops", "Sort the inbox.", kind="notice",
+              refs=RT.stamp({}, "schedule", "morning", purpose="  sort   inbox "))
+    assert turn(api, claim(api, r))["purpose"] == "sort inbox"
+    assert RT.purpose_for("pr-reviewer", "pr_checks") == "handle PR checks"
+    assert RT.purpose_for("pr-reviewer", "status_or_relation") == "react to task change"
+    assert RT.purpose_for("pr-reviewer-sol", "pr_checks") == "review PR"
+    assert RT.purpose_for("reviewer-2", "status_or_relation") == "review PR"
+    assert RT.purpose_for("ops", "other") == RT.purpose_for("ops", None) == "unknown"
+
+
+def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
+    with api.app.state.store.transaction() as c:
+        for i, (bot, kind) in enumerate([("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None),
+                                         ("ops", "other")]):
+            c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
+                      (f"old{i}", bot, H.now(), kind))
+        c.execute("INSERT INTO turns(id,bot,started,trigger,trigger_kind,purpose) VALUES('named','ops',?,'task',"
+                  "'comment','mine')", (H.now(),))
+        RT.backfill(c)
+        got = dict(c.execute("SELECT id, purpose FROM turns WHERE id LIKE 'old%' OR id='named'").fetchall())
+    assert got == {"old0": "answer comment", "old1": "handle PR checks", "old2": "unknown", "old3": "unknown",
+                   "named": "mine"}
+    rows = {row["purpose"] for row in weekly(api, where="bot='ops'")}
+    assert {"answer comment", "unknown", "mine"} <= rows
+
+
 WRITES = ["task_update", "comment", "message", "pr_link", "file_publish", "reply_to_person"]
 NO_WRITES = {"no_writes": "no_change", "bookkeeping_only": "no_change", "task_finished": "nothing_to_do"}
 
@@ -171,7 +206,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
     assert row["outcome"] == ("acted" if case in WRITES else NO_WRITES[case])
     assert row["did_nothing"] == (0 if case in WRITES else 1)
     assert (row["writes"] > 0) == (case in WRITES)
-    assert (row["tokens_in"], row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1200, 1000, 200, 30)
+    assert (row["cached_tokens"], row["input_tokens"], row["output_tokens"]) == (1000, 200, 30)
 
 
 def test_an_answer_to_a_bots_ask_in_the_final_text_counts_once(api):
@@ -220,6 +255,24 @@ def test_a_push_from_the_runs_own_task_worktree_is_acting(api, case):
     row = turn(api, attempt)
     assert (row["writes"], row["outcome"], row["did_nothing"]) == (
         (2, "acted", 0) if case == "own_task" else (0, "no_change", 1))
+
+
+@pytest.mark.parametrize("case", ["rotated", "resumed"])
+def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api, case):
+    """The runner reports a session left behind for its size (runner-rs/src/rotate.rs); the token table counts it."""
+    r = machine(api)
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    if case == "rotated":
+        body["rotated"] = {"reason": "tokens", "tokens": 612_000, "turns": 4, "limit": 400_000}
+    post(api, f"attempts/{attempt['id']}/complete", body, r["token"])
+    row = turn(api, attempt)
+    assert row["rotated"] == ("tokens" if case == "rotated" else None)
+    rows = weekly(api, where="bot='ops'")
+    assert {bucket["purpose"] for bucket in rows} == {row["purpose"]}
+    assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
 
 
 def test_a_restore_ends_open_runs_with_an_outcome(api):
@@ -378,3 +431,27 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], message))
     assert runs("ben-test") == {}
     assert runs("ana-test") == {"status_or_relation": 2, "unknown": 1}
+
+
+def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(api):
+    ana = H.human_actor("ana")
+    with api.app.state.store.transaction() as c:
+        old = H.turn_start(c, "bot:ops", "ops")              # a run with no result, as runs before this were
+        before = dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone())
+        runs = {}
+        for name in ("accepted", "edited", "overridden", "own"):
+            task = H.task_create(c, ana, f"Recheck the {name} cash warning", "Before the deadline.", "bot:ops")
+            runs[name] = (task["id"], H.turn_start(c, "bot:ops", "ops", task_id=task["id"])["id"])
+            H.task_update(c, "bot:ops", task["id"], status="done", note="Rechecked.")
+        H.task_close(c, ana, runs["accepted"][0])
+        H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
+        H.task_close(c, ana, runs["edited"][0])                       # after its edit: still one, `edited`
+        H.task_update(c, ana, runs["overridden"][0], status="open", note="Not yet: the March file is missing.")
+        H.task_update(c, "bot:ops", runs["own"][0], status="doing")    # the bot moving its own result is no verdict
+        got = {r[0]: (r[1], json.loads(r[2])) for r in c.execute(
+            "SELECT target, actor, detail_json FROM events WHERE action='turn.outcome'")}
+        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 3
+        for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
+            task_id, turn_id = runs[name]
+            assert got[turn_id] == (ana, {"task_id": task_id, "outcome": name, "from": "done", "to": to})
+        assert dict(c.execute("SELECT * FROM turns WHERE id=?", (old["id"],)).fetchone()) == before

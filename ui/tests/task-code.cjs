@@ -67,7 +67,9 @@ function fixtures() {
   const runView = {task_id: 't-checkout', checkpoint: {text: 'Summary step built; receipts next.', at: ago(300), by: 'bot:eng'},
     attempts: [
       {run: 'a2', bot: 'eng', job: 'j1', try: 2, tries: 2, state: 'running', outcome: null, created: ago(120), started: ago(118), finished: null,
-       took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: null, next: null,
+       took_s: null, ran_on: {segments: [{model: 'claude-opus-5-5', effort: 'high'}],
+         task_model: {source: 'fallback', note: "Ran on the bot's model claude-opus-5-5 (high): task model grok-4.6 (low) could not run (grok is not signed in on this bot's computer)"}},
+       lease: [], reason: null, next: null,
        wake: {class: 'batched', reason: 'Review comments', preset: 'token_saver', preset_label: 'Token saver', held_until: ago(125)},
        subagents: [{id: 'g1', parent_id: null, type: 'general-purpose', model: null, status: 'completed', background: true, tool_uses: 3, duration_ms: 42000, running: false},
          {id: 'g2', parent_id: 'g1', type: 'Explore', model: 'claude-haiku-5-5', status: null, background: false, tool_uses: null, duration_ms: null, running: true}],
@@ -85,7 +87,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   if (rich) {
     Object.assign(data.tasks[0], {body: 'Keep the old checkout behind a flag.\n\nVerify receipts in both flows.',
       note: 'The draft is checked; the rollout still needs a decision.', labels: ['checkout'], acceptance_criteria: ['Both flows send a receipt.']});
-    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ana', requester: 'bot:eng', status: 'open'}),
+    data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner: 'human:ben', requester: 'bot:eng', status: 'open'}),
       task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester: 'bot:eng', done_at: now, closed_at: now}),
       ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner: 'bot:eng', direction: 'out'}]}})));
     data.comments = [{id: 'm1', kind: 'say', from_actor: 'bot:eng', body: 'The draft is checked.', created: now, refs: {task: 't-checkout', note: true}},
@@ -130,6 +132,13 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const rows = (owner ? data.tasks.filter(t => t.owner === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester === 'bot:' + requester) : data.tasks)
         .map(t => ({...t, links: (t.links || []).map(({detail_json, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
+    }
+    // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs$/.test(p)) return json({tabs: [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name: 'Doing'},
+      {builtin: 'blocked', name: 'Blocked'}, {builtin: 'done', name: 'Done Recently'}, {name: 'Assigned to Others', conditions: []}], widgets: null, can_edit: false});
+    if (/^\/api\/v2\/bots\/[^/]+\/task-tabs\/tasks$/.test(p)) {
+      const others = data.tasks.filter(t => t.requester === 'bot:eng' && !['human:ana', 'bot:eng'].includes(t.owner) && ['open', 'doing', 'waiting'].includes(t.status));
+      return json({tabs: [{key: 'c4', name: 'Assigned to Others', count: others.length, ids: others.map(t => t.id)}], tasks: others});
     }
     if (p === '/api/v2/tasks' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
@@ -277,7 +286,10 @@ async function desktop(browser) {
   assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m ago']);
   const tries = runs.locator('.truns-try');
   assert.equal(await tries.count(), 2);
-  assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5/);
+  assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5 \(high\)/);
+  // What ran and why: the fallback from the bot's task model (backend/task_models.py).
+  assert.match(await tries.first().innerText(), /Ran on the bot's model claude-opus-5-5 \(high\): task model grok-4\.6 \(low\) could not run \(grok is not signed in on this bot's computer\)/);
+  assert.doesNotMatch(await tries.nth(1).innerText(), /task model/, 'a run with no task model says nothing about one');
   assert.equal(await tries.first().evaluate(x => x.open), true);
   assert.match(await tries.first().locator('.truns-wake').innerText(), /^Woke for: Review comments · Token saver · held until /);
   assert.equal(await tries.nth(1).locator('.truns-wake').count(), 0, 'a run from before presets says nothing about its wake');
@@ -494,7 +506,7 @@ async function botDetail(browser) {
       assert.equal(new URL(page.url()).hash, '#/bot/eng/tasks', how + ' returns to the bot');
     }
     for (const id of ['t-outward', 't-finished']) {
-      if (id === 't-finished') await page.locator('#bot-tab-t-done').click();
+      await page.locator(id === 't-finished' ? '#bot-tab-t-done' : '#bot-tab-t-c4').click();
       await page.locator(`[data-task-detail="${id}"] [data-task-detail-open]`).click();
       await d.locator(`[data-task-props]`).waitFor();
       await page.waitForFunction(id => document.querySelector('#task-modal')?.dataset.task === id, id);

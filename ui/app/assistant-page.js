@@ -8,7 +8,9 @@
 // assistant has any of them; with none, the chat alone. GET /v2/assistant gives your own Assistant room with its
 // messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of the assistant bot, shown
 // live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). The room takes text only, so
-// the composer has no attach button.
+// the composer has no attach button. For the owner the page is their CEO Bot chat, by its name, with no "Assistant"
+// wording (ui/app/state.js meCeo); their own Assistant chats from before stay readable under "Earlier chats".
+// "What it has learned" at the top opens ui/app/learned.js.
 const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
 let ASSISTANT_PILL = null, ASSISTANT_DRAFT = '', ASSISTANT_LOAD = 0;
 // "Ask the Assistant…" in search: the words go into the box, now if the page is open, else when it opens.
@@ -20,21 +22,23 @@ function assistantPrefill(text) {
   box.focus();
 }
 function assistantPill() {
-  const slug = assistantBot();
+  const slug = myChatBot();
   if (ASSISTANT_PILL?.slug === slug) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
   return ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files: false, send: assistantSend,
-    label: 'Message the Assistant', placeholder: 'Ask anything…'}));
+    label: meCeo() ? `Message ${myChatName()}` : 'Message the Assistant', placeholder: 'Ask anything…'}));
 }
 const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints" aria-label="Suggestions">${
   ASSISTANT_HINTS.map(t => `<button class="ghost" type="button" data-hint="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
 async function pageAssistant() {
-  const slug = assistantBot(), load = ++ASSISTANT_LOAD;
+  const slug = myChatBot(), load = ++ASSISTANT_LOAD;
   $('#main').classList.add('chat-layout', 'bot-chat-layout');
   $('#main').innerHTML = `
   <div class="bot-top asst-top" id="bot-top"><div class="bot-ident">${avatar(slug, 36, stateOf(slug))}
-    <div class="botid"><div class="bot-nameline"><h1>${esc(assistantName())}</h1></div></div></div></div>
+    <div class="botid"><div class="bot-nameline"><h1>${esc(myChatName())}</h1></div></div></div>
+    <a class="ghost asst-learned" href="${LEARNED}">What it has learned</a></div>
   <div class="bot-work" id="bot-work"><div id="pane-chat">
+    <details class="asst-earlier" id="asst-earlier" hidden><summary>Earlier chats</summary><div class="asst-earlier-list"></div></details>
     <section class="card conv" id="conv">
       <div class="conv-older" id="conv-older"></div>
       <div id="conv-thread" data-assistant><div class="empty">Loading…</div></div>
@@ -43,7 +47,7 @@ async function pageAssistant() {
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div id="chat-composer"></div>
   </div>
-  <aside id="pane-tasks" class="bot-rail" aria-label="${esc(assistantName())}" role="complementary" hidden>
+  <aside id="pane-tasks" class="bot-rail" aria-label="${esc(myChatName())}" role="complementary" hidden>
     <section class="rail-sec bot-active" id="asst-active" aria-labelledby="asst-active-h" hidden><h2 class="rail-h" id="asst-active-h">Active</h2><div class="tpane"></div></section>
     <section class="rail-sec bot-latest" id="asst-latest" aria-label="Updates" hidden></section>
     <section class="rail-sec bot-files" id="asst-files" aria-label="Files" hidden></section>
@@ -57,6 +61,8 @@ async function pageAssistant() {
     return;
   }
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT) return;
+  // Earlier chats are stored history: readable while the CEO Bot is paused too.
+  assistantEarlier(d.earlier, load);
   if (!d.available) {
     window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
@@ -73,11 +79,11 @@ async function assistantSend(P, text) {
   text = String(text || '').trim();
   if (!text || P.sending) return;
   P.sending = true;
-  const btn = pq(P, '.p-send'), state = V2C;
+  const btn = pq(P, '.p-send'), state = V2C, scope = sessionScope(pq(P, '.p-text'));
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
   try {
     const r = await post('/v2/assistant/messages', {text});
-    pillAcknowledge(P, text, []);
+    pillAcknowledge(P, text, [], scope);
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
       for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }
@@ -88,6 +94,39 @@ async function assistantSend(P, text) {
     }
   } catch (e) { toast(e.message, true); }
   finally { P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P); }
+}
+
+// "Earlier chats": the owner's own Assistant chats from before the CEO Bot took its place, read-only, newest page first
+// and older pages on request. Loaded when opened; nothing is sent from here.
+function assistantEarlier(earlier, load) {
+  const box = $('#asst-earlier');
+  if (!box) return;
+  box.hidden = !earlier?.room_id;
+  if (box.hidden) return;
+  const list = box.querySelector('.asst-earlier-list');
+  let before = null, busy = false;
+  const line = m => {
+    const mine = m.from_actor === 'human:' + (S.me?.id || '');
+    return `<div class="asst-earlier-msg"><b>${esc(mine ? 'You' : earlier.name || 'Assistant')}</b>
+      <span class="muted" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</span><div class="md">${safeMd(m.body || '', {shortLinks: true})}</div></div>`;
+  };
+  const more = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const q = before ? `?before=${encodeURIComponent(before)}` : '';
+      const page = await get(`/v2/conversations/${encodeURIComponent(earlier.room_id)}/messages${q}`);
+      if (load !== ASSISTANT_LOAD || !list.isConnected) return;
+      list.querySelector('[data-earlier-more]')?.remove();
+      list.insertAdjacentHTML('afterbegin', (page.messages || []).filter(m => !m.deleted_at).map(line).join('')
+        || (before ? '' : '<div class="muted">No messages.</div>'));
+      before = page.next_before;
+      if (page.has_more && before) list.insertAdjacentHTML('afterbegin', '<button class="ghost" type="button" data-earlier-more>Show older</button>');
+    } catch (e) { list.insertAdjacentHTML('afterbegin', `<div class="err">${esc(e.message)}</div>`); }
+    finally { busy = false; }
+  };
+  box.ontoggle = () => { if (box.open && !list.childElementCount) void more(); };
+  list.onclick = ev => { if (ev.target.closest('[data-earlier-more]')) void more(); };
 }
 
 // The rail: the assistant's active tasks, its latest update, its files and its routines, each only when it has

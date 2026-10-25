@@ -23,8 +23,8 @@ use crate::util::{epoch_s, log, text_of};
 const STATUS_FILE: &str = "update-status.json";
 /// The Docker update this runner saw changing containers, until the updater reports how it ended (Follower::unsettled).
 const HOLD_FILE: &str = "docker-update-hold.json";
+const DRAIN_S: u64 = 20 * 60; // older servers retain their claim window
 const RETRY_AFTER_S: f64 = 6.0 * 3600.0;
-const DRAIN_S: u64 = 20 * 60;
 const STALE_UPDATING_S: f64 = 15.0 * 60.0;
 const CHECKOUT_EVERY: Duration = Duration::from_secs(600);
 const PREPARE_LIMIT_S: u64 = 1800; // a cold cargo build (engine.py BUILD_TIMEOUT_S)
@@ -276,7 +276,7 @@ impl Sidecar {
 
     async fn call(&self, post: Option<Value>) -> Result<Value, String> {
         let token = std::fs::read_to_string(&self.token_file).unwrap_or_default().trim().to_string();
-        let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
+        let http = crate::tls::http_builder().timeout(Duration::from_secs(10)).build().map_err(|e| e.to_string())?;
         let request = match &post {
             Some(body) => http.post(format!("{}/update", self.url)).json(body),
             None => http.get(format!("{}/status", self.url)),
@@ -579,23 +579,30 @@ impl Follower {
         }
     }
 
-    /// True while an update is due or under way; starts it once nothing runs. After DRAIN_S it stops claiming.
+    /// A pending update drains immediately, including a prepared main checkout waiting for restart.
+    pub fn draining(&self) -> bool {
+        let s = self.inner.lock().unwrap();
+        s.pending.is_some() || s.running || s.restart_due
+    }
+
+    /// True while an update is due or under way; starts it once every claim has settled.
     pub async fn blocks_claims(&self, active: bool) -> bool {
-        let (pending, since) = {
+        let (pending, since, drain) = {
             let s = self.inner.lock().unwrap();
-            if s.running {
+            let drain = s.features["runner_drain"] == true;
+            if s.running || (drain && s.restart_due) {
                 return true;
             }
             match &s.pending {
                 None => return false,
-                Some(p) => (p.clone(), s.pending_since),
+                Some(p) => (p.clone(), s.pending_since, drain),
             }
         };
         if !active {
             self.launch(&pending).await;
             return true;
         }
-        since.is_some_and(|t| t.elapsed().as_secs() >= DRAIN_S)
+        drain || since.is_some_and(|t| t.elapsed().as_secs() >= DRAIN_S)
     }
 
     async fn launch(&self, want: &str) {
@@ -807,6 +814,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn old_servers_keep_the_update_claim_window() {
+        let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4()));
+        let f = docker_follower(&dir, "http://127.0.0.1:9", "0.3.47");
+        {
+            let mut s = f.inner.lock().unwrap();
+            s.pending = Some("0.3.48".into());
+            s.pending_since = Some(Instant::now());
+        }
+        assert!(!f.blocks_claims(true).await);
+        f.inner.lock().unwrap().pending_since = Instant::now().checked_sub(Duration::from_secs(DRAIN_S));
+        assert!(f.blocks_claims(true).await);
+        {
+            let mut s = f.inner.lock().unwrap();
+            s.pending_since = Some(Instant::now());
+            s.features = json!({"runner_drain": true});
+        }
+        assert!(f.blocks_claims(true).await);
+    }
+
+    #[tokio::test]
     async fn a_failed_update_waits_and_a_due_one_starts_once_idle() {
         let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -821,7 +848,7 @@ mod tests {
             self_update: true,
             prepare: vec!["true".into()],
             sidecar: Sidecar { url: String::new(), token_file: dir.join("t") },
-            inner: Mutex::new(Inner { state: "idle".into(), desired: Some("0.3.45".into()), ..Default::default() }),
+            inner: Mutex::new(Inner { state: "idle".into(), desired: Some("0.3.45".into()), features: json!({"runner_drain": true}), ..Default::default() }),
         };
         std::env::set_var("TICO_SUPERVISED", "1");
         write_status(&dir, json!({"state": "rolled_back", "target": "0.3.45", "error": "did not report in", "at": epoch_s()}));
@@ -835,7 +862,7 @@ mod tests {
         write_status(&dir, json!({"state": "rolled_back", "target": "0.3.45", "at": epoch_s() - RETRY_AFTER_S - 1.0}));
         f.decide().await;
         assert_eq!(f.inner.lock().unwrap().state, "waiting");
-        assert!(!f.blocks_claims(true).await); // a turn is running: keep claiming until the drain time
+        assert!(f.blocks_claims(true).await); // drain begins immediately while a turn is running
 
         // Out of disk: it waits until space frees past what was free when it failed, then tries at once.
         write_status(&dir, json!({"state": "failed", "target": "0.3.45", "error": "write: No space left on device", "at": epoch_s(), "disk_free": u64::MAX}));
@@ -852,7 +879,7 @@ mod tests {
     async fn a_docker_runner_whose_updater_does_not_answer_keeps_claiming() {
         let dir = std::env::temp_dir().join(format!("tico-follow-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        let drained = Instant::now().checked_sub(Duration::from_secs(DRAIN_S + 60));
+        let drained = Instant::now().checked_sub(Duration::from_secs(21 * 60));
         let f = Follower {
             directory: dir.clone(),
             root: dir.clone(),

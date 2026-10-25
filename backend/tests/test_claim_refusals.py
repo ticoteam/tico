@@ -9,7 +9,7 @@ import pytest
 
 from backend import check_models, diagnostics, execution, health, health_monitor
 from backend.store import H
-from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.test_task_lanes import new_task, task_bot
 
 
@@ -61,6 +61,94 @@ def test_a_drained_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1)")
     says(api, machine, "draining")
+
+
+def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_released(api):
+    machine = task_bot(api, lanes=True)
+    def control(**body):
+        post(api, "bots/ops/control", {**body, "expected_revision": get(api, "bots/ops")["revision"]})
+    task, other = new_task(api, "the check"), new_task(api, "unrelated")
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.",
+                                "relations": [{"task": task["id"], "kind": "parent"}]})
+    control(action="pause")
+    control(action="scope", task_id=task["id"])
+    assert claim(api, machine) is None                       # the scope never lifts a pause
+    control(action="resume")
+    post(api, "chat/ops", {"text": "Anything new?"})          # new work outside the task arrives during the check
+    taken = {claim(api, machine)["lane"], claim(api, machine)["lane"]}
+    assert taken == {"task:" + task["id"], "task:" + child["id"]} and claim(api, machine) is None
+    with api.app.state.store.read() as c:                     # Health reads the same rule
+        assert execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], "ops") == "scoped"
+    control(action="pause")
+    control(action="unscope")
+    assert claim(api, machine) is None                       # released while paused: eligible again, not started
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM attempts WHERE bot='ops' AND state IN ('leased','running')").fetchone()
+        assert [r[0] for r in c.execute("SELECT action FROM events WHERE target='ops' AND action LIKE 'bot.%scope' "
+                                        "ORDER BY rowid")] == ["bot.scope", "bot.unscope"]
+    control(action="resume")
+    lanes = {claim(api, machine)["lane"] for _ in range(4)}
+    assert lanes == {"task:" + t["id"] for t in (task, child, other)} | {"main"}
+
+
+def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_limit(api):
+    machine = task_bot(api, lanes=True)
+    other, task = new_task(api, "unrelated"), new_task(api, "the check")
+    turns = {a["lane"]: a for a in (claim(api, machine), claim(api, machine))}
+    for a in turns.values():
+        post(api, f"attempts/{a['id']}/started", {"thread_id": a["lane"]}, machine["token"])
+    post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
+                                   "expected_revision": get(api, "bots/ops")["revision"]})
+    with api.app.state.store.transaction() as c:              # follow-ups to both turns, after the limit is set
+        outside = H.task_comment(c, "human:ana", other["id"], "Use the new numbers.")
+        inside = H.task_comment(c, "human:ana", task["id"], "Check the March total too.")
+    poll = lambda t: [m["id"] for m in post(api, f"attempts/{turns['task:' + t['id']]['id']}/inputs", {},
+                                            machine["token"])["messages"]]
+    assert poll(other) == [] and poll(task) == [inside["id"]]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (outside["id"],)).fetchone()[0] == "queued"
+
+
+def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_released(api, monkeypatch):
+    from backend import bot_to_bot
+    backlog = []
+    monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot: backlog.append(bot))
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "the check")
+    child = post(api, "tasks", {"owner": "ops", "title": "review", "body": "Review it.", "next_run": True,
+                                "relations": [{"task": task["id"], "kind": "parent"}]})
+    other = post(api, "tasks", {"owner": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
+    note = post(api, "notes", {"to": "ops", "text": "Cancellations are flat."})["note"]
+    post(api, "bots/ops/control", {"action": "scope", "task_id": task["id"],
+                                   "expected_revision": get(api, "bots/ops")["revision"]})
+    run = lambda: post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]  # noqa: E731
+    limited = run()
+    assert limited["lane"] == "task:" + task["id"]
+    assert [t["id"] for t in limited["next_run"]] == [child["id"]] and limited["notes"] == [] and backlog == []
+    with api.app.state.store.read() as c:                     # the held work is left exactly as it was
+        assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+        assert c.execute("SELECT carried_by FROM notes WHERE id=?", (note["id"],)).fetchone()[0] is None
+    post(api, "bots/ops/control", {"action": "unscope", "expected_revision": get(api, "bots/ops")["revision"]})
+    post(api, "chat/ops", {"text": "Anything new?"})
+    released = run()
+    assert [t["id"] for t in released["next_run"]] == [other["id"]]
+    assert [n["id"] for n in released["notes"]] == [note["id"]] and backlog == ["ops"]
+
+
+def test_claim_limit_migration_upgrades_a_database_at_62_without_lifting_a_drain(api):
+    store = api.app.state.store
+    task_bot(api, lanes=True)
+    with store.transaction() as c:                            # a database from before the limit existed
+        c.execute("INSERT INTO bot_control(bot,draining) VALUES('ops',1) ON CONFLICT(bot) DO UPDATE SET draining=1")
+        c.execute("ALTER TABLE bot_control DROP COLUMN claim_task")
+        c.execute("DELETE FROM cloud_migrations WHERE version=63")
+    store.initialize()
+    store.initialize()                                        # a repeated start takes the same additive path
+    with store.read() as c:
+        assert [dict(r) for r in c.execute("SELECT * FROM bot_control WHERE bot='ops'")] == [
+            {"bot": "ops", "draining": 1, "claim_task": None}]
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=63").fetchone()[0] == 1
+        assert execution.claim_scope(c, "ops") is None
 
 
 def test_a_bot_whose_worktrees_the_runner_is_maintaining(api):
@@ -126,14 +214,6 @@ def test_a_rejected_sign_in(api):
     readiness(api, machine, {"schema_version": 1, "runtimes": {"codex": {"installed": True, "authenticated": "rejected"}},
                              "bots": {"ops": {"ready": True, "runtime": "codex"}}})
     says(api, machine, "sign_in_rejected")
-
-
-def test_a_subscription_profile_the_computer_has_not_reported(api):
-    machine = task_bot(api, lanes=True)
-    new_task(api, "first")
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments(scope,target,profile) VALUES('bot','ops','team-plan')")
-    says(api, machine, "profile")
 
 
 def test_the_report_names_the_bot_and_computer_by_their_bundle_labels(api):

@@ -30,15 +30,20 @@ url = "2"
 yaml-rust2 = { version = "0.10", default-features = false }
 sha2 = "0.10"
 hex = "0.4"
-# The computer screen bridge (crate::screen): the hub websocket over the same rustls and webpki roots reqwest uses.
+# Server certificates verify against the OS trust store, the bundled webpki-roots list where there is none (crate::tls).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+webpki-roots = "1"
+# The computer screen bridge (crate::screen): the hub websocket over the same rustls config reqwest uses.
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [dev-dependencies]
 
 [profile.release]
-lto = true
+# Thin LTO keeps most of fat LTO's inlining but runs in parallel: a clean build takes about two minutes on four
+# vCPUs instead of three, for a binary about 4.5 MB larger.
+lto = "thin"
 strip = true
-codegen-units = 1
 opt-level = 3
 # Unwind, not abort: a bug in one turn ends that turn's task (saved as interrupted), not the runner and every turn.
 panic = "unwind"

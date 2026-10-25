@@ -1,0 +1,59 @@
+# The default guide: what the CEO Bot asks while it drafts a strategy with the owner (backend/strategy.py `guides`).
+# A guide changes the questions and the word for bets, never the stored shape: every strategy has the summary, the
+# vision, the bets and the four sections (serve, sell, know, not), plus any extra section the owner adds.
+#
+# Each question is one idea. `claim` is what the CEO Bot fills in from what it already knows (the website, the
+# market graph, earlier answers) and puts to the owner to keep, edit or strike; `ask` is the open question it falls
+# back on when it knows nothing yet. `section` is where the answer lands; `bets` means it becomes a bet.
+id: default
+name: Default
+description: >-
+  Short, founder-native questions in the style of the YC application and a16z's go-to-market writing. Each one is
+  a claim to keep, edit or strike, so a first draft takes minutes, not a workshop.
+listed: true
+bets_label: Bets
+bet_label: Bet
+questions:
+  - key: make
+    section: sell
+    ask: What do you make, and who needs it badly enough to use a rough version today?
+    claim: "You make {product} for {customer}, who need it badly enough to put up with an early version."
+  - key: know
+    section: know
+    ask: What do you understand about this business that the obvious competitors don't?
+    claim: "You know something the obvious competitors miss: {insight}."
+  - key: money
+    section: sell
+    ask: How do you make money, and how much per customer?
+    claim: "You charge {price} per {unit}, and a typical customer is worth {value} a year."
+  - key: price
+    section: sell
+    ask: What would break if you doubled the price? What if you halved it?
+    claim: "Doubling the price would lose {who}; halving it would {effect}. So the price is a bet, not a guess."
+  - key: fear
+    section: know
+    ask: Who do you fear most, and what stops a bigger company copying you next quarter?
+    claim: "{competitor} is the one to fear, and they can't copy you quickly because {moat}."
+  - key: wedge
+    section: serve
+    ask: What is the narrow way in, the first customer and use you win before anything else?
+    claim: "You get in through {wedge}: {first_customer} first, the rest of the market after."
+  - key: turned-down
+    section: serve
+    ask: What request from a good customer did you turn down, and why?
+    claim: "You turned down {request} from a good customer, because it would pull you toward {direction}."
+  - key: contrarian
+    section: bets
+    ask: What are you betting on that most people in your market would call wrong?
+    claim: "Your bet that most people would call wrong: {bet}. You'd know it's wrong if {signal}."
+  - key: wont
+    section: not
+    ask: What won't you do, even when it would bring money this quarter?
+    claim: "You won't {refusal}, even when it would pay this quarter."
+suggested_sections:
+  - key: brand
+    title: Brand and voice
+    prompt: What the team sounds like and stands for in every message, and the words it never uses.
+  - key: channels
+    title: Channels
+    prompt: Where your last ten customers came from, and the one channel you are betting on next.

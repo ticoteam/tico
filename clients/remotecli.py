@@ -42,6 +42,8 @@ def via_tool(client, args, **more):
               and v is not None}
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
+    if args.fn == "bot keep-tasks-going" and hasattr(args, "limit"):
+        fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -104,6 +106,11 @@ def run(args, who=None):
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
+        if args.fn == "repo review":
+            body = Path(args.body_file).read_text() if args.body_file else args.body
+            return hubtools.repo_review(client, {"repository": args.repository, "number": args.number,
+                                                 "head": args.head, "verdict": args.verdict, "body": body,
+                                                 **({"operation_id": args.operation_id} if args.operation_id else {})})
         if args.fn == "repo product-create":
             return product_repo_create(client, args.name, confirm=args.confirm)
         if args.sub == "list":
@@ -150,9 +157,12 @@ def run(args, who=None):
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
-              "brief", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "org order", "run list",
+              "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "routine update", "team show", "team budget", "org order", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
-              "slack channel list", "slack channel add", "slack channel remove", "slack channel import"):
+              "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
+              "seat list", "seat create", "seat update", "seat close", "seat draft"):
+        if fn == "seat draft" and args.file:      # the CEO Bot's draft, from a file beside it
+            return via_tool(client, args, text=Path(args.file).read_text())
         if fn == "routine update":                  # --enable / --disable are the tool's `enabled`; a key or an id names it
             more = {"text": Path(args.text_file).read_text()} if args.text_file else {}
             if args.enable or args.disable:
@@ -184,6 +194,17 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
+    if fn and fn.startswith("task-manager "):
+        from clients import hubtools
+        op = os.environ.get("HUB_OPERATION_ID")
+        if fn == "task-manager status":
+            return hubtools.task_manager_status(client, {})
+        if fn == "task-manager run":
+            return hubtools.task_manager_run(client, {"operation_id": op})
+        change = {"task-manager on": {"on": True}, "task-manager off": {"on": False},
+                  "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
+                  "task-manager bot": {"bot": getattr(args, "state", None)}}[fn]
+        return hubtools.task_manager_set(client, {**change, "operation_id": op})
     if fn in ("health-monitor findings", "health-monitor report"):
         from clients import hubtools
         if fn == "health-monitor findings":
@@ -203,7 +224,7 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
-    if fn == "decision readout":
+    if fn in ("decision readout", "decision outcome"):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)
@@ -382,9 +403,9 @@ def run(args, who=None):
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
                 payload["private"] = args.private
-            for field in ("type", "step", "number"):
+            for field in ("type", "step", "number", "qa", "change_paths", "qa_not_checkable_live"):
                 if getattr(args, field, None) is not None:
-                    payload[field] = getattr(args, field)
+                    payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
             if args.label:
                 payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
             if args.top:
@@ -509,14 +530,19 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-        if sub in ("update", "close"):
+        if sub in ("update", "close", "done"):
             current = client.get("tasks/" + args.id)["task"]
             body = {"version": current["version"], "note": args.note}
+            if sub == "done":
+                body["status"] = "done"
+            for field in ("verdict", "verdict_head"):
+                if getattr(args, field, None) is not None:
+                    body[field] = getattr(args, field)
             if getattr(args, "quiet", False):
                 body["quiet"] = True
             if sub == "close":
                 body["close"] = True
-            else:
+            elif sub == "update":
                 body.update({"status": args.status, "owner": args.owner, "due": args.due,
                              "goal_id": getattr(args, "goal", None)})
                 if getattr(args, "private", None) is not None:
@@ -532,15 +558,15 @@ def run(args, who=None):
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
             return post("goals", {"owner": target(args.owner), "title": args.title, "parent_id": args.parent,
-                        "body": body or "", "top": bool(args.top)})["goal"]
+                        "body": body or "", "top": bool(args.top), "bet_id": args.bet_id})["goal"]
         if sub == "update":
             body = {"title": args.title, "parent_id": args.parent, "owner": target(args.owner) if args.owner else None,
-                    "rank": args.rank, "top": bool(args.top)}
+                    "rank": args.rank, "top": bool(args.top), "bet_id": args.bet_id}
             if args.body_file or args.body is not None:
                 body["body"] = Path(args.body_file).read_text() if args.body_file else args.body
             return post("goals/" + args.id, body)["goal"]
         return tool(client, args)
-    if cmd in ("kpi", "proposal"):
+    if cmd in ("kpi", "proposal", "strategy"):
         return tool(client, args)
     if cmd == "market":
         if sub == "show":
@@ -623,6 +649,8 @@ def run(args, who=None):
             return via_tool(client, args, text=text, enabled=not args.disabled)
         if sub in ("delete", "run"):
             return via_tool(client, args)
+    if cmd == "release":
+        return via_tool(client, args)
     if cmd == "approval":
         if sub == "show":
             return client.get("approvals/" + args.id)
@@ -733,8 +761,8 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot place", "bot go-live", "bot model", "bot pause",
-                   "bot resume", "bot restore", "bot archive") or (args.fn == "bot create" and args.record_only):
+    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
+                   "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items()
                   if k not in ("cmd", "sub", "subsub", "fn", "no_setup", "record_only") and v not in (None, [])}
@@ -778,7 +806,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo")
+    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "health-monitor")
     return catalog.free_slug(args.name or card.get("name") or args.template, lambda slug: (
         slug in known or slug in reserved
         or any((workspace / (prefix + slug)).exists() for prefix in (REPO_PREFIX, OLD_REPO_PREFIX))))

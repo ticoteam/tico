@@ -53,7 +53,8 @@ separate_users() {
   done
   # The workspace and model logins are shared; legacy secrets are the supervisor's.
   as_supervisor mkdir -p "$HOME/workspace/secrets"
-  as_supervisor chmod 0770 "$HOME/workspace"
+  # Sticky, so a turn running as another user of the group cannot rename a bot's checkout or the secrets aside.
+  as_supervisor chmod 1770 "$HOME/workspace"
   chown "$SUPERVISOR_UID:$SUPERVISOR_GID" "$HOME/workspace/secrets" && as_supervisor chmod 0700 "$HOME/workspace/secrets"
   # The mail tool's folder, <workspace>/runtime/mail: a bot's first `mail.sh` builds its venv there, and the
   # supervisor's connectors job keeps mail.db there. The job made these folders as ticorun (0755) on a new
@@ -85,6 +86,7 @@ separate_users() {
   fi
   mkdir -p /run/tico-runner && chown "$SUPERVISOR_UID:$SUPERVISOR_GID" /run/tico-runner && as_supervisor chmod 0755 /run/tico-runner
   export TICO_RUNNER_BOT_UID="$BOT_UID" TICO_RUNNER_BOT_GID="$SUPERVISOR_GID"
+  export TICO_RUNNER_TURN_UIDS=10100-10163
   exec setpriv --reuid="$SUPERVISOR_UID" --regid="$SUPERVISOR_GID" --clear-groups --inh-caps="$CAPS" --ambient-caps="$CAPS" \
     /usr/local/bin/tico-runner-entrypoint "$@"
 }

@@ -8,6 +8,7 @@ Those live in the person's `preferences` row, so each person has their own.
 """
 
 import json
+import sqlite3
 
 from . import model_login, providers
 from .statuses import PARKED_SQL
@@ -95,19 +96,19 @@ def _login_target(runners, wanted):
 
 
 def built_in(settings):
-    """The four bots every install starts with."""
-    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager"}
+    """The bots every install starts with: the four a person talks to, and the Task Manager (docs/task-manager.md)."""
+    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager", "task-manager"}
 
 
 def own_bots(c, settings):
-    """Bots the company added, as opposed to the four built in."""
+    """Bots the company added, as opposed to the ones built in."""
     bootstrap = built_in(settings)
     return [row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state!='archived' ORDER BY slug")
             if row["slug"] not in bootstrap]
 
 
 def _next_bot(c, settings):
-    """The starter bot to set up next: parked (`needs_setup`), in the order first run put them, which
+    """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
     puts the team's first bot first. Returns (slug, name, why), or None when nothing is waiting."""
     rows = c.execute("SELECT bc.bot,b.display_name,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
@@ -116,12 +117,12 @@ def _next_bot(c, settings):
     ranked = sorted(((json.loads(row["config_json"] or "{}"), row) for row in rows),
                     key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]))
     row = ranked[0][1]
-    why = "Press Set up on its page and answer its questions; it drafts a first result for you to approve."
+    why = "Press Start onboarding on its page and answer its questions; it drafts a first result for you to approve."
     return row["bot"], row["display_name"], why
 
 
 def _first_output(c):
-    """A starter bot has been onboarded: its setup is done and a person has seen its first
+    """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
     result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
     return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
                      "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1").fetchone()
@@ -161,16 +162,26 @@ def checklist(c, who, settings, github):
         _item("first_bot", "Create your first bot", mine,
               "BotOps is building it." if building else "Say what it should do and BotOps builds it.",
               "#/task/" + building["id"] if building else "", action="" if building else "create-bot"),
-        _item("next_bot", "Set up " + waiting[1] if waiting else "No bot is waiting for setup", not waiting,
+        _item("next_bot", "Onboard " + waiting[1] if waiting else "No bot is onboarding", not waiting,
               waiting[2] if waiting else "", "#/bot/" + waiting[0] if waiting else ""),
         _item("first_output", "First approved output", _first_output(c),
-              "Set up a starter bot and approve the first thing it drafts. That is the point of the team.",
+              "Onboard a starter bot and approve the first thing it drafts. That is the point of the team.",
               "#/bot/" + waiting[0] if waiting else "#/tasks"),
         _item("first_update", "Your first update arrived",
               c.execute("SELECT 1 FROM updates LIMIT 1").fetchone(),
               "Each active bot posts a short update every day.", "#/updates"),
+        _item("strategy", "Publish your strategy", _published(c),
+              "Setup saved a draft. Publish it when the bets and what you won't do are right.", "#/strategy"),
     ]
     return items
+
+
+def _published(c):
+    """The team has published a strategy version (backend/strategy.py); a server without the table has not."""
+    try:
+        return c.execute("SELECT 1 FROM strategy_versions WHERE status='published' LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        return None
 
 
 # What each kind of person needs to see: the owner all of it, bot administrators what involves

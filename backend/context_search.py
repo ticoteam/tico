@@ -90,7 +90,7 @@ def install_context_search(app, store, auth):
                     if all(word in (title + " " + body).casefold() for word in words):
                         found.append({"kind": "document", "id": row["id"], "title": title,
                                       "collection": row["collection"], "updated": row["updated"],
-                                      "url": doc.get("url") or "#/market?note=" + quote(row["id"], safe=""),
+                                      "url": doc.get("url") or "#/strategy/market?note=" + quote(row["id"], safe=""),
                                       "excerpt": excerpt(body, words),
                                       "score": sum(10 if w in title.casefold() else 1 for w in words)})
             if source in ("all", "market"):
@@ -102,7 +102,7 @@ def install_context_search(app, store, auth):
                         body = row.get("summary") or row.get("quote") or row.get("our_read") or ""
                         found.append({"kind": kind, "id": row["id"],
                                       "title": row.get("name") or row["id"], "excerpt": excerpt(body, words),
-                                      "url": row.get("source_url") or "#/market?note=" + quote(row["id"], safe=""), "score": len(words)})
+                                      "url": row.get("source_url") or "#/strategy/market?note=" + quote(row["id"], safe=""), "score": len(words)})
         found.sort(key=lambda r: (-r["score"], r["kind"], r["id"]))
         return {"query": q, "mode": "keyword", "results": found[:limit], "has_more": len(found) > limit}
 

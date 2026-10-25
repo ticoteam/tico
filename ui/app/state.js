@@ -47,14 +47,21 @@ const assistantName = () => {
     ? CONFIG_DEFAULTS.assistant_name : name;
 };
 const assistantBot = () => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
-// The assistant, BotOps, the Librarian and the CEO Bot are built in to every team: pause and rename them, never archive or delete.
-const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager';
+// The assistant, BotOps, the Librarian, the CEO Bot and the Task Manager are built in to every team: pause and rename
+// them, never archive or delete. The Task Manager's entry point is Settings > Rules, not the org chart.
+const isBuiltInBot = slug => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager';
 // The CEO Bot (backend/ceo_bot.py, slug goal-manager) is on every install, at the top of the org chart, by the name the
 // owner gave it, else "CEO Bot". Its old name never shows: a roster read before the upgrade renamed it says "CEO Bot".
 const ceoBotName = () => {
   const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
   return name && name !== 'Goal Manager' ? name : 'CEO Bot';
 };
+// The owner talks to the CEO Bot in place of an Assistant (backend/assistant.py): their menu tab and #/assistant are the
+// CEO Bot, by its name. Everyone else, admins included, keeps their Assistant.
+const meCeo = () => S.me?.role === 'owner'
+  && (S.emps || []).some(e => e.name === 'goal-manager' && !['archived', 'planned'].includes(e.status));
+const myChatBot = () => meCeo() ? 'goal-manager' : assistantBot();
+const myChatName = () => meCeo() ? ceoBotName() : assistantName();
 const companyName = () => S.config.company_name || appName();
 // Tico's own wordmark, only while the app is called Tico; a team that named its app gets that name as text.
 const brandLogo = () => appName() === CONFIG_DEFAULTS.app_name
@@ -163,9 +170,6 @@ function stateOf(slug) {
   const live = S.v2?.status?.[slug];
   if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
-  if (S.issues.some(i => i.owner === slug && i.state === 'OPEN' && (i.needs_human || i.status === 'blocked'))) return 'needs';
-  const last = (S.status?.recent_runs || []).find(r => r.employee === slug);
-  if (last && last.exit !== 0) return 'failed';
   return 'idle';
 }
 const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
@@ -175,4 +179,18 @@ function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
     && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug));
 }
-function needsMeCount(slug) { return botNeeds(slug).length; }
+// While only some pages are held, the counts are the server's over the whole list (its `bots`).
+const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
+function needsMeCount(slug) { const whole = needsBotsWhole(); return whole ? whole['bot:' + slug] || 0 : botNeeds(slug).length; }
+// needsMeCount for every bot in one pass over the needs list ("bot:<slug>" -> count), for views that count many rows.
+function needsMeCounts() {
+  const whole = needsBotsWhole();
+  if (whole) return new Map(Object.entries(whole));
+  const counts = new Map();
+  for (const it of S.v2?.needs || []) {
+    const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
+      : it.kind === 'ask' ? it.requester : null;
+    if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
+  }
+  return counts;
+}

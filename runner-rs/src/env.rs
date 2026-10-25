@@ -110,11 +110,46 @@ pub struct Vault {
     pub values: Vec<String>,
     pub names: BTreeSet<String>,
     pub files: Vec<PathBuf>,
+    file_vars: BTreeMap<String, usize>,
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
+    pub turn_user: Option<crate::turn_users::Lease>,
 }
 
 impl Vault {
+    /// A subscription host never receives the Gateway token. Its file grants keep their existing bot UID;
+    /// a Gateway primary or fallback gets private copies accessible only by its leased user.
+    /// The identity a hop runs as and the files it reads. `isolated` is the hop harness's `isolated_user` capability:
+    /// a leased turn runs such a harness as its own user, with private copies of its file credentials, its own HOME and
+    /// TMPDIR. Any other harness keeps owner-only sign-in files in the bot's home (Claude Code, Codex and the rest), so
+    /// it runs as `bot` with the files in the bot's turn directory, lease or not.
+    pub fn for_model(&mut self, env: &mut Env, model: Option<&str>, isolated: bool) -> Result<Option<(u32, u32)>, String> {
+        let gateway = crate::hosts::pi::is_gateway(model);
+        if gateway && (self.turn_user.is_none() || self.relay.is_none()) {
+            return Err("Tico model turn has no private user and relay (not_isolated)".into());
+        }
+        if !gateway {
+            for name in [crate::gateway_relay::KEY_ENV, crate::gateway_relay::URL_ENV, crate::gateway_relay::DIR_ENV] { env.remove(name); }
+        }
+        let Some(user) = &self.turn_user else { return Ok(None) };
+        let own = gateway || isolated;
+        let (id, dir) = if own {
+            (user.identity(), user.dir.clone())
+        } else {
+            (crate::isolation::identity().ok_or("missing Docker bot identity")?, crate::isolation::turn_dir())
+        };
+        user.move_files(env, &mut self.files, id, &dir)?;
+        for (name, index) in &self.file_vars { env.insert(name.clone(), self.files[*index].display().to_string()); }
+        if own {
+            user.private_home(env)?;
+            for name in ["TMPDIR", "TMP", "TEMP"] { env.insert(name.into(), user.dir.display().to_string()); }
+        }
+        if gateway {
+            env.insert(crate::gateway_relay::DIR_ENV.into(), user.dir.join("pi").display().to_string());
+        }
+        Ok(own.then_some(user.identity()))
+    }
+
     pub fn remove_files(&mut self) {
         for f in self.files.drain(..) {
             let _ = std::fs::remove_file(f);
@@ -124,7 +159,10 @@ impl Vault {
 
 impl Drop for Vault {
     fn drop(&mut self) {
+        // Revoke the connection before a cleaned UID can be lent to another turn.
+        self.relay.take();
         self.remove_files();
+        self.turn_user.take();
     }
 }
 
@@ -178,7 +216,8 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
             let value = text_of(&item["value"]);
             if item["kind"].as_str() == Some("file") {
                 // Under isolation the state directory is closed to the bot user: the file goes where its turn reads.
-                let dir = if crate::isolation::enabled() { crate::isolation::turn_dir() } else { ctx.state_dir.to_path_buf() };
+                let dir = if let Some(user) = &vault.turn_user { user.dir.clone() }
+                    else if crate::isolation::enabled() { crate::isolation::turn_dir() } else { ctx.state_dir.to_path_buf() };
                 let path = dir.join(format!("tico-credential-{}", uuid::Uuid::new_v4().simple()));
                 let mut f = std::fs::OpenOptions::new()
                     .write(true)
@@ -187,7 +226,12 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
                     .open(&path)
                     .map_err(|e| format!("cannot write a credential file: {e}"))?;
                 vault.files.push(path.clone());
-                crate::isolation::chown(&path);
+                vault.file_vars.insert(key.to_string(), vault.files.len() - 1);
+                if let Some(user) = &vault.turn_user {
+                    use std::os::fd::AsRawFd;
+                    let (uid, gid) = user.identity();
+                    if unsafe { libc::fchown(f.as_raw_fd(), uid, gid) } != 0 { return Err(std::io::Error::last_os_error().to_string()); }
+                } else { crate::isolation::chown(&path); }
                 f.write_all(value.as_bytes()).map_err(|e| e.to_string())?;
                 env.insert(key.to_string(), path.display().to_string());
             } else {
@@ -253,6 +297,19 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_gateway_hop_can_receive_the_relay_and_it_needs_a_lease() {
+        let mut vault = Vault::default();
+        let mut env: Env = [(crate::gateway_relay::KEY_ENV.into(), "synthetic-pass".into()),
+                            (crate::gateway_relay::URL_ENV.into(), "http://127.0.0.1:9/gateway".into()),
+                            (crate::gateway_relay::DIR_ENV.into(), "/synthetic/private".into())].into();
+        assert!(vault.for_model(&mut env.clone(), Some("tico-mid-1.0"), true).is_err());
+        assert_eq!(vault.for_model(&mut env, Some("opus-5-5"), true).unwrap(), None);
+        for key in [crate::gateway_relay::KEY_ENV, crate::gateway_relay::URL_ENV, crate::gateway_relay::DIR_ENV] {
+            assert!(!env.contains_key(key));
+        }
+    }
 
     #[test]
     fn reserved_names_are_the_python_list() {

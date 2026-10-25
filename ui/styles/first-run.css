@@ -19,7 +19,7 @@
 .ob *{--dci:color-mix(in srgb,var(--dc,var(--accent)) 78%,var(--ink))}
 .ob-main{min-width:0;grid-column:1;grid-row:1;scroll-margin-top:12px}
 .ob-side{grid-column:2;grid-row:1;position:sticky;top:12px;min-width:0}
-.ob-phase-finish{grid-template-columns:minmax(0,1fr)}
+.ob.ob-phase-finish{grid-template-columns:minmax(0,1fr)}
 .ob-phase-finish .ob-side{display:none}
 .ob-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px 28px;
   box-shadow:0 1px 2px rgba(15,23,42,.04),0 12px 32px -20px rgba(15,23,42,.28)}
@@ -99,6 +99,7 @@
 .ob-helper+.ob-helper{margin-top:8px}
 .ob-helper-toggle{display:flex;align-items:center;gap:10px;font-size:var(--t-base);font-weight:600;cursor:pointer}
 .ob-helper-name{flex:1;min-width:0}
+.ob-helper-name small{display:block;margin-top:3px;font-size:var(--t-sm);font-weight:400;line-height:1.4;color:var(--muted)}
 .ob-helper .ob-mailbox{padding:0 0 2px 38px}
 .ob-mailbox select{font-size:var(--t-base)}
 .ob-more{margin-top:14px}
@@ -225,19 +226,58 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
   .ob-nav{gap:6px}
   .ob-canvas{margin:0 -8px;padding:16px 12px}
 }
-.fr-card{margin-top:var(--s4)}.fr-card header{flex-wrap:wrap;gap:2px var(--s3)}
+.fr-providers{margin:var(--s3) 0;font-size:var(--t-base)}
+#onb-after>details{padding:10px 0;border-bottom:1px solid var(--line)}
+#onb-after summary,.onb-builtins summary,.fr-starter-tasks summary{cursor:pointer;font-size:var(--t-base)}
+.fr-owners summary{display:flex;align-items:center;gap:var(--s3);list-style:none}
+.fr-owners summary::-webkit-details-marker{display:none}
+.fr-owners summary .linkish{margin-left:auto}
+.fr-owner-list,.fr-admin form{margin-top:var(--s3)}
+.onb-builtins{margin-top:var(--s3);color:var(--muted)}
+.onb-builtins[open] summary{margin-bottom:var(--s2)}
+.fr-sample-created{margin:var(--s3) 0 var(--s2);font-size:var(--t-base)}
+.fr-starter-tasks{margin-bottom:var(--s3)}
 .fr-form{display:grid;grid-template-columns:1fr 1fr;gap:0 var(--s3)}.fr-form .onb-actions{grid-column:1/-1;margin-top:0}
 .fr-owner{display:flex;align-items:center;gap:var(--s3);padding:6px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}.fr-owner:last-of-type{border-bottom:0}
 .fr-owner>span:first-child{flex:1;min-width:140px;font-weight:600}.fr-owner select{width:190px;font-size:var(--t-base)}
-.fr-tools{list-style:none;margin:0 0 var(--s3);padding:0;display:grid;gap:4px}
-.fr-tools li{display:flex;gap:var(--s3);align-items:center;font-size:var(--t-base)}.fr-tools a{font-size:var(--t-base)}
 .fr-secrets{margin:0;padding:10px 12px;border-left:3px solid var(--wait);border-radius:0 7px 7px 0;background:var(--wait-bg);font-size:var(--t-base)}
 .tree-setup{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:4px;border-radius:50%;background:var(--wait-bg)}
-.tree-setup .nav-icon{width:14px;height:14px;font-size:14px;color:var(--wait);font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
+.tree-setup .nav-icon{width:14px;height:14px;font-size:14px;color:var(--wait-ink);font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
 .bot-onboard{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;margin:0 0 var(--s3);padding:10px 14px;border:1px solid color-mix(in srgb,var(--wait) 40%,var(--line));border-radius:var(--radius);background:color-mix(in srgb,var(--wait) 8%,var(--surface))}
 .bot-onboard .primary,.bot-onboard .muted{margin-left:auto}
 @media(max-width:760px){
   .fr-form{grid-template-columns:1fr}
   .fr-owner select{width:100%}
   .bot-onboard .primary{width:100%}
+}
+.fr-strategy{margin:var(--s3) 0;font-size:var(--t-base)}
+
+/* first run, Your bets (ui/setup-strategy.js): the claims and What we won't do on the left, the draft filling in on the
+   right; one column on a phone, the draft under the claims. The bets borrow the Strategy page's rows (strategy.css). */
+.onb.onb-wide{max-width:1040px}
+.ss{display:grid;grid-template-columns:minmax(0,1fr) minmax(240px,320px);gap:28px;align-items:start}
+.ss-main{min-width:0}
+.ss-job{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:var(--t-base)}
+.ss-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--accent);animation:ssdot 1.2s ease-in-out infinite}
+@keyframes ssdot{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.ss-dot{animation:none}}
+.ss-bet-actions{display:flex;gap:6px;margin:8px 0 0 24px}
+.ss .strat-bet-new{padding-top:4px}
+.ss-not{margin:16px 0 0}
+.ss-side{position:sticky;top:12px;min-width:0;padding:12px 16px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
+.ss-side-head{margin:0 0 6px;font-size:var(--t-sm)}
+.ss-side-sec{padding:8px 0;border-top:1px solid var(--line)}
+.ss-side-sec .strat-md,.ss-side-sec .strat-text{font-size:var(--t-base)}
+.ss-side-bets{margin:0;padding-left:18px;font-size:var(--t-base);line-height:var(--lh)}
+.ss-found{margin:0 0 12px}
+.ss-found .ss-job{margin-bottom:6px}
+.ss-found-list{list-style:none;margin:0;padding:0}
+.ss-found-row{display:grid;grid-template-columns:96px minmax(0,1fr) auto;gap:8px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-base);overflow-wrap:anywhere}
+@media(max-width:760px){
+  .ss{grid-template-columns:minmax(0,1fr);gap:16px}
+  .ss-side{position:static}
+  .ss-bet-actions{margin-left:0}
+  .ss-bet-actions .strat-mini{min-height:36px;padding:4px 12px}
+  .ss-found-row{grid-template-columns:minmax(0,1fr) auto}
+  .ss-found-row .strat-bet-k{grid-column:1/-1}
 }

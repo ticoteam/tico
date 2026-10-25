@@ -5,8 +5,10 @@ import json
 import os
 import sqlite3
 import threading
-from contextlib import contextmanager
+from collections import deque
+from contextlib import ExitStack, contextmanager
 
+import orjson
 import yaml
 
 from . import goals as G
@@ -192,6 +194,14 @@ CREATE TABLE IF NOT EXISTS attempts(
  token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
  created TEXT NOT NULL, started TEXT, finished TEXT, thread_id TEXT,
  result_json TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS attempt_diagnostics(
+ attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
+-- Bound history reads by time before evaluating their visibility gates.
+CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created);
+CREATE INDEX IF NOT EXISTS attempts_bot_state ON attempts(bot,state);
 CREATE TABLE IF NOT EXISTS attempt_events(
  id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT NOT NULL REFERENCES attempts(id),
  seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created TEXT NOT NULL,
@@ -357,7 +367,6 @@ CREATE TABLE IF NOT EXISTS slack_events(
  edited TEXT, deleted TEXT, updated TEXT, UNIQUE(channel, ts));
 CREATE INDEX IF NOT EXISTS slack_events_thread ON slack_events(channel, thread_ts, ts);
 CREATE INDEX IF NOT EXISTS slack_events_state ON slack_events(state, received);
-CREATE INDEX IF NOT EXISTS slack_events_channel_ts ON slack_events(channel, ts);
 CREATE TABLE IF NOT EXISTS slack_reads(
  channel TEXT NOT NULL, reader TEXT NOT NULL, last_ts TEXT NOT NULL DEFAULT '',
  last_run TEXT, digests INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(channel, reader));
@@ -389,6 +398,15 @@ def refused(c, identity, exc):
     """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it."""
     c.execute("ROLLBACK TO domain_write")
     c.execute("RELEASE domain_write")
+    from . import ceo_acts
+    if isinstance(exc, ceo_acts.Proposed):
+        # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
+        ceo_acts.settle(c, exc)
+        return Problem(exc.rule, exc.detail, 409)
+    # Gate notifications survive the refused move, while its step and reviewer wake roll back.
+    if getattr(exc, "review_gate", None):
+        from . import review_gate
+        review_gate.notify(c, identity.actor, exc.review_gate)
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
@@ -409,12 +427,19 @@ MAIL_RETENTION_DAYS = 180
 # answers again, and an empty claim handed out no lease. They arrive every 15 s per runner
 # (the heartbeat reply carries every assignment), and grew to most of the database file. A claim that leased a job stays replayable so a lost reply cannot
 # strand the lease.
+# A running turn asks for steering input every few seconds, and almost every answer is empty; an answer that
+# took input stays replayable. Output events replay by their own sequence numbers (execution.events), so a
+# stored receipt for each batch only grew the table: together they were most of its writes.
 def is_poll(operation, result):
     if operation in ("/api/v2/runners/heartbeat", "/api/v2/runners/performance"):
         return True
     if operation == "/api/v2/jobs/claim":
         return isinstance(result, dict) and result.get("attempt") is None
-    return operation.startswith("/api/v2/attempts/") and operation.endswith("/renew")
+    if not operation.startswith("/api/v2/attempts/"):
+        return False
+    if operation.endswith("/inputs"):
+        return isinstance(result, dict) and not result.get("messages")
+    return operation.endswith(("/renew", "/events"))
 
 
 def encode(value):
@@ -450,6 +475,54 @@ def sweep_idempotency(store, now=None, batch=5000):
         deleted += removed
         if removed < batch:
             return deleted
+
+
+DELTA_RETENTION_DAYS = 14
+DELTA_SWEEP_MAX = 200_000     # rows one hourly pass deletes at most, so a first backlog drains over hours
+
+
+def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
+    """Delete the streamed text pieces (`attempt_events` kind 'delta', not a model's thought) of runs finished more
+    than DELTA_RETENTION_DAYS ago, in short transactions like `sweep_idempotency`; returns the count.
+
+    A finished run's text is whole in its `message` events and `attempts.final_text`; the pieces only typed the live
+    reply (turns.reply_parts, read while a run is live). Thought deltas stay: a turn's steps show them (turns.py).
+    Attempts are walked in creation order from a mark kept in registry_metadata, so a pass never rescans the table;
+    one created before the cutoff and still unfinished is passed over for good."""
+    at = now or H.now()
+    cutoff = H.shift(at, days=-DELTA_RETENTION_DAYS)
+    created_before = H.shift(at, days=-DELTA_RETENTION_DAYS - 1)     # a run finishing a day after it began is late
+    with store.read() as c:
+        mark = c.execute("SELECT value_json FROM registry_metadata WHERE key='delta-sweep-mark'").fetchone()
+    mark = json.loads(mark[0]) if mark else ["", ""]
+    deleted = 0
+    while deleted < most:
+        with store.read() as c:
+            rows = c.execute("SELECT id,created,finished FROM attempts WHERE created<? AND (created,id)>(?,?) "
+                             "ORDER BY created,id LIMIT 200", (created_before, *mark)).fetchall()
+        done = [r["id"] for r in rows if r["finished"] and r["finished"] < cutoff]
+        while done and deleted < most:
+            with store.transaction() as c:
+                removed = c.execute(
+                    "DELETE FROM attempt_events WHERE id IN (SELECT id FROM attempt_events WHERE attempt_id IN (%s) "
+                    "AND kind='delta' AND CASE WHEN json_valid(payload_json) THEN "
+                    "json_extract(payload_json,'$.delta_kind') END IS NOT 'thought' LIMIT ?)"
+                    % ",".join("?" * len(done)), (*done, batch)).rowcount
+            deleted += removed
+            if removed < batch:
+                break
+        else:
+            if done:
+                break                   # the cap was reached inside this group: it is taken up again next pass
+        if not rows:
+            break
+        mark = [rows[-1]["created"], rows[-1]["id"]]
+        with store.transaction() as c:
+            c.execute("INSERT INTO registry_metadata VALUES('delta-sweep-mark',?) "
+                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(mark),))
+        if len(rows) < 200:
+            break
+    return deleted
 
 
 def sweep_mail(store, now=None, batch=5000):
@@ -489,9 +562,9 @@ def readiness_document(value):
     """Return the canonical runner-readiness shape, including legacy heartbeats."""
     if hasattr(value, "model_dump"):
         value = value.model_dump()
-    if isinstance(value, str):
+    if isinstance(value, (str, bytes)):
         try:
-            value = json.loads(value)
+            value = orjson.loads(value)
         except (TypeError, ValueError):
             value = {}
     value = value if isinstance(value, dict) else {}
@@ -619,6 +692,44 @@ def _pooled(base):
     return type("Pooled" + base.__name__, (base,), body)
 
 
+# Seconds a writer waits for the gate, then for SQLite's lock (busy_timeout, other processes). Together they bound a
+# request's wait for the lock: past that it answers 503 `busy` with Retry-After (app.py storage_handler) instead of
+# holding one of the 40 request threads for a minute while client retries queue behind it.
+WRITE_WAIT = 10
+
+
+class WriterGate:
+    """FIFO admission: a scheduler opening its next transaction goes behind already waiting requests."""
+
+    def __init__(self, timeout=WRITE_WAIT):
+        self.lock = threading.Lock()
+        self.queue = deque()
+        self.timeout = timeout
+
+    def acquire(self):
+        ready = threading.Event()
+        with self.lock:
+            self.queue.append(ready)
+            if len(self.queue) == 1:
+                ready.set()
+        try:
+            if not ready.wait(self.timeout):
+                raise sqlite3.OperationalError("database is locked")
+        except BaseException:
+            with self.lock:
+                first = self.queue[0] is ready
+                self.queue.remove(ready)
+                if first and self.queue:
+                    self.queue[0].set()
+            raise
+
+    def release(self):
+        with self.lock:
+            self.queue.popleft()
+            if self.queue:
+                self.queue[0].set()
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -633,22 +744,40 @@ class Store:
         # which on a large install cost more than most reads themselves.
         self.pooled = _pooled(self.factory)
         self.pool, self.pool_file, self.pool_lock = [], None, threading.Lock()
+        # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
+        # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
+        self.writer = WriterGate()
+        from .provenance_clock import Cache
+        self.provenance_cache = Cache()
 
     def connect(self, factory=None, check_same_thread=True):
-        c = sqlite3.connect(str(self.settings.db_path), timeout=30, isolation_level=None,
+        c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
                             factory=factory or self.factory, check_same_thread=check_same_thread)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
-        # As hubdb.connect: a writer waits out a backup checkpoint or a long scheduler pass
-        # rather than answering storage_unavailable.
-        c.execute("PRAGMA busy_timeout=30000")
-        c.execute("PRAGMA synchronous=FULL")
+        # A writer waits out a backup checkpoint or another process's pass, but not so long that requests pile up
+        # (WRITE_WAIT). hubdb.connect keeps 30 s: it opens the file at start-up, for migrations.
+        c.execute(f"PRAGMA busy_timeout={WRITE_WAIT * 1000}")
+        # In WAL mode NORMAL syncs at checkpoints, not on every commit inside the writer gate, where a sync
+        # waiting behind other disk writes on the host held every writer for seconds. The database cannot
+        # corrupt; an OS crash or power loss can lose the last commits, as with hubdb.connect.
+        c.execute(f"PRAGMA synchronous={H.synchronous('NORMAL')}")
+        # The 2 MB default page cache re-read hot index pages on every read of a multi-GB file. 16 MB per connection
+        # (POOL_IDLE kept, a few dozen at peak) fills lazily; the mmap is the OS page cache, shared by all of them.
+        c.execute("PRAGMA cache_size=-16384")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA mmap_size=268435456")
         return c
 
     def initialize(self, *, seed_market=True, adopt_legacy=False):
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
             c.executescript(SCHEMA)
+            from . import start_places as _start_places
+            c.executescript(_start_places.SCHEMA)
+            _start_places.restore_waits(c)
+            from . import org_turns as _org_turns
+            c.executescript(_org_turns.SCHEMA)
             from . import updates as _updates
             c.executescript(_updates.SCHEMA)
             _updates.ensure_schema(c)
@@ -665,8 +794,17 @@ class Store:
             c.executescript(_learnings.SCHEMA)
             from . import stale_review as _stale_review
             c.executescript(_stale_review.SCHEMA)
+            from . import stall_triage as _stall_triage
+            c.executescript(_stall_triage.SCHEMA)
+            from . import rule_suggestions as _rule_suggestions
+            c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
+            from . import task_rules as _task_rules
+            c.executescript(_task_rules.SCHEMA)
+            from . import rules as _rules
+            c.executescript(_rules.SCHEMA)
+            _rules.seed_dev(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs
@@ -679,6 +817,8 @@ class Store:
             c.executescript(_mail_settings.SCHEMA)
             from . import company_storage as _company_storage
             c.executescript(_company_storage.SCHEMA)
+            from . import tico_storage as _tico_storage
+            c.executescript(_tico_storage.SCHEMA)
             from . import google_connect as _google_connect
             _google_connect.ensure_schema(c)
             from . import support as _support
@@ -691,6 +831,14 @@ class Store:
             c.executescript(_credential_cards.SCHEMA)
             from . import watchers as _watchers
             c.executescript(_watchers.SCHEMA)
+            from . import bot_task_tabs as _bot_task_tabs
+            c.executescript(_bot_task_tabs.SCHEMA)
+            # The sidebar's widgets: order, hidden and heights (Editable bot sidebar); NULL is the default four.
+            H.add_column(c, "bot_task_tabs", "widgets_json", "TEXT")
+            from . import learned as _learned
+            c.executescript(_learned.SCHEMA)
+            from . import task_manager as _task_manager
+            c.executescript(_task_manager.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
@@ -700,8 +848,12 @@ class Store:
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
+            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
+                H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
+            from . import invites as _invites
+            c.executescript(_invites.SCHEMA)
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
@@ -1189,8 +1341,19 @@ class Store:
                     c.execute(H.TASKS_DUE_INDEX)
                     c.execute(H.TASKS_RESUME_INDEX)
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
+                    # A day of history must not authorize every older attempt first.
+                    c.execute("CREATE INDEX IF NOT EXISTS attempts_created ON attempts(created)")
+                    c.execute("INSERT INTO cloud_migrations VALUES(62,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=63").fetchone():
+                    # The one task an operator limited a bot's claims to (execution.scoped_sql); NULL is no limit.
+                    H.add_column(c, "bot_control", "claim_task", "TEXT")
+                    c.execute("INSERT INTO cloud_migrations VALUES(63,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
+                # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
+                # column, in one UPDATE. Unversioned and idempotent; it reads only the small unsettled-carried index.
+                H.notes_settle_catch_up(c, None)
                 H.ensure_market_reads(c)
                 # Deleted tasks wait here until restored or purged; created unversioned, like the
                 # trigger below, so it never takes a migration number another change needs.
@@ -1202,10 +1365,23 @@ class Store:
                 # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
                 from .milestone_waits import ensure as ensure_milestone_waits
                 ensure_milestone_waits(c)
+                # Failed-run back-off and run budgets (backend/run_backoff.py, backend/turn_budgets.py). Unversioned
+                # like the trash: an older release never reads the tables.
+                from .run_backoff import ensure as ensure_run_backoff
+                from .turn_budgets import ensure as ensure_turn_budgets
+                ensure_run_backoff(c)
+                ensure_turn_budgets(c)
+                # Recruiting seats (backend/lifecycle.py). Unversioned like the trash.
+                from .lifecycle import ensure as ensure_seats
+                ensure_seats(c)
                 # The company's Vision, Description and their history, and each goal's Why (backend/company.py).
                 # Unversioned like the trash: an older release never reads the tables or the columns.
                 from .company import ensure as ensure_company
                 ensure_company(c)
+                # The team's strategy: versions, choices, their history, and each goal's choice (backend/strategy.py).
+                # Unversioned the same way; the first run makes the draft from the company profile.
+                from .strategy import ensure as ensure_strategy
+                ensure_strategy(c)
                 # Temporary task assignments are retired (#420): their actors are archived and off every computer,
                 # their open tasks back with the role. Unversioned and idempotent like the trash; the tables stay inert.
                 from .shared_bots import retire_assignments
@@ -1223,6 +1399,11 @@ class Store:
                 # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
                 # NULL with none handed. Unversioned like stop_requested.
                 H.add_column(c, "attempts", "gateway_key_id", "TEXT")
+                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
+                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
+                # stop_requested.
+                H.add_column(c, "attempts", "handed_runtime", "TEXT")
+                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
@@ -1239,6 +1420,9 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
+                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
+                # (backend/task_models.py). Unversioned: an older release never reads it.
+                H.add_column(c, "attempts", "model_json", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
@@ -1263,13 +1447,42 @@ class Store:
                                    # A bot's latest usage-limited attempt (execution.last_limit), read per Health render.
                                    ("attempts_bot_finished", "attempts(bot, finished)"),
                                    ("attempts_job", "attempts(job_id)"),
+                                   # Lease maintenance walks only active runs, never their history.
+                                   ("attempts_live_lease", "attempts(lease_until,id) WHERE state IN ('leased','running')"),
+                                   ("jobs_queued", "jobs(id,bot,message_id) WHERE state='queued'"),
                                    ("attempts_runner_state", "attempts(runner_id, state)"),
                                    # The turns a computer ran in a window, read under the write lock by an
                                    # open overload (backend/performance.py `_runs`).
                                    ("attempts_runner_finished", "attempts(runner_id, finished)"),
                                    # A computer asking after the tasks its session checkouts are kept for.
                                    ("attempts_bot_lane", "attempts(bot, lane)"),
+                                   # Recent failed and finished runs (Health, Fleet check, the census, /api/runs).
+                                   # Partial, so the scheduler's live-lease read keeps attempts_live_lease.
+                                   ("attempts_finished_state", "attempts(state, finished) WHERE finished IS NOT NULL"),
                                    ("events_action_target", "events(action, target, ts)"),
+                                   # Conversations newest first (hubdb.conversations_for, chats_with): the ORDER BY's
+                                   # expression word for word, or SQLite sorts every conversation.
+                                   ("conversations_recent", "conversations(COALESCE(last_message_at, created))"),
+                                   # A person's open chat with a bot (hubdb._pair_conversation, on every say()).
+                                   ("conversations_open_kind", "conversations(kind, COALESCE(last_message_at, created)) "
+                                    "WHERE closed_at IS NULL AND task_id IS NULL"),
+                                   # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
+                                   # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
+                                   ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
+                                   ("approvals_open_requester", "approvals(requested_by) WHERE decision IS NULL"),
+                                   ("approvals_open_created", "approvals(created) WHERE decision IS NULL"),
+                                   # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
+                                   # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
+                                   ("jobs_live_created", "jobs(created) WHERE state IN ('queued','leased','running','input')"),
+                                   ("jobs_attempt", "jobs(attempt_id) WHERE attempt_id IS NOT NULL"),
+                                   ("jobs_uncertain", "jobs(created) WHERE state='uncertain'"),
+                                   # Open asks to someone, deleted or not (hubdb.tasks_asked_of); conversation_id too,
+                                   # so Health's silent_waits keeps a good plan.
+                                   ("messages_open_ask_to",
+                                    "messages(to_actor, conversation_id) WHERE kind='ask' AND answered_by IS NULL"),
+                                   # PRs at a commit (github.pr_signal, on every check and status webhook): the
+                                   # query's expression word for word.
+                                   ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
@@ -1283,6 +1496,8 @@ class Store:
                                     "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL")):
                     c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {spec}")
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
+                # Duplicated the UNIQUE(channel, ts) autoindex.
+                c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
@@ -1318,6 +1533,9 @@ class Store:
                 # The Goal Manager becomes the CEO Bot on every install, once (backend/ceo_bot.py). Idempotent.
                 from . import ceo_bot as CeoBot
                 CeoBot.migrate(c)
+                # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
+                from . import profiles as Profiles
+                Profiles.migrate(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
@@ -1348,6 +1566,8 @@ class Store:
             except Exception:
                 c.rollback()
                 raise
+            from . import provenance_clock
+            provenance_clock.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -1386,6 +1606,8 @@ class Store:
             if identity != self.pool_file:
                 # A restored or replaced database file: connections to the old one are not reused.
                 stale, self.pool, self.pool_file = self.pool, [], identity
+                from .provenance_clock import Cache
+                self.provenance_cache = Cache()
             else:
                 stale = []
             c = self.pool.pop() if self.pool else None
@@ -1395,6 +1617,10 @@ class Store:
             c = self.connect(factory=self.pooled, check_same_thread=False)
             c.pool_file = identity
         c.read_cache = {}
+        c.provenance_cache = self.provenance_cache
+        c.write_transaction = False
+        c.provenance_changes = c.total_changes
+        c.provenance_start = None
         return c
 
     def _give(self, c):
@@ -1415,25 +1641,23 @@ class Store:
 
     @contextmanager
     def transaction(self):
-        with self.read() as c:
-            if self.recorder is None:
-                c.execute("BEGIN IMMEDIATE")
-                try:
-                    yield c
-                    message_links.refresh_dirty(c)
-                    c.commit()
-                except Exception:
-                    c.rollback()
-                    raise
-                return
-            # The flight recorder: how long the write lock took to get, and how long it was held.
-            from .flight import begin
-            done = begin(c, self.recorder)
+        from .flight import begin
+        # The gate is released only after commit/rollback, including message-link maintenance.
+        with ExitStack() as stack:
+            c = None
+            def checkout():
+                nonlocal c
+                c = stack.enter_context(self.read())
+                return c
+            done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:
+                c.write_transaction = True
+                from . import provenance_clock
+                c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
                 c.commit()
-            except Exception:
+            except BaseException:
                 c.rollback()
                 raise
             finally:
@@ -1573,6 +1797,8 @@ class Store:
                           (principal, operation, key, hashed, encode(cached), H.now()))
         self.ring(logged)
         if refusal:
+            # This key now records a rolled-back operation, not an earlier successful delivery.
+            refusal.extra["idempotency_refused"] = True
             raise refusal
         return result
 

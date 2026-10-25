@@ -1,9 +1,23 @@
 # Team context and meeting search
 
+## The strategy in every run
+
+Once the owner has published a [strategy](strategy.md) version, every bot's run context carries the text of
+`GET /api/v2/strategy/summary` under a **Team strategy** header, about 500 characters: the summary, one line per active
+bet with its wrong-if, then "version N". It is there on every turn, not only the CEO Bot's, so a bot reads the team's bets
+before it reads its task. Nothing is added while no version is published, and a bot never sees the owner's draft. The full
+published page (the four sections, every bet with its why, what it rules out and its health) is `hub strategy show` /
+`hub_strategy_show`; the same short text is `hub strategy summary` / `hub_strategy_summary`. Publishing sends no note to any
+bot: the context is how they learn of it. A bot reads; only the owner writes the draft and publishes.
+
+## Search and reads
+
 The `hub` CLI and MCP expose the same read-only functions, and one that files a meeting:
 
 | CLI | MCP | Purpose |
 | --- | --- | --- |
+| `hub strategy show` | `hub_strategy_show` | The published strategy version, with its bets, the goals under each and each bet's health. |
+| `hub strategy summary` | `hub_strategy_summary` | The short text every bot gets in context. |
 | `hub doc search --market "pricing"` | `hub_doc_search` | Search full team document text and market entities/evidence. |
 | `hub doc read <document-id>` | `hub_doc_read` | Read a complete document found by search. |
 | `hub meeting search "pricing"` | `hub_meeting_search` | Search meeting titles, notes, and transcripts; omit the query for recent history. |

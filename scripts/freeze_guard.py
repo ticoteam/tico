@@ -21,7 +21,11 @@ such commit) and reports, naming the pull request or commit each time:
 Review receipts come from the tickets when GitHub reviews aren't used, as a JSON list:
 
     [{"pr": 639, "head": "<commit the reviewer approved, at least 7 characters>", "source": "<where it is written>"},
-     {"commit": "<commit landed without a PR>", "source": "..."}]
+     {"commit": "<commit landed without a PR>", "source": "..."},
+     {"pr": 640, "reverts": "<the earlier change it undoes on purpose, as the finding names it>", "source": "..."}]
+
+A revert receipt names one pull request and the one earlier change it means to undo (removing a workflow nobody
+uses, say); every other revert that pull request makes is still reported.
 
 Exit status: 0 when nothing is found, 1 with findings, 2 when it cannot check.
 """
@@ -346,14 +350,26 @@ def lookback_base(repo, previous, releases):
 def check(repo, head, previous=None, receipts=(), github=None, releases=None, fetch=True):
     """Check the candidate against every earlier release, or only the last `releases` of them when given."""
     head = git(repo, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
+    # A shallow checkout cuts history off at its depth: the previous tag looks parentless, the range runs back to the
+    # cut, and every old pull request in it is looked up on GitHub before anything is reported.
+    if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
+        raise GuardError("this checkout has shallow history, so the range to the previous release would be wrong; "
+                         "run `git fetch --unshallow --tags origin` and check again")
     previous = previous or previous_release(repo, head)
+    # A release branch that was never merged back still forks from main; no shared commit means missing history.
+    if not git(repo, "merge-base", previous, head, check=False).strip():
+        raise GuardError(f"{previous} and {head[:12]} share no history in this checkout; fetch the full history "
+                         f"(`git fetch --unshallow --tags origin`) or name the right release with --previous")
     changes = first_parent_log(repo, f"{previous}..{head}")
     if not changes:
         raise GuardError(f"nothing between {previous} and {head[:12]}: {previous} is not an earlier release of this "
                          f"candidate; name the right one with --previous")
     base = lookback_base(repo, previous, releases)
     shipped = first_parent_log(repo, f"{base}..{previous}" if base else previous)
-    findings = net_reverts(repo, changes, shipped) + unreviewed(repo, changes, list(receipts), github, fetch=fetch)
+    meant = [(r["pr"], r["reverts"]) for r in receipts if r.get("pr") and len(r.get("reverts") or "") >= 7]
+    findings = [f for f in net_reverts(repo, changes, shipped)
+                if not any(f["pr"] == pr and f["reverts"].startswith(sha) for pr, sha in meant)]
+    findings += unreviewed(repo, changes, list(receipts), github, fetch=fetch)
     return {"head": head, "previous": previous, "changes": len(changes), "compared_since": base or "the first commit",
             "findings": findings}
 

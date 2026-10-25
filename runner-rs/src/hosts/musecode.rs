@@ -30,9 +30,12 @@ pub const DEFAULT_MODEL: &str = "muse-spark-1.3";
 const EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 const DEFAULT_EFFORT: &str = "medium";
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
-const STDERR_TAIL: usize = 2000;
-/// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself.
-pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1")];
+/// How long a process may stay up after its run's terminal record before it is stopped.
+const AFTER_TERMINAL: Duration = Duration::from_secs(5);
+/// Set on every Muse process, the sign-in check's and `--version`'s too, so the launcher never updates itself. The
+/// file credential backend keeps a login whole in its config folder's auth.json: on macOS Muse otherwise keeps the token
+/// in the login Keychain, outside the files a switch moves into place or a cancel keeps.
+pub const QUIET: &[(&str, &str)] = &[("MUSE_NO_AUTO_UPDATE", "1"), ("NO_COLOR", "1"), ("TBH_CREDENTIAL_BACKEND", "file")];
 
 /// The catalog id as the CLI's model id; anything else passes through, so a model Meta adds works unchanged.
 pub fn model_for(model: Option<&str>) -> String {
@@ -82,6 +85,12 @@ fn tool_started(kind: &str, payload: &Value) -> Option<String> {
         return Some(name.unwrap_or_else(|| "tool".into()));
     }
     None
+}
+
+/// A model response the run starts: real runs propose one as a `model.<provider>.response` task. Its text is a new
+/// message, not more of the one before it.
+fn response_started(kind: &str, payload: &Value) -> bool {
+    kind == "task.lifecycle.proposed" && payload["event"]["task_kind"].as_str().is_some_and(|k| k.starts_with("model."))
 }
 
 /// (input, cached, output) from one event's own token counters, or None. A session's `cumulative` running totals
@@ -221,13 +230,98 @@ pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
     (args, extra)
 }
 
-/// Whether a Meta-account login file exists: Some(false) when it does not, None when its folder cannot be read
-/// (a bot user's 0700 config folder), which is not "signed out".
+/// Muse's saved credential store as far as Tico can tell from it.
+#[derive(Debug, PartialEq)]
+enum Store {
+    /// No Meta login: never signed in, or signed out (logout leaves `providers` empty).
+    Empty,
+    /// A Meta login held in the file itself, the file backend's form: an API key or an OAuth access token.
+    Login,
+    /// A pointer to a token in the macOS Keychain, outside this folder's files.
+    Keychain,
+    /// Unreadable, or a shape this check does not know: never taken for a login.
+    Unknown,
+}
+
+fn store(path: &Path) -> Store {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => {},
+        Ok(_) => return Store::Unknown,
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => return Store::Empty,
+        Err(_) => return Store::Unknown,
+    }
+    let Some(bytes) = read_auth(path, Duration::from_secs(5)).filter(|b| b.len() <= 65536) else {
+        return Store::Unknown;
+    };
+    let Ok(auth) = serde_json::from_slice::<Value>(&bytes) else {
+        return Store::Unknown;
+    };
+    // 1 is the file backend's store; 2 is the one whose credentials are Keychain pointers.
+    let (Some(version @ (1 | 2)), Some(providers)) = (auth["schema_version"].as_u64(), auth["providers"].as_object()) else {
+        return Store::Unknown;
+    };
+    let meta = match providers.get("meta") {
+        None | Some(Value::Null) => return Store::Empty,
+        Some(Value::Object(meta)) if meta.is_empty() => return Store::Empty,
+        Some(Value::Object(meta)) => meta,
+        _ => return Store::Unknown,
+    };
+    let text = |key: &str| meta.get(key).and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
+    match meta.get("storage") {
+        Some(Value::String(s)) if s == "keychain" => return Store::Keychain,
+        None if version == 1 => {}
+        Some(Value::String(s)) if s == "file" && version == 1 => {}
+        _ => return Store::Unknown,
+    }
+    let oauth = text("access_token") && meta.get("mechanism").is_none_or(|m| m == "oauth");
+    if text("api_key") || oauth { Store::Login } else { Store::Unknown }
+}
+
+/// Whether Muse's saved credential store holds a Meta login of its own. Logout leaves the store with no Meta entry;
+/// an unreadable store, a Keychain pointer or any other shape gives no answer, never a "signed in" from the file alone.
 pub fn signed_in(path: &Path) -> Option<bool> {
-    match std::fs::metadata(path) {
-        Ok(m) => Some(m.is_file()),
-        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => Some(false),
-        Err(_) => None,
+    match store(path) {
+        Store::Empty => Some(false),
+        Store::Login => Some(true),
+        Store::Keychain | Store::Unknown => None,
+    }
+}
+
+/// Why the saved store cannot be used, when the reason is one the person can act on.
+pub fn store_problem(path: &Path) -> Option<String> {
+    (store(path) == Store::Keychain).then(|| {
+        "Muse Code sign-in is saved in the macOS Keychain, outside Tico's Muse folder: sign in again from Tico".into()
+    })
+}
+
+/// Read as the CLI's user, with bounded output and time. A file swapped for a pipe after the metadata check
+/// must not stall readiness or sign-out, and credential contents never belong in diagnostics.
+fn read_auth(path: &Path, timeout: Duration) -> Option<Vec<u8>> {
+    let mut child = crate::isolation::std_command("head").args(["-c", "65537", "--"]).arg(path)
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.take(65537).read_to_end(&mut bytes).map(|_| bytes);
+        let _ = tx.send(result);
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                return rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).ok()?.ok();
+            }
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 
@@ -340,7 +434,7 @@ pub fn prepare_config(home: &Path) -> Result<PathBuf, HostError> {
     }
     let directory = crate::isolation::mkdir(&home.join("muse"), 0o700).map_err(|e| failed(format!("Muse settings folder: {e}")))?;
     // Only this login's Muse home, not the profile directory or the runner's private state.
-    crate::isolation::adopt(&[home.to_path_buf()]);
+    crate::isolation::adopt_store(&[home.to_path_buf()]);
     let path = directory.join("settings.json");
     let stored = match std::fs::read_to_string(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(directory),
@@ -383,6 +477,8 @@ struct Turn {
     reply: String,
     /// Text streamed since the last tool call: the answer when the terminal carries no text of its own.
     streamed: String,
+    /// A model response started since the last streamed text: its first piece opens a new paragraph.
+    new_message: bool,
     terminal: String,
     reason: String,
     usage: Option<(i64, i64, i64)>,
@@ -552,13 +648,11 @@ impl MuseCodeHost {
             let offset = session_log(&env, thread_id).and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len());
             let prompt = self.prompt_file(text).map_err(|e| failed(format!("could not start muse: {e}")))?;
             let spawned = (|| {
-                // stderr goes to an unlinked file: read back for the error text, never a pipe that could fill.
-                let path = std::env::temp_dir().join(format!("tico-muse-stderr-{}", uuid::Uuid::new_v4().simple()));
-                let stderr = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
-                let _ = std::fs::remove_file(&path);
-                let child = self.command(thread_id, &settings, &prompt, effort)
-                    .stderr(Stdio::from(stderr.try_clone()?))
+                // Drain stderr independently so a noisy harness cannot block its own exit.
+                let mut child = self.command(thread_id, &settings, &prompt, effort)
+                    .stderr(Stdio::piped())
                     .spawn()?;
+                let stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &env);
                 Ok::<_, std::io::Error>((child, stderr))
             })();
             let (mut child, stderr) = match spawned {
@@ -589,7 +683,7 @@ impl MuseCodeHost {
         &self,
         stdout: Option<ChildStdout>,
         exited: tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>,
-        mut stderr: std::fs::File,
+        mut stderr: crate::run_diagnostics::Stderr,
         files: (PathBuf, Env, u64),
         tid: String,
         turn: String,
@@ -602,11 +696,29 @@ impl MuseCodeHost {
                 if let Ok(ev) = serde_json::from_str::<Value>(line.trim()) {
                     self.on_event(&ev, &tid, &turn, &mut state);
                 }
+                // The run's terminal record is its last word. A process, or a child that inherited its stdout, that
+                // stays up after it would otherwise hold the turn and the attempt's lease open with the run over.
+                if !state.terminal.is_empty() {
+                    break;
+                }
             }
         }
-        let rc = match exited.await {
-            Ok(status) => super::return_code(&status),
-            Err(_) => -1,
+        let mut exited = exited;
+        let rc = if state.terminal.is_empty() {
+            exited.await.map_or(-1, |s| super::return_code(&s))
+        } else {
+            match tokio::time::timeout(AFTER_TERMINAL, &mut exited).await {
+                Ok(status) => status.map_or(-1, |s| super::return_code(&s)),
+                Err(_) => {
+                    log(&format!("muse[{}]: run ended {} but the process stayed up; stopping it", self.0.bot, state.terminal));
+                    let stopper = self.inner().stopper.clone();
+                    if let Some(s) = stopper {
+                        s.terminate(STOP_TIMEOUT);
+                    }
+                    let _ = exited.await;
+                    0 // the run had already ended on its own terms; the stop is ours, not its outcome
+                }
+            }
         };
         let _ = std::fs::remove_file(&prompt);
         if state.usage.is_none() {
@@ -618,6 +730,7 @@ impl MuseCodeHost {
                 }
             }
         }
+        stderr.drained().await;
         self.finish(&tid, &turn, rc, &stderr_tail(&mut stderr), state);
     }
 
@@ -645,9 +758,11 @@ impl MuseCodeHost {
         }
         if kind == "run.output.delta" {
             if let Some(text) = payload["text"].as_str().filter(|t| !t.is_empty()) {
-                state.streamed.push_str(text);
+                let text = super::add_piece(&mut state.streamed, std::mem::take(&mut state.new_message), text);
                 self.emit(event("delta", Some(tid), Some(turn), json!({"text": text, "delta_kind": "text"})));
             }
+        } else if response_started(&kind, payload) {
+            state.new_message = true;
         } else if let Some(name) = tool_started(&kind, payload) {
             state.streamed.clear(); // text before a tool call is progress, not the answer
             self.emit(event("tool", Some(tid), Some(turn), json!({"name": name, "tool": name, "phase": "tool_execution_start"})));
@@ -692,17 +807,20 @@ impl MuseCodeHost {
             }
             self.emit(event("turn_completed", Some(tid), Some(turn), json!({"status": "completed"})));
         } else {
+            let process_exit = rc < 0 || state.reason.is_empty() && rc != 0;
             let error = if !state.reason.is_empty() {
                 state.reason
             } else if !stderr.is_empty() {
-                stderr.into()
+                crate::run_diagnostics::process_reason(rc, stderr)
             } else if !state.terminal.is_empty() {
                 format!("muse run ended {}", state.terminal)
             } else {
                 format!("muse exited {rc}")
             };
             let limit = is_limit(&error);
-            self.emit(event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": limit})));
+            let mut failure = event("turn_failed", Some(tid), Some(turn), json!({"error": error, "limit": limit}));
+            if process_exit { failure["exit_code"] = json!(rc); failure["process_exit"] = json!(true); }
+            self.emit(failure);
         }
         self.emit(event("status", Some(tid), None, json!({"state": "idle"})));
     }
@@ -719,19 +837,8 @@ impl MuseCodeHost {
     }
 }
 
-/// The last STDERR_TAIL characters of stderr, without the CLI's progress notes ("muse: workspace root: ..."),
-/// which are not why a run failed.
-fn stderr_tail(file: &mut std::fs::File) -> String {
-    let mut bytes = vec![];
-    if file.seek(SeekFrom::Start(0)).is_ok() {
-        let _ = file.read_to_end(&mut bytes);
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let kept = text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with("muse: ")).collect::<Vec<_>>().join("\n");
-    let kept = kept.trim();
-    let skip = kept.chars().count().saturating_sub(STDERR_TAIL);
-    kept.chars().skip(skip).collect()
-}
+/// The bounded stderr retained independently of the provider stream.
+fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String { file.tail() }
 
 #[cfg(test)]
 mod tests {
@@ -893,6 +1000,7 @@ mod tests {
         let env = std::fs::read_to_string(dir.join("env")).unwrap();
         assert!(env.lines().any(|l| l == "TICO_MCP_1=Bearer lin-secret"));
         assert!(env.lines().any(|l| l == "MUSE_NO_AUTO_UPDATE=1"));
+        assert!(env.lines().any(|l| l == "TBH_CREDENTIAL_BACKEND=file"), "a turn must never fall back to the shared Keychain");
         // A restarted runner resumes the same session by its id.
         assert_eq!(host.resume_thread(&thread, &settings), thread);
         std::fs::remove_dir_all(dir).unwrap();
@@ -918,6 +1026,32 @@ mod tests {
         let got = until_idle(&mut rx, 15).await;
         assert!(got.iter().any(|e| e["kind"] == "turn_completed" && e["status"] == "interrupted"), "{got:?}");
         assert!(!got.iter().any(|e| e["kind"] == "turn_failed"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A quota failure whose process (and a child holding its stdout) stays up still settles the turn as a limit
+    /// failure, so the attempt ends, the quota hold is kept and nothing is retried on its own.
+    #[tokio::test]
+    async fn a_terminal_failure_settles_the_turn_while_the_process_stays_up() {
+        let dir = temp("fake-muse");
+        let limit = crate::hosts::fixtures::dir("musecode").join("limit.jsonl");
+        let cmd = script(&dir, "muse", "#!/bin/sh\ncat \"$FIXTURE\"\nsleep 20 &\nexec sleep 30\n");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        host.start();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        settings.env.insert("FIXTURE".into(), limit.display().to_string());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "x", None).unwrap();
+        let got = until_idle(&mut rx, 15).await;
+        let failed: Vec<&Value> = got.iter().filter(|e| e["kind"] == "turn_failed").collect();
+        assert_eq!(failed.len(), 1, "{got:?}");
+        assert_eq!(failed[0]["limit"], true);
+        assert_eq!(failed[0]["error"], "provider error: rate limit exceeded (status 429)");
+        assert!(failed[0].get("auth_retry").is_none());
+        assert!(got.last().is_some_and(|e| e["kind"] == "status" && e["state"] == "idle"), "{got:?}");
+        assert!(host.inner().turn.is_none() && host.inner().stopper.is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -951,8 +1085,40 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = temp("muse-auth");
         assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
-        std::fs::write(dir.join("auth.json"), "{}").unwrap();
+        std::fs::write(dir.join("auth.json"), "malformed").unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), Some(false));
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{"meta":{"api_key":"fixture"}}}"#).unwrap();
         assert_eq!(signed_in(&dir.join("auth.json")), Some(true));
+        // Field names as Muse 1.4.9 writes them: the file backend's inline login, the Keychain backend's pointer.
+        let keychain = r#"{"schema_version":2,"providers":{"meta":{"storage":"keychain","subs_active":true}}}"#;
+        for (store, expected) in [
+            (r#"{"schema_version":2,"providers":{}}"#, Some(false)),
+            (r#"{"schema_version":3,"providers":{}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{}}}"#, Some(false)),
+            (r#"{"schema_version":1,"providers":{"meta":null}}"#, Some(false)),
+            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"oauth","access_token":"t","obtained_via":"device_code"}}}"#, Some(true)),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"file","api_key":"k"}}}"#, Some(true)),
+            (keychain, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"keychain"}}}"#, None),
+            (r#"{"schema_version":2,"providers":{"meta":{"api_key":"k"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"subs_active":true,"user_email":"a@acme.example"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"api_key":" "}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"mechanism":"other","access_token":"t"}}}"#, None),
+            (r#"{"schema_version":1,"providers":{"meta":{"storage":"vault","api_key":"k"}}}"#, None),
+        ] {
+            std::fs::write(dir.join("auth.json"), store).unwrap();
+            assert_eq!(signed_in(&dir.join("auth.json")), expected, "{store}");
+            assert_eq!(store_problem(&dir.join("auth.json")).is_some(), store.contains(r#""storage":"keychain""#), "{store}");
+        }
+        std::fs::write(dir.join("auth.json"), " ".repeat(65537)).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::rename(dir.join("auth.json"), dir.join("target.json")).unwrap();
+        std::os::unix::fs::symlink(dir.join("target.json"), dir.join("auth.json")).unwrap();
+        assert_eq!(signed_in(&dir.join("auth.json")), None);
+        std::fs::remove_file(dir.join("auth.json")).unwrap();
+        std::fs::write(dir.join("auth.json"), r#"{"schema_version":1,"providers":{}}"#).unwrap();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
         let locked = signed_in(&dir.join("auth.json"));
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -960,6 +1126,18 @@ mod tests {
         if unsafe { libc::geteuid() } != 0 {
             assert_eq!(locked, None);
         }
+    }
+
+    #[test]
+    fn a_pipe_swapped_in_for_auth_cannot_stall_the_reader() {
+        let dir = temp("muse-auth-pipe");
+        let path = dir.join("auth.json");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        let start = std::time::Instant::now();
+        assert_eq!(read_auth(&path, Duration::from_millis(100)), None);
+        assert!(start.elapsed() < Duration::from_secs(5));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The installed CLI on its offline echo provider, two turns on one thread with the hub MCP server: both land

@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS flight_requests(ts INTEGER NOT NULL, span INTEGER NOT
   caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
   p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, span, route, caller)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, route TEXT, caller TEXT,
-  actor TEXT, ms REAL, bytes INTEGER, status INTEGER);
+  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER);
 CREATE TABLE IF NOT EXISTS flight_process(ts INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
   fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
   txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
@@ -65,6 +65,8 @@ DB_WAIT = 2.0                   # seconds the recorder's own database writes wai
 PENDING_MAX = 120               # table writes kept for the next try while the lock is busy (about two hours of minutes)
 LONG_HOLD_MS = 5000             # a write transaction holding the lock this long is logged with its route and code site
 LONG_HOLD_PER_MINUTE = 20
+LOG_HOLD_MS = 250               # a write transaction holding the lock this long goes to the server log with its code site
+LOG_HOLD_PER_MINUTE = 30
 MINUTE_DAYS = 2                 # request minutes older than this become hours
 SHORT_DAYS = 14                 # requests, slow requests, process minutes
 LONG_DAYS = 90                  # SQL hours, database sizes, events
@@ -154,21 +156,39 @@ def _site(frames):
     return None
 
 
-def begin(conn, recorder=None):
+def begin(conn, recorder=None, *, gate=None, checkout=None):
     """`BEGIN IMMEDIATE`, timed for the flight recorder: how long the write lock took to get (counted while it is still
     being waited for, so a stall can see it) and, when the returned `done` is called after COMMIT or ROLLBACK, how
-    long it was held."""
+    long it was held. `checkout` borrows a connection after queue admission, so waiters do not drain the read pool."""
     rec = recorder or getattr(conn, "recorder", None) or ACTIVE
     if rec is None:
-        conn.execute("BEGIN IMMEDIATE")
-        return _nothing
+        if gate is not None:
+            gate.acquire()
+        try:
+            if checkout is not None:
+                conn = checkout()
+            conn.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            if gate is not None:
+                gate.release()
+            raise
+        return gate.release if gate is not None else _nothing
     token = next(_TOKENS)
     started = time.monotonic()
     rec.waiting[token] = started
+    acquired = False
     try:
+        if gate is not None:
+            gate.acquire()
+            acquired = True
+        if checkout is not None:
+            conn = checkout()
         conn.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as exc:
-        rec.transaction((time.monotonic() - started) * 1000, 0.0, "locked" in str(exc))
+    except BaseException as exc:
+        if acquired:
+            gate.release()
+        rec.transaction((time.monotonic() - started) * 1000, 0.0,
+                        isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc))
         raise
     finally:
         rec.waiting.pop(token, None)
@@ -179,14 +199,32 @@ def begin(conn, recorder=None):
     def done():
         rec.holding.pop(token, None)
         hold_ms = (time.monotonic() - held) * 1000
+        if gate is not None:
+            gate.release()
         rec.transaction((held - started) * 1000, hold_ms)
+        site = _log_hold(route, hold_ms, (held - started) * 1000) if hold_ms >= LOG_HOLD_MS else None
         if hold_ms >= LONG_HOLD_MS:             # who held it: the call site is read only for a long hold
-            rec.long_hold(route, _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
+            rec.long_hold(route, site or _site(traceback.extract_stack()), hold_ms, (held - started) * 1000)
     return done
 
 
 def _nothing():
     pass
+
+
+_logged = [0, 0]                # [minute, holds logged in it]
+
+
+def _log_hold(route, hold_ms, wait_ms):
+    minute = int(time.time() // 60)
+    if _logged[0] != minute:
+        _logged[:] = [minute, 0]
+    if _logged[1] >= LOG_HOLD_PER_MINUTE:
+        return None
+    _logged[1] += 1
+    site = _site(traceback.extract_stack())
+    LOG.warning("write lock held %.0f ms (waited %.0f ms) at %s %s", hold_ms, wait_ms, site, route or "")
+    return site
 
 
 def caller_kind(who):
@@ -312,7 +350,8 @@ class Recorder:
                     row[7] += sql_ms
                     row[8] += wait_ms
                     if ms >= SLOW_MS and len(self.slow) < SLOW_PER_MINUTE:
-                        slow = (int(time.time()), route, caller, actor, round(ms, 1), nbytes or 0, status)
+                        slow = (int(time.time()), route, caller, actor, round(ms, 1), nbytes or 0, status,
+                                round(sql_ms, 1), round(wait_ms, 1), queries)
                         self.slow.append(slow)
                         self.slow_file.append({"kind": "slow", "route": route, "caller": caller, "actor": actor,
                                                "ms": slow[4], "bytes": slow[5], "status": status,
@@ -406,7 +445,7 @@ class Recorder:
 
 def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", taken["requests"])
-    c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status) VALUES(?,?,?,?,?,?,?)", taken["slow"])
+    c.executemany("INSERT INTO flight_slow(ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries) VALUES(?,?,?,?,?,?,?,?,?,?)", taken["slow"])
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
     for hold in taken.get("long_holds") or []:
@@ -653,6 +692,18 @@ def last_start(c):
 
 # ---------------------------------------------------------------------------- the database itself
 
+def _rows(c, table):
+    """About how many rows `table` holds, from its rowid span: exact for a log pruned from its oldest end, a little
+    high for one deleted from the middle. count(*) read every page of a table of millions of rows each hour, for
+    minutes, holding a read snapshot that kept the WAL from resetting. A table without rowids is counted."""
+    try:
+        # One aggregate per SELECT: SQLite answers min() or max() from the b-tree's end only when it is alone.
+        low, high = c.execute(f"SELECT (SELECT min(rowid) FROM {table}), (SELECT max(rowid) FROM {table})").fetchone()
+    except sqlite3.OperationalError:
+        return c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    return 0 if high is None else high - low + 1
+
+
 def db_stats(store, use_dbstat=True):
     path = str(store.settings.db_path)
     size = os.path.getsize(path) if os.path.exists(path) else 0
@@ -672,7 +723,7 @@ def db_stats(store, use_dbstat=True):
         for table, column in BIG.items():
             if table not in present:
                 continue
-            detail["rows"][table] = c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            detail["rows"][table] = _rows(c, table)
             if column:
                 row = c.execute(f"SELECT {column} FROM {table} ORDER BY rowid LIMIT 1").fetchone()
                 detail["oldest"][table] = row[0] if row else None
@@ -993,7 +1044,7 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
         out["requests"] = _requests(c, since)
     if "slow" in sections:
         out["slow"] = [dict(r) for r in c.execute(
-            "SELECT ts,route,caller,actor,ms,bytes,status FROM flight_slow WHERE ts>=? ORDER BY id DESC LIMIT 50",
+            "SELECT ts,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries FROM flight_slow WHERE ts>=? ORDER BY id DESC LIMIT 50",
             (since,))]
     if "process" in sections:
         out["process"] = _process(c, since)

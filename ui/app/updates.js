@@ -14,7 +14,7 @@
 // reports' updates alert (backend/updates.py tree). List keeps the plain newest-first feed.
 let UPD = null;
 const UPD_DRAFTS = new Map();
-const UPD_CACHE = state => updIsTree(state) ? `tico.updates.tree.${state.kind}.${state.scope || 'auto'}`
+const UPD_CACHE = state => updIsTree(state) ? `tico.updates.tree.${state.kind}.${state.scope || 'auto'}${state.day ? '.' + state.day : ''}`
   : `tico.updates.${state.kind}.${state.view}.${state.mine ? 'mine' : 'all'}`;
 const updIsTree = state => state.view !== 'archive' && state.layout !== 'list';
 function updPrefs() {
@@ -49,30 +49,44 @@ function pageUpdates() {
   const params = new URLSearchParams(S.route.split('?')[1] || '');
   const kind = params.get('kind') === 'weekly' ? 'weekly' : 'daily';
   const view = params.get('view') === 'archive' ? 'archive' : 'inbox';
+  // A link to one update (the Updates chat's, updGoLink) names its day, so the tree shows that day, and may ask for
+  // the whole org for this visit when the update's author is not below you; the page then goes to the update.
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(params.get('day') || '') ? params.get('day') : null;
+  const target = params.get('update') || null;
   // "a filter at the top, on by default, to only show my bots" (the bots I own), in List and Archive.
-  const {mine, layout, scope} = updPrefs();
-  const state = UPD = {kind, view, mine, layout, scope, expanded: null, editing: false, data: null, open: new Set(), threads: {}, pending: new Set(), manualUnread: new Set(),
+  const {mine, layout, scope: saved} = updPrefs();
+  const scope = params.get('scope') === 'all' ? 'all' : saved;
+  const state = UPD = {kind, view, day, target, mine, layout, scope, expanded: null, editing: false, data: null, open: new Set(), threads: {}, pending: new Set(), manualUnread: new Set(),
                        archivePending: new Set(), linked: new Map(), loadSeq: 0, mutationSeq: 0, sel: -1, loading: true, fromCache: false};
   const cached = state.data = updCacheRead(state);
   state.loading = !cached; state.fromCache = !!cached;
   if (cached) updOrder(state, true);
-  $('#main').innerHTML = `<div class="upd-page">
+  // The feed is redrawn in its own column; the Updates chat beside it (ui/app/updates-chat.js) stays, with its
+  // conversation, while only the kind, the day or the view changes.
+  const main = $('#main');
+  let col = main.querySelector(':scope > .upd-col');
+  if (!col || !UPDC?.el?.isConnected) { main.innerHTML = '<div class="upd-col"></div>'; col = main.firstElementChild; }
+  col.innerHTML = `<div class="upd-page">
     <div class="upd-head">
       <h1>${view === 'archive' ? 'Archive' : 'Updates'}</h1>
       <div class="upd-seg" role="tablist" aria-label="Kind">
         <button type="button" role="tab" data-upd-kind="daily" aria-selected="${kind === 'daily'}" aria-label="Daily" title="Daily"><span class="nav-icon" aria-hidden="true">today</span><span class="upd-lbl">Daily</span></button>
         <button type="button" role="tab" data-upd-kind="weekly" aria-selected="${kind === 'weekly'}" aria-label="Weekly" title="Weekly"><span class="nav-icon" aria-hidden="true">date_range</span><span class="upd-lbl">Weekly</span></button>
       </div>
+      ${day && updIsTree(state) ? `<button type="button" class="upd-chip" id="upd-day" title="Back to the latest day"><span class="upd-day">${esc(new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC'}))}</span><span class="upd-x" aria-hidden="true">×</span></button>` : ''}
       <span class="spacer"></span>
       <button type="button" class="upd-chip" id="upd-scope" aria-pressed="${state.scope === 'all'}" aria-label="Whole org" title="Whole org: off shows only the cards below you"${updIsTree(state) ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">groups</span><span class="upd-lbl">Whole org</span></button>
       <button type="button" class="upd-chip" id="upd-mine" aria-pressed="${state.mine}" aria-label="My bots" title="My bots"${updIsTree(state) ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">person</span><span class="upd-lbl">My bots</span></button>
       <button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>
       <button type="button" class="upd-chip upd-view" id="upd-view" aria-label="${view === 'archive' ? 'Open inbox' : 'Open archive'}" title="${view === 'archive' ? 'Inbox' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${view === 'archive' ? 'inbox' : 'archive'}</span><span class="upd-lbl">${view === 'archive' ? 'Inbox' : 'Archive'}</span></button>
       <button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>
+      ${updcButtonHTML()}
     </div>
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
-  $('#main').querySelector('.upd-seg').onclick = ev => {
+  updcMount();
+  if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
+  col.querySelector('.upd-seg').onclick = ev => {
     const b = ev.target.closest('[data-upd-kind]'); if (!b || b.dataset.updKind === state.kind) return;
     const q = new URLSearchParams(); if (b.dataset.updKind === 'weekly') q.set('kind', 'weekly');
     if (state.view === 'archive') q.set('view', 'archive');
@@ -113,6 +127,7 @@ function pageUpdates() {
 function updFeedPath(state, more = false) {
   if (updIsTree(state)) {
     const q = new URLSearchParams({kind: state.kind});
+    if (state.day) q.set('day', state.day);
     if (state.scope) q.set('scope', state.scope);
     return '/v2/updates/tree?' + q;
   }
@@ -148,6 +163,7 @@ async function updLoad(state, more = false) {
   updLinkedRank(state);
   updBadge(r.unread);
   updRender(state);
+  if (state.target && !more) { const id = state.target; state.target = null; void updGoTo(state, id); }
 }
 // The visit's order: unread first, then newest. Set on the first answer of a visit (fresh=true);
 // later pages ("Load older") append below without moving anything already shown.
@@ -360,7 +376,7 @@ function updEditor(u, n, state, kids = '') {
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      ${u?.drafted_by ? '<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by Assistant label)</label>' : ''}
+      ${u?.drafted_by ? `<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by ${esc(botDisplayName(u.drafted_by))} label)</label>` : ''}
       <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
@@ -435,6 +451,53 @@ function updLinkedRank(state) {
   if (!state.linked.size) return;
   state.order ||= new Map();
   for (const [id, {from}] of state.linked) state.order.set(id, (state.order.get(from) ?? -1) + 0.5);
+}
+// A link to one update (#/updates?kind=&day=&update=, the Updates chat's): when its card is on the page, go to it;
+// else open the page on its kind and day and go to it once the feed loads (pageUpdates `target`).
+function updGoLink(href) {
+  const q = new URLSearchParams(href.split('?')[1] || ''), id = q.get('update'), state = UPD;
+  const kind = q.get('kind') === 'weekly' ? 'weekly' : 'daily';
+  if (state && state.data && state.kind === kind && (state.list || []).some(u => u.id === id)) { void updGoTo(state, id); return; }
+  location.hash = href;
+}
+// Scrolled to and highlighted. In the tree its managers' cards open; an author not below you shows the whole org for
+// this visit; one a newer update replaced is in the Archive. In List or Archive, one not on the page is loaded and
+// shown at the top. The link's own part of the address goes once it has been followed.
+async function updGoTo(state, id) {
+  const done = () => {
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    if (q.has('update')) { q.delete('update'); history.replaceState(history.state, '', UPDATES + (q.toString() ? '?' + q : '')); S.route = LAST_ROUTE = location.hash; }
+  };
+  if (state.data?.tree && updIsTree(state)) {
+    const path = [], find = nodes => nodes.some(n => (n.update?.id === id || find(n.children)) && path.push(n.key));
+    if (find(state.data.tree.roots)) { path.slice(1).forEach(key => state.expanded.add(key)); updRender(state); }
+  }
+  let i = (state.list || []).findIndex(u => u.id === id);
+  if (i < 0) {
+    const r = await v2Get('/v2/updates/' + encodeURIComponent(id));
+    if (UPD !== state) return;
+    const u = r?.update;
+    if (!u) { done(); toast('That update is no longer there', true); return; }
+    const base = new URLSearchParams({kind: u.kind});
+    if (updIsTree(state) && !u.archived && state.scope !== 'all') {
+      base.set('day', u.day); base.set('scope', 'all'); base.set('update', id);
+      location.hash = UPDATES + '?' + base; return;
+    }
+    if (u.archived && state.view !== 'archive') { base.set('view', 'archive'); base.set('update', id); location.hash = UPDATES + '?' + base; return; }
+    if (!updIsTree(state) && state.data) {
+      if (!state.data.updates.some(x => x.id === id)) state.data.updates.push(u);
+      state.threads[id] ||= r.thread;
+      state.linked.set(id, {update: state.data.updates.find(x => x.id === id), from: null});
+      updLinkedRank(state);
+      updRender(state);
+      i = state.list.findIndex(x => x.id === id);
+    }
+  }
+  done();
+  if (i < 0) { toast('That update is not on this page', true); return; }
+  updSelect(state, i, 'center');
+  const el = document.querySelector(`#upd-feed [data-upd="${CSS.escape(id)}"]`);
+  if (el) { el.classList.remove('upd-flash'); void el.offsetWidth; el.classList.add('upd-flash'); setTimeout(() => el.classList.remove('upd-flash'), 2600); }
 }
 function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
@@ -582,12 +645,12 @@ async function updArchive(state, id) {
     toast(e.message || (archived ? 'Could not archive the update' : 'Could not restore the update'), true);
   }
 }
-function updSelect(state, i) {
+function updSelect(state, i, block = 'nearest') {
   const list = state.list || []; if (!list.length) return;
   state.sel = Math.max(0, Math.min(list.length - 1, i));
   for (const el of document.querySelectorAll('#upd-feed .upd-card.sel')) el.classList.remove('sel');
   const el = document.querySelector(`#upd-feed [data-i="${state.sel}"]`);
-  if (el) { el.classList.add('sel'); el.scrollIntoView({block: 'nearest'}); el.focus({preventScroll: true}); }
+  if (el) { el.classList.add('sel'); el.scrollIntoView({block}); el.focus({preventScroll: true}); }
   updSeen(state, list[state.sel].id);
 }
 // A phone has no hover: a long press on an icon shows its name, and that press does not also act.

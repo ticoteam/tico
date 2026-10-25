@@ -159,6 +159,27 @@ def test_resume_from_after_or_last_event_id_sends_only_what_came_since(api, live
 
 
 @pytest.mark.slow
+def test_task_and_party_send_only_those_tasks_and_a_partys_including_one_moved_away(api, live):
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    bens = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    caras = post(api, "tasks", {"owner": "cara", "title": "Book the room", "body": "Please."})
+    handed = post(api, "tasks", {"owner": "ben", "title": "Order the lunch", "body": "Please."})
+    handed = post(api, "tasks/" + handed["id"], {"version": handed["version"], "owner": "cara"})
+    last = post(api, "tasks", {"owner": "cara", "title": "Print the badges", "body": "Please."})
+    party = live("ana-test", f"?topics=tasks&after={cursor}&party=human:ben")
+    party.until(lambda e: e["event"] == "tasks" and e["data"]["id"] == handed["id"] and e["data"]["task"]["owner"] == "human:cara")
+    party.drain(1.0)
+    sent = {e["data"]["id"] for e in party.seen if e["event"] == "tasks"}
+    assert sent == {bens["id"], handed["id"]}
+    one = live("ana-test", f"?topics=tasks&after={cursor}&task={caras['id']}")
+    one.until(task_event(caras["id"]))
+    one.drain(1.0)
+    assert {e["data"]["id"] for e in one.seen if e["event"] == "tasks"} == {caras["id"]}
+    assert last["id"] not in json.dumps(one.seen)
+
+
+@pytest.mark.slow
 def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
     post(api, "tasks", {"owner": "ben", "title": "Clear the old work", "body": "Please."})
     with api.app.state.store.read() as c:

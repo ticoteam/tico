@@ -29,6 +29,8 @@ api_keys = "bot"
 mcp_unsupported = "it has no MCP support"
 resume_command = "pi --resume"
 model_list = "host"
+# pi reads its key from the turn environment and keeps its agent dir in $HOME, so a leased turn user signs in.
+isolated_user = true
 
 [capabilities.sign_in_status]
 check = "bot-key"

@@ -105,7 +105,7 @@ def test_the_requester_is_told_and_review_hands_it_back_awake(api):
                          " AND json_extract(refs_json,'$.task')=?", (row["id"],)).fetchall()
         assert len(told) == 1 and c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0] == 0
         # Only its owner's news waits: a notice to the requester bot about it wakes that bot.
-        H._wake(c, H.task(c, row["id"]), "bot:finance", "Question for you: which card?", {})
+        H._wake(c, H.task(c, row["id"]), "bot:finance", "Question for you: which card?", {"wake": "update"})
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued'").fetchone()[0] == 1
         c.execute("UPDATE jobs SET state='completed'")
         # Handed back for review, the requester bot is woken now and the snooze is over.

@@ -634,6 +634,15 @@ def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_
     audit = rows(hub, "SELECT actor,target,detail_json FROM events WHERE action='judge.call'")
     assert [(r["actor"], r["target"]) for r in audit] == [("human:ben", G.JUDGE_LABEL)]
     assert json.loads(audit[0]["detail_json"])["via"] == "slack" and "vendor" not in audit[0]["detail_json"]
+    kept = json.loads(audit[0]["detail_json"])["answers"]
+    assert kept["bot:legal"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
+    assert kept["asks"] == {"type": "noul", "value": 0.9, "confidence": 0.8}
+    from backend.decide_readout import readout
+    with hub.read() as c:
+        out = readout(c, hub.settings)
+    (row,) = [r for r in out["sets"] if r["set"] == "slack-route"]
+    assert row["answers"]["asks"] == {"0.7 and over": 1} and row["answers"]["(other questions)"]["0.7 and over"] >= 1
+    assert "not kept" not in out["text"]
     calls = len(gateway.engine.calls)
     second = send(gateway, "and the NDA too", channel=DM, kind="message", user="U2")
     assert len(gateway.engine.calls) == calls, "over the cap the decision model is not asked"
@@ -751,7 +760,21 @@ def test_a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, h
     [post] = gateway.slack.posts
     assert post["text"] == ("Here is the quarter.\n\n"
                             f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
-                            "\n\n(sent from Legal)")
+                            f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)")
+
+
+def test_a_task_reply_names_and_links_its_task(gateway, hub):
+    """A DM about a task makes sense on its own: the footer names the task (number first when it has one) and links to it."""
+    link_task_requester(hub)
+    task, _ = task_reply(hub, False, [])
+    with hub.transaction() as c:
+        c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
+    gateway.originate()
+    gateway.mirror()
+    gateway.deliver()
+    [post] = gateway.slack.posts
+    assert post["text"] == ("Here is the quarter.\n\n"
+                            f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)")
 
 
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):

@@ -231,7 +231,7 @@ async function listAndTabs(browser) {
   // Labelled tabs with counts, as a tab list; the count is part of each tab's name, after a comma.
   const tabs = await page.locator('#task-view [role=tab]').evaluateAll(ts => ts.map(t => [t.dataset.view, t.firstChild.textContent, t.querySelector('.cnt')?.textContent ?? null, t.getAttribute('aria-selected')]));
   assert.deepEqual(tabs, [['foryou', 'Needs you', String(NEEDS_YOU), 'false'], ['list', 'Open', String(OPEN_COUNT), 'true'], ['board', 'Board', null, 'false'],
-    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false']]);
+    ['recurring', 'Routines', '2', 'false'], ['done', 'Done', null, 'false'], ['closed', 'Closed', null, 'false']]);
   assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), `Needs you, ${NEEDS_YOU}`);
   assert.equal(await page.locator('#task-view').getAttribute('role'), 'tablist');
   // "Needs you", then one "Needs <Name>" per other person a task waits on, "Needs someone", then Waiting and Doing.
@@ -620,7 +620,8 @@ async function properties(browser) {
   const rows = await props.locator('.prop').evaluateAll(rs => rs.map(r => [r.querySelector('.prop-k').textContent,
     [...r.querySelectorAll('.prop-txt, .tlabel > [data-tag-key]')].map(x => x.textContent.trim()).join(' ')]));
   assert.deepEqual(rows, [['Status', 'Waiting'], ['Owner', 'Engineer'], ['Asked by', 'You'], ['Private', 'Everyone'], ['Due', 'Add due date'], ['Tags', 'checkout'],
-    ['Part of', 'Add parent']]);
+    ['Part of', 'Add parent'], ['Wake rules', 'Defaults']]);
+  assert.equal(await props.locator('[data-wake-rules]').getAttribute('href'), '#/settings/rules?task=t-checkout');
   assert.match(await props.locator('[data-prop="status"]').innerText(), /Waiting/);
   // Detail names the status; the status-grouped list uses its heading. "blocked" is a small chip.
   assert.equal(await peek.locator('.tmodal-head .tstatus').innerText(), 'Waiting');
@@ -893,17 +894,52 @@ async function views(browser) {
   assert.equal(await page.locator('.tl-group[data-group="a:human:sam"] .tl-gchat').count(), 0, 'no chat link for a person');
   await shot(page, 'needs-you-dark');
   await page.locator('#task-view [data-view="done"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 3);
-  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done', 'closed']);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
+  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['done', 'done']);
   assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Done /);
   assert.match(await page.locator('#task-body .tl-age').first().innerText(), /^\d+h$/, 'the same short ages as every other row');
   assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   await shot(page, 'done-dark');
+  // Closed, right after Done: only closed work, laid out the same.
+  await page.locator('#task-view [data-view="closed"]').click();
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 1);
+  assert.deepEqual(await page.locator('#task-body .tl-row > .task-status').evaluateAll(s => s.map(x => x.dataset.status)), ['closed']);
+  assert.match(await page.locator('#task-body .tl-age').first().getAttribute('title'), /^Closed /);
+  assert.equal(await page.locator('#task-group-wrap').isHidden(), true);
   await page.locator('#task-view [data-view="recurring"]').click();
   await page.waitForFunction(() => document.querySelectorAll('.rrow').length === 2);
   assert.equal(await page.locator('#task-bar').isHidden(), true);
   assert.deepEqual(errors, []);
-  console.log('Needs you, Done, Recurring: ok');
+  console.log('Needs you, Done, Closed, Recurring: ok');
+  await page.close();
+}
+
+async function plates(browser) {
+  // The people picker: a teammate's plate with a count each, kept in the address through a reload; a task blocked by
+  // an open one folds under Blocked; an unknown person is Me again; a row's status chip moves the task.
+  const held = {...fixtures().find(x => x.id === 't-demo'), id: 't-cut', title: 'Cut the demo trailer', _blocked: ['t-idem'], due: undefined};
+  const {page, errors, posts} = await open(browser, {hash: '#/tasks', extraTasks: [held]});
+  await page.click('#task-who');
+  const sam = page.locator('#task-filter-pop [data-who="human:sam"]');
+  assert.equal(await sam.locator('.tl-mi-n').innerText(), '2');
+  await page.fill('#task-filter-pop .tl-menu-q', 'sa');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => location.hash.includes('who=human:sam'));
+  assert.equal(await page.locator('#task-view [data-view="foryou"]').getAttribute('aria-label'), 'Needs Sam, 2');
+  assert.equal(await page.locator('[data-task-key="tt-demo"]').count(), 1);
+  assert.equal(await page.locator('.tl-group[data-group="blocked"] [data-task-key="tt-cut"]').count(), 1);
+  assert.equal(await page.locator('.tl-group[data-group="blocked"] .tl-rows').isHidden(), true, 'blocked folds away');
+  await page.reload();
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('[data-task-key="tt-demo"]'));
+  assert.equal(await page.locator('#task-who .v').innerText(), 'Sam');
+  await page.click('[data-task-key="tt-demo"] [data-row-status]');
+  await page.click('.prop-pop [data-prop-pick="doing"]');
+  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-demo"] .task-status')?.dataset.status === 'doing');
+  assert.equal(posts.find(x => x.p.endsWith('/t-demo'))?.body.status, 'doing');
+  await page.evaluate(() => { location.hash = '#/tasks?who=human:zed'; });
+  await page.waitForFunction(() => document.querySelector('#task-view [data-view="foryou"]')?.firstChild.textContent === 'Needs you');
+  assert.deepEqual(errors, []);
+  console.log('plates: ok');
   await page.close();
 }
 
@@ -926,7 +962,8 @@ async function waitingOnYou(browser) {
   assert.equal(await page.locator('#task-body .tl-waiting').count(), 1, 'only on what waits on you');
   assert.equal(await row.locator('.task-status').count(), 0, 'the chip is its status: "Waiting" once');
   assert.equal(await page.locator('[data-task-key="tt-sams"]').count(), 0, 'what waits on Sam is not in your Needs you');
-  const buttons = r => page.locator(`[data-task-key="${r}"] button`).evaluateAll(b => b.map(x => x.className));
+  // (the status chip aside: this row's "Waiting" chip stands in for it)
+  const buttons = r => page.locator(`[data-task-key="${r}"] button:not(.tl-status)`).evaluateAll(b => b.map(x => x.className));
   assert.deepEqual(await buttons('tt-host'), await buttons('tt-access'), 'no status buttons of its own');
   assert.deepEqual(errors, []);
   console.log('Waiting on you: ok');
@@ -1152,7 +1189,7 @@ async function recheckLists(browser) {
   // tasks), never the rest; its selection survives.
   await page.locator('#task-bulk [data-bulk="clear"]').click();
   await page.locator('#task-view [data-view="done"]').click();
-  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 3);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tl-row').length === 2);
   await page.locator('[data-task-key="tt-sso"] .tl-check').click();
   const doneAsks = [];
   page.on('request', r => { if (/status=done/.test(r.url())) doneAsks.push(new URL(r.url()).searchParams); });
@@ -1161,7 +1198,7 @@ async function recheckLists(browser) {
   await page.evaluate(() => refresh(false));
   await page.locator('#task-body [data-task-key="tt-flaky"]').waitFor();
   assert.ok(doneAsks.length >= 1 && doneAsks.every(q => q.get('offset') === '0' && q.get('limit') === '20'), 'only the first page');
-  assert.equal(await page.locator('#task-body .tl-row').count(), 4);
+  assert.equal(await page.locator('#task-body .tl-row').count(), 3);
   assert.equal(await page.locator('.tl-bulk-n').innerText(), '1 selected');
   assert.deepEqual(errors, []);
   await page.close();
@@ -1282,7 +1319,7 @@ if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, snoozing, quietWork, bulk, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

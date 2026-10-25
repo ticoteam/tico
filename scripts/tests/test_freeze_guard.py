@@ -86,6 +86,11 @@ def test_a_change_that_undoes_a_shipped_pr_is_named_and_so_is_its_reapply(repo):
     assert kinds(result) == [("NET REVERT", 2, 1)]
     assert "PR #2" in result["findings"][0]["text"] and "PR #1" in result["findings"][0]["text"]
     assert "shipped in v1.0.0" in result["findings"][0]["text"]
+    # A revert receipt clears only the undo it names: the same receipt naming another change leaves this one reported.
+    meant = {"pr": 2, "reverts": result["findings"][0]["reverts"][:8], "source": "ticket 2"}
+    assert kinds(freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [meant], fetch=False)) == []
+    other = {**meant, "reverts": git(repo, "rev-parse", "v1.0.0~1")[:8]}
+    assert kinds(freeze_guard.check(str(repo), "main", "v1.0.0", receipts + [other], fetch=False)) == [("NET REVERT", 2, 1)]
 
     # Putting the reverted work back undoes what the next release shipped: the re-apply is named too.
     git(repo, "tag", "v1.1.0")
@@ -187,6 +192,11 @@ def test_an_untagged_older_candidate_is_checked_against_the_release_before_it(re
     assert kinds(result) == [("UNREVIEWED", 30, None)]
     with pytest.raises(freeze_guard.GuardError, match="--previous"):
         freeze_guard.check(str(repo), candidate, "v1.1.0", [], fetch=False)
+    # A shallow checkout is refused before walking a wrong range; the unmerged release branch above still passed.
+    shallow = repo.parent / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth", "1", "--no-single-branch", f"file://{repo}", str(shallow)], check=True)
+    with pytest.raises(freeze_guard.GuardError, match="unshallow"):
+        freeze_guard.check(str(shallow), "origin/main", "v1.0.1", [], fetch=False)
 
 
 def test_reviews_on_a_later_page_count(monkeypatch):

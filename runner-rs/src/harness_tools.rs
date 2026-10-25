@@ -117,6 +117,9 @@ pub struct Capabilities {
     pub serial_cold_start: bool,
     /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
     pub one_turn_per_login: bool,
+    /// The CLI keeps no owner-only state shared across turns (a 0600 sign-in file in the bot's home), so a turn can
+    /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
+    pub isolated_user: bool,
     pub compaction: bool,
     pub resume_command: String,
     /// "" | host | command
@@ -153,6 +156,7 @@ impl Default for Capabilities {
             goal_runs_across_turns: false,
             serial_cold_start: false,
             one_turn_per_login: false,
+            isolated_user: false,
             compaction: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -496,6 +500,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
             "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
+            "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,
@@ -1592,7 +1597,7 @@ mod tests {
         let data: toml::Table = toml::from_str(&typo).unwrap();
         assert!(parse(&data, "claude-code.toml").unwrap_err().contains("unknown capability compactoin"));
         assert_eq!(all["cursor-agent"].bin_relative(), ".local/bin/cursor-agent");
-        assert_eq!(all["muse-code"].env, vec![("MUSE_NO_AUTO_UPDATE".to_string(), "1".to_string())]);
+        assert_eq!(all["muse-code"].env, [("MUSE_NO_AUTO_UPDATE", "1"), ("TBH_CREDENTIAL_BACKEND", "file")].map(|(k, v)| (k.to_string(), v.to_string())));
         assert!(all["pi"].catch_all);
         let mut dup = BUILT_IN.iter().map(|(n, t)| (n.to_string(), t.to_string())).collect::<Vec<_>>();
         dup.push(("other.toml".into(), BUILT_IN[1].1.replace("id = \"codex\"", "id = \"other\"")));
@@ -1692,6 +1697,29 @@ mod tests {
         h.step(&HashSet::new());
         assert!(!dir.join("tools").join("cursor-agent").exists());
         assert!(std::fs::symlink_metadata(h.bin_dir().join(&cursor.executable)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_models_require_their_runtime_until_cleared_even_when_switched_off() {
+        let dir = std::env::temp_dir().join(format!("tico-task-runtime-{}", uuid::Uuid::new_v4().simple()));
+        let mut h = Harnesses::new(dir.join("tools"), dir.join("harnesses.json"), built_in());
+        h.choose(json!({"grok": false}).as_object().unwrap());
+        let mut rows = vec![json!({"config": {"runtime": "claude", "fallback": {"harness": "codex", "model": "gpt-6.1-sol"},
+                                             "task_model": {"runtime": "grok", "harness": "grok", "model": "grok-4.6"}}})];
+        let runtimes = crate::relays::harness_runtimes(&rows);
+        assert_eq!(runtimes, HashSet::from(["claude".into(), "codex".into(), "grok".into()]));
+        let required: Vec<String> = runtimes.into_iter().collect();
+        assert!(h.want(&required, &Vec::<String>::new()).contains("grok"));
+        assert!(!h.turned_off("grok"));
+        h.manifests.retain(|id, _| id == "grok");
+        h.manifests.get_mut("grok").unwrap().executable = format!("tico-missing-{}", uuid::Uuid::new_v4().simple());
+        let job = h.next().unwrap();
+        assert_eq!((job.kind.as_str(), job.harness.as_str()), ("install", "grok"));
+        rows[0]["config"].as_object_mut().unwrap().remove("task_model");
+        let required: Vec<String> = crate::relays::harness_runtimes(&rows).into_iter().collect();
+        assert!(!h.want(&required, &Vec::<String>::new()).contains("grok"));
+        assert!(h.turned_off("grok"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

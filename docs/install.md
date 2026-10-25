@@ -54,15 +54,18 @@ python3 -m setup --company-file ./tico.company.yaml
 ```
 
 Choose this server, an existing SSH server, or AWS; the wizard configures the usual sign-in, DNS and HTTPS.
-The same flag works with the non-interactive cloud setup. It validates the file before provisioning, uses its
+The same flag works with the non-interactive cloud setup. The company YAML file and its normalized plan must each
+fit within 512 KiB (524,288 bytes). Setup refuses larger files or plans before provisioning. It validates the file, uses its
 company name, and carries the normalized plan privately to the server. On first startup the app creates the selected
 AI employees and reporting lines, adds its built-in roles once, and leaves employees marked **later** paused.
 It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
-over the recommended sample company. AWS stores this plan with the encrypted install settings in an Advanced
-Parameter Store parameter (charges apply); settings and compressed plan must fit its 8 KB limit.
-See [Finish setup](onboarding.md) for file support and choices saved for later. A larger file, such as any whole
-company model, is refused before anything is set up: run setup without `--company-file`, then on the first Welcome step
-in Tico, under **Already chose your team?**, choose the file in **Company YAML file** and click **Use this team**.
+over the recommended sample company. Charts up to 300 seats fit. AWS setup creates a private, encrypted bucket in
+your account, with public access blocked and a one-day expiry rule. It copies the plan to the server and deletes the
+bucket's copy once the app reads it. SSH and local setup write the plan to a private file, checking its checksum before
+starting Tico. The chart stays out of the server's environment and AWS Parameter Store size limit.
+See [Finish setup](onboarding.md) for file support and choices saved for later. You can also install without
+`--company-file`, then on the first Welcome step in Tico, under **Already chose your team?**, choose the file in
+**Company YAML file** and click **Use this team**.
 
 Nothing to set up first: no domain, no DNS, no sign-in provider. Tico runs on this computer only, at
 `http://127.0.0.1:8765`, and you sign in as the owner with a token kept on this computer. Add a domain and sign-in
@@ -85,22 +88,27 @@ It prints a reusable private owner sign-in link. Keep it private: anyone with th
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.
 Open the link in your browser: the app opens on **Finish setup**. Then:
 
-1. **Choose AI providers** (optional): leave them all unticked to do it later. Bots need one to run; until then each bot says
-   "Add an AI provider", and Settings > Computers > Models adds it. With a gateway key from Tico, the
-   [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0. The step starts with how bots get
-   their models; **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
-   ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)).
+1. **Choose AI providers** (optional): **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
+   ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
+   **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
+   to run; until then each bot says "Add an AI provider", and **Settings > Computers > Models** adds it.
+   With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds Tico Cheap 1.1, Mid 1.0 and Power 1.0.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
 4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
    with **Needs setup** until you talk to them.
-5. **Sign in to a model.** In **Settings > Computers**, wait for the selected harness to be installed, then press **Sign in**
-   beside Codex or Claude Code. Open the provider link and enter its device code, or paste the returned code into Tico when asked.
+5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to both Claude Code and Codex
+   (ChatGPT through Codex). **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
+   selected harness to be installed, then press **Sign in** beside it.
+   Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
    profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Computers > Models** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
+
+**Unreleased wizard layout:** Provider checkboxes appear only under **Your company's plans or API keys**.
+The Computer step shows sign-in commands for your provider choice ([Finish setup](onboarding.md#the-screens)).
 
 ### Your first result
 
@@ -114,9 +122,9 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 1. **Check the AI provider is ready** before any real work. Open **Settings > Health**: **Models** should read "Codex is signed
    in." (or Claude Code). "No AI provider is chosen yet" or "No online computer is signed in to your model" means stop and follow
    [First-result recovery](#first-result-recovery). Runs cost what your provider charges; [Usage](usage.md) shows the estimate.
-   With no spending limit set (the default) there is no cap. A bot that reaches a daily or monthly limit takes no new work
+   With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
-   Runs on a ChatGPT or Claude sign-in count toward a limit only when **Count subscription runs** is on.
+   Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
 2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
@@ -531,6 +539,9 @@ local sign-in, each protected by its own one-time code, an HMAC or a long secret
 Otherwise computers join through the same hostname. If Access sits in front of all of it, give the runners a bypass or a
 service token for `/api/v2/runners/*` (the runner authenticates itself with its own token), and give `/api/v2/mcp` a
 Bypass policy so humans' own external agents can connect with their tokens ([Connect an external agent](connect-an-agent.md)).
+To link the server to its Tico company (Settings > General > Tico company), also bypass
+`GET /api/v2/company-connection/proof` on the app hostname: Tico checks it there, and it answers only while an owner's
+connect is pending.
 
 Or run the bots' computer on the server itself and skip Access altogether: the runner joins the server's own Docker
 network and talks to it directly. With a one-time code from Settings > Computers > Add computer, on the server:
@@ -664,7 +675,17 @@ directory, as in every earlier release. Everything a bot runs (each run's model 
 its `git`, the sign-in flows) runs as the unprivileged `bot` user, whose home holds the workspace, `secrets/` and the
 model logins. So a bot cannot read the runner's own credential, which could claim any bot's work; a run gets its
 run token, and asks the runner for its bot's GitHub token over a local socket. Bots still share the `bot` user with
-one another ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)). The first start of a volume from an older image
+one another, except for Tico model turns and turns on a harness that keeps no shared sign-in file (pi): each such
+turn uses its own temporary OS user from a pool of 64, in the same workspace group. Each checkout and worktree has a
+group of its own too, and a leased turn is let into only the checkouts its turn runs in. A sibling bot cannot read that turn's process environment, open file descriptors or
+private temporary files, or use its Gateway connection, even with its relay pass. The workspace remains shared;
+owner-only workspace files are made available through the group, and files a Gateway turn creates return to the
+ordinary bot user when it ends. The runner revokes the connection, kills leftover processes and cleans temporary
+files before reusing a user; an incomplete cleanup keeps that user out of the pool until restart. Turns on Claude
+Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity still run as `bot`, because their sign-in files are
+owner-only and shared across turns; the tool's chip in **Settings > Computers** says which tools' turns share the bot
+user. They, the runner's own git, watchers and shared base clones retain the existing shared-user boundary
+([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)). The first start of a volume from an older image
 changes its ownership to match (one time, a minute on a large workspace). If an update is rolled back, the previous
 image still starts on the migrated volume and reads its own files; the bots then run as the runner's user again until
 the next update. Use `docker exec -u bot` for what a bot should

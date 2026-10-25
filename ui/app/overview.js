@@ -83,7 +83,7 @@ function pageOverview() {
   const state = OVERVIEW_PAGE = {frame, abort: new AbortController(), ready: false, computers: [], loadingComputers: false};
   window.addEventListener('message', ev => {
     if (OVERVIEW_PAGE !== state || ev.source !== frame.contentWindow || ev.origin !== location.origin) return;
-    if (ev.data?.type === 'tico-overview-ready') { state.ready = true; overviewRefresh(); }
+    if (ev.data?.type === 'tico-overview-ready') { state.ready = true; state.sent = ''; overviewRefresh(); }
     if (ev.data?.type === 'tico-overview-open') {
       const person = overviewModel().groups.flatMap(g => g.members).find(m => m.id === ev.data.id);
       if (person?.href) location.hash = person.href;
@@ -124,7 +124,12 @@ function overviewRefresh() {
   const state = OVERVIEW_PAGE; if (!state) return;
   state.model = overviewModel();
   overviewHoursMaybe();
-  if (state.ready) state.frame.contentWindow?.postMessage({type: 'tico-overview-data', model: state.model}, location.origin);
+  if (!state.ready) return;
+  // Every bot event lands here; the frame redraws only for a model it has not had.
+  const sent = JSON.stringify(state.model);
+  if (sent === state.sent) return;
+  state.sent = sent;
+  state.frame.contentWindow?.postMessage({type: 'tico-overview-data', model: state.model}, location.origin);
 }
 function overviewStop() {
   const state = OVERVIEW_PAGE; if (!state) return;
@@ -156,7 +161,7 @@ function overviewStuckDraw() {
 function overviewNeedsDraw() {
   const el = OVERVIEW_PAGE && $('#overview-needs'); if (!el) return;
   if (S.me?.role === 'bot') { el.hidden = true; return; }
-  const n = (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
+  const n = S.v2?.needsCount ?? (S.v2?.needs || []).length, w = S.v2?.wentAway, parts = [];
   if (w?.expired) parts.push(`${w.expired} expired`);
   if (w?.withdrawn) parts.push(`${w.withdrawn} withdrawn`);
   if (w?.assistant) parts.push(`${w.assistant} answered by your Assistant`);

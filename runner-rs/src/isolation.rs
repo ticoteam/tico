@@ -35,11 +35,19 @@ pub fn prefix() -> Option<Vec<String>> {
 }
 
 fn prefix_for((uid, gid): (u32, u32)) -> Vec<String> {
+    // A leased turn user also gets the groups of the checkouts its turn runs in (crate::checkout_groups); every other
+    // identity runs with none.
+    let extra = crate::checkout_groups::granted(uid);
+    let groups = if extra.is_empty() {
+        "--clear-groups".into()
+    } else {
+        format!("--groups={}", std::iter::once(gid).chain(extra).map(|g| g.to_string()).collect::<Vec<_>>().join(","))
+    };
     vec![
         SETPRIV.into(),
         format!("--reuid={uid}"),
         format!("--regid={gid}"),
-        "--clear-groups".into(),
+        groups,
         "--inh-caps=-all".into(),
         "--ambient-caps=-all".into(),
     ]
@@ -54,7 +62,12 @@ fn umask_group() -> std::io::Result<()> {
 /// A command that runs `program` as the bot user when isolation is on (with umask 002: the bot's files are
 /// group-writable), else as itself. Arguments added later follow the program.
 pub fn command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-    match prefix() {
+    command_as(identity(), program)
+}
+
+/// An explicitly leased identity; None preserves the ordinary bot identity.
+pub fn command_as(id: Option<(u32, u32)>, program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    match id.or_else(identity).map(prefix_for) {
         None => tokio::process::Command::new(program),
         Some(p) => {
             let mut cmd = tokio::process::Command::new(&p[0]);
@@ -82,8 +95,12 @@ pub fn command_under(parent: &[std::ffi::OsString], program: impl AsRef<std::ffi
 
 /// `command` for std's blocking Command.
 pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    std_command_as(identity(), program)
+}
+
+pub fn std_command_as(id: Option<(u32, u32)>, program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     use std::os::unix::process::CommandExt;
-    match prefix() {
+    match id.or_else(identity).map(prefix_for) {
         None => std::process::Command::new(program),
         Some(p) => {
             let mut cmd = std::process::Command::new(&p[0]);
@@ -149,14 +166,76 @@ pub fn turn_dir() -> PathBuf {
     base
 }
 
-/// Give the bot user ordinary files/directories under `paths` that the supervisor made. Directory descriptors
-/// pin traversal; neither path components nor entries follow symlinks. Foreign hardlink aliases stay private.
+/// Give the bot user ordinary files/directories under `paths` that the supervisor made, all of them before
+/// returning (a checkout git is about to use). Directory descriptors pin traversal; neither path components nor
+/// entries follow symlinks. Foreign hardlink aliases stay private.
 pub fn adopt(paths: &[PathBuf]) {
     let Some((uid, gid)) = identity() else { return };
-    adopt_with(paths, uid, gid, &mut |_| {});
+    Adoption::new(paths).run(uid, gid, Budget::UNBOUNDED, &mut |_| {});
 }
 
-fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd::OwnedFd> {
+/// What one synchronous pass over a provider's store may walk before its thread starts or its sign-in runs.
+const STORE_ENTRIES: usize = 20_000;
+const STORE_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+/// Deeper directories stay the supervisor's (and are logged): no CLI store nests this far.
+const STORE_DEPTH: usize = 64;
+/// How long the background continuation of an oversized store may run before the next call retries it.
+const CONTINUE_TIME: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// `adopt` for a provider CLI's login or state home (credentials, settings and possibly years of sessions), which
+/// is handed over on startup, sign-in and thread-start paths. One bounded breadth-first pass hands over the roots
+/// and the shallowest entries first, where a CLI saves its credentials, settings and new sessions. A store larger
+/// than that pass is handed off explicitly: the rest continues at once on one background thread per store, and the
+/// log says so; a continuation that cannot finish in time is logged and retried by the next call. True when the
+/// store was handed over completely before returning.
+pub fn adopt_store(paths: &[PathBuf]) -> bool {
+    let Some((uid, gid)) = identity() else { return true };
+    let deadline = std::time::Instant::now() + STORE_TIME;
+    adopt_store_with(paths, uid, gid, Budget { entries: STORE_ENTRIES, depth: STORE_DEPTH, until: Some(deadline) })
+}
+
+fn adopt_store_with(paths: &[PathBuf], uid: u32, gid: u32, budget: Budget) -> bool {
+    use std::sync::Mutex;
+    static CONTINUING: Mutex<Vec<Vec<PathBuf>>> = Mutex::new(Vec::new());
+    let named = || paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
+    let mut walk = Adoption::new(paths);
+    if walk.run(uid, gid, budget, &mut |_| {}) {
+        walk.report_depth(&named());
+        return true;
+    }
+    let key = paths.to_vec();
+    {
+        let mut continuing = CONTINUING.lock().unwrap();
+        if continuing.contains(&key) {
+            crate::util::log(&format!("Tico runner: still handing {} to the bot user in the background", named()));
+            return false;
+        }
+        continuing.push(key.clone());
+    }
+    crate::util::log(&format!("Tico runner: {} is larger than one ownership pass ({} entries handed over first, \
+                               shallowest first); handing over the rest in the background", named(), walk.visited));
+    let label = named();
+    let finish = move |walk: &mut Adoption| {
+        let deadline = std::time::Instant::now() + CONTINUE_TIME;
+        let done = walk.run(uid, gid, Budget { entries: usize::MAX, depth: budget.depth, until: Some(deadline) }, &mut |_| {});
+        CONTINUING.lock().unwrap().retain(|k| *k != key);
+        if done {
+            walk.report_depth(&label);
+            crate::util::log(&format!("Tico runner: handed {label} to the bot user ({} entries)", walk.visited));
+        } else {
+            crate::util::log(&format!("Tico runner: handing {label} to the bot user is still incomplete after {} entries; \
+                                       the next start, sign-in or thread retries it", walk.visited));
+        }
+    };
+    let spawned = std::thread::Builder::new().name("tico-adopt".into()).spawn(move || finish(&mut walk));
+    if let Err(e) = spawned {
+        CONTINUING.lock().unwrap().retain(|k| k != paths);
+        crate::util::log(&format!("Tico runner: could not continue handing {} to the bot user ({e}); the next call retries it", named()));
+    }
+    false
+}
+
+pub(crate) fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
     // SAFETY: name is NUL-terminated; the returned descriptor has one owner and is close-on-exec.
     let fd = unsafe { libc::openat(parent, name.as_ptr(), flags | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
@@ -165,7 +244,7 @@ fn open_at(parent: i32, name: &std::ffi::CStr, flags: i32) -> Option<std::os::fd
 
 /// The pinned parent directory of `path` and its last name, opened one component at a time without
 /// following a link. None for an empty path, / or . (never an ownership-handoff root).
-fn pinned_parent(path: &Path) -> Option<(std::os::fd::OwnedFd, std::ffi::CString)> {
+pub(crate) fn pinned_parent(path: &Path) -> Option<(std::os::fd::OwnedFd, std::ffi::CString)> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -208,51 +287,179 @@ pub fn keep_supervisor_directory(path: &Path, mode: u32) -> std::io::Result<()> 
     Ok(())
 }
 
-fn adopt_with(paths: &[PathBuf], uid: u32, gid: u32, before_directory: &mut impl FnMut(&std::ffi::CStr)) {
-    use std::ffi::CStr;
+/// Open `path` read-only through descriptors without following a link in any component, ancestors included, so a
+/// bot-owned folder on the way cannot redirect a supervisor read. The one exception is a root-owned link (a system
+/// alias such as macOS /var or /tmp, which no bot user can make). `flags` apply to the last component only.
+pub fn open_unfollowed(path: &Path, flags: i32) -> std::io::Result<std::fs::File> {
+    use std::collections::VecDeque;
+    use std::ffi::{CString, OsStr};
     use std::os::fd::AsRawFd;
-
-    struct Directory(*mut libc::DIR);
-    impl Drop for Directory {
-        fn drop(&mut self) { unsafe { libc::closedir(self.0); } }
-    }
-    fn walk(parent: i32, name: &CStr, uid: u32, gid: u32, before_directory: &mut impl FnMut(&CStr)) {
-        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // Classify without following a link or opening a special file. The opened inode is checked again below.
-        if unsafe { libc::fstatat(parent, name.as_ptr(), info.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 { return; }
-        let kind = unsafe { info.assume_init() }.st_mode & libc::S_IFMT;
-        if kind != libc::S_IFDIR && kind != libc::S_IFREG { return; }
-        let flags = libc::O_RDONLY | libc::O_NONBLOCK | if kind == libc::S_IFDIR { libc::O_DIRECTORY } else { 0 };
-        let Some(fd) = open_at(parent, name, flags) else { return };
-        if unsafe { libc::fstat(fd.as_raw_fd(), info.as_mut_ptr()) } != 0 { return; }
-        let info = unsafe { info.assume_init() };
-        let kind = info.st_mode & libc::S_IFMT;
-        if kind != libc::S_IFDIR && kind != libc::S_IFREG { return; }
-        if kind == libc::S_IFREG && info.st_uid != uid && info.st_nlink != 1 { return; }
-        if info.st_uid != uid {
-            // Ownership changes the opened inode, never a name that the bot can replace between syscalls.
-            let _ = unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) };
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a plain path");
+    let parts = |path: &Path| -> std::io::Result<Vec<CString>> {
+        path.components().filter_map(|part| match part {
+            Component::RootDir | Component::CurDir => None,
+            Component::Normal(s) => Some(CString::new(s.as_bytes()).map_err(|_| invalid())),
+            Component::ParentDir => Some(Ok(CString::new("..").unwrap())),
+            Component::Prefix(_) => Some(Err(invalid())),
+        }).collect()
+    };
+    let start = |absolute: bool| {
+        open_at(libc::AT_FDCWD, if absolute { c"/" } else { c"." }, libc::O_RDONLY | libc::O_DIRECTORY).ok_or_else(std::io::Error::last_os_error)
+    };
+    let mut fd = start(path.is_absolute())?;
+    let mut pending: VecDeque<CString> = parts(path)?.into();
+    let mut links = 0;
+    while let Some(name) = pending.pop_front() {
+        let last = pending.is_empty();
+        match open_at(fd.as_raw_fd(), &name, libc::O_RDONLY | if last { flags } else { libc::O_DIRECTORY }) {
+            Some(next) if last => return Ok(next.into()),
+            Some(next) => { fd = next; continue; }
+            None => {}
         }
-        if kind != libc::S_IFDIR { return; }
-        before_directory(name);
+        let error = std::io::Error::last_os_error();
+        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstatat and readlinkat on a pinned descriptor and a NUL-terminated name, into owned buffers.
+        let system_link = unsafe { libc::fstatat(fd.as_raw_fd(), name.as_ptr(), info.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } == 0
+            && unsafe { info.assume_init() }.st_mode & libc::S_IFMT == libc::S_IFLNK
+            && unsafe { info.assume_init() }.st_uid == 0;
+        if !system_link || links >= 40 {
+            return Err(error);
+        }
+        links += 1;
+        let mut target = vec![0u8; libc::PATH_MAX as usize];
+        let n = unsafe { libc::readlinkat(fd.as_raw_fd(), name.as_ptr(), target.as_mut_ptr().cast(), target.len()) };
+        if n <= 0 || n as usize >= target.len() {
+            return Err(error);
+        }
+        let target = Path::new(OsStr::from_bytes(&target[..n as usize]));
+        if target.is_absolute() {
+            fd = start(true)?;
+        }
+        for part in parts(target)?.into_iter().rev() {
+            pending.push_front(part);
+        }
+    }
+    Err(invalid())
+}
+
+/// How far one adoption pass may go: entries looked at, directory depth below a root, and a deadline.
+#[derive(Clone, Copy)]
+struct Budget {
+    entries: usize,
+    depth: usize,
+    until: Option<std::time::Instant>,
+}
+
+impl Budget {
+    const UNBOUNDED: Budget = Budget { entries: usize::MAX, depth: usize::MAX, until: None };
+}
+
+struct Directory(*mut libc::DIR);
+impl Drop for Directory {
+    fn drop(&mut self) { unsafe { libc::closedir(self.0); } }
+}
+
+/// Open and hand over one ordinary file or directory `name` in the pinned `parent`, returning its descriptor and
+/// status. Links, special files and foreign hardlink aliases are left alone.
+fn take(parent: i32, name: &std::ffi::CStr, uid: u32, gid: u32) -> Option<(std::os::fd::OwnedFd, libc::stat)> {
+    use std::os::fd::AsRawFd;
+    let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // Classify without following a link or opening a special file. The opened inode is checked again below.
+    if unsafe { libc::fstatat(parent, name.as_ptr(), info.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 { return None; }
+    let kind = unsafe { info.assume_init() }.st_mode & libc::S_IFMT;
+    if kind != libc::S_IFDIR && kind != libc::S_IFREG { return None; }
+    let flags = libc::O_RDONLY | libc::O_NONBLOCK | if kind == libc::S_IFDIR { libc::O_DIRECTORY } else { 0 };
+    let fd = open_at(parent, name, flags)?;
+    if unsafe { libc::fstat(fd.as_raw_fd(), info.as_mut_ptr()) } != 0 { return None; }
+    let info = unsafe { info.assume_init() };
+    let kind = info.st_mode & libc::S_IFMT;
+    if kind != libc::S_IFDIR && kind != libc::S_IFREG { return None; }
+    if kind == libc::S_IFREG && info.st_uid != uid && info.st_nlink != 1 { return None; }
+    if info.st_uid != uid {
+        // Ownership changes the opened inode, never a name that the bot can replace between syscalls.
+        let _ = unsafe { libc::fchown(fd.as_raw_fd(), uid, gid) };
+    }
+    Some((fd, info))
+}
+
+/// A resumable breadth-first adoption. Every directory is reopened from its path one component at a time without
+/// following a link, so what a bounded pass leaves is just the queue, and the shallowest entries go first.
+struct Adoption {
+    queue: std::collections::VecDeque<(PathBuf, usize)>,
+    done: std::collections::HashSet<(u64, u64)>,
+    visited: usize,
+    too_deep: usize,
+}
+
+impl Adoption {
+    fn new(paths: &[PathBuf]) -> Self {
+        Self { queue: paths.iter().map(|p| (p.clone(), 0)).collect(), done: Default::default(), visited: 0, too_deep: 0 }
+    }
+
+    /// Walk until nothing is left (true) or `budget` runs out (false: the rest stays queued for another run).
+    fn run(&mut self, uid: u32, gid: u32, budget: Budget, before_directory: &mut impl FnMut(&std::ffi::CStr)) -> bool {
+        let mut used = 0;
+        while let Some((path, depth)) = self.queue.pop_front() {
+            if !self.step(&path, depth, uid, gid, &budget, &mut used, before_directory) {
+                // An unfinished directory is read again from the start; its finished subdirectories are skipped.
+                self.queue.push_front((path, depth));
+                return false;
+            }
+        }
+        true
+    }
+
+    fn step(&mut self, path: &Path, depth: usize, uid: u32, gid: u32, budget: &Budget, used: &mut usize,
+            before_directory: &mut impl FnMut(&std::ffi::CStr)) -> bool {
+        use std::ffi::{CStr, OsStr};
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        let mut spend = |visited: &mut usize| {
+            if *used >= budget.entries || budget.until.is_some_and(|t| std::time::Instant::now() >= t) { return false; }
+            *used += 1;
+            *visited += 1;
+            true
+        };
+        if !spend(&mut self.visited) { return false; }
+        let Some((parent, name)) = pinned_parent(path) else { return true };
+        let Some((fd, info)) = take(parent.as_raw_fd(), &name, uid, gid) else { return true };
+        let key = (info.st_dev as u64, info.st_ino as u64);
+        if info.st_mode & libc::S_IFMT != libc::S_IFDIR || self.done.contains(&key) { return true; }
+        if depth >= budget.depth {
+            self.too_deep += 1;
+            self.done.insert(key);
+            return true;
+        }
+        before_directory(&name);
         // fdopendir owns its descriptor. Keep the original pinned for all openat calls and avoid leaking the
         // enumeration descriptor into a concurrently spawned model process.
         let duplicate = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
-        if duplicate < 0 { return; }
+        if duplicate < 0 { return true; }
         let stream = unsafe { libc::fdopendir(duplicate) };
-        if stream.is_null() { unsafe { libc::close(duplicate); } return; }
+        if stream.is_null() { unsafe { libc::close(duplicate); } return true; }
         let stream = Directory(stream);
         loop {
             let entry = unsafe { libc::readdir(stream.0) };
             if entry.is_null() { break; }
-            let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_owned();
-            if name.to_bytes() == b"." || name.to_bytes() == b".." { continue; }
-            walk(fd.as_raw_fd(), &name, uid, gid, before_directory);
+            let child = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_owned();
+            if child.to_bytes() == b"." || child.to_bytes() == b".." { continue; }
+            if !spend(&mut self.visited) { return false; }
+            if let Some((_, status)) = take(fd.as_raw_fd(), &child, uid, gid) {
+                if status.st_mode & libc::S_IFMT == libc::S_IFDIR {
+                    self.queue.push_back((path.join(OsStr::from_bytes(child.to_bytes())), depth + 1));
+                }
+            }
         }
+        self.done.insert(key);
+        true
     }
-    for path in paths {
-        if let Some((parent, name)) = pinned_parent(path) {
-            walk(parent.as_raw_fd(), &name, uid, gid, before_directory);
+
+    fn report_depth(&self, named: &str) {
+        if self.too_deep > 0 {
+            crate::util::log(&format!("Tico runner: {} folder(s) in {named} nest deeper than {STORE_DEPTH} levels; their \
+                                       contents stay the supervisor's", self.too_deep));
         }
     }
 }
@@ -318,7 +525,7 @@ mod tests {
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
         let parked = root.join("parked");
         let mut swapped = false;
-        adopt_with(&[root], 10003, 10002, &mut |name| {
+        Adoption::new(&[root]).run(10003, 10002, Budget::UNBOUNDED, &mut |name| {
             if name.to_bytes() != b"swap" || swapped { return; }
             swapped = true;
             let result = std_command("/usr/bin/python3")
@@ -366,6 +573,35 @@ mod tests {
     }
 
     #[test]
+    fn a_bounded_pass_hands_over_the_shallowest_entries_and_resumes() {
+        // Runs as any user: handing a tree to its own owner changes nothing, so this checks the walk itself.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        // Adoption follows no link at all, so start from a link-free path (macOS's /var is one).
+        let root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("tico-adopt-bound-{}", uuid::Uuid::new_v4().simple()));
+        for i in 0..30 {
+            let folder = root.join(format!("d{i}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for j in 0..40 { std::fs::write(folder.join(format!("f{j}")), "").unwrap(); }
+        }
+        std::fs::create_dir_all(root.join("deep/l1/l2/l3/l4/l5")).unwrap();
+        let mut walk = Adoption::new(std::slice::from_ref(&root));
+        let mut seen = Vec::new();
+        let budget = Budget { entries: 100, depth: 4, until: None };
+        assert!(!walk.run(uid, gid, budget, &mut |n| seen.push(n.to_bytes().to_vec())), "an oversized tree stops at the bound");
+        assert_eq!(walk.visited, 100);
+        assert_eq!(seen[0], root.file_name().unwrap().as_encoded_bytes(), "the store root goes first");
+        assert!(seen.len() < 5, "the first pass ends early: {}", seen.len());
+        // The rest is handed off and finished; nothing is skipped except folders past the depth bound, which are counted.
+        assert!(walk.run(uid, gid, Budget { entries: usize::MAX, ..budget }, &mut |n| seen.push(n.to_bytes().to_vec())));
+        let seen: std::collections::HashSet<String> = seen.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect();
+        let mut expected: std::collections::HashSet<String> = (0..30).map(|i| format!("d{i}")).collect();
+        expected.extend([root.file_name().unwrap().to_string_lossy().into_owned(), "deep".into(), "l1".into(), "l2".into()]);
+        assert_eq!(seen, expected);
+        assert_eq!(walk.too_deep, 1, "l3 is past the bound and reported");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn off_without_a_bot_uid_and_for_the_supervisor_itself() {
         let s = |v: &str| Some(v.to_string());
         assert_eq!(identity_from(None, None, 501), None);
@@ -376,5 +612,11 @@ mod tests {
         assert_eq!(identity_from(s("10003"), s("10002"), 10002), Some((10003, 10002)));
         let p = prefix_for((10003, 10002));
         assert_eq!(p, ["/usr/bin/setpriv", "--reuid=10003", "--regid=10002", "--clear-groups", "--inh-caps=-all", "--ambient-caps=-all"]);
+        // A leased turn user gets exactly its own checkouts' groups, a sibling none, and the UID's next borrower none.
+        crate::checkout_groups::grant(10150, &[20001, 20002]);
+        assert_eq!(prefix_for((10150, 10002))[3], "--groups=10002,20001,20002");
+        assert_eq!(prefix_for((10151, 10002))[3], "--clear-groups");
+        crate::checkout_groups::revoke(10150);
+        assert_eq!(prefix_for((10150, 10002))[3], "--clear-groups");
     }
 }

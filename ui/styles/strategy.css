@@ -1,0 +1,136 @@
+/* ui/styles/strategy.css — the Strategy section (ui/strategy-page.js): its heading and tabs, shared with the Market tab
+   (ui/market-page.js), the page's contents rail and reading column, the bets, and the Versions drawer. */
+#main.strategy-layout{max-width:none}
+.strat-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:40px;margin:0 0 14px;padding:0 0 8px;border-bottom:1px solid var(--line)}
+.strat-head h1{margin:0;font-size:var(--t-lg);line-height:1.2}
+.strat-head .spacer{flex:1}
+/* On Market the page has no padding of its own: the heading brings the same gutters, so switching tabs never moves it. */
+#main.market-layout .strat-head{flex:none;margin:0;padding:8px 28px}
+.strat-tabs{display:flex;gap:2px;border:0;margin:0}
+.strat-tabs a{padding:4px 10px;border-radius:6px;color:var(--muted);font-size:var(--t-base);text-decoration:none}
+.strat-tabs a:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
+.strat-tabs a.cur{background:var(--surface2);color:var(--ink);font-weight:600}
+.strat-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.strat-actions:empty{display:none}
+.strat-why-not{color:var(--muted);font-size:var(--t-sm)}
+.strat-meta{margin:0 0 10px;color:var(--muted);font-size:var(--t-sm)}
+.strat-status{color:var(--ink)}
+.strat-none{margin:8px 0 12px;color:var(--muted);font-size:var(--t-md)}
+.strat-publish{display:flex;gap:8px;align-items:center;max-width:760px;margin:0 0 12px}
+.strat-publish input{flex:1 1 auto;min-width:0}
+
+.strat-grid{display:grid;grid-template-columns:176px minmax(0,760px);gap:28px;align-items:start}
+.strat-toc{position:sticky;top:0;display:flex;flex-direction:column;gap:1px;padding-top:6px}
+.strat-toc-link{display:block;width:100%;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.strat-toc-link:hover{background:var(--surface2);color:var(--ink)}
+.strat-toc-link:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+.strat-doc{min-width:0}
+.strat-sec{padding:14px 0;border-top:1px solid var(--line);scroll-margin-top:8px}
+.strat-sec:first-of-type,.strat-none+.strat-sec{border-top:0;padding-top:4px}
+.strat-sec-head{display:flex;align-items:center;gap:8px;min-height:26px;margin:0 0 6px}
+.strat-sec-head .strat-k{margin:0}
+.strat-sec-head .cnt{color:var(--muted);font-size:var(--t-sm)}
+.strat-k{margin:0 0 6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.strat-mini{padding:2px 8px;font-size:var(--t-sm);line-height:1.3}
+.strat-empty{margin:0;font-size:var(--t-base)}
+.strat-text{margin:0;font-size:var(--t-md);line-height:var(--lh-read);white-space:pre-line;overflow-wrap:anywhere}
+.strat-summary .strat-text,.strat-summary .strat-field{font-size:var(--prose)}
+/* The owner's Summary and Vision read as text and become a field on hover and focus. */
+.strat-field{display:block;width:calc(100% + 14px);margin:0 -7px;padding:4px 6px;resize:none;overflow:hidden;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:var(--lh-read)}
+.strat-field:hover{border-color:var(--line)}
+.strat-field:focus{border-color:var(--accent);background:var(--surface);outline:none}
+.strat-field::placeholder{color:var(--muted)}
+.strat-md{font-size:var(--t-md);line-height:var(--lh-read);overflow-wrap:anywhere}
+.strat-md>:first-child{margin-top:0}.strat-md>:last-child{margin-bottom:0}
+.strat-sec-form textarea{width:100%;min-height:140px;resize:vertical;font:inherit;font-size:var(--t-md);line-height:var(--lh-read)}
+.strat-sec-form .goal-actions,.strat-bet-form .goal-actions{margin-top:8px}
+
+.strat-bets{list-style:none;margin:0;padding:0}
+.strat-bet{padding:10px 0;border-top:1px solid var(--line)}
+.strat-bets>.strat-bet:first-child{border-top:0;padding-top:2px}
+.strat-bet-top{display:flex;align-items:baseline;gap:8px;min-width:0}
+.strat-bet-n{flex:none;width:16px;color:var(--muted);font-size:var(--t-sm)}
+.strat-bet-st{flex:1 1 auto;min-width:0;font-size:var(--t-md);font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.strat-retired .strat-bet-st{font-weight:500;color:var(--g7)}
+.strat-pill{flex:none}
+.pill.proposed{background:var(--wait-bg);color:var(--wait-ink)}
+.strat-bet-tools{flex:none;display:flex;gap:2px;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.strat-bet:hover .strat-bet-tools,.strat-bet:focus-within .strat-bet-tools{opacity:1}
+/* Why, Rules out, Wrong if and Goals: a label column and the words, aligned under the statement. */
+.strat-bet-lines{display:grid;gap:4px;margin:6px 0 0 24px}
+.strat-bet-line{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;margin:0;color:var(--g7);font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere;white-space:pre-line}
+.strat-bet-k{font-weight:600;color:var(--muted);font-size:var(--t-sm);line-height:inherit}
+.strat-health{flex:none;display:inline-flex;align-self:center}
+.strat-goals{display:flex;flex-wrap:wrap;gap:2px 14px;list-style:none;margin:0;padding:0}
+.strat-goals a{display:inline-flex;align-items:center;gap:6px;min-height:24px;color:var(--g7);font-size:var(--t-sm);text-decoration:none}
+.strat-goals a:hover{color:var(--ink);text-decoration:underline}
+.strat-bet-form{display:grid;gap:8px}
+.strat-bet-form textarea{resize:vertical}
+.strat-bet-status{max-width:200px}
+.strat-wrong{display:grid;gap:8px;margin:0;padding:0;border:0;min-width:0}
+.strat-wrong legend{padding:0;margin:0 0 4px;font-size:var(--t-sm);color:var(--muted)}
+.strat-wrong-row{display:flex;gap:8px;align-items:center;min-width:0}
+.strat-wrong-kind{flex:none;width:120px}
+.strat-wrong-fields{display:flex;gap:8px;flex:1 1 auto;min-width:0}
+.strat-wrong-fields[hidden]{display:none}
+.strat-wrong-fields input,.strat-wrong-fields select{box-sizing:border-box;height:36px;min-width:0;padding:0 9px;font-size:var(--t-md)}
+.strat-wrong-fields>*{flex:1 1 auto}
+.strat-wrong-fields select[name="direction"]{flex:0 0 96px}
+.strat-wrong-fields input[name="threshold"]{flex:0 0 110px}
+.strat-wrong-by{max-width:200px}
+.strat-form-why{margin:0;color:var(--wait-ink);font-size:var(--t-sm)}
+.strat-add-sec{padding:12px 0;border-top:1px solid var(--line)}
+.strat-sec-form input[name="title"]{box-sizing:border-box;width:100%;height:36px;margin:0 0 8px;font-size:var(--t-md)}
+.strat-retired{margin-top:8px}
+.strat-retired>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
+.strat-retired .cnt{margin-left:4px}
+.strat-flash{animation:stratflash 1.6s var(--ease-out)}
+@keyframes stratflash{from{background:color-mix(in srgb,var(--accent) 16%,transparent)}to{background:transparent}}
+@media (prefers-reduced-motion:reduce){.strat-flash{animation:none}}
+
+/* Versions: a drawer on the right (the Goals panel's shape), the whole screen on a phone. */
+.strat-versions .tmodal-head h2{margin:0;font-size:var(--t-md)}
+.strat-back{padding:4px 8px}
+.strat-sv-list{list-style:none;margin:0;padding:0}
+.strat-sv-row{display:grid;grid-template-columns:40px minmax(0,1fr);grid-template-rows:auto auto;column-gap:8px;width:100%;padding:8px 6px;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.strat-sv-list li:first-child .strat-sv-row{border-top:0}
+.strat-sv-row:hover{background:var(--surface2)}
+.strat-sv-n{grid-row:1/3;font-weight:600}
+.strat-sv-note{overflow-wrap:anywhere}
+.strat-sv-meta{font-size:var(--t-xs)}
+.strat-sv-title{margin:4px 0 12px;font-size:var(--t-md)}
+.strat-sv-title .muted{font-size:var(--t-sm);margin-top:2px}
+.strat-sv-sec{padding:10px 0;border-top:1px solid var(--line)}
+.strat-sv-sec p{margin:0;line-height:var(--lh-read)}
+.strat-sv-bets{margin:0;padding-left:18px}
+.strat-sv-bets li{margin:0 0 6px}
+
+@media (max-width:760px){
+  #main.strategy-layout{padding-left:16px;padding-right:16px;padding-top:12px}
+  #main.market-layout .strat-head{padding:12px 16px 8px}
+  .strat-head{gap:8px 12px}
+  .strat-head .spacer{display:none}
+  .strat-actions{flex-basis:100%}
+  .strat-actions .primary{margin-left:auto}
+  .strat-grid{grid-template-columns:minmax(0,1fr);gap:0}
+  .strat-toc{display:none}
+  .strat-bet-tools{opacity:1}
+  /* Number and statement on one line; the status and the tools share the next, so the number never sits alone. */
+  .strat-bet-top{flex-wrap:wrap;row-gap:6px}
+  .strat-bet-st{flex-basis:calc(100% - 24px)}
+  .strat-pill{margin-left:24px}
+  .strat-bet-tools{margin-left:auto}
+  .strat-mini{min-height:32px;padding:4px 10px}
+  .strat-field,.strat-sec-form textarea,.strat-publish input{font-size:16px}
+  .strat-publish{flex-wrap:wrap}.strat-publish input{flex-basis:100%}
+  .strat-why-not{flex-basis:100%;order:3}
+  .strat-bet-lines{margin-left:0}
+  .strat-bet-line{grid-template-columns:68px minmax(0,1fr)}
+  .strat-wrong-row{flex-wrap:wrap}
+  .strat-wrong-kind{width:100%}
+  .strat-wrong-fields{flex-basis:100%;flex-wrap:wrap}
+  .strat-wrong-fields input,.strat-wrong-fields select{height:44px;font-size:16px}
+  .strat-wrong-fields select[name="kpi_id"]{flex-basis:100%}
+  .strat-wrong-by{max-width:none}
+}

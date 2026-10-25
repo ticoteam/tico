@@ -528,6 +528,10 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
              "updated_by": actor, "source": "transfer", "previous": owner["email"], "history": history[-OWNER_HISTORY:],
              "retired": emails(stored.get("retired"))}
     _store(c, OWNER, after)
+    # The CEO Bot chat stays with the owner seat: the new owner inherits it, and the old owner talks to their Assistant
+    # again, with their own Assistant chats (backend/assistant.py).
+    from .assistant import move_ceo_room
+    move_ceo_room(c, actor, "human:" + target["id"])
     access = load_access(c, settings)
     if previous_bot_admin and owner["email"]:
         _store(c, ACCESS, {**access, "admins": emails([*access["admins"], owner["email"]]),

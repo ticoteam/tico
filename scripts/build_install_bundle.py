@@ -11,7 +11,9 @@ import argparse
 import gzip
 import hashlib
 import io
+import json
 import re
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -53,6 +55,34 @@ def build_bundle(source: Path, version: str) -> bytes:
             if name == ".env.example":
                 data = re.sub(rb"(?m)^TICO_TAG=.*$", ("TICO_TAG=" + version).encode(), data)
             add(name, data, 0o755 if path.stat().st_mode & 0o111 else 0o644)
+        # This is content provenance, not a capability granted by a version label.
+        # Incomplete or modified source can still build fixtures, but cannot
+        # advertise the same-installation operator protocol.
+        # Running this file as a script otherwise searches scripts/, not the
+        # repository containing the release builder's contract.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from setup.visual_contract import PROTOCOL, RUNTIME_FILES
+        names = [n for n in bundle_names(source) if n.startswith("setup/") or n == "compose.yaml"]
+        runtime = {n: hashlib.sha256((source / n).read_bytes()).hexdigest()
+                   for n in RUNTIME_FILES if (source / n).is_file()}
+        revision = ""
+        try:
+            selected = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"],
+                                      capture_output=True, check=True, timeout=5).stdout.decode().strip()
+            if re.fullmatch(r"[0-9a-f]{40}", selected) and len(runtime) == len(RUNTIME_FILES):
+                for name in sorted(set(names) | set(RUNTIME_FILES)):
+                    tracked = subprocess.run(["git", "-C", str(source), "show", selected + ":" + name],
+                                             capture_output=True, check=True, timeout=5).stdout
+                    if tracked != (source / name).read_bytes():
+                        break
+                else:
+                    revision = selected
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        manifest = {"protocol": PROTOCOL, "revision": revision,
+                    "files": {n: hashlib.sha256((source / n).read_bytes()).hexdigest() for n in names},
+                    "runtime_files": runtime}
+        add("installer-manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode() + b"\n", 0o644)
         add("VERSION", (version.lstrip("v") + "\n").encode(), 0o644)
     out = io.BytesIO()
     with gzip.GzipFile(fileobj=out, mode="wb", mtime=0, compresslevel=9) as gz:

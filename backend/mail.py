@@ -237,17 +237,19 @@ def install_mail(app, store, auth):
         tid = str(thread_id or "").strip()
         if not tid:
             raise Problem("thread", "thread_id is required", 422)
-        with store.transaction() as c:
+        # The thread is read outside the write lock; the audit event is written, in a short transaction, before
+        # anything is returned.
+        with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
             rows = c.execute(
                 "SELECT * FROM mail_messages WHERE mailbox=? AND thread_id=? AND deleted_at IS NULL "
                 "ORDER BY epoch, msg_id", (addr, tid)).fetchall()
             if not rows:
                 raise Problem("not_found", "Thread not found", 404)
-            H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread",
-                                                     "messages": len(rows)})
-            return {"mailbox": addr, "thread_id": tid,
-                    "messages": [message_public(row, body=True) for row in rows]}
+            out = {"mailbox": addr, "thread_id": tid, "messages": [message_public(row, body=True) for row in rows]}
+        with store.transaction() as c:
+            H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread", "messages": len(rows)})
+        return out
 
     @app.get("/api/v2/mail/messages/{msg_id}")
     def message(request: Request, msg_id: str, mailbox: str = ""):
@@ -256,12 +258,13 @@ def install_mail(app, store, auth):
         mid = str(msg_id or "").strip()
         if not mid:
             raise Problem("message", "msg_id is required", 422)
-        with store.transaction() as c:
+        with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
             row = c.execute("SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL",
                             (addr, mid)).fetchone()
             if not row:
                 raise Problem("not_found", "Message not found", 404)
-            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message",
-                                                     "thread_id": row["thread_id"]})
-            return message_public(row, body=True)
+            out = message_public(row, body=True)
+        with store.transaction() as c:
+            H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message", "thread_id": row["thread_id"]})
+        return out

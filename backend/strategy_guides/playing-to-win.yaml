@@ -1,0 +1,40 @@
+# Playing to Win (Lafley and Martin): five linked choices, from the aspiration to the systems that make the
+# other four possible.
+# Not listed until the page can switch guides (docs/strategy.md); the stored shape is the same for every guide.
+id: playing-to-win
+name: Playing to Win
+description: 'In the style of Playing to Win: where to play, how to win, and what it takes.'
+listed: false
+bets_label: Choices
+bet_label: Choice
+questions:
+  - key: q1
+    ask: In two years, what would have to be true for you to say the team won?
+  - key: q2
+    ask: Which customers and which parts of the market are you choosing to serve, and, as important, which are you leaving alone?
+  - key: q3
+    ask: In those places, do you win on cost or on being different, and what exactly is the difference a buyer notices?
+  - key: q4
+    ask: Which capability do you need that you do not have today, and what is the plan to build or buy it?
+  - key: q5
+    ask: What do you review every week that tells you whether the strategy is working, and what would you review if you could only pick one number?
+  - key: q6
+    ask: Name a market you could enter easily that you are choosing not to, and say why.
+  - key: q7
+    ask: What would a competitor have to believe about you to decide not to attack your position?
+suggested_sections:
+  - key: aspiration
+    title: Winning aspiration
+    prompt: What winning looks like for this team, concretely enough to tell whether you got there. Not a mission statement; a picture of the end state.
+  - key: where
+    title: Where to play
+    prompt: The customers, geographies, product categories, channels and stages of the market you compete in, and the ones you leave to others.
+  - key: how
+    title: How to win
+    prompt: In the places you play, why you win. Lowest cost or clear differentiation, and the specific form it takes for you. Being good at everything is not an answer.
+  - key: capabilities
+    title: Capabilities
+    prompt: The three to five things the team must do better than anyone else for the how-to-win to hold, and which of them you already have.
+  - key: systems
+    title: Management systems
+    prompt: The measures, routines and structures that keep the capabilities sharp and show, week to week, whether the choices are working.

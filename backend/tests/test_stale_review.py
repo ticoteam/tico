@@ -127,6 +127,23 @@ def test_a_review_task_with_a_merged_pr_gets_one_stale_check_comment_to_its_bot(
     assert summary["routes"] == {"gateway": 1} and summary["calls"] == 1 and summary["cost_usd"] == 0.00002
 
 
+def test_the_audit_keeps_what_decide_answered_and_the_readout_spreads_it(stale):
+    """Below the threshold the task is left, but the `judge.call` row keeps Decide's own answer beside the verdict."""
+    from backend.decide_readout import readout
+    api, store, task = stale
+    task("Ship the export button", pr="merged")
+    SR.run_pass(store, engine=FakeDecide("close", 0.4))
+    (audit,) = calls(store)
+    assert audit["verdict"] == {"value": "leave", "confidence": 0.4}, "the verdict row is unchanged"
+    assert audit["answers"] == {"verdict": {"type": "choice", "value": "close", "confidence": 0.4}}
+    assert set(audit) == {"label", "questions", "types", "task", "ms", "model", "usage", "cost_usd", "provider",
+                          "verdict", "answers"}
+    with store.read() as c:
+        out = readout(c, store.settings)
+    (row,) = [r for r in out["sets"] if r["set"] == "stale-review"]
+    assert row["answers"] == {"verdict": {"close": 1}} and "not kept" not in out["text"]
+
+
 def test_no_new_candidate_means_no_decide_call_no_event_and_only_the_watermark_moves(stale):
     api, store, task = stale
     task("Ship the export button", pr="merged")

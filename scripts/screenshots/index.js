@@ -79,7 +79,7 @@ const PAGES = [
     await page.locator('#docs-h-internal').waitFor();
     await page.locator('#docs-h-linked').waitFor();
   }},
-  {name: 'market', route: '#/market?note=company%2Fnorthwind', ready: 'Cheapest starter plan'},
+  {name: 'market', route: '#/strategy/market?note=company%2Fnorthwind', ready: 'Cheapest starter plan'},
 ];
 
 function argument(name, fallback = '') {

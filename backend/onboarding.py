@@ -10,6 +10,7 @@ created at once, `needs_onboarding`, and its repository is materialized by the c
 still a task for BotOps. Nothing here reaches a machine: it writes definitions and tasks.
 """
 
+import difflib
 import json
 import os
 import re
@@ -24,7 +25,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import ceo_bot, rooms, routines, statuses
+from . import ceo_bot, lifecycle, rooms, routines, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -43,14 +44,15 @@ INSTRUCTIONS_FILE = "AGENT.md"
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
 NEEDS_SETUP = statuses.NEEDS_SETUP
 ONBOARDED = "onboarded"
-EMPTY_NAMES = {"company_name": "", "app_name": "", "assistant_name": "", "owner_name": "", "team_domain": ""}
+EMPTY_NAMES = {"company_name": "", "app_name": "", "assistant_name": "", "owner_name": "", "team_domain": "",
+               "website": ""}
 # `pains`, `pains_text` and `tools` are no longer asked. An older record keeps them and a client may still send them;
 # nothing reads them. `departments` are the org builder's chosen departments, in order, and `briefings` the one-line
-# answer given for each.
-EMPTY_ANSWERS = {"what_we_do": "", "customers": "", "team_size": "", "work_arrives": [],
+# answer given for each. `building` is setup's first step: the owner's one line, or a new idea in a few sentences.
+EMPTY_ANSWERS = {"building": "", "what_we_do": "", "customers": "", "team_size": "", "work_arrives": [],
                  "repetitive_work": "", "pains": [], "pains_text": "",
                  "tools": [], "software_product": "", "departments": [], "briefings": {}}
-ANSWER_LABELS = (("what_we_do", "What we do"), ("customers", "Customers"),
+ANSWER_LABELS = (("building", "What we're building"), ("what_we_do", "What we do"), ("customers", "Customers"),
                  ("team_size", "Team size"), ("work_arrives", "Work arrives by"),
                  ("repetitive_work", "Repetitive work"),
                  ("software_product", "Software is the product"),
@@ -262,6 +264,8 @@ def load(c):
             # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
             "sample": stored.get("sample") or None,
             "company_import": stored.get("company_import") or None,
+            # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
+            "seats": dict(stored.get("seats") or {}),
             "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
@@ -324,6 +328,9 @@ def config_view(c, settings, who=None):
         # A runner names a folder its turns can't write (Muse Code's sessions) apart from its sign-in only to a server
         # that takes the field (runner-rs/src/fallback.rs server_takes_data_problem).
         value["readiness_data_problem"] = True
+        value["computer_logins_v1"] = True
+        # Likewise whether a tool's turns run as their own OS user (runner-rs/src/fallback.rs server_takes_turn_user).
+        value["readiness_turn_user"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
     value["in_docker"] = running_in_docker()      # the first run offers a Linux computer first when the server is one
@@ -381,6 +388,52 @@ def setup_body(slug, choice, answers):
     ])
 
 
+def job_description(card, names, reason="", instructions="", display_name=""):
+    """A seat's job description as setup writes it: the role's text from its template (what it does and owns), why the
+    company chart has it, then what the owner changed in the template's instructions during setup. Those changes are
+    the duties and limits the owner reviewed, so recruiting must see them; the template's own instructions stay with the
+    template, which keeps the description short. Unedited or empty instructions add nothing. Anyone with access to the
+    seat edits it from there."""
+    raw = card or {}
+    card = render(raw, names) if raw else {}
+    parts = [str(card.get("summary") or "").strip()]
+    owns = [line for line in card.get("owns") or [] if str(line).strip()]
+    if owns:
+        parts.append("Owns:\n" + "\n".join("- " + str(line).strip() for line in owns))
+    if str(reason or "").strip():
+        parts.append("Why this role is on the company chart:\n" + str(reason).strip())
+    parts.append(_instruction_changes(raw, names, instructions, display_name))
+    return "\n\n".join(part for part in parts if part)
+
+
+def _instruction_changes(card, names, instructions, display_name=""):
+    """The lines the owner added to or took out of a template's instructions, or "" when they left them as shown. The
+    wizard shows them filled with the company's names and, once saved, the role's own name (`Onboarding.catalog`)."""
+    text = str(instructions or "").strip()
+    if not text or not card:
+        return ""
+    shown = [render(card, names, name)["instructions"].strip() for name in ("", display_name)]
+    if text in shown:
+        return ""
+    base = min(shown, key=lambda default: sum(1 for line in difflib.ndiff(default.splitlines(), text.splitlines())
+                                                if line[:1] in "+-"))
+    added, removed, kept = [], [], 0
+    for line in difflib.ndiff(base.splitlines(), text.splitlines()):
+        if line[:2] in ("+ ", "- ") and line[2:].strip():
+            (added if line[0] == "+" else removed).append(line[2:].rstrip())
+        elif line[:2] == "  " and line[2:].strip():
+            kept += 1
+    if len(removed) > kept:
+        # Mostly rewritten: the owner's text is the instructions, and a list of the template's lines would bury it.
+        return "The owner wrote this role's instructions in setup:\n" + text
+    out = ["The owner changed this role's instructions in setup."]
+    if added:
+        out.append("Added:\n" + "\n".join(added))
+    if removed:
+        out.append("Taken out:\n" + "\n".join(removed))
+    return "\n\n".join(out) if added or removed else ""
+
+
 class Onboarding:
     def __init__(self, store, auth, settings_admin, execution, models):
         self.store, self.auth, self.admin = store, auth, settings_admin
@@ -425,8 +478,15 @@ class Onboarding:
         owner = self.auth.owner_id(c)
         # Where every department head reports: the owner, at the top of the chart.
         home = "human:" + owner if owner and H.human(c, owner) else ""
+        from . import company_import, invites
+        imported = record.get("company_import")
+        if imported and imported.get("people"):
+            sent = invites.sent(c)
+            record = {**record, "company_import": {**imported, "people": [
+                {**person, "invited_at": (sent.get(person.get("person") or "") or {}).get("at")}
+                for person in imported["people"]]}}
         return {**record, "home": home, "bots": self._bots(c), "machine": self._machine(c),
-                "needed": needed(c, who, record)}
+                "needed": needed(c, who, record), "company_import_failed": company_import.failure(c)}
 
     def _bots(self, c):
         rows = []
@@ -482,7 +542,24 @@ class Onboarding:
             names["team_domain"] = Access.team_domain(names["team_domain"])
         else:
             names["team_domain"] = record["names"].get("team_domain") or ""      # a client that never asks keeps it
-        record.update(names=names, answers=body.answers.model_dump(), selected=selected)
+        if "website" in body.names.model_fields_set:
+            from .strategy_setup import normalize_url, refuse_unsafe
+            try:
+                names["website"] = normalize_url(names["website"])
+            except ValueError as exc:
+                raise Problem("validation", str(exc), 422) from None
+            if names["website"]:
+                refuse_unsafe(names["website"])
+        else:
+            names["website"] = record["names"].get("website") or ""
+        answers = body.answers.model_dump()
+        answers["building"] = answers["building"].strip() if "building" in body.answers.model_fields_set \
+            else record["answers"].get("building") or ""
+        if not names["website"] and not answers["building"] and (record["names"].get("website") or
+                                                                 record["answers"].get("building")):
+            from .strategy_setup import stop_running
+            stop_running(c, {"code": "cleared", "message": "The website and the line were cleared"})
+        record.update(names=names, answers=answers, selected=selected)
         # The owner's name goes on their roster entry (first run only knew their email).
         owner = self.auth.owner_id(c)
         if owner and body.names.owner_name.strip():
@@ -501,9 +578,13 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who, models=None):
-        """Create the plan's bots. `models` names the model a new bot runs on, by slug, in place of its card's
-        (the sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
+    def complete(self, c, who, models=None, seats=True):
+        """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
+        Librarian, the CEO Bot and the Assistant) are created as bots, Active from day one, and every other role is laid
+        out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until someone
+        recruits it. `seats` False creates every pick as a bot, as the sample company does (backend/sample_company.py).
+        `models` names the model a new bot runs on, by slug, in place of its card's (the sample company spreads its
+        bots over two subscriptions); a model whose provider is off is ignored."""
         self._owner(who)
         record = load(c)
         names = display_names(self.settings, record)
@@ -511,6 +592,15 @@ class Onboarding:
         plan = self._plan(record, cards, names)
         owner = self.auth.owner_id(c)
         home = "human:" + owner if owner and H.human(c, owner) else ""
+        roles = {}
+        if seats:
+            for slug, choice in plan.items():
+                raw = cards.get(choice["template"]) or {}
+                # A message bot (`kind: helper`, the Inbox Manager) serves one person and is never on the chart, so it
+                # is made as a bot linked to its mailbox, like the built-ins; only a role becomes a seat.
+                if not (raw.get("required") or raw.get("bootstrap") or raw.get("kind") == "helper") and not H.bot(c, slug):
+                    roles[slug] = choice
+            plan = {slug: choice for slug, choice in plan.items() if slug not in roles}
         rank, parents = 0, {}
         for slug, choice in plan.items():
             raw = cards.get(choice["template"])
@@ -539,16 +629,100 @@ class Onboarding:
                     reports_to=parent, expected_revision=row["revision"]))
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
-        Groups.place(c, self.settings, list(plan))
+        before = set(Groups._roster(c)["org_groups"])
+        Groups.place(c, self.settings, list(plan), group_order=record["answers"]["departments"])
+        laid = self._lay_out(c, who, record, roles, cards, names, home)
+        self._link_bets(c, record, before)
         if not record["completed"]:
             # A new company starts caught up: the releases shipped before it existed are not news to its owner.
             changelog.mark_read(c, self.settings, who.actor, [row["id"] for row in changelog.products(c, self.settings)])
-        # Completing twice keeps the moment the company actually finished.
-        record.update(selected=plan, completed=record["completed"] or H.now())
+        # Completing twice keeps the moment the company actually finished; the chart's picks stay in `selected`.
+        record.update(selected={**plan, **roles}, completed=record["completed"] or H.now(), seats=laid)
         self._wire(c, record, who.actor)
         self._store(c, record, who.actor)
-        H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan)})
+        self._market_task(c, who, record)
+        # Setting the team up here is one of the two ways out Health offers for a setup file that wasn't imported.
+        from . import company_import
+        company_import.clear_failure(c)
+        H.event(c, who.actor, "onboarding.completed", "", {"bots": sorted(plan), "seats": sorted(roles)})
         return self.view(c, who)
+
+    def _link_bets(self, c, record, before):
+        """Each group this setup made that clearly serves one of the strategy draft's bets names it (`bet_id`): the
+        same match the org builder showed (backend/recruit.py `bet_for`), from the department and the owner's answer
+        for it. With no bets, nothing."""
+        from . import recruit
+        bets = recruit.strategy_bets(c)
+        made = set(Groups._roster(c)["org_groups"]) - before
+        if not bets or not made:
+            return []
+        value = recruit.catalog(self.settings)
+        briefings = record["answers"].get("briefings") or {}
+        links = {}
+        for gid in made:
+            served = recruit.bet_for(value, gid, bets, str(briefings.get(gid) or ""))
+            if served:
+                links[gid] = served["id"]
+        return Groups.link_bets(c, links)
+
+    def _market_task(self, c, who, record):
+        """Setup gave the team's website: the Librarian's "Set up the market map" is filed from it now, once, unless
+        the owner already filed it from the Market page (backend/librarian_setup.py). Its playbook reads the strategy for
+        the rest (templates/catalog/librarian/playbooks/market-setup.md)."""
+        from . import getting_started as GS
+        from . import librarian_setup as LS
+        website = str(record["names"].get("website") or "").strip()
+        librarian = H.bot(c, LIBRARIAN) if website else None
+        if not librarian or librarian["state"] == "archived":
+            return None
+        state = LS._load(c, who.actor, LS.MARKET_KEY)
+        if state.get("task_id"):
+            return None
+        building = str(record["answers"].get("building") or record["answers"].get("what_we_do") or "").strip()
+        answers = {**{key: "" for key in LS.QUESTIONS}, "sell": "\n".join(x for x in (website, building) if x)}
+        # Best effort: finishing setup never fails because the Librarian could not be handed the task.
+        c.execute("SAVEPOINT setup_market_task")
+        try:
+            task = GS._task(c, self.auth, who, LIBRARIAN, GS._market_title(c, "bot:" + LIBRARIAN, who.actor),
+                            LS.market_text(answers))
+        except (H.Refused, Problem):
+            c.execute("ROLLBACK TO setup_market_task")
+            c.execute("RELEASE setup_market_task")
+            return None
+        c.execute("RELEASE setup_market_task")
+        LS._save(c, who.actor, LS.MARKET_KEY, {**state, "answers": answers, "task_id": task["id"], "skipped": False})
+        H.event(c, who.actor, "getting_started.market_requested", LIBRARIAN, {"task": task["id"], "setup": True})
+        return task
+
+    def _lay_out(self, c, who, record, roles, cards, names, home):
+        """The picked roles as Recruiting seats (backend/lifecycle.py `lay_out`), each with the job description its
+        template gives and its reporting line. Completing twice lays out none again: {pick: seat id} is kept on the
+        record."""
+        laid = dict(record.get("seats") or {})
+        todo = {slug: choice for slug, choice in roles.items() if slug not in laid}
+        if not todo:
+            return laid
+        teams = Groups.seat_teams(c, self.settings, sorted({choice["template"] for choice in todo.values()}),
+                                  group_order=record["answers"]["departments"])
+
+        def line(choice):
+            parent = str(choice.get("reports_to") or "")
+            if parent in todo:
+                return parent
+            if parent in laid:
+                return lifecycle.SEAT_PREFIX + laid[parent]
+            if parent.startswith("human:") or (parent and H.bot(c, parent)):
+                return parent
+            return home
+        rows = {slug: {"title": choice["display_name"], "team": teams.get(choice["template"], ""),
+                       "description": job_description(cards.get(choice["template"]) or {}, names, choice.get("reason", ""),
+                                                      choice.get("instructions", ""), choice["display_name"]),
+                       # The owner reviewed the setup description and edited duties/limits before it became a seat.
+                       # Keep those words instead of asking the CEO Bot to replace them on the first open.
+                       "description_by": who.actor,
+                       "reports_to": line(choice)}
+                for slug, choice in todo.items()}
+        return {**laid, **lifecycle.lay_out(c, who.actor, rows)}
 
     def start_sample(self, c, who):
         """The welcome's "Start with a sample company": this new company becomes Tico's sample company
@@ -573,18 +747,27 @@ class Onboarding:
         self._seed_routines(c, who, slug, template)
         H.event(c, who.actor, "bot.needs_onboarding", slug, {"template": template})
 
-    def onboarded(self, c, who, slug, arm=True):
-        """The bot's own word, or its manager's, that its setup is done: it stops being
-        parked, its routines may run and its work is claimed. A member's bot counts toward their
-        limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
+    def onboarded(self, c, who, slug, arm=True, summary=""):
+        """Mark onboarding complete: a person above the bot on the org chart (its manager, their managers, the owner)
+        says it is done learning, so it becomes Active, its routines run and its work is claimed (backend/lifecycle.py).
+        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage. A member's bot counts toward
+        their limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
         company's bots, set up by the sample's own answers)."""
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
-        if not (who.role == "bot" and H.actor_id(who.actor) == slug):
-            self.admin._manager(c, who, slug)
         row = c.execute("SELECT onboarding_state,created_by FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if who.role == "bot" and H.actor_id(who.actor) == slug:
+            if not statuses.is_parked(row["onboarding_state"]):
+                return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "stage": lifecycle.ACTIVE,
+                        "changed": False}
+            return {**lifecycle.ready(c, who, slug, summary), "onboarding_state": row["onboarding_state"],
+                    "changed": False}
+        if not lifecycle.may_complete(self.auth, c, who, slug):
+            raise Problem("forbidden", "Only a person above this bot on the org chart (its manager, their managers or "
+                          "the owner) marks its onboarding complete", 403)
         if not statuses.is_parked(row["onboarding_state"]):
-            return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "changed": False}
+            return {"bot": slug, "onboarding_state": row["onboarding_state"] or "", "stage": lifecycle.ACTIVE,
+                    "changed": False}
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
             if self.admin.counted_bots(c, row["created_by"], excluding=slug) >= limit:
@@ -599,7 +782,7 @@ class Onboarding:
         # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
         # would have given it; once only, so one already armed or turned off by a person is left alone.
         routine = self.arm_first_routine(c, who, slug) if arm else None
-        return {"bot": slug, "onboarding_state": ONBOARDED, "changed": True, "routine": routine}
+        return {"bot": slug, "onboarding_state": ONBOARDED, "stage": lifecycle.ACTIVE, "changed": True, "routine": routine}
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
@@ -705,6 +888,16 @@ class Onboarding:
     def ensure_goal_manager(self, c):
         """The same for the CEO Bot: a company from before it was built in gets it once it can run it."""
         return self._ensure_builtin(c, GOAL_MANAGER, ceo_bot.name(c), "goal_manager.turned_on")
+
+    def ensure_task_manager(self, c):
+        """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
+        run it. It is a helper outside the org chart, so no chart or seat changes."""
+        return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
+
+    def turn_on_task_manager(self, c, who):
+        """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
+        keeps running either way, but the tasks it opens need the bot to be active)."""
+        return self._turn_on(c, who, "task-manager", "task-manager", "Task Manager", "task_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
@@ -854,6 +1047,7 @@ class Onboarding:
             return branches
         self.ensure_librarian(c)              # a company from before it was built in
         self.ensure_goal_manager(c)
+        self.ensure_task_manager(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed

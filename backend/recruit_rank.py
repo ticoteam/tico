@@ -181,7 +181,8 @@ def _common(cards):
 
 def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
     """The suggestions for one department: its head, its `default` and `common` cards and any `niche` card the answer
-    names, the head first and then the best matches. Words in the briefing count double those in "What you do". A
+    names, the head first and then the best matches. Words in the briefing count double those in "What you do" and
+    the bets. A
     card written for business customers sinks when the company sells only to consumers. Deterministic: the same
     answer gives the same list."""
     about = about if isinstance(about, dict) else {}
@@ -193,7 +194,10 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
     own = _stems(dept["name"] + " " + dept["id"])
     # Such a word keeps its place (an empty stem), so the words either side of it are not read as one phrase.
     briefing_words = [("" if stem in own else stem, word) for stem, word in _words(_text(briefing, BRIEFING_LIMIT))]
-    about_words = [("" if stem in own else stem, word) for stem, word in _words(_text(about.get("what"), BRIEFING_LIMIT))]
+    # The team's strategy bets, when the caller sends them (`about.bets`, the Tico server's own recommender only), count
+    # like "What you do": a bet on price brings in the pricing cards.
+    about_text = _text(about.get("what"), BRIEFING_LIMIT) + " " + _text(about.get("bets"), BRIEFING_LIMIT)
+    about_words = [("" if stem in own else stem, word) for stem, word in _words(about_text)]
     consumers = str(about.get("sells_to") or "") == "consumers"
     members = [card for card in catalog["cards"] if card["department"] == department_id]
     common = _common(members)

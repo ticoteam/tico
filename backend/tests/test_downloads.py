@@ -273,6 +273,11 @@ def stubbed_s3(monkeypatch):
             monkeypatch.delenv(name)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing-secret")
+    # Clearing AWS_* also dropped conftest's isolation; without it botocore reads the developer's
+    # ~/.aws/config region, so "no region configured" would not be true on their machine.
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
     real, made = boto3.client, []
     def make(service, **options):
         s3 = real(service, **options)

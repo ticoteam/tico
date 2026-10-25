@@ -4,7 +4,7 @@ as reading them one bot at a time, and about the same number of statements for 7
 import collections
 import json
 
-from backend import agents, rooms, update_feeds, views, wake_presets
+from backend import auto_tasks, agents, execution, lifecycle, pipeline_stats, profiles, rooms, update_feeds, views, task_models, wake_presets
 from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
@@ -15,7 +15,8 @@ from backend.tests.test_api import api  # noqa: F401
 
 BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", "reports_to", "owners",
-            "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default")
+            "thread_mode", "temp", "access", "bot_owners", "onboarding_state", "private_tasks_default", "stage",
+           "can_complete_onboarding")
 
 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
@@ -31,6 +32,10 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["operator"] = config["operator"] if config else None
     row["revision"] = config["revision"] if config else None
     row["onboarding_state"] = (config["onboarding_state"] or "") if config else ""
+    row["stage"] = lifecycle.stage(row["onboarding_state"])
+    if row["stage"] == lifecycle.ONBOARDING:
+        row["can_complete_onboarding"] = lifecycle.may_complete(auth, c, who, bot["slug"])
+        row["onboarding_ready"] = lifecycle.ready_of(config["config_json"]) if config else None
     if config:
         repo = config["repo"] or ("emp-" + bot["slug"])
         from backend.shared_bots import follow
@@ -53,7 +58,12 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "shared_from": str(declared.get("shared_from") or ""),
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
+                    "task_model": task_models.of(declared),
+                    "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
+                    "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
+                                                              task_models.of(declared)),
                     "wake": wake_presets.effective(declared),
+                    "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
     configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
     owner_rows = ([H.human(c, owner) for owner in configured] if configured is not None
@@ -65,7 +75,11 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
         row["reports_to"] = ""
     if not level["read"]:
         return {k: v for k, v in row.items() if k in SEE_ONLY}
+    row["task_flow"] = auto_tasks.counts(c, bot["slug"], who)
     row["draining"] = bool(c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot["slug"],)).fetchone())
+    scope = execution.claim_scope(c, bot["slug"])
+    row["claim_scoped"] = bool(scope)
+    row["claim_task"] = scope if scope and privacy.task_readable(c, who, H.task(c, scope)) else None
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
     row["online"] = bool(assignment and not assignment["revoked_at"] and assignment["last_seen"]

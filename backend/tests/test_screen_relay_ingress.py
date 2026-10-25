@@ -9,7 +9,7 @@ import time
 import httpx
 import pytest
 
-from backend.tests.test_screen_relay_contract import Service, service  # noqa: F401
+from backend.tests.test_screen_relay_contract import Service, relay_binary, service  # noqa: F401
 from backend.tests.test_api import headers
 
 pytestmark = pytest.mark.slow
@@ -106,7 +106,7 @@ def test_gateway_does_not_reuse_a_backend_connection_the_backend_is_closing():
     reserved = Service.bind()
     public = f"127.0.0.1:{reserved.getsockname()[1]}"
     reserved.close()
-    process = subprocess.Popen([os.environ["TICO_SCREEN_RELAY_BIN"]], stdout=subprocess.PIPE, text=True,
+    process = subprocess.Popen([relay_binary()], stdout=subprocess.PIPE, text=True,
         env={**os.environ, "TICO_SCREEN_RELAY_KEY": "fictional-relay-key-for-isolated-tests-only",
              "TICO_SCREEN_PYTHON_URL": f"http://127.0.0.1:{backend.getsockname()[1]}",
              "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0", "TICO_SCREEN_PUBLIC_BIND": public})
