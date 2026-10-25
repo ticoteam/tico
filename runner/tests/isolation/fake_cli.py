@@ -79,6 +79,23 @@ def sibling_credentials():
             "sibling_github_token": b"GH_TOKEN=synthetic-sibling-github" in environment}
 
 
+def parallel_login():
+    folder = HOME / "workspace/broker-overlap"
+    if SPEC["host"] != "codex" or not folder.exists() or os.geteuid() == 10003:
+        return {}
+    pid = os.getpid()
+    (folder / f"ready-{pid}").write_text(str(os.geteuid()))
+    until = time.monotonic() + 15
+    while time.monotonic() < until:
+        ready = list(folder.glob("ready-*"))
+        if len(ready) >= 2 and len({p.read_text() for p in ready}) >= 2:
+            (folder / f"ack-{pid}").write_text("ready")
+            if len(list(folder.glob("ack-*"))) >= 2:
+                return {"parallel_login": True}
+        time.sleep(0.02)
+    return {"parallel_login": False}
+
+
 def git(cwd, *args):
     done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
     return "ok" if done.returncode == 0 else "failed: " + (done.stderr.strip().splitlines() or ["?"])[-1][:160]
@@ -93,7 +110,7 @@ def probe(cwd):
     result = {"harness": NAME, "uid": os.geteuid(), "caps": caps, "where": where,
               "registration": readable(HOME / "runner.json"),
               "state": any(readable(p) for p in HOME.glob("state-*")),
-              "secrets": readable(HOME / "workspace/secrets/_shared.env"), **siblings(cwd), **sibling_credentials()}
+              "secrets": readable(HOME / "workspace/secrets/_shared.env"), **siblings(cwd), **sibling_credentials(), **parallel_login()}
     if SPEC["host"] in {"codex", "claude"} and os.geteuid() != 10003:
         variable, basename = ("CODEX_HOME", "auth.json") if SPEC["host"] == "codex" else ("CLAUDE_CONFIG_DIR", ".credentials.json")
         private = Path(os.environ[variable])

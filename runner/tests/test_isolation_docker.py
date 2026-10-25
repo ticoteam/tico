@@ -262,7 +262,8 @@ class Stack:
         spec = {h["executable"]: {"host": h["host"], "version_args": h["version_args"], "version": "9.9.9 (fake)",
                                   "status": h["status"]} for h in table}
         (self.tmp / "spec.json").write_text(json.dumps(spec))
-        mounts = [a for h in table for a in ("-v", f"{HERE / 'fake_cli.py'}:/usr/local/bin/{h['executable']}:ro")]
+        mounts = [a for executable in sorted({h["executable"] for h in table})
+                  for a in ("-v", f"{HERE / 'fake_cli.py'}:/usr/local/bin/{executable}:ro")]
         if brokered:
             # Exercise the candidate identity before enabling the production readiness promise.
             manifests = self.tmp / "harnesses"
@@ -384,6 +385,9 @@ def probe_problems(table, done, logs):
             want.update({"sibling_granted_secret": not h["isolated"],
                          "sibling_tico_token": not h["isolated"], "sibling_github_token": not h["isolated"]})
         wrong = {k: seen.get(k) for k, v in want.items() if seen.get(k) != v}
+        if h.get("credential_probe") and h["host"] == "codex":
+            if seen.get("parallel_login") is not True:
+                wrong["parallel_login"] = seen.get("parallel_login")
         if h.get("credential_probe") and h["host"] in {"claude", "codex"} and seen.get("private_signin") is not True:
             wrong["private_signin"] = seen.get("private_signin")
         if h["isolated"] and not 10100 <= int(seen.get("uid") or 0) <= 10163:
@@ -405,6 +409,10 @@ def test_every_harness_takes_task_turns_as_the_bot_user_and_the_session_stays_th
         if h["host"] in {"claude", "codex"}:
             h["isolated"] = True  # Explicit requirement, independent of production readiness flag.
         h["credential_probe"] = True
+    # A second Codex bot shares the same managed login. Both must be alive together after broker refresh.
+    sibling = next(h for h in table if h["host"] == "codex").copy()
+    sibling["bot"] += "-parallel"
+    table.append(sibling)
     bots = [h["bot"] for h in table]
     stack.start_hub(IMAGE, bots)
     stack.put("assignments.json", [{"bot": h["bot"], "config": {"runtime": h["runtime"], "harness": h["harness"]}}
@@ -421,20 +429,28 @@ def test_every_harness_takes_task_turns_as_the_bot_user_and_the_session_stays_th
     stack.seed(IMAGE, registration(bots) + "\nmkdir -p .codex .claude\n" +
                "printf '%s' '" + json.dumps(login) + "' > .codex/auth.json\n" +
                "printf '%s' '" + json.dumps(claude) + "' > .claude/.credentials.json\n" +
-               "chown -R 10003:10002 .codex .claude; chmod 700 .codex .claude; chmod 600 .codex/auth.json .claude/.credentials.json\n")
+               "chown -R 10003:10002 .codex .claude; chmod 700 .codex .claude; chmod 600 .codex/auth.json .claude/.credentials.json\n" +
+               "mkdir -p workspace/broker-overlap; chmod 1777 workspace/broker-overlap\n")
 
     stack.start_runner(IMAGE, table, brokered=True)
     # An actual sibling bot process holds all three credential types. The shared-bot control can read
     # them; every leased harness must be denied the same live PID and owner-only file.
     holder = "import os,pathlib,time; p=pathlib.Path('/home/runner/workspace/credential-sibling'); p.mkdir(exist_ok=True); os.chmod(p,0o755); (p/'pid').write_text(str(os.getpid())); f=p/'granted-secret'; f.write_text('synthetic-granted-secret'); os.chmod(f,0o600); time.sleep(900)"
-    stack.must("exec", "-d", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
-               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", holder)
+    launch_holder = ("import subprocess,time,pathlib; p=subprocess.Popen(['python','-c'," + repr(holder) +
+                     "],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True); "
+                     "f=pathlib.Path('/home/runner/workspace/credential-sibling/pid'); deadline=time.monotonic()+3\n"
+                     "while (not f.exists() or f.read_text()!=str(p.pid)) and time.monotonic()<deadline: time.sleep(.01)\n"
+                     "assert f.read_text()==str(p.pid), 'credential fixture did not start'")
+    stack.must("exec", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
+               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", launch_holder)
     problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
     assert not problems, "\n".join(problems)
 
+    stack.must("exec", "-u", "0", stack.runner, "python", "-c",
+               "from pathlib import Path; [p.unlink() for p in Path('/home/runner/workspace/broker-overlap').iterdir()]")
     stack.must("restart", "-t", "20", stack.runner)
-    stack.must("exec", "-d", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
-               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", holder)
+    stack.must("exec", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
+               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", launch_holder)
     problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
     assert not problems, "the first round passed, then after a restart:\n" + "\n".join(problems)
 
