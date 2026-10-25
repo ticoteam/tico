@@ -186,7 +186,7 @@ def evaluate(formula, local, shared):
     result = expression()
     if at != len(tokens):
         raise FormulaError(f"'{tokens[at][1]}' is not where an operator should be")
-    return result
+    return finite(result)         # a lone literal or name never passed through an operator's check
 
 
 # ----------------------------------------------------------------------------- the definition and its parameters

@@ -89,6 +89,13 @@ def test_the_formula_evaluator_takes_arithmetic_over_known_names_and_nothing_els
         MS.evaluate(formula, {"a": 2, "b": 3}, {})
 
 
+def test_a_formula_that_is_one_huge_number_is_refused_not_stored_as_infinity():
+    with pytest.raises(MS.FormulaError):
+        MS.evaluate("1" + "0" * 400, {}, {})
+    with pytest.raises(MS.FormulaError):
+        MS.evaluate("big", {"big": float("inf")}, {})
+
+
 def test_the_formula_evaluator_does_arithmetic_with_local_and_shared_names():
     assert MS.evaluate("a * (b + 1) / 2 - -3", {"a": 4, "b": 2}, {}) == 9
     assert MS.evaluate("units * $adoption", {"units": 1000}, {"adoption": 0.25}) == 250

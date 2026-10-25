@@ -311,3 +311,18 @@ def test_a_draft_whose_guide_file_moved_falls_back_to_the_default_guide(api):
     view = get(api, "strategy")
     assert view["draft"]["guide"] == "rumelt" and view["label"] == "Bets"
     assert S.guide("rumelt")["id"] == "default" and [g["id"] for g in get(api, "strategy/guides")] == ["default"]
+
+
+def test_a_market_lens_reads_the_market_definition_and_sizes_and_a_strategy_lens_does_not(api, model):
+    from backend.tests.test_market_spend import B, defined, size
+    first, second, _ = defined(api)
+    size(api, first, 4 * B, accept=True)
+    model["result"] = result(None)
+    start(api, "where-to-play", {"segments": ["Screening"]})
+    spend = model["sent"][-1]["market_spend"]
+    assert spend["definition"]["description"] == "Software for small landlords."
+    sized = {s["id"]: s for s in spend["segments"]}
+    assert sized[first]["spend_usd"] == 4 * B and sized[first]["accepted"] and sized[second]["spend_usd"] is None
+    two_bets(api)
+    start(api)
+    assert model["sent"][-1]["market_spend"] is None
