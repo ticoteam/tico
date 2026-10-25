@@ -432,7 +432,7 @@ def _spend_input(c, the):
         return None
     segments = []
     for seg in found["segments"][:SPEND_SEGMENTS]:
-        size = seg["size"] or {}
+        size = seg["size"] if seg["size"] and seg["size"].get("spend_usd") is not None else {}
         segments.append({"id": seg["id"], "name": seg["name"], "depth": seg["depth"], "ours": seg["self"],
                          "spend_usd": size.get("spend_usd"), "low_usd": size.get("low_usd"),
                          "high_usd": size.get("high_usd"), "growth_pct": size.get("growth_pct"),
@@ -752,6 +752,8 @@ def apply(c, auth, who, run_id, index, revision):
     draft revision the page showed. Each change is added once."""
     owner_only(who)
     row = read(c, who, run_id)
+    if row["proposal_id"]:
+        raise Problem("proposed", "These changes were sent to you as a proposal; decide it on its card", 409)
     changes = (S.loads(row["result"], {}) or {}).get("changes") or []
     if not 0 <= index < len(changes):
         raise Problem("invalid", f"This run has {len(changes)} change{'s' if len(changes) != 1 else ''}", 422)

@@ -221,14 +221,17 @@ def record(c, watch, result):
         return False
     text = result["text"]
     fresh = digest(text)
-    c.execute("UPDATE market_watches SET checked=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
-              (now, fresh, text, row["id"]))
-    if row["last_hash"] is None or row["last_hash"] == fresh:
-        return False                # the baseline, or nothing new
+    if row["last_hash"] is None:    # the baseline
+        c.execute("UPDATE market_watches SET checked=?, last_status='ok', error=NULL, last_hash=?, last_text=? WHERE id=?",
+                  (now, fresh, text, row["id"]))
+        return False
+    c.execute("UPDATE market_watches SET checked=?, last_status='ok', error=NULL WHERE id=?", (now, row["id"]))
+    if row["last_hash"] == fresh:
+        return False                # nothing new
     removed, added = changes(row["last_text"] or "", text)
     if size_of(removed, added) < MIN_CHANGE:
-        return False
-    c.execute("UPDATE market_watches SET changed=? WHERE id=?", (now, row["id"]))
+        return False                # too small to report; the baseline stays, so slow edits add up
+    c.execute("UPDATE market_watches SET changed=?, last_hash=?, last_text=? WHERE id=?", (now, fresh, text, row["id"]))
     file_change(c, row, removed, added, fresh)
     return True
 

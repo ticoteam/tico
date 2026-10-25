@@ -361,15 +361,17 @@ def effective(row, shared):
         spend = round(evaluate(row["formula"], local, current), 2)
     except FormulaError:
         return out
-    if spend < 0 or spend > MAX_USD:
+    params = {**row["params"], **{"$" + k: {**row["params"].get("$" + k, {}), "value": v} for k, v in current.items()}}
+    if not math.isfinite(spend) or spend < 0 or spend > MAX_USD:
+        out.update(spend_usd=None, low_usd=None, high_usd=None, params=params,
+                   error="A shared parameter puts this estimate out of range")
         return out
     old = float(row["spend_usd"])
     if old > 0:
         low, high = row["low_usd"] * spend / old, row["high_usd"] * spend / old
     else:
         low, high = min(row["low_usd"], spend), max(row["high_usd"], spend)
-    out.update(spend_usd=spend, low_usd=min(low, spend), high_usd=max(high, spend), recomputed=True,
-               params={**row["params"], **{"$" + k: {**row["params"].get("$" + k, {}), "value": v} for k, v in current.items()}})
+    out.update(spend_usd=spend, low_usd=min(low, spend), high_usd=max(high, spend), recomputed=True, params=params)
     return out
 
 
@@ -532,11 +534,12 @@ def change_params(conn, actor, size_id, changes):
         raise Problem("formula", str(exc), 422) from None
     if not 0 <= spend <= MAX_USD:
         raise Problem("range", f"That makes the estimate {spend:g} dollars, outside 0 to {MAX_USD:g}", 422)
-    old = float(now_row["spend_usd"])
+    base = now_row if now_row["spend_usd"] is not None else row         # out of range now: scale the stored range
+    old = float(base["spend_usd"])
     if old > 0:
-        low, high = now_row["low_usd"] * spend / old, now_row["high_usd"] * spend / old
+        low, high = base["low_usd"] * spend / old, base["high_usd"] * spend / old
     else:
-        low, high = min(now_row["low_usd"], spend), max(now_row["high_usd"], spend)
+        low, high = min(base["low_usd"], spend), max(base["high_usd"], spend)
     said = ", ".join(f"{k} = {params[k]['value']:g}" for k in changes)
     created = {"segment_id": row["segment_id"], "dimension": row["dimension"], "basis": row["basis"], "year": row["year"],
                "spend_usd": spend, "low_usd": min(low, spend), "high_usd": max(high, spend),
@@ -612,15 +615,33 @@ def _tree(conn, root):
 # ----------------------------------------------------------------------------- the spend view
 def _best(rows):
     rank = {"high": 0, "medium": 1, "low": 2}
-    return sorted(rows, key=lambda r: (rank.get(r["confidence"], 3), r["method"] == "owner", r["updated"]), reverse=False)[0]
+    return sorted(rows, key=lambda r: (r["spend_usd"] is None, rank.get(r["confidence"], 3), r["method"] == "owner",
+                                       r["updated"]), reverse=False)[0]
 
 
 def _disagree(rows):
-    spends = [r["spend_usd"] for r in rows]
+    spends = [r["spend_usd"] for r in rows if r["spend_usd"] is not None]
     if len(spends) < 2:
         return False
     low, high = min(spends), max(spends)
     return high > 0 and (low <= 0 or high / low > DISAGREE_RATIO)
+
+
+def _rolled(ids, parent, chosen_of):
+    """Each segment's spend as the total counts it: its own chosen size when that has a spend, else the sum of its
+    children's, at any depth, else None."""
+    kids = {}
+    for seg_id in ids:
+        kids.setdefault(parent.get(seg_id), []).append(seg_id)
+    rolled = {}
+    for seg_id in reversed(ids):                    # children come after their parent in `ids`
+        own = chosen_of[seg_id]
+        if own and own["spend_usd"] is not None:
+            rolled[seg_id] = {k: own[k] for k in ("spend_usd", "low_usd", "high_usd")}
+            continue
+        parts = [rolled[k] for k in kids.get(seg_id, []) if rolled.get(k)]
+        rolled[seg_id] = {k: sum(p[k] for p in parts) for k in ("spend_usd", "low_usd", "high_usd")} if parts else None
+    return rolled
 
 
 def spend(conn, dimension="offering", basis="product", year=None):
@@ -651,16 +672,22 @@ def spend(conn, dimension="offering", basis="product", year=None):
     names = {r["id"]: r["name"] for r in H._rows(conn.execute(
         "SELECT id, name FROM market_entities WHERE id IN (SELECT value FROM json_each(?)) AND status='active'",
         (json.dumps(sorted({e for seg in members.values() for e in seg})),)))}
+    chosen_of = {}
+    for seg_id in ids:
+        mine = [r for r in sizes.get(seg_id, []) if r["basis"] == basis]
+        accepted = [r for r in mine if r["status"] == "accepted"]
+        chosen_of[seg_id] = accepted[0] if accepted else (_best(mine) if mine else None)
+    rolled = _rolled(ids, tree["parent"], chosen_of)
     total = {"spend_usd": 0.0, "low_usd": 0.0, "high_usd": 0.0}
+    for seg_id in ids:
+        if tree["depth"][seg_id] == 1 and rolled[seg_id]:
+            for key in total:
+                total[key] += rolled[seg_id][key]
     for seg_id in ids:
         rows = sizes.get(seg_id, [])
         mine = [r for r in rows if r["basis"] == basis]
-        accepted = [r for r in mine if r["status"] == "accepted"]
-        chosen = accepted[0] if accepted else (_best(mine) if mine else None)
+        chosen = chosen_of[seg_id]
         level = tree["depth"][seg_id]
-        if chosen and level == 1:
-            for key in total:
-                total[key] += chosen[key]
         players = []
         for entity_id in sorted(members.get(seg_id, ()), key=lambda e: (not figures.get((seg_id, e)), names.get(e, e).lower(), e)):
             if entity_id in names and len(players) < MAX_PLAYERS:
@@ -670,6 +697,7 @@ def spend(conn, dimension="offering", basis="product", year=None):
             "id": seg_id, "name": tree["rows"][seg_id]["name"], "parent": tree["parent"].get(seg_id), "depth": level,
             "summary": tree["rows"][seg_id]["summary"],
             "size": {**chosen, "accepted": chosen["status"] == "accepted"} if chosen else None,
+            "rolled_usd": rolled[seg_id],
             "estimates": mine, "disagree": _disagree(mine),
             "bases": sorted({r["basis"] for r in rows}), "players": players, "self": seg_id in own})
     result["total"] = {k: round(v, 2) for k, v in total.items()}

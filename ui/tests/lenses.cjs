@@ -368,6 +368,8 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.match(await page.locator('.lens-meta').innerText(), /CEO Bot/);
       assert.match(await page.locator('[data-lens-proposal]').innerText(), /^Sent to you as a proposal/);
       assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/decide');
+      assert.equal(await page.locator('[data-lens-change]').count(), 2);
+      assert.equal(await page.locator('[data-lens-apply]').count(), 0, 'a proposed run is decided on its card');
       assert.deepEqual(await page.locator('.lens-quad').evaluateAll(a => a.map(e => [e.dataset.q, e.querySelector('b').textContent])),
         [['lh', 'Grow quietly'], ['hh', 'Race'], ['ll', 'Hold on'], ['hl', 'Brace']]);
       assert.deepEqual(await page.locator('[data-axis]').allInnerTexts(), ['Buyer budgets', 'Pace of rules']);

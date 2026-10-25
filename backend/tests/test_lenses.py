@@ -217,6 +217,19 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
     assert len([p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
 
 
+def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):
+    first, second = two_bets(api)
+    ceo = with_ceo_bot(api, level=2)
+    model["result"] = result(first["id"], changes=[
+        {"label": "Retire Bet 2", "payload": {"bets": [{"id": second["id"], "status": "retired"}]}}])
+    run = start(api, token=ceo)
+    assert run["proposal_id"]
+    before = draft(api)
+    out = post(api, f"lenses/runs/{run['id']}/apply", {"index": 0, "revision": before["revision"]}, expected=409)
+    assert out["error"]["code"] == "proposed"
+    assert draft(api) == before
+
+
 def test_the_owner_applies_each_change_once_against_the_draft_revision(api, model):
     first, _ = two_bets(api)
     model["result"] = result(first["id"], changes=[

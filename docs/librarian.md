@@ -220,8 +220,10 @@ market reads it, and the tables are readable in hub SQL like the other market ta
   platform) and year back to `proposed`. Two estimates more than twice apart mark the segment as disagreeing.
 - **Formulas.** Arithmetic over numbers, the estimate's own parameters and shared `$names`: `+ - * /` and parentheses, nothing
   else (no power, no call). The server works the spend out when the estimate is filed. When a shared parameter changes, reads
-  work it out again and scale the range by the same ratio; the stored row is not rewritten. The owner changing a parameter of
-  an estimate files a new accepted `owner` estimate.
+  work it out again and scale the range by the same ratio; the stored row is not rewritten. If that puts the spend below
+  zero or past the cap, the estimate reads with no spend and an `error`, and the total leaves it out. The owner changing a
+  parameter of an estimate files a new accepted `owner` estimate. Each segment carries `rolled_usd`: its own size, else the
+  sum of its parts at any depth, else null. The total is the sum of the top-level segments' `rolled_usd`.
 - **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
   and evidence.
 - **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that

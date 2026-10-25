@@ -9,9 +9,9 @@ changes. It is for the pages where a change is news: pricing, changelog, careers
 
 - Once a day the server reads each watched page. No model is called.
 - The first read is a baseline and files nothing.
-- A later read that differs by at least 40 characters files three things: a piece of evidence (source kind
+- A later read that differs from the baseline by at least 40 characters files three things: a piece of evidence (source kind
   `page-change`, the added and removed lines as its quote), a market insight for the Librarian to curate, and an event on
-  the entity.
+  the entity. The baseline moves only when a change is filed, so small edits add up.
 - A bet that cites the entity, or whose thesis wrong-if watches it, trips the fit check like any other market change
   ([Strategy](strategy.md#the-fit-check)).
 - Lines that are only numbers, dates or a copyright notice are ignored, so a changing year files nothing.

@@ -336,7 +336,7 @@ function lensResultHtml(run, result, owner) {
   }).join('');
   const applied = new Set(run.applied || []);
   const changes = (result.changes || []).map((c, i) => `<li class="lens-change" data-lens-change="${i}"><span class="lens-ctext">${esc(c.label)}</span>${
-    applied.has(i) ? '<span class="lens-done muted">Added</span>' : owner ? `<button class="ghost strat-mini" type="button" data-lens-apply="${i}">Add to draft</button>` : ''}</li>`).join('');
+    applied.has(i) ? '<span class="lens-done muted">Added</span>' : owner && !run.proposal_id ? `<button class="ghost strat-mini" type="button" data-lens-apply="${i}">Add to draft</button>` : ''}</li>`).join('');
   const tasks = run.sharpen_tasks || {};
   const sharpen = (result.sharpen || []).map((s, i) => {
     const text = typeof s === 'string' ? s : s?.text || '', task = tasks[String(i)];

@@ -83,16 +83,17 @@ function mktSquarify(items, x, y, w, h) {
   return out;
 }
 
-// The segments as the map draws them: each top segment with its sized sub-segments. A top segment with no size of its
-// own takes the sum of its parts; a segment with nothing sized is not drawn, and is listed instead.
+// The segments as the map draws them: each top segment with its sized sub-segments. A segment with no size of its own
+// takes the API's rolled-up spend (its parts, at any depth), so the map and the total agree; a segment with nothing
+// sized is not drawn, and is listed instead.
 function mktTree(data) {
   const segs = data.segments || [], ids = new Set(segs.map(s => s.id));
-  const size = s => Number(s.size?.spend_usd) || 0;
+  const size = s => Number(s.rolled_usd?.spend_usd) || 0;
   const tops = segs.filter(s => !s.parent || !ids.has(s.parent));
   const tree = tops.map((seg, i) => {
     const kids = segs.filter(c => c.parent === seg.id).map(c => ({seg: c, value: size(c)}));
     const sized = kids.filter(k => k.value > 0);
-    return {seg, colour: i % MKT_COLOURS, value: size(seg) || sized.reduce((a, k) => a + k.value, 0), kids: sized,
+    return {seg, colour: i % MKT_COLOURS, value: size(seg), kids: sized,
       unsized: kids.filter(k => !k.value).map(k => k.seg)};
   });
   return {drawn: tree.filter(g => g.value > 0), unsized: [...tree.filter(g => !(g.value > 0)).map(g => g.seg), ...tree.flatMap(g => g.unsized)]};
@@ -111,18 +112,29 @@ function mktTileHtml(seg, value, r, colour, nested) {
   const cls = ['mkt-box', 'mkt-tile', seg.size?.confidence === 'low' ? 'low' : '', seg.self ? 'self' : '', nested ? 'nested' : ''].filter(Boolean).join(' ');
   return `<div class="${cls}" role="button" tabindex="0" data-seg="${esc(seg.id)}" data-value="${value}" aria-label="${esc(label)}" title="${esc(label)}"
     style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--c:var(--mkt-c${colour + 1})">${mid
-      ? `<span class="mkt-n">${esc(seg.name)}</span><span class="mkt-v">${mktMoney(shown)}</span>${big && seg.size ? `<span class="mkt-r">${mktRange(seg.size)}</span>` : ''}${mktChips(seg, big)}` : ''}</div>`;
+      ? `<span class="mkt-n">${esc(seg.name)}</span><span class="mkt-v">${mktMoney(shown)}</span>${big && seg.size?.spend_usd != null ? `<span class="mkt-r">${mktRange(seg.size)}</span>` : ''}${mktChips(seg, big)}` : ''}</div>`;
 }
 
 function mktBoxHtml(r) {
   const g = r.g, seg = g.seg, head = 26;
   if (!(g.kids.length && r.w > 120 && r.h > 80)) return mktTileHtml(seg, g.value, r, g.colour, false);
-  const sum = g.kids.reduce((a, k) => a + k.value, 0);
-  const inner = mktSquarify(g.kids.map(k => ({seg: k.seg, value: k.value * g.value / sum})), 0, head, r.w, r.h - head);
+  const sum = g.kids.reduce((a, k) => a + k.value, 0), rest = g.value - sum;
+  // Parts that add up to less than the box keep their own dollars and a plain tile takes the rest, so each area matches
+  // its label; parts that overlap (more than the box) are scaled down to fit it.
+  const parts = g.kids.map(k => ({seg: k.seg, value: rest < 0 ? k.value * g.value / sum : k.value}));
+  if (rest > g.value * 0.01) parts.push({rest: true, value: rest});
+  const inner = mktSquarify(parts, 0, head, r.w, r.h - head);
   const shown = Number(seg.size?.spend_usd) || g.value;
   return `<div class="mkt-box mkt-group${seg.self ? ' self' : ''}" data-value="${g.value}" style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px;--c:var(--mkt-c${g.colour + 1})">
     <button class="mkt-gh" type="button" data-seg="${esc(seg.id)}" aria-label="${esc(seg.name + ', ' + mktMoney(shown))}"><span class="mkt-n">${esc(seg.name)}</span><b>${mktMoney(shown)}</b>${mktChips(seg, r.w > 240)}</button>
-    ${inner.map(k => mktTileHtml(k.seg, k.value, k, g.colour, true)).join('')}</div>`;
+    ${inner.map(k => k.rest ? mktRestHtml(seg, k) : mktTileHtml(k.seg, k.value, k, g.colour, true)).join('')}</div>`;
+}
+
+function mktRestHtml(seg, r) {
+  const label = `Rest of ${seg.name}`;
+  return `<div class="mkt-box mkt-rest" data-value="${r.value}" aria-label="${esc(label + ', ' + mktMoney(r.value))}" title="${esc(label)}"
+    style="left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px">${r.w > 58 && r.h > 34
+      ? `<span class="mkt-n">${esc(label)}</span><span class="mkt-v">${mktMoney(r.value)}</span>` : ''}</div>`;
 }
 
 // ------------------------------------------------------------------ Spend, Buyers and Size vs growth
@@ -186,7 +198,7 @@ function mktSpend(host, view) {
 
   // How sure are we: one bar per top segment from low to high, the point estimate ticked.
   function sureHtml(drawn) {
-    const rows = drawn.filter(g => g.seg.size).sort((a, b) => b.value - a.value);
+    const rows = drawn.filter(g => g.seg.size?.spend_usd != null).sort((a, b) => b.value - a.value);
     if (!rows.length) return '';
     const max = Math.max(...rows.map(g => Math.max(g.seg.size.high_usd, g.seg.size.spend_usd)));
     const step = mktNice(max / 4), top = Math.ceil(max / step) * step, ticks = [];
@@ -210,7 +222,7 @@ function mktSpend(host, view) {
 
   // One dot per top segment: spend across (log when the range is wide), growth up, ours filled.
   function drawGrowth(area, W) {
-    const all = ctx.tree.drawn.filter(g => g.seg.size);
+    const all = ctx.tree.drawn.filter(g => g.seg.size?.spend_usd != null);
     const pts = all.filter(g => Number.isFinite(g.seg.size.growth_pct));
     const none = all.filter(g => !pts.includes(g)).map(g => g.seg);
     if (!pts.length) { area.innerHTML = '<p class="market-none">No growth figures yet.</p>' + (none.length ? unsizedHtml(none, 'No growth figure') : ''); return; }
@@ -331,7 +343,7 @@ function mktSpend(host, view) {
     const accepted = e.status === 'accepted' || (s.size?.id === e.id && s.size.accepted);
     const evidence = (Array.isArray(e.evidence) ? e.evidence : []).filter(x => x && (x.source_url || x.quote));
     return `<li class="mkt-est" data-size="${esc(e.id)}"><div class="mkt-est-h"><b>${esc(MKT_METHODS[e.method] || e.method)}</b>
-        <span>${mktMoney(e.spend_usd)} <small>${mktRange(e)}</small></span>
+        ${e.spend_usd == null ? `<span>${esc(e.error || '')}</span>` : `<span>${mktMoney(e.spend_usd)} <small>${mktRange(e)}</small></span>`}
         ${accepted ? '<span class="pill active">Accepted</span>' : '<span class="pill">Proposed</span>'}
         ${owner && !accepted ? `<button class="ghost mkt-mini" type="button" data-mkt-accept="${esc(e.id)}">Accept</button>` : ''}</div>
       ${e.arithmetic ? `<p class="mkt-arith">${esc(e.arithmetic)}</p>` : ''}${e.formula ? `<p class="mkt-arith"><code>${esc(e.formula)}</code></p>` : ''}
@@ -360,7 +372,8 @@ function mktSpend(host, view) {
       <div class="mkt-chips">${z ? `<span class="pill${z.confidence === 'low' ? '' : ' active'}">${esc(z.confidence)} confidence</span>` : '<span class="pill">Not sized yet</span>'}
         ${s.disagree ? '<span class="pill waiting">Disagree</span>' : ''}${s.self ? '<span class="pill us">Us</span>' : ''}${z && !z.accepted ? '<span class="pill">Proposed</span>' : ''}</div>
       ${s.summary ? `<p>${esc(s.summary)}</p>` : ''}
-      ${z ? kv([['Spend', mktMoney(z.spend_usd)], ['Range', mktRange(z)], Number.isFinite(z.growth_pct) ? ['Growth', mktTrim(z.growth_pct, 1) + '%'] : null, ctx.data.year && ['Year', esc(ctx.data.year)]])
+      ${z?.error ? `<p>${esc(z.error)}</p>` : ''}
+      ${z && z.spend_usd != null ? kv([['Spend', mktMoney(z.spend_usd)], ['Range', mktRange(z)], Number.isFinite(z.growth_pct) ? ['Growth', mktTrim(z.growth_pct, 1) + '%'] : null, ctx.data.year && ['Year', esc(ctx.data.year)]])
         + `<div class="mkt-bar solo" aria-hidden="true"><div class="span" style="left:${pc(z.low_usd)};width:calc(${pc(z.high_usd)} - ${pc(z.low_usd)})"></div><div class="mid" style="left:${pc(z.spend_usd)}"></div></div>` : ''}
       ${block('Estimates', estimates.length ? `<ul class="mkt-ests">${estimates.map(e => estimateHtml(e, s)).join('')}</ul>` : '')}
       ${block('Overlaps', over ? `<p>${esc(over)}</p>` : '')}${block('Spread', spread ? `<p>${esc(spread)}</p>` : '')}

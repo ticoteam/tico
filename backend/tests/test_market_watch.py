@@ -78,6 +78,17 @@ def test_the_first_read_is_a_baseline_and_a_small_change_files_nothing(seeded, m
     assert counts(seeded) == before
 
 
+def test_small_edits_that_add_up_file_one_insight_on_the_check_that_crosses_the_line(seeded, monkeypatch):
+    watch(seeded)
+    first, second = BASE + "\nPro plan changes soon", BASE + "\nPro plan changes soon\nSeats cost more money"
+    pages(monkeypatch, BASE, first, second)
+    before = counts(seeded)
+    assert check(seeded)["changed"] == 0
+    assert check(seeded)["changed"] == 0           # 21 characters: under the line, and not the new baseline
+    assert check(seeded)["changed"] == 1           # 44 against the baseline
+    assert counts(seeded)["market_insights"] - before["market_insights"] == 1
+
+
 def test_a_real_change_files_one_insight_one_evidence_and_one_event_once(seeded, monkeypatch):
     watch(seeded)
     pages(monkeypatch, BASE, CHANGED)

@@ -30,7 +30,8 @@ const size = (id, segment, spend, low, high, over = {}) => ({id, segment_id: seg
   spend_usd: spend * B, low_usd: low * B, high_usd: high * B, growth_pct: null, method: 'bottom_up', arithmetic: '', formula: null, params: {}, evidence_ids: [],
   confidence: 'medium', overlaps: '', spread: '', status: 'accepted', accepted: true, ...over});
 const seg = (id, name, parent, sized, over = {}) => ({id: 'segment/' + id, name, parent: parent ? 'segment/' + parent : null, depth: parent ? 2 : 1,
-  summary: '', size: sized || null, estimates: sized ? [sized] : [], disagree: false, bases: sized ? ['product'] : [], players: [], self: false, ...over});
+  summary: '', size: sized || null, rolled_usd: sized ? {spend_usd: sized.spend_usd, low_usd: sized.low_usd, high_usd: sized.high_usd} : null,
+  estimates: sized ? [sized] : [], disagree: false, bases: sized ? ['product'] : [], players: [], self: false, ...over});
 
 // Eight segments: two with sub-segments, one low confidence that disagrees, one proposed, one with no size, and our own.
 const officeBu = size('sz-office-bu', 'segment/office', 4.2, 2.9, 6.1, {growth_pct: 12, overlaps: 'Facilities management firms', spread: 'Report vendors say $3B to $11B', arithmetic: 'Firms x adoption x spend per firm', formula: 'firms * adoption * spend',
@@ -171,6 +172,29 @@ const noSideScroll = page => page.evaluate(() => ({page: document.documentElemen
       assert.equal(await page.locator('.mkt-sure .mkt-row').count(), 7);
       assert.deepEqual(await noSideScroll(page), {page: 0, host: 0});
       await shot(page, 'desktop', 'light');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Parts that add up to less than their parent keep their own dollars and a plain "Rest of" tile takes the remainder, so
+    // each area matches its label; a segment with no size of its own is drawn from the API's rolled-up spend.
+    {
+      const parts = [seg('big', 'Offices', null, size('sz-big', 'segment/big', 10, 6, 14)), seg('small', 'Homes', null, size('sz-small', 'segment/small', 5, 3, 8)),
+        seg('p1', 'Day shifts', 'big', size('sz-p1', 'segment/p1', 3, 2, 4)), seg('p2', 'Night shifts', 'big', size('sz-p2', 'segment/p2', 2, 1, 3)),
+        seg('group', 'Equipment', null, null, {rolled_usd: {spend_usd: 4 * B, low_usd: 2 * B, high_usd: 6 * B}}),
+        seg('mid', 'Rental', 'group', null, {depth: 2, rolled_usd: {spend_usd: 4 * B, low_usd: 2 * B, high_usd: 6 * B}})];
+      const data = {definition, year: 2025, dimension: 'offering', basis: 'product', total: {spend_usd: 19 * B, low_usd: 11 * B, high_usd: 28 * B}, segments: parts};
+      const {page, errors} = await open(browser, {data: {offering: data}});
+      await page.locator('.mkt-map .mkt-box').first().waitFor();
+      const group = page.locator('.mkt-group:has([data-seg="segment/p1"])');
+      assert.equal(await group.locator('.mkt-rest').count(), 1);
+      assert.match(await group.locator('.mkt-rest').getAttribute('aria-label'), /^Rest of Offices, \$5B$/);
+      assert.equal(await group.locator('.mkt-rest').getAttribute('data-seg'), null, 'the rest is not clickable');
+      const area = await group.locator('.mkt-box').evaluateAll(els => els.map(el => { const r = el.getBoundingClientRect(); return r.width * r.height; }));
+      const gb = await group.evaluate(el => { const r = el.getBoundingClientRect(); return r.width * (r.height - 26); });
+      [0.3, 0.2, 0.5].forEach(share => assert.ok(area.some(a => Math.abs(a / gb - share) < 0.02 * share), `an area is ${share} of the box`));
+      assert.equal(await page.locator('.mkt-map > .mkt-box[data-value="' + 4 * B + '"]').count(), 1, 'an unsized segment is drawn at its rolled-up spend');
+      assert.equal(await page.locator('.mkt-total strong').innerText(), '$19B');
+      await shot(page, 'rest', 'light');
       assert.deepEqual(errors, []);
       await page.close();
     }

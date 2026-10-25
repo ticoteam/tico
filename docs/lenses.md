@@ -58,7 +58,8 @@ the code `empty`.
 ## Acting on it
 
 - **Add to draft** (owner only): puts one change into your draft, as you, with the revision you were looking at. If
-  the draft moved, it answers 409 and nothing is written. A change can be added once.
+  the draft moved, it answers 409 and nothing is written. A change can be added once. A run that was sent as a proposal
+  answers 409 `proposed`: decide it on its card.
 - **Sharpen** (owner only): files one research task for the Librarian for one item, once. Its findings go to the
   market page Open questions.
 - A run the **CEO Bot** starts files one `strategy_draft` proposal with the changes, marked as from the lens. It

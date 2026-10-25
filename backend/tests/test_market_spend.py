@@ -188,6 +188,39 @@ def test_the_total_sums_the_top_level_segments_only(api):
     assert [s["id"] for s in seen["segments"]] == [second, first, sub]
 
 
+def test_the_total_counts_a_sized_grandchild_under_unsized_parents(api):
+    _, _, _ = defined(api)
+    offices = post(api, "market/segments", {"name": "Offices"})["segment"]["id"]
+    rooms = post(api, "market/segments", {"name": "Rooms", "parent_id": offices})["segment"]["id"]
+    desks = post(api, "market/segments", {"name": "Desks", "parent_id": rooms})["segment"]["id"]
+    size(api, desks, 10_000_000, accept=True)
+    seen = get(api, "market/spend")
+    by_id = {s["id"]: s for s in seen["segments"]}
+    assert seen["total"]["spend_usd"] == 10_000_000
+    assert by_id[offices]["rolled_usd"] == by_id[rooms]["rolled_usd"] == {"spend_usd": 10_000_000, "low_usd": 5_000_000, "high_usd": 20_000_000}
+    assert by_id[desks]["rolled_usd"]["spend_usd"] == 10_000_000 and by_id[offices]["size"] is None
+
+
+def test_a_shared_parameter_that_puts_a_formula_out_of_range_leaves_no_spend_and_stays_out_of_the_total(api):
+    first, second, _ = defined(api)
+    proof = evidence(api)
+    size(api, second, B, accept=True)
+    row = post(api, "market/sizes", {"segment_id": first, "method": "bottom_up", "spend_usd": 0, "low_usd": 1_000_000,
+                                     "high_usd": 50_000_000, "evidence_ids": [proof], "accept": True,
+                                     "formula": "units * $adoption - 90000000", "params": {"units": {"value": B}}})["size"]
+    assert row["spend_usd"] == 10_000_000
+    put(api, "market/definition", {"params": {"adoption": {"value": 0.05}}})
+    seen = get(api, "market/spend")
+    shown = next(s for s in seen["segments"] if s["id"] == first)
+    assert shown["size"]["spend_usd"] is None and shown["size"]["low_usd"] is None and not shown["size"]["recomputed"]
+    assert "out of range" in shown["size"]["error"] and shown["rolled_usd"] is None
+    assert seen["total"]["spend_usd"] == B and shown["disagree"] is False
+    from backend import lenses as L
+    with api.app.state.store.read() as c:
+        sent = L._spend_input(c, {"applies_to": "market"})
+    assert [x["spend_usd"] for x in sent["segments"] if x["id"] == first] == [None]
+
+
 def test_the_tree_is_capped_and_a_segment_needs_a_defined_root(api):
     post(api, "market/segments", {"name": "Early"}, expected=422)
     first, _, sub = defined(api)

@@ -37,6 +37,8 @@
 .mkt-tile.low{background:linear-gradient(var(--c),var(--c)) top/100% 3px no-repeat,repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--ink) 16%,transparent) 5px 6.5px),color-mix(in srgb,var(--c) calc(var(--mkt-tint) - 6%),var(--surface))}
 .mkt-tile.nested.low{background:linear-gradient(var(--c),var(--c)) top/100% 2px no-repeat,repeating-linear-gradient(135deg,transparent 0 5px,color-mix(in srgb,var(--ink) 16%,transparent) 5px 6.5px),color-mix(in srgb,var(--c) calc(var(--mkt-tint) - 6%),var(--surface))}
 .mkt-tile:hover{filter:var(--mkt-hover)}
+.mkt-rest{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 10px 6px;color:var(--muted);background:color-mix(in srgb,var(--ink) 5%,var(--surface))}
+.mkt-rest .mkt-n{font-weight:500}
 .mkt-tile.self{box-shadow:inset 0 0 0 4px var(--accent)}
 .mkt-group.self::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 0 3px var(--accent);pointer-events:none}
 .mkt-box:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;z-index:2;border-radius:0}
