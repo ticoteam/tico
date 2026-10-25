@@ -627,6 +627,7 @@ function tasksTools(state) {
   const tabs = $('#task-view');
   if (!tabs || TASKS_ST !== state) return;
   taskPipelineTools(state);
+  taskChecksSync(state);
   // Someone this install does not know (an old link, a person who left) falls back to Me; Everyone asks nothing itself.
   if (state.who && state.who !== 'me' && (!tasksWhoKnown(state.who) || (state.who === 'all' && state.side === 'asked'))) {
     state.who = 'me'; state.memo = new Map(); tasksURLWrite(state);

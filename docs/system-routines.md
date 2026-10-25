@@ -84,6 +84,12 @@ The department picker uses only the org chart's fixed department list; it accept
 
 Only the done-and-untouched trigger and close action are available for task rules. There are no per-task overrides. Editing a task rule does not change a bot's routines.
 
+### On the Tasks page
+
+The Tasks page has a collapsible bar on the right (**Unreleased**). Collapsed, it shows how many tasks the checks caught today. Expanded, it lists the checks and task rules for the task type in view. Each one has its switch, or, when you may not change it, a line such as "Only Engineering can change this rule." Each rule also shows its recent catches on tasks you can read, with **Right** and **Wrong** to mark each one. The bar has **Check now** and **Check all**, links to this list and to bot routines, and a weekly flow report: catches, overrides, wrong marks, quiet waits, and one or two suggestions.
+
+At the bottom is the **Task Manager**, a built-in helper in every company. It needs no setup and no hiring. It runs on Claude Haiku 5.5 through your team's AI setting: the Tico AI Gateway when your models choice uses it, otherwise your Anthropic key. It can turn a complaint into a proposed check, shown as the row will read. It can add a saved filter as a tab, either your own or on a bot you manage. It can run **Check all** and offer the fix, and it can make a task through the same checks. It acts only with your rights and says who can when you can't. Nothing changes until you click **Confirm** on its card. It never deletes, reassigns to another person, spends, sends, or publishes, and it never sees a task you can't read.
+
 ## Which AI answered
 
 Two jobs ask Decide, Tico's question-answering model: **Stale ticket review** and **Nightly learnings**. Decide tries the [Tico AI Gateway](ai-gateway.md) first, then your own key, then your company's AI provider. This page and the list change none of that. They only show which route answered.

@@ -805,6 +805,8 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import task_checks as _task_checks
             _task_checks.migrate(c)
+            from . import task_manager as _task_manager
+            c.executescript(_task_manager.SCHEMA)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs

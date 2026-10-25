@@ -2456,3 +2456,14 @@ class TaskCheckFixItem(Contract):
 
 class TaskCheckFix(Contract):
     tasks: list[TaskCheckFixItem] = Field(min_length=1, max_length=50)
+
+
+class TaskCheckMark(Contract):
+    # A person's mark on one task check catch (backend/task_manager.py); null takes it back.
+    verdict: Literal["right", "wrong"] | None = None
+
+
+class TaskManagerSay(Contract):
+    text: str = Field(min_length=1, max_length=2000)
+    # The task type in view on the Tasks page, so the Task Manager talks about its rules.
+    type: str = Field(default="general", max_length=64)

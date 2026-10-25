@@ -6085,6 +6085,8 @@ def create_app(settings=None):
     system_routines.install(app, store, auth, mutate)
     from . import task_rules
     task_rules.install(app, store, auth, mutate)
+    from . import task_manager
+    task_manager.install(app, store, auth, mutate)
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

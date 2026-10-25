@@ -163,6 +163,7 @@ function pageTasks(forced, openId = '') {
   state.layoutAbort = new AbortController();
   taskBoardBind(state, body);
   document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
+  taskChecksMount(state);
   tasksTools(state); tasksRender(state);
   if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
   if (state.migrated) tasksRemember(state);
