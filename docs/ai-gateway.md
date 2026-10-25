@@ -95,8 +95,13 @@ Sign in directly as an owner or admin to link the server:
 3. Paste the code into **Server code** and press **Preview**.
 4. Check the company name, then press **Connect**.
 
+![Synthetic example of the Tico company card with a masked server code, company preview, and Connect button.](images/company-gateway-preview.png)
+
+*Synthetic example of the preview step. No server was connected.*
+
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
-The server asks for a Gateway key immediately, then retries hourly while it has none. Gateway use spends that company's credit.
+With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
+Gateway use spends that company's credit.
 The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Computers → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
@@ -104,6 +109,7 @@ If linking fails, check the error beside the form. Tico must be able to reach yo
 the company Gateway endpoint also needs to be available at Tico HQ.
 
 An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
+To unlink the server, press **Disconnect** on the **Tico company** card and confirm.
 Disconnecting the company removes a key obtained through that link; a pasted key stays.
 Reconnecting lets the same install ask for its company key again.
 The server also reports its version daily and within an hour after an update, when HQ is reachable.
