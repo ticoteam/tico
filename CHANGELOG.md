@@ -7,6 +7,42 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-10-25
+
+### Added
+- **Write and publish your team's strategy.** Owners can draft a summary, vision, bets and four strategy sections, then publish numbered versions with a note. The draft stays private to the owner. Bots read the published summary on each run; the CEO Bot proposes changes for the owner to confirm ([Strategy](docs/strategy.md)).
+- **Connect goals to the bets they serve.** A bet's health comes from its KPI-backed goals. A threshold crossing, changed market evidence or overdue check date prompts the CEO Bot to propose a response. Publishing a rewritten or retired bet asks the owner whether to keep, move or retire its goals ([Strategy checks](docs/strategy.md#the-fit-check)).
+- **Setup starts with your strategy.** **What are you building** and **Your bets** turn a website or description into claims you can keep, edit or strike. Research fills a draft without publishing it or overwriting your edits. Without a model or after failed research, you can complete the same fields by hand ([Setup](docs/strategy.md#setup)).
+- **Manage wake rules in Settings.** **Settings > Rules** brings routines and wake rules together. Rules can apply to a team, task type, department, bot or task, with outcomes such as keeping a note, batching news or waking a bot. Each run records its rule, and the page shows seven-day runs and no-op rates ([Wake rules](docs/tasks.md#wake-rules)).
+- **Choose a profile for each bot.** **Doer**, **Reviewer**, **Lead**, **Responder**, **Monitor** and **Custom** control what wakes a bot and which tasks it takes. Choose one in the bot editor or with `hub bot profile`. Leads can receive a daily digest; Custom lets you edit the rules ([Profiles](docs/how-it-works.md#profiles)).
+- **Task Manager follows up on stalled work.** This built-in helper checks departments hourly during weekday business hours and acts on quiet tasks, overdue questions and missing handoffs. Empty checks start no model run. It is on by default; the owner can pause it. Private tasks remain outside its access ([Task Manager](docs/task-manager.md)).
+- **Run budgets stop runaway bot loops.** Team defaults allow 300 runs per hour and 2,500 per day for each bot, with per-bot overrides. A bot that reaches its budget keeps its queued work and shows the hold in Health. Release it or raise its budget to continue; a person's messages bypass this budget ([Run budgets](docs/how-it-works.md#what-happens-when)).
+- **Schedule daily releases or request one now.** Owners and admins can set one or two daily release times. Pending work creates one task for the Release Manager; an unfinished release task is reused. Authorized people, the Release Manager and Head of Engineering can request **Release now** from the board, Settings or CLI ([Releasing](docs/releasing.md)).
+- **Review and QA results name the reviewed revision.** Subtasks record an approve, changes, pass or fail verdict with the pull-request head, shown on task cards and lists. `hub task done --verdict --head` and the corresponding MCP tools return that result to the parent owner. Duplicate open checks for the same head are refused ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Review suggestions for quieter wake rules.** A weekly check suggests turning frequently unproductive wakes into notes. **Settings > Rules** shows the affected rule and recent results, with **Apply**, **Dismiss** and **Undo**. Protected wakes and scheduled or assigned work are excluded; no suggestion changes a rule automatically ([Wake rules](docs/tasks.md#wake-rules)).
+
+### Changed
+- **Market moves inside Strategy.** Open **Strategy > Market** from the sidebar; existing Market links redirect there. Vision moves from Goals to Strategy. Existing vision and description text starts a private strategy draft for the owner to review ([Strategy](docs/strategy.md)).
+- **Profiles replace the Wakes setting.** New Doer bots batch ordinary task news for 15 minutes. Existing bots receive a profile on upgrade; former Token saver bots retain a 30-minute batch window. People, handoffs and awaited results keep their immediate paths, subject to bot holds ([Profiles](docs/how-it-works.md#profiles)).
+- **Routine task news waits for the next run.** Events without a matching wake rule become notes. Ordinary comments and other bots' status changes no longer start a run by default. Assignments, review requests, blockers and awaited results have explicit rules; task-step rules control who hears each handoff ([Wake rules](docs/tasks.md#wake-rules)).
+- **Pull-request checks produce one completed result per revision.** Individual check completions no longer wake the owner. After all checks finish, an eligible working task receives one result for that head; other task steps keep a note unless a completion wake is armed ([Task PR events](docs/github-app.md#task-pr-events)).
+- **Quiet tasks are checked before waking their bots.** Stall and status checks skip live sessions and recorded waits. Quiet task triage can record a wait, close work found finished, or wake work found stuck; uncertain cases reach Task Manager. Owners and admins can turn triage off ([Waiting work](docs/tasks.md#work-that-is-waiting)).
+- **Documentation follows the published release.** Publication creates one documentation task for the release and wakes the applicable QA owners. Release notes follow on their own task. Missing pre-release docs no longer hold the release checklist; installed changelog entries arrive in a later build containing the notes ([Releasing](docs/releasing.md)).
+
+### Fixed
+- **Fast failures no longer loop without a pause.** Failures within a minute start a 15-second wait that doubles on repetition. Five consecutive fast failures hold the bot, preserve queued work and notify its operator. Health names the error, and **Release** clears the hold ([Failure recovery](docs/how-it-works.md#what-happens-when)).
+- **Held bots can recover after an outage.** A bot held for repeated fast failures tries one queued run after 30 minutes. Further fast failures double that wait up to eight hours; a normally completed run releases the bot and closes its Needs-you item. You can still release it immediately ([Failure recovery](docs/how-it-works.md#what-happens-when)).
+- **Provider limits are recognized inside longer errors.** A weekly or other usage-limit message now applies the provider hold even when an older runner reports it inside a different error. The login waits until the stated reset instead of repeatedly retrying ([Usage-limit recovery](docs/how-it-works.md#what-happens-when)).
+- **Oversized sessions stop repeating the same failure.** Errors such as “too many total text bytes” or “Prompt is too long” make the next run start a fresh provider session. An embedded usage limit still takes its usage-limit hold ([Session recovery](docs/how-it-works.md#what-happens-when)).
+- **SQL history reads do less repeated privacy work.** Message counts and small turn or attempt queries avoid repeated history-wide checks while preserving row visibility and query deadlines ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Busy histories cause less waiting for bot work.** Idle claims and input polls avoid unnecessary database writes. Waiting-note reads skip settled history, and task, inbox and meeting-provenance reads reuse or batch lookups. Existing message and task privacy checks still apply ([How Tico works](docs/how-it-works.md)).
+- **Unreadable HTTPS configuration gives a clear refusal.** An inaccessible Caddy configuration directory now returns a sanitized configuration error instead of leaking an unexpected startup exception on older Python versions ([HTTPS setup](docs/install.md#caddy-and-a-separate-visual-site)).
+- **Task refusals stay beside the attempted action.** Failed moves show their reason on the card or row. A refused subtask stays in the Add subtask form with its title preserved ([Tasks](docs/tasks.md)).
+- **Install help states the company-file size limit.** The company YAML file and its normalized plan must each fit within 512 KiB. The help now explains that setup refuses larger inputs before provisioning; this documents the existing limit ([Install Tico](docs/install.md#quick-start-on-your-own-computer)).
+
+### Security
+- **Docker Gateway turns use separate Linux users.** Gateway and isolation-capable harness turns receive private credentials and homes, with processes and temporary files cleaned before reuse. Checkout groups restrict access to sibling workspaces. Shared-login harnesses still run as the shared bot user, and base clones and runner operations remain shared. Update the Docker runner for this protection ([Isolation limits](SECURITY.md), [Computers](docs/computers.md)).
+
 ## [0.4.2] - 2026-10-23
 
 ### Added
@@ -4347,7 +4383,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
 [0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
