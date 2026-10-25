@@ -34,6 +34,9 @@ The docs include internal writing, external sources and the manual:
   - The first map, when the owner asks for it on the Market page: `playbooks/market-setup.md`. It researches
     what the owner gave (their answers to what they sell, to whom, competitors and what to watch, or a website,
     a description, links) and sets what Market tracks from it.
+  - Sizing it, when the owner asks on the Spend view or after the first map: `playbooks/size-the-market.md`. Define
+    the market, cut it into segments, size each by at least two methods, every figure cited, filed as proposals
+    (`hub market define|segment|size|figure|sources|spend`).
   - Keeping it current: the daily "Curate the market" routine (`playbooks/curate-the-market.md`) and the
     "Urgent market insight" routine (`playbooks/urgent-market-insight.md`). The relations, the evidence
     standard, entity resolution and the pages are in `knowledge/market/`.

@@ -6,6 +6,10 @@ summary every bot reads on every run, a vision, three to five **bets**, and four
 publishes it; the [CEO Bot](ceo-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
+**Market views.** The Market tab shows the market in views: Players (the graph), Spend, Buyers, Value chain and
+Size vs growth. Spend is the default once a segment is sized. How the market is defined, cut into segments and sized
+is in [Librarian](librarian.md#market-spend).
+
 Three activities make one loop:
 
 | Activity | Who | What it produces |

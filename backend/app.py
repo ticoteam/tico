@@ -6089,6 +6089,8 @@ def create_app(settings=None):
     install_market_watch(app, store, auth, mutate)
     from .market_briefing import install as install_market_briefing
     install_market_briefing(app, store, auth, mutate)
+    from .market_spend import install as install_market_spend
+    install_market_spend(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
     from .strategy_setup import install as install_strategy_setup

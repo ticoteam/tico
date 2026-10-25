@@ -739,6 +739,60 @@ ONE_LOGIN_PER_COMPUTER_SCHEMA = """
 DELETE FROM subscription_assignments WHERE scope='bot';
 """
 
+# The market by spend (backend/market_spend.py): sized segments, player figures and the team's own sources. Rows are
+# retired or rejected, never deleted. A size's evidence is a list of market_evidence ids.
+MARKET_SPEND_SCHEMA = """
+CREATE TABLE IF NOT EXISTS market_sizes (
+  id TEXT PRIMARY KEY,
+  segment_id TEXT NOT NULL,
+  dimension TEXT NOT NULL DEFAULT 'offering',
+  basis TEXT NOT NULL DEFAULT 'product',
+  year INTEGER NOT NULL,
+  spend_usd REAL NOT NULL,
+  low_usd REAL NOT NULL,
+  high_usd REAL NOT NULL,
+  growth_pct REAL,
+  method TEXT NOT NULL,
+  arithmetic TEXT NOT NULL DEFAULT '',
+  formula TEXT,
+  params TEXT NOT NULL DEFAULT '{}',
+  evidence_ids TEXT NOT NULL DEFAULT '[]',
+  confidence TEXT NOT NULL DEFAULT 'medium',
+  overlaps TEXT NOT NULL DEFAULT '',
+  spread TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'proposed',
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS market_sizes_segment ON market_sizes(segment_id, dimension, year, status);
+
+CREATE TABLE IF NOT EXISTS market_figures (
+  id TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  segment_id TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL,
+  text TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL,
+  as_of TEXT NOT NULL,
+  evidence_id TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS market_figures_segment ON market_figures(segment_id, entity_id);
+
+CREATE TABLE IF NOT EXISTS market_sources (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  covers TEXT NOT NULL DEFAULT '[]',
+  access TEXT NOT NULL,
+  reliability TEXT NOT NULL,
+  how TEXT NOT NULL DEFAULT '',
+  url TEXT,
+  created_by TEXT NOT NULL,
+  created TEXT NOT NULL);
+"""
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -750,7 +804,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               LIVE_MEETINGS_CHAT_ROUTING_SCHEMA, TASK_RELATIONS_SCHEMA, TRIGGERS_SCHEMA,
               TRIGGER_SIGNING_SCHEMA, CHECK_MODELS_SCHEMA, GOAL_ASKS_SCHEMA, RUN_TRIGGERS_SCHEMA,
               TASK_GUEST_SCHEMA, CEO_MERGES_SCHEMA, ONE_LOGIN_PER_COMPUTER_SCHEMA, RUN_PURPOSE_SCHEMA,
-              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, CEO_ACTIONS_SCHEMA]
+              RUN_ROTATION_SCHEMA, LIVE_MEETING_ACCESS_SCHEMA, CEO_ACTIONS_SCHEMA,
+              MARKET_SPEND_SCHEMA]
 
 
 class Refused(Exception):

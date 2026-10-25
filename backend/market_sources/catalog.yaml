@@ -1,0 +1,291 @@
+# Where facts about a market come from, and how far to trust each (backend/market_spend.py).
+# The Librarian reads this before it sizes a market (`hub market sources`) and cites a catalog id or a URL for every
+# figure. No source is trusted alone: size each segment by two methods. A team adds its own with `hub market sources
+# --add-file`; a team entry with the same id replaces the one here.
+#
+# covers:      sizing, players, buyers, pricing, signals, value_chain
+# access:      free (public), team_key (the team brings a login or key), gateway (a Gateway feed, not built yet)
+# reliability: primary (the source holds the data), secondary (someone else's count), estimate (modelled; spreads of
+#              3-10x are normal), signal (what people say, never a size)
+
+- id: ramp-ai-index
+  name: Ramp AI Index
+  kind: Card spend
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: What small businesses actually pay for AI tools, by vendor. The first source to try for buyers.
+  url: https://ramp.com
+- id: brex
+  name: Brex
+  kind: Card spend
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: What small businesses actually pay, by vendor. A paid feed is a Gateway candidate.
+  url: https://www.brex.com
+- id: mercury
+  name: Mercury
+  kind: Card spend
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: What small businesses actually pay, by vendor. A paid feed is a Gateway candidate.
+  url: https://mercury.com
+- id: jpmc-institute
+  name: JPMorgan Chase Institute
+  kind: Card spend
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: What small businesses actually pay. A paid feed is a Gateway candidate.
+  url: https://www.jpmorganchase.com/institute
+
+- id: census-cbp-susb
+  name: US Census County Business Patterns and SUSB
+  kind: Government counts
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: Firms by industry and size. The count of buyers for a bottom-up size.
+  url: https://www.census.gov/programs-surveys/susb.html
+- id: census-abs
+  name: US Census Annual Business Survey
+  kind: Government counts
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: Technology and AI use by firm size. The adoption rate for a bottom-up size.
+  url: https://www.census.gov/programs-surveys/abs.html
+- id: bls
+  name: BLS occupations and wages
+  kind: Government counts
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: Occupations and wages. The labour spend a product replaces.
+  url: https://www.bls.gov
+- id: eurostat-sbs
+  name: Eurostat structural business statistics
+  kind: Government counts
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: Firms by industry and size in Europe, for a bottom-up buyer count.
+  url: https://ec.europa.eu/eurostat
+- id: uk-ons
+  name: UK Office for National Statistics
+  kind: Government counts
+  covers: [buyers, sizing]
+  access: free
+  reliability: primary
+  how: Firms by industry and size in the UK, for a bottom-up buyer count.
+  url: https://www.ons.gov.uk
+
+- id: sec-edgar
+  name: SEC EDGAR filings
+  kind: Filings
+  covers: [players, sizing]
+  access: free
+  reliability: primary
+  how: 10-K and 10-Q segment revenue. Player revenue and segment totals for public leaders.
+  url: https://www.sec.gov/edgar
+- id: investor-pages
+  name: Public company investor pages and earnings calls
+  kind: Filings
+  covers: [players, sizing]
+  access: free
+  reliability: primary
+  how: Revenue and segment figures a public company states itself.
+
+- id: gartner-press
+  name: Gartner press releases
+  kind: Analyst headlines
+  covers: [sizing]
+  access: free
+  reliability: secondary
+  how: Public headline totals for a top-down size. Definitions differ between publishers, so record which one was used.
+  url: https://www.gartner.com/en/newsroom
+- id: idc-press
+  name: IDC press releases
+  kind: Analyst headlines
+  covers: [sizing]
+  access: free
+  reliability: secondary
+  how: Public headline totals for a top-down size. Definitions differ between publishers, so record which one was used.
+  url: https://www.idc.com
+- id: forrester-press
+  name: Forrester press releases
+  kind: Analyst headlines
+  covers: [sizing]
+  access: free
+  reliability: secondary
+  how: Public headline totals for a top-down size. Definitions differ between publishers, so record which one was used.
+  url: https://www.forrester.com
+
+- id: grand-view-research
+  name: Grand View Research free abstracts
+  kind: Report vendors
+  covers: [sizing]
+  access: free
+  reliability: estimate
+  how: A second top-down figure. Spreads of 3-10x between vendors are normal; keep it as the segment's spread.
+  url: https://www.grandviewresearch.com
+- id: marketsandmarkets
+  name: MarketsandMarkets free abstracts
+  kind: Report vendors
+  covers: [sizing]
+  access: free
+  reliability: estimate
+  how: A second top-down figure. Spreads of 3-10x between vendors are normal; keep it as the segment's spread.
+  url: https://www.marketsandmarkets.com
+- id: fortune-business-insights
+  name: Fortune Business Insights free abstracts
+  kind: Report vendors
+  covers: [sizing]
+  access: free
+  reliability: estimate
+  how: A second top-down figure. Spreads of 3-10x between vendors are normal; keep it as the segment's spread.
+  url: https://www.fortunebusinessinsights.com
+
+- id: g2
+  name: G2 category pages
+  kind: Directories
+  covers: [players, signals]
+  access: free
+  reliability: secondary
+  how: Who the players are; how crowded a segment is.
+  url: https://www.g2.com
+- id: capterra
+  name: Capterra category pages
+  kind: Directories
+  covers: [players, signals]
+  access: free
+  reliability: secondary
+  how: Who the players are; how crowded a segment is.
+  url: https://www.capterra.com
+- id: product-hunt
+  name: Product Hunt
+  kind: Directories
+  covers: [players, signals]
+  access: free
+  reliability: secondary
+  how: Who the players are; how crowded a segment is.
+  url: https://www.producthunt.com
+- id: app-stores
+  name: App stores
+  kind: Directories
+  covers: [players, signals]
+  access: free
+  reliability: secondary
+  how: Who the players are; how crowded a segment is.
+
+- id: press-arr
+  name: Press-reported ARR and funding
+  kind: Private company data
+  covers: [players]
+  access: free
+  reliability: secondary
+  how: Player revenue for private leaders, as reported, estimated or claimed. Record which, and the date.
+- id: crunchbase
+  name: Crunchbase
+  kind: Private company data
+  covers: [players]
+  access: team_key
+  reliability: secondary
+  how: Player revenue for private leaders. Needs the team's own login.
+  url: https://www.crunchbase.com
+- id: pitchbook
+  name: PitchBook
+  kind: Private company data
+  covers: [players]
+  access: team_key
+  reliability: secondary
+  how: Player revenue for private leaders. Needs the team's own login.
+  url: https://pitchbook.com
+- id: cb-insights
+  name: CB Insights
+  kind: Private company data
+  covers: [players]
+  access: team_key
+  reliability: secondary
+  how: Player revenue for private leaders. Needs the team's own login.
+  url: https://www.cbinsights.com
+
+- id: similarweb
+  name: Similarweb
+  kind: Digital footprint
+  covers: [players, signals]
+  access: team_key
+  reliability: estimate
+  how: Relative size and growth of players. Needs the team's own login.
+  url: https://www.similarweb.com
+- id: semrush
+  name: Semrush
+  kind: Digital footprint
+  covers: [players, signals]
+  access: team_key
+  reliability: estimate
+  how: Relative size and growth of players. Needs the team's own login.
+  url: https://www.semrush.com
+- id: google-trends
+  name: Google Trends
+  kind: Digital footprint
+  covers: [players, signals]
+  access: free
+  reliability: estimate
+  how: Relative size and growth of players.
+  url: https://trends.google.com
+- id: github
+  name: GitHub
+  kind: Digital footprint
+  covers: [players, signals]
+  access: free
+  reliability: estimate
+  how: Relative size and growth of players.
+  url: https://github.com
+
+- id: pricing-pages
+  name: The players' own pricing pages
+  kind: Pricing
+  covers: [pricing, buyers]
+  access: free
+  reliability: primary
+  how: List price per seat or per plan. Spend per buyer for a bottom-up size.
+
+- id: listening
+  name: Listening (Syften, Reddit, Hacker News)
+  kind: Conversation
+  covers: [signals]
+  access: free
+  reliability: signal
+  how: Buyer language and objections. Never a size.
+- id: peec
+  name: Peec
+  kind: Conversation
+  covers: [signals]
+  access: team_key
+  reliability: signal
+  how: What AI answers say about a category and its players. Never a size.
+
+- id: internal-sales-calls
+  name: The team's sales calls
+  kind: Internal
+  covers: [buyers, pricing, signals]
+  access: free
+  reliability: primary
+  how: The team's real spend per buyer and win rate. Cite the call, not a customer's name.
+- id: internal-meetings
+  name: The team's live meetings
+  kind: Internal
+  covers: [buyers, pricing, signals]
+  access: free
+  reliability: primary
+  how: The team's real spend per buyer and win rate, as said in live team meetings.
+- id: internal-revenue
+  name: The team's own revenue
+  kind: Internal
+  covers: [buyers, pricing]
+  access: free
+  reliability: primary
+  how: The team's real spend per buyer and win rate.

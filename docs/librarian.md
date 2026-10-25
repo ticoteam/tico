@@ -203,6 +203,58 @@ it. A new team gets the routine with the Librarian; an existing install gets it 
 **Sources a team brings.** Some sources do not allow resale, so Tico cannot supply them. A team can grant its own Crunchbase,
 Similarweb or similar credential to the Librarian, and the sources catalog marks those sources `team_key`.
 
+## Market spend
+
+The market graph has no numbers. Spend is the other half: the market defined, cut into segments, and each segment sized
+in US dollars a year, every figure tied to evidence. Only the owner and the Librarian write it; everyone who can read the
+market reads it, and the tables are readable in hub SQL like the other market tables (`market_sizes`, `market_figures`,
+`market_sources`; the definition is served by `GET /api/v2/market/spend`).
+
+- **Definition.** What the market is, what is in and out, how to count, the year, and shared parameters: named numbers
+  (`smb_share`) that a formula reads as `$smb_share`, each with a source or marked a judgement.
+- **Segments.** `segment` entities joined by `member_of` edges, at most four levels deep. The total sums the top level only.
+- **Sizes.** Several estimates per segment, one per method (`top_down`, `bottom_up`, `player_sum`, `owner`), each with a
+  range (`low_usd <= spend_usd <= high_usd`), its arithmetic in words, its evidence, a confidence, what it overlaps with, and
+  the analyst headline figures as `spread` text. Every method except `owner` cites evidence. An estimate is filed `proposed`;
+  accepting one sends the previous accepted estimate for the same segment, dimension (offering or buyer), basis (product or
+  platform) and year back to `proposed`. Two estimates more than twice apart mark the segment as disagreeing.
+- **Formulas.** Arithmetic over numbers, the estimate's own parameters and shared `$names`: `+ - * /` and parentheses, nothing
+  else (no power, no call). The server works the spend out when the estimate is filed. When a shared parameter changes, reads
+  work it out again and scale the range by the same ratio; the stored row is not rewritten. The owner changing a parameter of
+  an estimate files a new accepted `owner` estimate.
+- **Figures.** A player's revenue, ARR, customers or seats in a segment, with `kind` (reported, estimated, claimed), `as_of`
+  and evidence.
+- **Bets.** An accepted size, or a shared parameter changing an accepted size, is a market event on the segment, so a bet that
+  cites the segment gets its fit check ([Strategy](strategy.md#the-fit-check)). A proposed size is logged but does not trip a bet.
+- **Value chain.** `GET /api/v2/market/value-chain` lays the graph out in five layers (suppliers, platforms, us and rivals,
+  channels, buyers) from `competes_with`, `integrates_with`, `partners_with`, `distributes_through` and `sells_to` edges around
+  `company/self`; at most 40 nodes a layer.
+- **Sources.** `backend/market_sources/catalog.yaml` lists where to look: for each source what it covers (sizing, players,
+  buyers, pricing, signals, value chain), whether it is free, needs the team's key or goes through the gateway, and how far to
+  trust it (primary, secondary, estimate, signal). A team adds its own with `hub market sources --add-file`; one with a shipped
+  id replaces it.
+
+The owner asks for the work with **Size the market** (`POST /api/v2/market/spend/research {description}`), which files one
+Librarian task following `playbooks/size-the-market.md`; asking again while it is open returns the same task. A first market
+setup ends by pointing at the same playbook.
+
+| Route | Who | |
+|---|---|---|
+| `GET /api/v2/market/spend?dimension=&basis=&year=` | anyone who reads the market | definition, total, segments with sizes, estimates (with their evidence), players |
+| `PUT /api/v2/market/definition` | owner, Librarian | the definition; `root_name` makes the root |
+| `POST /api/v2/market/segments` | owner, Librarian | `{name, parent_id?, summary?}` |
+| `POST /api/v2/market/sizes` | owner, Librarian | an estimate; `accept: true` accepts it |
+| `POST /api/v2/market/sizes/{id}/accept`, `/reject` | owner, Librarian | |
+| `POST /api/v2/market/sizes/{id}/params` | owner | `{params: {name: number}}` |
+| `POST /api/v2/market/figures` | owner, Librarian | a player's figure |
+| `GET`, `POST /api/v2/market/sources` | read: anyone; add: owner, Librarian | the catalog |
+| `POST /api/v2/market/spend/research` | owner | `{description}`; returns `{task_id}` |
+| `GET /api/v2/market/value-chain` | anyone who reads the market | the five layers |
+
+CLI: `hub market define`, `segment add|tree`, `size add|accept|reject|params|list`, `figure add`, `sources`, `spend`,
+`research`. MCP: `hub_market_spend`, `hub_market_define`, `hub_market_segment_add`, `hub_market_size_add`,
+`hub_market_size_decide`, `hub_market_figure_add`, `hub_market_sources`, `hub_market_research`.
+
 ## Built-in
 
 Like the assistant and BotOps, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
