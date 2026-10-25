@@ -339,7 +339,10 @@ def messages(c, actor, ids=None):
 
 
 def history(c, actor):
-    rows = c.execute("SELECT role,body FROM task_manager_messages WHERE actor=? ORDER BY created DESC,rowid DESC LIMIT ?",
+    """The recent chat the model sees: the person's words and the Task Manager's replies, never a card. Cards name
+    tasks (a Check all's results, a fix), and no task title goes to the model."""
+    rows = c.execute("SELECT role,body FROM task_manager_messages WHERE actor=? AND card_json IS NULL "
+                     "ORDER BY created DESC,rowid DESC LIMIT ?",
                      (actor, HISTORY)).fetchall()
     return [{"from": "person" if r["role"] == "person" else "you", "text": r["body"][:1000]} for r in reversed(rows)]
 

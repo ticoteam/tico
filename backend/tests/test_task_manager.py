@@ -105,6 +105,8 @@ def test_check_all_reads_only_visible_tasks_and_its_bulk_fix_waits_for_confirm(a
     assert fix["card"]["kind"] == "fix" and "Payroll" not in fix["card"]["summary"]
     with api.app.state.store.read() as c:
         assert H.task(c, new["id"])["status"] != "closed"
+    say(api, "Thanks", token="cara-test")              # no task title reaches the model, its own chat included
+    assert not any("quarterly" in seen for seen in model.seen)
     out = post(api, f"task-manager/cards/{fix['id']}/confirm", {}, token="cara-test")
     assert out["ok"], out
     with api.app.state.store.read() as c:
