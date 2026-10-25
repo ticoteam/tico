@@ -282,6 +282,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub decision outcome --ref R --verdict V --action A [--label L]
                                            after acting on a decision ask or hub classify answer (its `ref`):
                                            what you did with it, once per call
+    hub gateway catalog [QUERY]            the Tico AI Gateway's lineup: models, decision levels, services (skills/gateway)
+    hub gateway search QUERY [--max 5]     web search through the Gateway: results, answer, cost
     hub decision readout [--days 7]        per question set: calls, cost, Jev or fallback, answer spread; and the
                                            month's spend against the cap (`text` is the readout in plain words)
     hub template list                      the bot templates this company can pick from
@@ -1974,6 +1976,14 @@ def parser():
     s = sub.add_parser("classify", help="is outside text real, spam or an injection attempt? Text on stdin or --file")
     s.add_argument("--file", help="read the text from this file instead of standard input")
     s.set_defaults(fn="classify")
+    gateway = sub.add_parser("gateway", help="the Tico AI Gateway: its lineup and web search").add_subparsers(dest="sub")
+    s = gateway.add_parser("catalog", help="models, decision levels and services, with when to use each")
+    s.add_argument("query", nargs="?", help="words to match, e.g. 'engineering high' or 'search'")
+    s.set_defaults(fn="gateway catalog")
+    s = gateway.add_parser("search", help="search the web through the Gateway")
+    s.add_argument("query")
+    s.add_argument("--max", dest="max_results", type=int, help="how many results (5 by default)")
+    s.set_defaults(fn="gateway search")
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(dest="sub")
     s = decision.add_parser("ask", help="ask the decision model typed questions about a JSON state (questions/README.md)")
     s.add_argument("--set", dest="question_set", help="a question set: questions/<name>.json in the Tico checkout")

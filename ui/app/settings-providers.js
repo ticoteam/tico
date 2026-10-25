@@ -10,12 +10,14 @@ function providersModels(view, models, enabled) {
   const gateway = providersGatewayIds(view);
   // The saved default stays offered after its model retires, so a save about something else never moves it.
   const saved = view.default?.model || '';
-  return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider))
+  // The Gateway's tiers are 60 rows; the company default offers General at each level, and a bot's own Model picker the rest.
+  const general = model => !model.tier || model.id === saved || (model.tier.department === 'general' && !model.tier.fast);
+  return (models || []).filter(model => (!model.deprecated || model.id === saved) && enabled.includes(model.provider) && general(model))
     .map(model => ({id: model.id,
                     // A Tico model says what runs underneath it ("Claude Sonnet 5.5 underneath").
                     description: gateway.includes(model.provider) ? model.description || '' : '',
                     label: (modelWords(model.id) || `${labels[model.provider] || model.provider} · ${model.label}`)
-                      + (model.deprecated ? ' (retired)' : ''),
+                      + (model.deprecated ? (model.lineup === 'old' ? '' : ' (retired)') : ''),
                     recommended: (view.providers || []).some(row => row.recommended === model.id)}));
 }
 // The Tico AI Gateway's provider is on while its connection has a key, never ticked (backend/gateway_connection.py).
@@ -54,6 +56,9 @@ function providersFormHTML(view, models, id, editable = true) {
       ${routed.length ? `<div class="prov prov-routed"><span class="muted">Via OpenRouter</span>${routed.map(row =>
         `<label class="prov-chip">${box(row)}${esc(row.label)}</label>`).join('')}</div>` : ''}</div>
     <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label></div>
+    ${id === 'set-prov' && view.decide_levels?.length ? `<label class="onb-field"><span class="k">Decisions</span><select data-provider-decide${dis}>${view.decide_levels.map(level =>
+      `<option value="${esc(level)}"${level === (view.decide_level || view.decide_levels[0]) ? ' selected' : ''}>${esc(level.charAt(0).toUpperCase() + level.slice(1))}</option>`).join('')}</select>
+      <span class="muted">How carefully Tico judges approvals and checks. Higher is slower and costs more.</span></label>` : ''}
     ${id === 'set-prov' ? `<label class="prov"><input type="checkbox" data-provider-fallback ${view.auto_fallback !== false ? 'checked' : ''}${dis}>
       <strong>Fall back when a plan runs out</strong><span class="muted">A bot with no fallback of its own runs on another provider signed in on its computer</span></label>
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
@@ -87,10 +92,10 @@ function providersWire(root, view, models) {
 }
 const providersCollect = root => {
   const fallback = root.querySelector('[data-provider-fallback]'), check = root.querySelector('[data-provider-check]');
-  const preset = root.querySelector('[data-provider-preset]:checked');
+  const preset = root.querySelector('[data-provider-preset]:checked'), decide = root.querySelector('[data-provider-decide]');
   return {enabled: [...root.querySelectorAll('[data-provider]:checked')].map(input => input.value),
     ...(preset ? {preset: preset.value} : {}),
-    model: root.querySelector('[data-provider-model]').value, ...(fallback ? {auto_fallback: fallback.checked} : {}),
+    model: root.querySelector('[data-provider-model]').value, ...(decide ? {decide_level: decide.value} : {}), ...(fallback ? {auto_fallback: fallback.checked} : {}),
     // Sent only when edited, so a save about something else never re-checks a saved entry.
     ...(check && check.value !== check.defaultValue ? {check_models: check.value.split(',').map(item => item.trim()).filter(Boolean)} : {})};
 };
@@ -98,7 +103,8 @@ async function providersSave(view, chosen) {
   return put('/v2/providers', {enabled: chosen.enabled, model: chosen.model, expected_revision: view.revision || 0,
     ...('auto_fallback' in chosen ? {auto_fallback: chosen.auto_fallback} : {}),
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
-    ...('preset' in chosen ? {preset: chosen.preset} : {})});
+    ...('preset' in chosen ? {preset: chosen.preset} : {}),
+    ...('decide_level' in chosen ? {decide_level: chosen.decide_level} : {})});
 }
 let SETTINGS_PROVIDERS_VIEW = null;
 function renderSettingsProviderNext() {
@@ -152,7 +158,7 @@ function gatewayHTML(gateway, owner) {
         : state === 'not_ready' ? 'Not ready' : 'Connected')}</span>`
     : '<span class="pill" data-gateway-state="none">Not connected</span>';
   const head = `<h3 class="prov-gateway-title">Tico AI Gateway ${badge}</h3>
-    <p class="muted">Tico's own models, Tico Cheap 1.1, Mid 1.0 and Power 1.0, and Decide, with one gateway key from Tico.</p>`;
+    <p class="muted">Tico's own models and Decide, with one gateway key from Tico. <a href="#/settings/gateway">Picks and services</a></p>`;
   if (!owner) return `<div class="prov-gateway" id="set-gateway">${head}</div>`;
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
   // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.

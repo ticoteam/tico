@@ -768,3 +768,29 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 .task-rule-form input:not([type=checkbox]),.task-rule-form select{max-width:100%;min-width:0}
 .task-rule-form input[name=ruleName]{flex:1 1 100%}
 .task-rule-form input[type=number]{width:90px}
+/* Settings > Gateway (ui/app/settings-gateway.js) and the Gateway pick in a bot's Model picker (settings-bots.js) */
+.gw-table{width:100%;border-collapse:collapse;font-size:var(--t-sm)}
+.gw-table td,.gw-table th{padding:6px 8px 6px 0;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.gw-table .num{text-align:right;font-variant-numeric:tabular-nums}
+.gw-table .gw-bots-word{display:none}
+.gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
+.gw-status-cell[data-status=live]{color:var(--ok)}
+.gw-status-cell:not([data-status=live]){color:var(--muted)}
+@media (max-width:640px){
+  .gw-table thead{display:none}
+  .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .gw-table td{padding:0;border:0}
+  .gw-table .gw-name{font-weight:600}
+  .gw-table .gw-bots-word{display:inline}
+  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price{grid-column:1 / -1;color:var(--muted)}
+}
+.settings-tier{display:grid;gap:8px;min-width:0}
+.settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
+.settings-tier-row label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
+.settings-tier-seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.settings-tier-seg button{border:0;border-radius:0;background:var(--surface);color:var(--ink);padding:7px 12px;font-size:var(--t-base);cursor:pointer}
+.settings-tier-seg button+button{border-left:1px solid var(--line)}
+.settings-tier-seg button[aria-checked=true]{background:var(--ink);color:var(--surface)}
+.settings-tier-seg button:disabled{opacity:.6;cursor:default}
+.settings-tier-row label.settings-tier-fast{flex-direction:row;align-items:center;gap:6px;padding-bottom:7px;color:var(--ink)}
+.settings-tier-line{margin:0;font-size:var(--t-sm);color:var(--muted)}

@@ -176,7 +176,10 @@ def test_a_tico_model_is_counted_at_tico_decides_price_not_the_unknown_model_cei
     settings = Settings(db_path=tmp_path / "hub.db")
     for model in J.GATEWAY_MODELS:
         assert B.priced(settings, model)
-        assert B.cost_usd(settings, model, {"input_tokens": 1_000_000, "output_tokens": 1_000_000}) == 0.06
+        cost = B.cost_usd(settings, model, {"input_tokens": 1_000_000, "output_tokens": 1_000_000})
+        # Low is Jev's price; Medium and High are Claude Sonnet 5.5's ($2.50 / $12.50) and Opus 5.5's ($5 / $25).
+        want = 15.0 if "-medium" in model else 30.0 if "-high" in model else 0.06
+        assert cost == want
     unknown = B.reservation(settings, ["no-such-model"], {"team": "Acme"}, QUESTIONS)
     assert B.reservation(settings, [J.GATEWAY_MODEL], {"team": "Acme"}, QUESTIONS) < unknown / 100
 
@@ -576,10 +579,24 @@ def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes
     monkeypatch.setattr(remotecli, "Client", client)
     with pytest.raises(Stop):
         remotecli.run(type("Args", (), {"cmd": "decision", "fn": "decision ask"})())
-    assert waits == [30]
-    assert J.TIMEOUT + 10 > B.CHAIN_SECONDS                     # `J.from_env` through the Hub
-    assert "Client(url, token, timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()     # the MCP tools
-    assert B.CHAIN_SECONDS + 1 < min(waits)
+    assert waits == [45]
+    assert J.HUB_WAIT > B.SLOW_CHAIN_SECONDS > B.CHAIN_SECONDS      # `J.from_env` through the Hub, Decisions at any level
+    assert B.SLOW_CHAIN_SECONDS + 1 < min(waits)
+    # The MCP tools' client keeps its ordinary deadline but waits past the chain on the routes that run one.
+    from clients import tico
+    from clients.tico import Client, SLOW_WAIT
+    opened = []
+
+    class Opener:
+        def open(self, request, timeout):
+            opened.append((request.full_url.rsplit("/api/v2/", 1)[1], timeout))
+            return io.BytesIO(b"{}")
+    monkeypatch.setattr(tico.urllib.request, "build_opener", lambda *args: Opener())
+    hub = Client("https://hub.example", "lease", timeout=30)
+    for path in ("decisions", "gateway/search", "tasks"):
+        hub.request("POST", "/api/v2/" + path, {})
+    assert opened == [("decisions", SLOW_WAIT), ("gateway/search", SLOW_WAIT), ("tasks", 30)]
+    assert SLOW_WAIT > B.SLOW_CHAIN_SECONDS and "timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()
 
 
 # ----------------------------------------------------------------------------- 4. no provider at all

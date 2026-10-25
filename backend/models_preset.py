@@ -2,7 +2,7 @@
 
 Four choices, kept on the providers record (backend/providers.py) as `preset`:
 - `subscriptions-gateway` (recommended): bots' main work runs on the person's Claude and ChatGPT subscriptions; until
-  a bot's runtime is signed in on its computer, its turns run on Tico Mid 1.0 through the Tico AI Gateway, and a
+  a bot's runtime is signed in on its computer, its turns run on its department's Medium tier through the Tico AI Gateway, and a
   used-up subscription falls back to the Gateway last.
 - `subscriptions`: subscriptions only; the Gateway is never spent for a bot that does not name a Tico model.
 - `gateway`: the Gateway only; a used-up login falls back to the Gateway last as well.
@@ -15,12 +15,15 @@ handed to it and the bot waits for a sign-in instead (it never fails for it).
 """
 import json
 
+from . import gateway_tiers
+
 RECOMMENDED = "subscriptions-gateway"
 PRESETS = (RECOMMENDED, "subscriptions", "gateway", "own-keys")
 GATEWAY_PRESETS = frozenset((RECOMMENDED, "gateway"))
-# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback (Head of Engineering,
-# Oct 18: the versioned name, so a new lineup is a deliberate change).
-WAITING_MODEL = "tico-mid-1.0"
+# What a bot's main work runs on before its subscription is signed in, and the Gateway fallback: its department's tier at
+# the current version, pinned (backend/gateway_tiers.py `bot_model`), so a new price is a deliberate pick. A bot's
+# `gateway:` block in bot.yaml (`level`, `fast`) changes the tier; the company-wide row names General Medium.
+WAITING_MODEL = "tico-general-medium-1.0"
 GATEWAY_RUNTIME = "pi"
 # The runtimes a person signs in to with a subscription (Settings > Computers "Sign in").
 SUBSCRIPTION_RUNTIMES = frozenset(("claude", "codex"))
@@ -70,19 +73,34 @@ def waiting(record, ready, config):
             and not signed_in(ready, runtime))
 
 
-def on_gateway(config):
+def pick(model=None):
+    """The Gateway model a waiting or fallback turn runs on: `model` (an id, or a function that finds it only when it
+    is needed), else the company-wide General Medium."""
+    model = model() if callable(model) else model
+    return model or gateway_tiers.default_model()
+
+
+def model_for_bot(c, settings, bot, config):
+    """The Gateway model for `bot` when nothing named one: the tier of its org-chart department (Medium unless its
+    bot.yaml `gateway:` says otherwise) at the current version. A bot in no department is General."""
+    from .task_manager import Chart
+    department = gateway_tiers.department_of(Chart(c, settings).of("bot:" + bot))
+    return gateway_tiers.bot_model(department, (config or {}).get("gateway"))
+
+
+def on_gateway(config, model=None):
     """`config` moved to the Gateway for one turn. The bot's own choice is untouched: once it is signed in, the next
     claim runs it there again, with no restart."""
-    return {**config, "runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": WAITING_MODEL,
+    return {**config, "runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": pick(model),
             "waiting_for_sign_in": str(config.get("runtime") or "")}
 
 
-def main_config(record, ready, config):
+def main_config(record, ready, config, model=None):
     """What a claim runs a bot's turn on under the company's choice: `config` itself, or the Gateway while it waits."""
-    return on_gateway(config) if waiting(record, ready, config) else config
+    return on_gateway(config, model) if waiting(record, ready, config) else config
 
 
-def with_gateway_fallback(record, ready, config):
+def with_gateway_fallback(record, ready, config, model=None):
     """`config` with the Gateway as the last fallback when the choice spends it, the computer can run it and the bot
     names no fallback of its own; the runner tries the company's other signed-in providers first."""
     from .gateway_connection import is_tico
@@ -90,13 +108,13 @@ def with_gateway_fallback(record, ready, config):
     if (not spends_gateway(record) or not record.get("auto_fallback") or not gateway_on(record)
             or not isolated(ready) or fallback or is_tico(config.get("model"))):
         return config
-    return {**config, "gateway_fallback": WAITING_MODEL}
+    return {**config, "gateway_fallback": pick(model)}
 
 
 def fallback_row(record):
     """The Gateway's row at the end of the company's fallback list (providers.default_fallbacks), or None."""
     if spends_gateway(record) and gateway_on(record):
-        return {"runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": WAITING_MODEL}
+        return {"runtime": GATEWAY_RUNTIME, "harness": GATEWAY_RUNTIME, "model": pick()}
     return None
 
 
@@ -145,7 +163,7 @@ def computer_of(c, bot):
 
 def runnable_fallbacks(record, ready, rows):
     """The company's fallback rows a bot on the computer `ready` can use: the Gateway row only where it can run it."""
-    return [row for row in rows if row.get("model") != WAITING_MODEL or row.get("runtime") != GATEWAY_RUNTIME
+    return [row for row in rows if not gateway_tiers.resolve(row.get("model")) or row.get("runtime") != GATEWAY_RUNTIME
             or isolated(ready)]
 
 

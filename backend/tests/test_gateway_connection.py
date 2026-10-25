@@ -231,13 +231,15 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         assert view["enabled"] == ["anthropic", "tico"]
         assert "tico" in get(api, "models")["enabled_providers"]
         # Picked like any other model, with Tico names and what runs underneath.
-        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
-        assert view["default"] == {"runtime": "pi", "model": "tico-mid-1.0"} and "tico" in view["enabled"]
+        assert view["default"] == {"runtime": "pi", "model": "tico-general-medium-1.0"} and "tico" in view["enabled"]
         rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
-        assert [(rows[m]["label"], rows[m]["description"]) for m in sorted(rows)] == [
-            ("Tico Cheap 1.1", "Claude Haiku 5.5 underneath"), ("Tico Mid 1.0", "Claude Sonnet 5.5 underneath"),
-            ("Tico Power 1.0", "Claude Opus 5.5 underneath")]
+        assert len(rows) == 60 and all(m.endswith("-1.0") for m in rows)
+        assert (rows["tico-general-medium-1.0"]["label"], rows["tico-general-medium-1.0"]["description"]) == (
+            "General · Medium 1.0", "Claude Sonnet 5.5 underneath")
+        assert rows["tico-sales-low-fast-1.0"]["tier"] == {"department": "sales", "level": "low", "fast": True,
+                                                           "version": "1.0", "auto": False}
         delete(api, "providers/gateway")
         assert "tico" not in get(api, "providers")["enabled"]
         with api.app.state.store.read() as c:
@@ -251,7 +253,7 @@ def new_bot(api, slug, expected=200, **choice):
                               "operator": "ana", "owners": ["ana"], "runner_id": None, **choice}, expected=expected)
 
 
-def test_cheap_1_1_replaces_1_0_and_a_default_or_bot_already_on_1_0_keeps_it(api, monkeypatch):
+def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(api, monkeypatch):
     setup(api, monkeypatch)
     with fake_gateway() as fake:
         fake.active(KEY, 0.1)
@@ -261,7 +263,7 @@ def test_cheap_1_1_replaces_1_0_and_a_default_or_bot_already_on_1_0_keeps_it(api
                                          "expected_revision": view["revision"]}, expected=422)
         assert "retired" in json.dumps(refused)
         # A default saved as Cheap 1.0 before 1.1 shipped.
-        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-mid-1.0", "expected_revision": view["revision"]})
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         with api.app.state.store.transaction() as c:
             stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
             c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
@@ -278,7 +280,7 @@ def test_cheap_1_1_replaces_1_0_and_a_default_or_bot_already_on_1_0_keeps_it(api
         # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
         new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
         view = get(api, "providers")
-        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.1", "expected_revision": view["revision"]})
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-low-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-cheap-1.0", "expected_revision": view["revision"]},
             expected=422)
@@ -595,7 +597,7 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
         put_bot_on(api, "ops", "kimi-k3")
     elif change == "default_to_tico":
         record = get(api, "providers")
-        put(api, "providers", {"enabled": ["openrouter", "tico"], "runtime": "pi", "model": "tico-mid-1.0",
+        put(api, "providers", {"enabled": ["openrouter", "tico"], "runtime": "pi", "model": "tico-general-medium-1.0",
                                "expected_revision": record["revision"]})
     else:
         monkeypatch.setattr(check_models, "of", lambda c, task_id, bot: {
@@ -796,9 +798,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
 
 # What the runner ends a refused Tico run with (runner-rs/src/hosts/pi.rs `plain_error`), and what the bot says.
 @pytest.mark.parametrize("code,error,focus", [
-    ("unknown_model", "Tico AI Gateway: this model isn't offered. Tico models: Tico Cheap 1.1, Tico Mid 1.0, Tico "
-     "Power 1.0 (unknown_model)", "The Tico AI Gateway doesn't offer this model. Tico models: Tico Cheap 1.1, Tico Mid "
-     "1.0, Tico Power 1.0"),
+    ("unknown_model", "Tico AI Gateway: this model isn't offered; Settings > Gateway lists the picks (unknown_model)",
+     "The Tico AI Gateway doesn't offer this model; Settings > Gateway lists the picks"),
     ("unsupported_field", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["unsupported_field"][1]),
     ("bad_request", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["bad_request"][1]),
     ("upstream_refused", REFUSED, "The Tico AI Gateway refused the request as sent: " + ERRORS["upstream_refused"][1]),
@@ -1047,3 +1048,21 @@ def test_base_url_takes_one_setting_for_both_endpoints():
     assert G.base_url("https://gw.example/v1/gateway/decisions/") == "https://gw.example/v1/gateway"
     assert G.decisions_url("https://gw.example/v1/gateway") == "https://gw.example/v1/gateway/decisions"
     assert G.cap_reached("429 {\"error\":{\"code\":\"cap_reached\"}}") and not G.cap_reached("429 rate_limited")
+
+
+def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeypatch):
+    setup(api, monkeypatch)
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        view = get(api, "providers")
+        put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
+        # The Inbox template says Low; a bot with no template, or one that names its own model, is not touched.
+        made = new_bot(api, "mailwatch", template="inbox")
+        plain = new_bot(api, "plain")
+        own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
+        with api.app.state.store.read() as c:
+            models = dict(c.execute("SELECT slug, model FROM bots WHERE slug IN ('mailwatch','plain','chosen')").fetchall())
+            stored = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='mailwatch'").fetchone()[0])
+        assert models == {"mailwatch": "tico-general-low-1.0", "plain": "tico-general-medium-1.0", "chosen": "tico-general-high-1.0"}, (made, plain, own)
+        assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}

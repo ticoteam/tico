@@ -142,8 +142,13 @@ function modelWords(id) {
   if (/^gpt$/i.test(parts[0])) return ['GPT', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
   if (/^gpt/i.test(raw)) return raw.replace(/^gpt/i, 'GPT');
   if (/^gemini$/i.test(parts[0])) return ['Gemini', version(parts.slice(1)), words(parts.slice(1))].filter(Boolean).join(' ');
-  // Tico's own models, served by the Tico AI Gateway: tico-mid-1.0 is "Tico Mid 1.0".
-  if (/^tico$/i.test(parts[0])) return ['Tico', words(parts.slice(1)), version(parts.slice(1))].filter(Boolean).join(' ');
+  // Tico's own models, served by the Tico AI Gateway: tico-sales-medium-fast-1.0 is "Sales · Medium · Fast 1.0", the same
+  // without a version "Sales · Medium · Fast (auto)", and the ids from before the tiers "Mid 1.0 (old lineup)".
+  if (/^tico$/i.test(parts[0]) && parts.length > 1) {
+    const rest = parts.slice(1), ver = /^\d+(\.\d+)?$/.test(rest[rest.length - 1]) ? rest.pop() : '';
+    if (rest.length === 1 && /^(cheap|mid|power|decide|classify)$/i.test(rest[0])) return `${cap(rest[0])} ${ver}`.trim() + ' (old lineup)';
+    return rest.map(cap).join(' · ') + (ver ? ' ' + ver : ' (auto)');
+  }
   return raw;
 }
 // A bot's model choice: "Claude Opus 5 · high", and the tool that runs it when that is not the model's own.

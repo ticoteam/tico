@@ -201,7 +201,7 @@ own paths, so renaming later is real work.
 | Path | What it is for |
 |---|---|
 | `AGENT.md` | The Instructions. Read at the start of every run. **Required.** `AGENTS.md` and `CLAUDE.md` are one-line pointers at it, so any model CLI finds it |
-| `bot.yaml` | Identity and switches: `name`, optional runtime overrides, `tools:`, `outbound_send`, `reads:`. An older `employee.yaml` (with `access:` and `schedules:`) is still read for one release; the template refresh renames it |
+| `bot.yaml` | Identity and switches: `name`, optional runtime overrides, `gateway:`, `tools:`, `outbound_send`, `reads:`. An older `employee.yaml` (with `access:` and `schedules:`) is still read for one release; the template refresh renames it |
 | `state.md` | Current focus, open threads, next step. Rewritten at the end of each run |
 | `memory/learnings.md` | How to do the job: the flag it forgot, the tool that refused, dated |
 | `memory/decisions.md` | What was decided, when, why. Dated. This is where history goes |
@@ -581,8 +581,9 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Harness**: which CLI performs the run (`openai` / Codex, `claude`, `gemini`, `antigravity`,
   `grok`, `cursor` / Cursor Agent, `musecode` / Muse Code, `pi`). A harness whose provider is off still
   shows in the picker, greyed out, with where to turn it on. **Model**: the latest model in that family (Sol, Astra, Grok 4.6, Gemini Flash,
-  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, `pi` also offers
-  Tico Cheap 1.1, Mid 1.0 and Power 1.0, each listed with what runs underneath. Search the picker: `grok` shows `grok/grok 4.6` at every
+  Claude Opus 5, Claude Fable 5.1). While the [Tico AI Gateway](ai-gateway.md) is connected, the harness list
+  also offers **Tico AI Gateway**: instead of a model list it shows Department (the bot's group's), Level, Fast and Version,
+  with the model underneath and its price on one line. Search the picker: `grok` shows `grok/grok 4.6` at every
   effort; `sol` shows `openai/gpt 5.6 sol`. The same levers set the built-in BotOps bot: it may
   run on any harness and model here, limited in practice to the providers the company enabled
   and what its computer is signed in to.
@@ -615,6 +616,12 @@ Levers set in **Settings → Bots**, not in the repository:
   A branch picks its own. The old **Wakes** setting (`wake_preset`) is still read and set by older clients: it changes only
   the Doer's window.
 - **`max_run_minutes`**: the ceiling on one run. Set it from the longest real routine, not hope.
+- **`gateway:`** (optional, in a template's `bot.yaml`): `level: low | medium | high` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
+  template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on its department's pick at that
+  level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It
+  is read once when the bot is created and kept in the bot's settings; the pick in **Settings → Bots** replaces it. Left
+  out, it is Medium and not Fast. The Inbox, Health Monitor, Dispatcher, Issue Triage and Spend Watcher templates use Low;
+  DevOps, Security and Software Architect use High.
 - **`background_wait_s`** (Claude bots): how long an answered turn may wait only on its own background commands
   before the runner ends it, in seconds; 300 when unset, 0 to wait for them as before. The commands keep running,
   and the bot gets one message with their exit codes when they end, or when the run's time limit kills them.

@@ -52,7 +52,8 @@ from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
 from . import updates
-from . import company_billing, company_server, gateway_connection
+from clients import gateway as gateway_client
+from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
 from . import access as Access
 from . import releases, runner_versions, ui_bundle
@@ -1511,8 +1512,8 @@ def create_app(settings=None):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now())
             model_login.hold_removals(c, settings)   # bots on the company's default may now run another tool
             H.event(c, who.actor, "providers.updated", "",
-                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")},
-                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset")}})
+                    {"before": {k: before[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")},
+                     "after": {k: after[k] for k in ("enabled", "runtime", "model", "revision", "auto_fallback", "check_models", "preset", "decide_level")}})
             return Providers.view(after)
         return mutate(request, body, work)
 
@@ -1526,6 +1527,48 @@ def create_app(settings=None):
             gateway_connection.check_soon(store, app.state.vault, settings)   # the page's answer is the last check's
         with store.read() as c:
             return gateway_connection.view(c, settings, manage=who.role == "owner")
+
+    @app.get("/api/v2/gateway")
+    def gateway_overview(request: Request):
+        """Settings > Gateway: the connection (with spend against the cap for the owner), the picks the bots use and the
+        services."""
+        who = request.state.identity
+        auth.domain(who)
+        if who.role == "owner":
+            gateway_connection.check_soon(store, app.state.vault, settings)
+        with store.read() as c:
+            return gateway_page.overview(c, settings, owner=who.role == "owner")
+
+    @app.get("/api/v2/gateway/catalog")
+    def gateway_catalog(request: Request, query: str = ""):
+        """The Gateway's lineup as an agent reads it: models, decisions and services, each with when to use it, its
+        price and its ids (`hub_gateway_catalog`). `query` keeps the entries it matches."""
+        auth.domain(request.state.identity)
+        with store.read() as c:
+            gateway_page.catalog(c, settings)
+        return gateway_tiers.lineup(query[:200])
+
+    @app.post("/api/v2/gateway/search")
+    def gateway_search(request: Request, body: M.GatewaySearch):
+        """Web search through the Tico AI Gateway (`hub_gateway_search`), asked with the company's gateway key and, for a
+        bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
+        who = request.state.identity
+        auth.domain(who)
+        if settings.rehearsal:
+            raise Problem("rehearsal", "Search is off in rehearsal mode; nothing is sent to the Gateway", 503)
+        with store.read() as c:
+            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
+            base = gateway_connection.url(c, settings)
+            header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
+        if not key:
+            raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
+                          "Settings > Computers", 409)
+        status, answer, code = gateway_client.search(base, key, body.query, body.max_results, header)
+        if status != 200:
+            if status == 404:
+                raise Problem("gateway_search_unavailable", "The Tico AI Gateway does not offer search yet", 503)
+            raise Problem("gateway_search_failed", f"Search failed: {code or status}", 503 if status in (0, 429) or status >= 500 else 422)
+        return answer
 
     @app.put("/api/v2/providers/gateway")
     def gateway_save(request: Request, body: M.GatewayConnectionSave):
@@ -2442,8 +2485,9 @@ def create_app(settings=None):
         auth.domain(request.state.identity)
         with store.read() as c:
             choice = Providers.load(c, settings)
+            cat = gateway_page.catalog(c, settings)
         return {"models": list(MODEL_CATALOG), "harnesses": list(HARNESS_CATALOG),
-                "enabled_providers": choice["enabled"],
+                "gateway": gateway_tiers.view(cat), "enabled_providers": choice["enabled"],
                 "default": {"runtime": choice["runtime"], "model": choice["model"]}}
 
     @app.get("/api/v2/conversations")

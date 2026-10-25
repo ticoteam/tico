@@ -2181,7 +2181,9 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])
-        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config))
+        # Its department's tier (Medium by default) is looked up only when a turn would use it.
+        tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot"], followed)
+        config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config, tier), tier)
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
         if held:

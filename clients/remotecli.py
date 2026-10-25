@@ -108,7 +108,7 @@ def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=30 if args.cmd in ("sql", "decision") else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
+    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
@@ -238,7 +238,7 @@ def run(args, who=None):
         from clients import hubtools
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["hub_classify"]["fn"](client, {"text": text})
-    if fn in ("decision readout", "decision outcome"):
+    if fn in ("decision readout", "decision outcome", "gateway catalog", "gateway search"):
         return via_tool(client, args)
     if args.cmd == "decision":
         return judge(client, args)

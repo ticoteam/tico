@@ -14,8 +14,9 @@ way a stale bot definition is, and every change leaves an event with the before 
 import json
 
 from clients import harness_manifests as manifests
+from clients import judge as J
 
-from . import models_preset
+from . import gateway_tiers, models_preset
 from .harnesses import attach_harnesses, normalize_fallback
 from .store import Problem
 
@@ -148,17 +149,10 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "recommended": True, "efforts": ("low", "high"), "default_effort": "low"},
     {"id": "devstral-2512", "label": "devstral 2512", "runtime": "pi", "provider": "mistral",
      "efforts": ("low", "high"), "default_effort": "low"},
-    # The Tico AI Gateway's lineup (Head of Product, 2026-10-18), on pi through the Gateway's OpenAI-chat endpoint
-    # (runner-rs/src/hosts/pi.rs). Bots see Tico names; `description` says what runs underneath. A new price is a new
-    # version: Cheap 1.1 replaced Cheap 1.0, which the Gateway still serves for the bots already on it.
-    {"id": "tico-cheap-1.1", "label": "Tico Cheap 1.1", "runtime": "pi", "provider": "tico",
-     "description": "Claude Haiku 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "low"},
-    {"id": "tico-cheap-1.0", "label": "Tico Cheap 1.0", "runtime": "pi", "provider": "tico", "deprecated": True,
-     "description": "Claude Haiku 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "low"},
-    {"id": "tico-mid-1.0", "label": "Tico Mid 1.0", "runtime": "pi", "provider": "tico", "recommended": True,
-     "description": "Claude Sonnet 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "high"},
-    {"id": "tico-power-1.0", "label": "Tico Power 1.0", "runtime": "pi", "provider": "tico",
-     "description": "Claude Opus 5.5 underneath", "efforts": ("low", "high", "max"), "default_effort": "high"},
+    # The Tico AI Gateway's lineup (backend/gateway_tiers.py): 60 department tiers at their current pinned version, then the
+    # old lineup (retired: it keeps working at its old price, nothing new may pick it). Any other id of the lineup
+    # (an auto id, an older version, one that arrived with HQ's catalog) is found through `MODEL_BY_ID`.
+    *gateway_tiers.listed_rows(),
     # An external agent brings its own model; the profile's config decides, and the heartbeat
     # reports what it is. This row exists so the bot can be created and shown like any other.
     {"id": "hermes-profile", "label": "profile's own model", "runtime": "hermes", "provider": "",
@@ -177,7 +171,28 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
      "efforts": ("as-configured",),
      "default_effort": "as-configured"},
 ))
-MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
+
+
+class _ById(dict):
+    """`MODEL_BY_ID`: the listed rows, and any other id of the Gateway's lineup on lookup."""
+
+    def __missing__(self, key):
+        row = gateway_tiers.row_for(key) if isinstance(key, str) else None
+        if row is None:
+            raise KeyError(key)
+        return row
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or self.get(key) is not None
+
+
+MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
 # output). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
@@ -193,7 +208,30 @@ MODEL_BY_ID = {row["id"]: row for row in MODEL_CATALOG}
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
 PRICES_AS_OF = "2026-09-29"
-PRICES = {
+class _Priced(dict):
+    """A price table whose lookups also find the Gateway's ids (`gateway_tiers`): a tier, a pinned version, an old id."""
+
+    def __init__(self, rows, find):
+        super().__init__(rows)
+        self.find = find
+
+    def get(self, key, default=None):
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        found = self.find(key) if isinstance(key, str) and key.startswith(gateway_tiers.PREFIX) else None
+        return default if found is None else found
+
+    def __missing__(self, key):
+        found = self.get(key)
+        if found is None:
+            raise KeyError(key)
+        return found
+
+    def __contains__(self, key):
+        return self.get(key) is not None
+
+
+PRICES = _Priced({
     "claude-fable-5-1": (10.0, 0.25, 50.0),
     "claude-fable-5": (10.0, 1.0, 50.0),
     "claude-opus-5-5": (4.0, 0.20, 20.0),
@@ -216,27 +254,21 @@ PRICES = {
     "deepseek-v4-pro": (0.955, 0.080, 1.911),
     "kimi-k3": (3.0, 0.30, 15.0),
     "kimi-k2.7-code": (0.671, 0.18, 3.35),
-    # The Tico AI Gateway's price (fixed per version; cached input at 10% of input). Cheap 1.1 has a long-prompt rate.
-    "tico-cheap-1.1": (0.15, 0.015, 0.75),
-    "tico-cheap-1.0": (0.15, 0.015, 0.75),
-    "tico-mid-1.0": (2.50, 0.25, 12.50),
-    "tico-power-1.0": (5.0, 0.50, 25.0),
     "llama-4-maverick": (0.1875, 0.1875, 0.6525),
     "mistral-medium-3.5": (1.5, 1.5, 7.5),
     "devstral-2512": (0.40, 0.04, 2.0),
-}
+}, gateway_tiers.price_for)    # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
 
 
 # Models whose every rate goes up for a request with a long prompt: (prompt tokens it may have, the rates
 # above that) in the same units as PRICES. A request's prompt is all its input, cache reads and cache writes
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
-# Tico Cheap 1.1's comes from the Tico AI Gateway's own price (lineup 1.1), not Anthropic's page.
+# The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
 LONG_PROMPT_AS_OF = "2026-10-17"
-LONG_PROMPT = {
+LONG_PROMPT = _Priced({
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
-    "tico-cheap-1.1": (100_000, (0.75, 0.075, 3.75)),
-}
+}, gateway_tiers.long_prompt_for)
 
 
 def price_of(model):
@@ -391,7 +423,9 @@ def _record(value):
             "auto_fallback": stored.get("auto_fallback") is not False,
             "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
             # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
-            "preset": models_preset.normalize(stored.get("preset"))}
+            "preset": models_preset.normalize(stored.get("preset")),
+            # How hard the Tico AI Gateway thinks on a decision (clients/judge.py DECIDE_LEVELS); Low is today's.
+            "decide_level": J.normalize_level(stored.get("decide_level"))}
 
 
 def env_seed(settings):
@@ -464,13 +498,17 @@ def save(c, actor, body, now):
     preset = before["preset"] if body.get("preset") is None else models_preset.normalize(body.get("preset"))
     if body.get("preset") not in (None, "") and not preset:
         raise ProviderError("preset", "Choose one of the four models choices", 422)
+    level = body.get("decide_level")
+    if level not in (None, "") and level not in J.DECIDE_LEVELS:
+        raise ProviderError("decide_level", "Choose Low, Medium or High for decisions", 422)
     after = {"enabled": enabled, "runtime": runtime, "model": model, "revision": before["revision"] + 1,
              "updated": now, "updated_by": actor, "source": "owner",
              "auto_fallback": before["auto_fallback"] if auto is None else bool(auto),
              "check_models": (before["check_models"] if checks is None
                               else normalize_check_models(checks, {"enabled": enabled, "runtime": runtime,
                                                                    "model": model}, before["check_models"])),
-             "preset": preset}
+             "preset": preset,
+             "decide_level": before["decide_level"] if level is None else J.normalize_level(level)}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
     stored = {**after, "enabled": [name for name in enabled if name not in gateway]}
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
@@ -487,6 +525,7 @@ def view(record):
             "auto_fallback": record["auto_fallback"],
             "check_models": record["check_models"], "check_order": check_order(record),
             "preset": record.get("preset", ""), "presets": list(models_preset.PRESETS),
+            "decide_level": record.get("decide_level", J.DECIDE_LEVELS[0]), "decide_levels": list(J.DECIDE_LEVELS),
             "providers": [{**row, "enabled": row["id"] in record["enabled"],
                            "recommended": (recommended(row["id"]) or {}).get("id", "")}
                           for row in PROVIDERS]}
