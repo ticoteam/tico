@@ -777,8 +777,8 @@ function hubModalHTML(t, it, opts = {}) {
   // What it waits on: a question to you reads as one; any other waiting note is a quiet line. A blocker is in Related.
   // Waiting on a bot's prerequisite work reads "Waiting on <bot>: <reason>" (taskBotWait).
   const blockers = taskBlockers(t), botWait = !askToYou && !finished ? taskBotWait(t) : null;
-  const waitText = clipLine(botWait ? `${botWait.name}${botWait.reason ? `: ${botWait.reason}` : ''}`
-    : blockers.length && !askToYou ? '' : taskWaitLine(t), 400);
+  const waitText = clipLine(botWait ? `${botWait.name}${botWait.reason ? `: ${botWait.reason}` : ''}${botWait.since}`
+    : blockers.length && !askToYou && !t.blocked_since ? '' : taskWaitLine(t), 400);
   const waitLabel = askToYou ? needsWho(t) : botWait || t.status === 'waiting' ? 'Waiting on' : '';
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');

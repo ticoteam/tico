@@ -252,7 +252,7 @@ def bot_attempts(api, computer, bot):
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thread(api, computer):
+def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keeps_the_primary_thread(api, computer):
     from backend.tests.test_check_models import company
     from backend.tests.test_task_models import set_task_model
 
@@ -289,7 +289,8 @@ def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thre
     assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
     assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
     assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
-    # The cheaper policy deliberately starts every task-model fallback fresh, including consecutive fallbacks.
+    # A fallback runs in a side session of its own, from the checkpoint, including consecutive fallbacks; the bot's own
+    # thread is neither resumed by it nor forgotten.
     with api.app.state.store.read() as c:
         latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
     assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
@@ -299,6 +300,15 @@ def test_task_model_fallback_starts_from_the_checkpoint_instead_of_an_older_thre
     assert "--resume" not in last["argv"]
     assert f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}" in last["prompt"]
     assert last["argv"] != call["argv"]
+    assert last["argv"][last["argv"].index("--session-id") + 1] != call["argv"][call["argv"].index("--session-id") + 1]
+    # Back on the bot's own model, the next turn resumes the thread it had before any of that, and is told a side
+    # session ran in between.
+    set_task_model(api, None)
+    post(api, f"tasks/{task['id']}/chat", {"text": "Continue on the bot's own model."})
+    completed(5)
+    primary = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
+    assert primary["argv"][primary["argv"].index("--resume") + 1] == old_thread, "the primary thread was not kept"
+    assert "side session" in primary["prompt"]
 
 
 @pytest.mark.parametrize("harness", ["claude"])

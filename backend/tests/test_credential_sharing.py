@@ -123,9 +123,17 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
         assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]       # hers, via BotOps
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
     assert act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"}).json()["id"] == done.json()["id"]
-    # Grants use the administrator requester’s full rights, including grants to humans.
-    card = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "human:cara"}).json()
-    assert "needs_confirm" not in card and card["subject"] == "human:cara"
+    # A grant to a person (or to every computer) is the administrator's own tap: a card, and no grant until it.
+    for subject in ("human:cara", "computers"):
+        card = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": subject}).json()
+        assert card["needs_confirm"] and card["action"]["owner"] == "human:ana"
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM credential_grants WHERE subject=?", (subject,)).fetchone()[0] == 0
+        if subject == "human:cara":
+            post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=ana["token"], expected=403)
+            assert post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"] == "done"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara' AND revoked IS NULL").fetchone()[0] == 1
     finish(api, botops, ana)
     # A member is refused, in words that say who to ask, and no card is left behind.
     cara = turn(api, botops, person="cara-test", text="Grant ops the Jira credential")

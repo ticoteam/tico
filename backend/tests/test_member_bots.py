@@ -197,13 +197,19 @@ def test_a_members_bot_goes_only_on_a_computer_that_accepts_members_bots(api, bo
     assert enroll.status_code == 200
     with api.app.state.store.read() as c:
         assert c.execute("SELECT accepts_member_bots FROM runners WHERE label='Cara Mac'").fetchone()[0] == 1
-    # An admin may place the bot directly with their own rights through BotOps.
+    # An admin may place it there through BotOps too, on their own tap: a card in their chat, nothing moved before it.
     other = close_computer(api, runner(api, label="Closed Mac"))
     finish(api, botops, attempt)
     ben_turn = turn(api, botops, person="ben-test", text="Move jira-manager to the closed Mac")
     proposed = call(api, "post", "bots/jira-manager/assignment", ben_turn["token"],
                     {"runner_id": other["runner_id"], "expected_generation": 1, "on_behalf_of": "turn"})
-    assert proposed.status_code == 200 and "needs_confirm" not in proposed.json()
+    assert proposed.status_code == 200 and proposed.json()["needs_confirm"]
+    def placed():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT runner_id FROM assignments WHERE bot='jira-manager'").fetchone()[0]
+    assert placed() != other["runner_id"]
+    post(api, f"assistant/actions/{proposed.json()['action']['id']}/confirm", {}, token="ben-test")
+    assert placed() == other["runner_id"]
 
 
 def test_a_member_has_at_most_the_companys_limit_of_active_bots(api, botops):

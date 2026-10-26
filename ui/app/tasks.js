@@ -41,24 +41,52 @@ const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
+function taskBlockedReason(t, source = document.activeElement) {
+  return new Promise(resolve => {
+    const opener = source, dialog = document.createElement('dialog');
+    dialog.className = 'tmodal task-block-reason';
+    dialog.innerHTML = `<form class="tmodal-body"><h2>Block task</h2>
+      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(t.blocked_reason || '')}</textarea></label>
+      <div class="row"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Block</button></div></form>`;
+    let value = null;
+    dialog.querySelector('form').onsubmit = event => {
+      event.preventDefault();
+      const reason = dialog.querySelector('textarea').value.trim();
+      if (!reason) return;
+      value = reason; dialog.close();
+    };
+    dialog.querySelector('[data-cancel]').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => { dialog.remove(); if (opener?.isConnected) opener.focus(); resolve(value); }, {once: true});
+    document.body.append(dialog); dialog.showModal(); dialog.querySelector('textarea').focus();
+  });
+}
+function taskBlockedLine(t) {
+  const blocker = taskBlockers(t).find(b => !['done', 'closed', 'declined'].includes(b.status));
+  const reason = t.blocked_reason === 'Waiting on a dependency' && blocker?.title
+    ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
+  return `${reason} · since ${fmt(t.blocked_since)}`;
+}
 // A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
 // must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
 // blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
 // task, an open question to them, or any open blocker they own, which is how the ask card a bot's task files for them
 // is served) keeps their ask, so its note is never shown as a bot's reason. A reader who cannot open the first
-// blocker is served only the ones after it, so a second bot's task there is named instead.
+// blocker is served only the ones after it, so a second bot's task there is named instead. That wait is the task's
+// Blocked hold, so it carries the hold's age; a review-gate or worktree hold is something else and says its own why.
 function taskBotWait(t) {
   const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
-  if (t?.status !== 'waiting' || actorPerson(t.waiting_on) || taskAskToPerson(t)
-      || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
+  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(t.blocked_kind) || actorPerson(t.waiting_on)
+      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
   const b = taskBlockers(t).find(open);
   if (!b || !actorSlug(b.owner)) return null;
   const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
-  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b};
+  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b,
+    since: t.blocked_since ? ` · since ${fmt(t.blocked_since)}` : ''};
 }
 function taskWaitLine(t) {
   const bot = taskBotWait(t);
-  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}`;
+  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}${bot.since}`;
+  if (t?.blocked_since) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
@@ -162,6 +190,7 @@ function taskWaitingOn(t) {
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {
   if (!t) return '';
+  if (t.blocked_since) return 'Blocked';
   if (t.step?.name && pipelineTypeId(t) !== 'general') return t.step.name;
   return STATUS_WORD[t.status] || String(t.status || '');
 }
@@ -335,6 +364,7 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
+    ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
     <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`

@@ -834,8 +834,9 @@ def card(conn, p, hidden, editor):
         out["changes"] = [{"label": CARD_FIELDS.get(k, k), "now": record.get(k) or "", "proposed": v}
                           for k, v in K.clean(dict(pl)).items()]
     elif kind == "goal_wording" and row:
+        # Every field yes writes (update writes any that is not None): an empty body clears the description.
         changes = [{"label": label, "now": row.get(k) or "", "proposed": pl[k]}
-                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k)]
+                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k) is not None]
         if pl.get("bet_id"):
             from . import strategy
             if editor:

@@ -1329,6 +1329,28 @@ def _aged_pr_checks(c, who, auth, full, kind):
                    fixes=[_fix("Open tasks", "#/tasks")])] if items else []
 
 
+def _unreviewed_runs(c, who, auth):
+    """Bots with a stopped run held two hours or more with no decision (execution.unreviewed), as `who` may read them:
+    BotOps's review of it did not happen, so a person sees it here and in the operator's Needs you (Dev 543)."""
+    from .execution import HELD_UNREVIEWED, unreviewed
+    slugs = [row[0] for row in c.execute(
+        "SELECT DISTINCT j.bot FROM jobs j LEFT JOIN attempts a ON a.id=j.attempt_id WHERE j.state='uncertain' "
+        "AND coalesce(a.finished,j.created)<=? ORDER BY j.bot", (H.shift(H.now(), seconds=-HELD_UNREVIEWED),))]
+    readable = auth.bot_accesses(c, who, slugs) if slugs else {}
+    items = []
+    for slug in slugs:
+        if not readable.get(slug, auth.FULL)["read"]:
+            continue
+        count, hours = unreviewed(c, who, slug)
+        if count:
+            text = f"{_bot_name(c, slug)}: {count} stopped run{'' if count == 1 else 's'} waiting {hours} h"
+            items.append({"bot": slug, "name": _bot_name(c, slug), "count": count, "hours": hours, "text": text,
+                          "fixes": [_fix("Review stopped runs", f"#/bot/{slug}/more")]})
+    return _check("stopped_runs", "Stopped runs nobody decided", "warn",
+                  _diagnostic_summary("Held for a check two hours or more; choose Try again or Don't retry.", items),
+                  [_fix("Open bots", "#/settings", "bots")], items=items) if items else None
+
+
 def _prime_claims(c):
     """Every bot's own rows that the claim check reads (execution.claim_refusal) for the queued work on each computer
     and each stuck bot, read one table at a time: the page makes a few statements however many bots it checks."""
@@ -1616,6 +1638,8 @@ def view(c, who, settings, auth, github, config):
                              + ("" if len(copies) <= 3 else f"; and {len(copies) - 3} more")
                              + ". Restart that computer's runner to retry now.",
                              [_fix("Open Computers", "#/settings", "devices")]))
+    if (unreviewed := _unreviewed_runs(c, who, auth)):
+        checks.append(unreviewed)
     from .app_delivery import health_problems
     for key, summary in health_problems(c, who, auth, online_ids):
         checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
