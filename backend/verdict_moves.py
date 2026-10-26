@@ -8,11 +8,13 @@ is still at that check's step, moves the ticket as Tico, in the same write (`aft
 - changes -> that review's Fixes step, fail -> QA Fixes; the builder is woken once, with the verdict and the head.
 Tico never merges (Chris's open question 1, default no): the builder does, woken once per head when the last check
 approved it and CI is green (`merge_wake`). The merge then moves a ticket waiting for it to Pending Release
-(`merged`), and checks passing on a new head at a Fixes step move it on to the next check (`checks_done`, AFTER_FIXES).
+(`merged`), and checks passing on a new head at a Fixes step move it back to that step's check, which judges the new
+head (`checks_done`, AFTER_FIXES).
 
 One move per step and head: Tico moves only a ticket still at the check's own step, on the judged head, so the
 builder's move and Tico's are the same move, made once. A move the review gate refuses (CI failing, no receipt at the
-head) stays where it is and the builder is told what clears it, once per head and kind (review_gate.notify).
+head) stays where it is, the builder is told what clears it, once per head and kind (review_gate.notify), and Tico
+retries it once that clears (backend/move_retry.py).
 
 Builder hand-offs (a verdict to act on, a failed check, a merge conflict, a merge to do) carry `refs.handoff`. Only
 the keeper's count: they always wake (wake_rules.always_wakes), are never held for a batch, and are the first of the
@@ -94,13 +96,9 @@ def _approved(row, kind):
     return None
 
 
-# A green new head at a Fixes step goes on to the next check: Review 1 Fixes to Review 2, as the factory runs one
-# round of each review (docs/software-factory.md); QA Fixes back to QA. None: the merge is next.
-AFTER_FIXES = {
-    "Review 1 Fixes": lambda row: _approved(row, "review 1"),
-    "Review 2 Fixes": lambda row: _approved(row, "review 2"),
-    "QA Fixes": lambda row: "In QA",
-}
+# A green new head at a Fixes step goes back to the check that asked for the fix: nothing moves on past a review
+# until that review approves the head the ticket is at now (docs/software-factory.md).
+AFTER_FIXES = {fixes: CHECK_STEP[kind] for kind, fixes in FIXES.items()}
 
 
 def _checks(c, row, kind):
@@ -124,7 +122,10 @@ def move(c, row, target, why):
         c.execute("RELEASE verdict_move")
         notice = getattr(exc, "review_gate", None)
         if notice:
+            from . import move_retry
             review_gate.notify(c, H.KEEPER, notice)
+            # The notice promises that Tico retries the move once what refused it clears.
+            move_retry.remember(c, H.KEEPER, notice)
         return False
     except Exception:  # noqa: BLE001 - a verdict or a merge is never lost to the move it causes
         c.execute("ROLLBACK TO verdict_move")
@@ -309,17 +310,17 @@ def merge_wake(c, row):
 
 
 def checks_done(c, row, head, outcome):
-    """Every check on `head` finished (github.pr_signal). Green on a new head at a Fixes step moves the ticket on to
-    its next check (AFTER_FIXES); green on the head its last check approved wakes the builder to merge."""
+    """Every check on `head` finished (github.pr_signal). Green on a new head at a Fixes step moves the ticket back
+    to that step's check (AFTER_FIXES); green on the head its last check approved wakes the builder to merge."""
     row = _ticket(c, H.task(c, row["id"]))
     if not row or outcome != "pass" or not at_head(c, row, head):
         return None
     step = step_of(c, row)
     if step in AFTER_FIXES:
-        kind = {"Review 1 Fixes": "review 1", "Review 2 Fixes": "review 2", "QA Fixes": "qa"}[step]
+        kind = next(k for k, fixes in FIXES.items() if fixes == step)
         judged = next((t.get("verdict_head") for t in reversed(_checks(c, row, kind)) if t.get("verdict")), None)
-        target = AFTER_FIXES[step](row)
-        if target and not (judged and str(head).lower().startswith(str(judged).lower())):
+        target = AFTER_FIXES[step]
+        if not (judged and str(head).lower().startswith(str(judged).lower())):
             if move(c, row, target, f"checks passed on the new head {str(head)[:12]} at {step}"):
                 return target
         return None

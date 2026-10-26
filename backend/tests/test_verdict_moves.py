@@ -1,4 +1,6 @@
 """The verdict moves the Dev ticket, as Tico, with no builder turn spent on routing (backend/verdict_moves.py)."""
+import json
+
 from backend import hubdb as H, rules, verdict_moves as V
 from backend.tests.test_github import PR, _suite, api, hook, post, pr_event  # noqa: F401
 
@@ -266,7 +268,7 @@ def test_review_1_only_makes_review_1_the_last_review(api):
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["merge"]
 
 
-def test_a_green_new_head_at_a_fixes_step_moves_on_to_the_next_check(api):
+def test_a_green_new_head_at_a_fixes_step_goes_back_to_the_review_that_asked_for_the_fix(api):
     task = ticket(api)
     review = check(api, task)
     verdict(api, review, "changes")
@@ -277,7 +279,7 @@ def test_a_green_new_head_at_a_fixes_step_moves_on_to_the_next_check(api):
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     receipt(api, task, NEW)
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "Review 2"
+    assert step(api, task) == "Review 1", "Review 2 waits until Review 1 approves the fixed head"
     assert step_events(api, task)[-1][0] == H.KEEPER
 
 
@@ -291,6 +293,9 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
         told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()
     assert len(told) == 1 and "receipt" in told[0][0]
+    with api.app.state.store.read() as c:
+        kept = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='move_retry'", (task["id"],)).fetchall()
+    assert [json.loads(r[0])["step"] for r in kept] == ["Review 1"], "Tico retries the refused move once it clears"
 
 
 def test_qa_fixes_green_new_head_goes_back_to_in_qa(api):

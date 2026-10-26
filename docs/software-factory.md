@@ -92,6 +92,12 @@ ticket stays at its step with a Waiting tag.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
   and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged.
+- **The verdict moves the ticket.** Tico moves it, as Tico, when the verdict is on the head the pull request is at now:
+  Review 1 approve to Review 2 (or, on a `review-1-only` ticket, as the last review), the last review's approve to In QA
+  on a `qa` ticket, QA pass to Pending Release once merged, changes to that review's Fixes step and fail to QA Fixes.
+  Once the last check approved the current head with CI green, the Builder is woken to merge; Tico never merges. A
+  fixed head that passes CI at a Fixes step goes back to the check that asked for the fix, never on past it. A move
+  the review gate refuses stays, and Tico retries it once what refused it clears.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
   for the same check on the same head is refused with the open one's id.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
