@@ -211,7 +211,7 @@ def fresh(service, store=None, force=False):
     with store.read() as c:
         for row in H._rows(c.execute("SELECT * FROM tasks WHERE blocked_since IS NOT NULL AND blocked_kind='gate'")):
             held.add(row['id'])
-            prs = review_gate.links(c, row)
+            prs = review_gate.review_links(c, row)
             if not prs or reconciliation(c, row) is not None or move_retry.remembered(c, row):
                 continue
             seen = move_retry.fingerprint(c, row)
