@@ -2340,6 +2340,10 @@ class Execution:
         config = app_delivery.job_config(config)
         if held:
             config = {**config, "primary_held": held.get("until") or H.now()}
+        # The thread's last run failed on a prompt too large to send: this one compacts its session before it runs, once
+        # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
+        if run_backoff.take_compact(c, row["bot"], conv["id"], aid):
+            config = {**config, "compact_first": True}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
@@ -2679,6 +2683,7 @@ class Execution:
         stamp_attempt(c, row["id"], row["runner_id"], "end", body.load_snapshot)
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         run_triggers.rotation(c, row["id"], body.rotated)
+        run_triggers.session(c, row["id"], body.session)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, summary=body.text[:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
@@ -3369,6 +3374,7 @@ class Execution:
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
+        run_triggers.session(c, aid, body.session)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, summary=split_runner_notices(body.text)[0][:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
@@ -3611,15 +3617,19 @@ class Execution:
     def account_failure(self, c, row, body, aid, conv, failure, counts):
         """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the
         count over; a failure within a minute of starting makes the bot wait, and holds it after five in a row; a
-        prompt too large to send starts the next run in a fresh session. A Stop, a usage limit, a busy model, a
+        prompt too large to send makes the next run compact its session first, and only a second one in a row starts a fresh
+        session. A Stop, a usage limit, a busy model, a
         yield and a Gateway outage (`counts` False) are none of that."""
+        too_long = body.outcome == "failed" and counts and failure == run_backoff.PROMPT_TOO_LONG
+        if not too_long:
+            run_backoff.compact_settle(c, aid, body.outcome == "completed")
         if body.outcome == "completed":
             run_backoff.reset(c, row["bot"])
             return
         if body.outcome != "failed" or not counts:
             return
-        if failure == run_backoff.PROMPT_TOO_LONG:
-            run_backoff.fresh_session(c, self.store.settings, row["bot"], conv["id"], aid)
+        if too_long:
+            run_backoff.too_long(c, self.store.settings, row, conv["id"], aid)
         run_backoff.failed(c, self.store.settings, row, body, aid)
 
     def retry(self, c, who, job_id, body):

@@ -369,8 +369,9 @@ The bot's operator or BotOps checks what happened before choosing to resume or d
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
 failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage limit and holds the login until the reset it names. An
-error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) starts the bot's next run in a
-fresh provider session, as Clear does, instead of resuming the session into the same error.
+error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
+thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
+([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
