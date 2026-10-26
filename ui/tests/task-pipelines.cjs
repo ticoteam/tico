@@ -41,6 +41,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     Object.assign(tasks[1], {labels: [tag.key], tags: [tag]});
     // Waiting is a tag on a task that stays in its step.
     tasks[0].status = 'waiting';
+    // A Dev ticket at a working step carries when it got there; past four hours its card says so in amber.
+    tasks[3].step_since = new Date(Date.now() - 5 * 3600e3).toISOString();
+    tasks[1].step_since = new Date(Date.now() - 30 * 60e3).toISOString();
     tasks.push({...tasks[2], id: 'closed-task', title: 'Dropped campaign', step_id: 'archive', step: types[1].steps[4], status: 'closed'});
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -106,6 +109,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
+    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-3"] [data-step-age].late').allTextContents(), ['5h in step']);
+    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-1"] [data-step-age]:not(.late)').allTextContents(), ['30m in step']);
+    assert.equal(await page.locator('#task-body [data-step-age]').count(), 2, 'only a ticket with a step clock shows one');
     // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
     // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
     const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));

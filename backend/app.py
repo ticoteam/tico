@@ -29,6 +29,7 @@ from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifec
 from . import outcome_stats
 from . import ceo_bot, invites, owner_link
 from . import login_holds
+from . import step_age
 from . import bot_stops, turn_budgets
 from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
@@ -1118,6 +1119,8 @@ def create_app(settings=None):
                                    + TR.CHILD_IDS + ") AND (" + visible_sql + ")", (row["id"],)).fetchone()
                 parts = {"total": counts[0] or 0, "done": counts[1] or 0}
             value["parts"] = parts
+            if since := step_age.since_map(c, [row]).get(row["id"]):
+                value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
         return value
 
     def task_views(rows, c, who, visible_sql="1"):
@@ -1206,6 +1209,7 @@ def create_app(settings=None):
         # decided one at a time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
+        step_since = step_age.since_map(c, rows)
         result = []
         for row in rows:
             value = task_view(row, pipelines=pipelines)
@@ -1224,6 +1228,8 @@ def create_app(settings=None):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
                 if quiet := quiet_work.view(c, row, history=False):
                     value["quiet"] = quiet
+            if row["id"] in step_since:
+                value["step_since"] = step_since[row["id"]]
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:

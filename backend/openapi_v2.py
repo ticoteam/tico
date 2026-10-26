@@ -664,6 +664,8 @@ SCHEMAS = {
                                       "height": {"type": ["integer", "null"]}}), {"type": "null"}]},
                 open_asks={"type": "integer", "description": "Questions on this task with no answer or dismissal"},
                 type_id={"type": ["string", "null"]}, step_id={"type": ["string", "null"]},
+                step_since={"type": "string", "description": "A Dev ticket at a working step (In Progress, a Fixes "
+                            "step): when it entered that step or came back to work; absent otherwise"},
                 relations={"type": "object", "description": "Related tasks the reader may open, by kind (parent, "
                            "blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; "
                            "direction is out when this task is the subtask, blocker, duplicate or follow-up, in for "

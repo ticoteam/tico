@@ -100,6 +100,13 @@ ticket stays at its step with a Waiting tag.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
   Rules page (`hub rule list --scope-kind type --scope-id <type>`).
+- **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
+  on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
+  work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,
+  even when the ticket stands as at its last checkpoint and the plain status check would be held, and unless it waits on
+  something recorded (a question, a snooze, a due date, a blocker, a subtask) or a run of it is going. After 4 hours at
+  the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute
+  it. Each happens once per stay at the step.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 
