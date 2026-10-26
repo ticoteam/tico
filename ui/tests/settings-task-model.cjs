@@ -4,7 +4,10 @@
 //  - the bots table shows a subtle Tasks mark beside each bot's model, marked when its tasks run on another model;
 //    it opens a row under that bot with the same three pickers; Apply sets the task model only, and clearing it to
 //    "Same as bot" sends null;
-//  - a cheaper pick on a high-stakes bot saves and shows the server's plain-words warning under the row.
+//  - a cheaper pick on a high-stakes bot saves and shows the server's plain-words warning under the row;
+//  - Task effort and Task context length beside it, "Same as bot" until set: each saves on its own and carries the
+//    other parts forward (a model "" record is the bot's own model, shown as Same as bot); only all three Same as bot
+//    sends null. The editor holds them until Save bot and sends one task-model save.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -41,9 +44,13 @@ const {unrouted} = require('./support/routes.cjs');
         calls.push({what, body});
         if (body.expected_revision !== helper.revision) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
         if (what === 'task-model') {
-          // As backend/settings_admin.py set_task_model answers: the stored choice, and a warning for a cheaper pick.
+          // As backend/settings_admin.py set_task_model answers: the stored record (task_models.stored: model '' with
+          // only an effort or context length, null when nothing is set), and a warning for a cheaper pick.
           const t = body.task_model;
-          helper.task_model = t ? {harness: t.harness, model: t.model, reasoning_effort: t.effort, runtime: t.harness} : null;
+          if (t && t.harness && !t.model) return json({error: {code: 'harness', detail: 'Choose a task model to pick a harness for it'}}, 422);
+          helper.task_model = !t || !(t.model || t.effort || t.compact_at) ? null
+            : t.model ? {harness: t.harness, model: t.model, reasoning_effort: t.effort || 'high', runtime: t.harness, compact_at: t.compact_at || null}
+            : {harness: '', model: '', reasoning_effort: t.effort || '', runtime: '', compact_at: t.compact_at || null};
           // The bot view carries the same warning, judged against the bot's model now.
           helper.task_model_warning = t?.model === 'claude-haiku-5-5' && helper.model === 'claude-sonnet-5-5' ? WARNING : '';
           return json({bot: 'helper', task_model: helper.task_model, revision: ++helper.revision, readiness: null,
@@ -73,6 +80,11 @@ const {unrouted} = require('./support/routes.cjs');
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
+    const capture = async (name, target) => {
+      if (!process.env.TICO_UI_RECEIPT_DIR) return;
+      fs.mkdirSync(process.env.TICO_UI_RECEIPT_DIR, {recursive: true});
+      await target.screenshot({path: require('node:path').join(process.env.TICO_UI_RECEIPT_DIR, name + '.png'), animations: 'disabled'});
+    };
     const loaded = revision => page.waitForFunction(r => S.emps.find(e => e.name === 'helper')?.revision === r, revision);
     await page.goto('https://tico-ui.test/#/settings/devices');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'helper') && SETTINGS_DATA.models?.length);
@@ -97,7 +109,7 @@ const {unrouted} = require('./support/routes.cjs');
     await editor.locator('button[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition'], 'the task model, then the definition; never the bot model');
-    assert.deepEqual(calls[0].body, {task_model: {harness: 'codex', model: 'gpt-6-luna', effort: 'high'}, expected_revision: 4});
+    assert.deepEqual(calls[0].body, {task_model: {harness: 'codex', model: 'gpt-6-luna', effort: 'high', compact_at: null}, expected_revision: 4});
     assert.equal(calls[1].body.expected_revision, 5, 'the definition follows the revision the task model made');
     await openEditor();
     assert.equal(await task.locator('[data-choice-model]').inputValue(), 'gpt-6-luna', 'reopening shows the task model');
@@ -121,28 +133,109 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await row.evaluate(tr => tr.previousElementSibling?.dataset.settingsBot), 'helper', 'the row opens under its bot');
     const pickers = row.locator('[data-bot-choice][data-kind=task]');
     assert.equal(await pickers.locator('[data-choice-model]').inputValue(), 'gpt-6-luna');
-    // Clearing it returns to the same as the bot.
+    assert.equal(await pickers.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort picker');
+    const effortPick = row.locator('[data-task-effort]'), contextPick = row.locator('[data-task-context]');
+    assert.equal(await effortPick.inputValue(), 'high');
+    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
+    // Same as bot for the model keeps the task effort: tasks still differ, so the mark stays on.
     calls = [];
     await pickers.locator('[data-choice-harness]').selectOption('');
     await pickers.locator('[data-choice-apply]').click();
     await loaded(7);
-    assert.deepEqual(calls, [{what: 'task-model', body: {task_model: null, expected_revision: 6}}]);
-    await page.waitForFunction(() => !document.querySelector('[data-task-open=helper]')?.classList.contains('on'));
+    assert.deepEqual(calls, [{what: 'task-model', body: {task_model: {model: null, effort: 'high', compact_at: null}, expected_revision: 6}}]);
     assert.equal(await row.count(), 1, 'the row stays open after Apply');
+    assert.equal(await pickers.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot', 'model "" shows Same as bot');
+    assert.equal(await effortPick.inputValue(), 'high');
+    assert.equal(await mark.evaluate(b => b.classList.contains('on')), true);
+    // Only all three Same as bot clears it.
+    calls = [];
+    await effortPick.selectOption('');
+    await loaded(8);
+    assert.deepEqual(calls, [{what: 'task-model', body: {task_model: null, expected_revision: 7}}]);
+    await page.waitForFunction(() => !document.querySelector('[data-task-open=helper]')?.classList.contains('on'));
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset.taskEffort), 'helper', 'the keyboard stays on Task effort');
 
     // 4/4. A cheaper pick on a high-stakes bot saves, and the row shows the warning in plain words.
     calls = [];
     await pickers.locator('[data-choice-harness]').selectOption('claude');
     await pickers.locator('[data-choice-model]').selectOption('claude-haiku-5-5');
     await pickers.locator('[data-choice-apply]').click();
-    await loaded(8);
+    await loaded(9);
     assert.equal(calls[0].body.task_model.model, 'claude-haiku-5-5');
     await row.locator('[data-task-warning]').waitFor();
     assert.equal(await row.locator('[data-task-warning]').innerText(), WARNING);
     assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'it saved');
-    // The editor shows the same warning under its Task model row.
+    // Context only, then effort only: each carries the other parts. The mark names the context length.
+    const savePart = async (select, value) => {
+      const before = helper.revision; calls = [];
+      await select.selectOption(value);
+      await loaded(before + 1);
+      assert.equal(calls.length, 1, 'one save per change');
+      return calls[0].body.task_model;
+    };
+    assert.deepEqual(await savePart(contextPick, '600000'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 600000});
+    assert.equal(await mark.innerText(), 'Tasks · 600k');
+    await capture('desktop-task-row', page.locator('#settings-bots-list'));
+    assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['low', 'high'], "the task model's efforts; no Same as bot while it runs them");
+    assert.deepEqual(await savePart(effortPick, 'low'), {harness: 'claude', model: 'claude-haiku-5-5', effort: 'low', compact_at: 600000});
+    // Same as bot for the model keeps the effort and context length; then each clears on its own.
+    calls = []; let was = helper.revision;
+    await pickers.locator('[data-choice-harness]').selectOption('');
+    await pickers.locator('[data-choice-apply]').click();
+    await loaded(was + 1);
+    assert.deepEqual(calls.map(c => c.body.task_model), [{model: null, effort: 'low', compact_at: 600000}]);
+    assert.equal(await pickers.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot');
+    assert.deepEqual(await effortPick.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high'], "the bot's own model's efforts");
+    assert.equal(await mark.innerText(), 'Tasks · 600k');
+    assert.match(await mark.getAttribute('title'), /^Tasks run on the bot's model · low · 600k$/);
+    assert.deepEqual(await savePart(effortPick, ''), {model: null, effort: null, compact_at: 600000});
+    assert.equal(await mark.evaluate(b => b.classList.contains('on')), true, 'context only still differs');
+    assert.equal(await savePart(contextPick, ''), null, 'all three Same as bot');
+    assert.equal(await mark.innerText(), 'Tasks');
+    assert.equal(await mark.evaluate(b => b.classList.contains('on')), false);
+
+    // The editor: Task effort and Task context length are held until Save bot, then go in one save with the model.
+    helper.task_model = {harness: 'claude', model: 'claude-haiku-5-5', reasoning_effort: 'high', runtime: 'claude', compact_at: null};
+    helper.task_model_warning = WARNING; helper.revision++;
+    await page.evaluate(() => loadSettings());
     await openEditor();
-    assert.equal(await editor.locator('[data-task-warning]').innerText(), WARNING);
+    assert.equal(await editor.locator('[data-task-warning]').innerText(), WARNING, 'the editor shows the warning under Task model');
+    const editorEffort = editor.locator('[data-task-effort]'), editorContext = editor.locator('[data-task-context]');
+    await editorContext.selectOption('1000000');
+    await page.waitForTimeout(50);
+    assert.deepEqual(calls, [], 'held until Save bot');
+    assert.match(await editor.locator('[data-bot-pending]').innerText(), /task context length/);
+    let before = helper.revision;
+    await editor.locator('button[type=submit]').click();
+    await loaded(before + 2);
+    assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition']);
+    assert.deepEqual(calls[0].body.task_model, {harness: 'claude', model: 'claude-haiku-5-5', effort: 'high', compact_at: 1000000}, 'context saved, model and effort kept');
+    // A new task model: Task effort lists its efforts and keeps the one held; one save carries all three.
+    await openEditor();
+    assert.equal(await editorContext.inputValue(), '1000000');
+    await editorEffort.selectOption('low');
+    await task.locator('[data-choice-harness]').selectOption('codex');
+    await task.locator('[data-choice-model]').selectOption('gpt-6-luna');
+    assert.equal(await editorEffort.inputValue(), 'low');
+    before = helper.revision;
+    await editor.locator('button[type=submit]').click();
+    await loaded(before + 2);
+    assert.deepEqual(calls.map(c => c.what), ['task-model', 'definition'], 'one task-model save');
+    assert.deepEqual(calls[0].body.task_model, {harness: 'codex', model: 'gpt-6-luna', effort: 'low', compact_at: 1000000});
+    // Same as bot for the model in the editor keeps the effort and context; it reopens as Same as bot.
+    await openEditor();
+    await task.locator('[data-choice-harness]').selectOption('');
+    assert.deepEqual(await editorEffort.locator('option').allInnerTexts(), ['Same as bot', 'low', 'high']);
+    before = helper.revision;
+    await editor.locator('button[type=submit]').click();
+    await loaded(before + 2);
+    assert.deepEqual(calls[0].body.task_model, {model: null, effort: 'low', compact_at: 1000000});
+    await openEditor();
+    assert.equal(await task.locator('[data-choice-harness] option:checked').innerText(), 'Same as bot', 'model "" shows Same as bot');
+    assert.equal(await editorEffort.inputValue(), 'low');
+    assert.equal(await editorContext.inputValue(), '1000000');
+    await editor.locator('[data-bot-choice][data-kind=task]').evaluate(n => n.scrollIntoView({block: 'center'}));
+    await capture('desktop-task-editor', page);
     await page.evaluate(() => settingsEditBot('helper', true));
 
     // Close folds the row away and gives the keyboard back to the mark.
@@ -157,6 +250,9 @@ const {unrouted} = require('./support/routes.cjs');
     await row.waitFor();
     const width = await row.evaluate(tr => tr.getBoundingClientRect().width);
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
+    const parts = await row.locator('.sb-task-part').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return [r.left, r.right]; }));
+    assert.ok(parts.length === 2 && parts.every(([l, r]) => l >= 0 && r <= 390), `Task effort and Task context length fit the phone: ${JSON.stringify(parts)}`);
+    await capture('phone-task-row', row);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
 
     // Active-work caps save with Save bot at both widths, including off and the unlimited default.

@@ -147,8 +147,11 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
 .sb-task-under{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sb-task-head{flex:1 0 100%;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
-.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 520px;min-width:0}
-.sb-task-under .settings-model-choice{flex:1 1 420px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 420px;min-width:0}
+.sb-task-under .settings-model-choice{flex:1 1 320px;grid-template-columns:repeat(2,minmax(0,1fr))}
+/* Task effort and Task context length: labelled and drawn like the task model's own pickers beside them. */
+.sb-task-part{display:flex;flex-direction:column;gap:3px;flex:0 1 150px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
+.sb-task-part select{width:100%;min-width:0;max-width:100%;padding:7px 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
 .sb-task-under .settings-choice-blocks{grid-column:1/-1}
 .sb-task-under .settings-choice>[data-choice-apply]{margin-top:0}
 .sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
@@ -157,6 +160,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
   .settings-bots-table tr.sb-task-row td{display:block}
   .sb-task-under .settings-choice,.sb-task-under .settings-model-choice{flex:1 0 100%}
   .sb-task-under .settings-model-choice{grid-template-columns:minmax(0,1fr)}
+  .sb-task-part{flex:1 1 calc(50% - 6px)}
   .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:32px}
 }
 .settings-bots-table .settings-pick{padding-right:0}.settings-pick input{margin:0;cursor:pointer}.settings-pick input:disabled{cursor:not-allowed}

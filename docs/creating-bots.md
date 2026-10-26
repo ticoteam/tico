@@ -619,9 +619,10 @@ Levers set in **Settings → Bots**, not in the repository:
   **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
-- **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
-  editor and press **Save bot**, or click **Tasks** beside the model in the bots list.
-  Chat keeps the bot's own model. A task effort and a task context length work without a task model, and chat keeps the bot's own.
+- **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context
+  length for task sessions, each **Same as bot** until set. Set them in the editor and press **Save bot**, or click
+  **Tasks** beside the model in the bots list. A task effort and a task context length work without a task model.
+  Chat keeps the bot's own.
   See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
