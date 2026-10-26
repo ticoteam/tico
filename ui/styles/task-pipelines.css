@@ -6,9 +6,12 @@
 .task-step-edit { display:flex; gap:6px; align-items:center; }
 .task-step-edit input { width:100%; min-width:0; flex:1; }
 .task-step-edit select { max-width:120px; }
+.task-step-edit input[aria-label="Check pool"] { flex:1.4; }
+.task-step-edit input[type=number] { flex:0 0 64px; width:64px; }
 .task-type-editor .row { margin-top:20px; }
 @media(max-width:600px) {
   .task-step-edit { flex-wrap:wrap; }
   .task-step-edit input { flex-basis:100%; }
+  .task-step-edit input[type=number] { flex:0 0 64px; }
   .task-step-edit select { flex:1; max-width:none; }
 }

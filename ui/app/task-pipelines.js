@@ -188,7 +188,7 @@ async function renderTaskTypes() {
     if (!host.isConnected) return;
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
-      <div>${type.steps.map(step => `<span class="tlabel">${esc(step.name)}</span>`).join(' ')}</div>
+      <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
@@ -217,6 +217,8 @@ function taskTypeEditor(type = null) {
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
       <input ${dialog.querySelector('[name=defaultVisibility]').value === 'public' ? '' : 'hidden'} aria-label="Public step name" value="${esc(step?.public_name ?? step?.name ?? '')}" placeholder="Public step">
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
+      <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
+      <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
       <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
       <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
     row.querySelector('[data-up]').onclick = () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); };
@@ -238,7 +240,9 @@ function taskTypeEditor(type = null) {
   dialog.querySelector('form').onsubmit = event => {
     event.preventDefault();
     const steps = [...rows.children].map((row, position) => ({...(row.dataset.stepId ? {id: row.dataset.stepId} : {}),
-      name: row.querySelector('input').value, public_name: row.querySelector('[aria-label="Public step name"]').value || row.querySelector('input').value, status: row.querySelector('select').value, position}));
+      name: row.querySelector('input').value, public_name: row.querySelector('[aria-label="Public step name"]').value || row.querySelector('input').value, status: row.querySelector('select').value, position,
+      check_pool: row.querySelector('[aria-label="Check pool"]').value.split(',').map(slug => slug.trim()).filter(Boolean),
+      check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector('[aria-label="Open checks each"]').value, 10) || 2))}));
     void saved({name: dialog.querySelector('[name=typeName]').value, steps, bots: dialog.querySelector('[name=typeBots]').value, default_visibility: dialog.querySelector('[name=defaultVisibility]').value});
   };
   const remove = dialog.querySelector('[data-delete-type]');

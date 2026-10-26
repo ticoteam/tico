@@ -94,6 +94,9 @@ ticket stays at its step with a Waiting tag.
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
   for the same check on the same head is refused with the open one's id.
+- **Tico files the check.** Each check step has a pool of bots, set on the step in Settings → Tasks. Entering the step
+  files its check to the least busy eligible bot in the pool, from another model company than the Builder, or leaves it
+  "Waiting for a reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
   Rules page (`hub rule list --scope-kind type --scope-id <type>`).

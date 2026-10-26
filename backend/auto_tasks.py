@@ -26,7 +26,7 @@ def review(c, row):
     if not parent or parent['owner'] == row['owner']:
         return False
     step = c.execute('SELECT name FROM task_steps WHERE id=?', (parent.get('step_id'),)).fetchone()
-    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA'))
+    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
 
 
 def waiting(c, row, starting=False):

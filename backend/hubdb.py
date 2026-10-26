@@ -3025,13 +3025,20 @@ def type_get(conn, value):
     if row:
         row["numbered"] = bool(row.get("numbered"))
         row["steps_only"] = bool(row.get("steps_only"))
-        row["steps"] = _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id", (row["id"],)))
+        row["steps"] = _step_views(conn, _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id",
+                                                            (row["id"],))))
     return row
+
+
+def _step_views(conn, steps):
+    """Steps as callers read them: a check step's pool as a list and its limit (backend/check_pools.py)."""
+    from . import check_pools
+    return [check_pools.view(step) for step in steps] if steps and "check_pool" in steps[0] else steps
 
 
 def type_list(conn):
     rows = _rows(conn.execute("SELECT * FROM task_types ORDER BY id<>?,name", (GENERAL_TYPE,)))
-    steps = _rows(conn.execute("SELECT * FROM task_steps ORDER BY position,id"))
+    steps = _step_views(conn, _rows(conn.execute("SELECT * FROM task_steps ORDER BY position,id")))
     for row in rows:
         row["numbered"] = bool(row.get("numbered"))
         row["steps_only"] = bool(row.get("steps_only"))
@@ -3291,7 +3298,9 @@ def _type_name(conn, actor, name, type_id=None):
 
 
 def _type_steps(conn, actor, type_id, steps):
+    from . import check_pools
     existing = {row["id"]: row for row in (type_get(conn, type_id) or {}).get("steps", [])}
+    pools = check_pools._ready(conn)
     clean, names, ids = [], set(), set()
     for position, raw in enumerate(steps):
         name = str(raw.get("name") or "").strip()
@@ -3307,7 +3316,8 @@ def _type_steps(conn, actor, type_id, steps):
             refuse(conn, actor, "kind", f"A step can't be {status}: a waiting task keeps its step, and a declined one "
                                         f"goes to the closed step. A step status is {'|'.join(STEP_STATUSES)}")
         names.add(name); ids.add(ident)
-        clean.append({"id": ident, "type_id": type_id, "name": name,
+        pool, limit = check_pools.clean(conn, actor, raw, existing.get(ident)) if pools else (None, None)
+        clean.append({"id": ident, "type_id": type_id, "name": name, "check_pool": pool, "check_limit": limit,
                       "position": raw.get("position") if raw.get("position") is not None else position,
                       "status": status, "public_name": str(raw.get("public_name") if raw.get("public_name") is not None else
                           existing.get(ident, {}).get("public_name", name))})
@@ -3334,6 +3344,8 @@ def _type_steps(conn, actor, type_id, steps):
         conn.execute("INSERT INTO task_steps(id,type_id,name,position,status,public_name) "
                      "VALUES(:id,:type_id,:name,:position,:status,:public_name) ON CONFLICT(id) DO UPDATE SET "
                      "name=excluded.name,position=excluded.position,status=excluded.status,public_name=excluded.public_name", row)
+        if pools:
+            conn.execute("UPDATE task_steps SET check_pool=:check_pool,check_limit=:check_limit WHERE id=:id", row)
 
 
 def type_create(conn, actor, name, steps=(), mover=None, bots=None, numbered=False, steps_only=False, default_visibility='private'):
@@ -3376,6 +3388,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
         conn.execute("UPDATE task_types SET steps_only=? WHERE id=?", (int(bool(steps_only)), row["id"]))
     if steps is not None:
         _type_steps(conn, actor, row["id"], steps)
+        from . import check_pools
+        check_pools.safely(conn, check_pools.drain)     # a pool that grew may take a check that waits
     if bots is not None:
         conn.execute("UPDATE task_types SET bots=? WHERE id=?", (_type_bots(conn, actor, bots), row["id"]))
     conn.execute("UPDATE task_types SET updated=? WHERE id=?", (now(), row["id"]))
@@ -3549,6 +3563,10 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
         from . import rules as wake_rule_engine
         wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
+    if row.get("status") in ACTIVE_STATUSES and effective not in ACTIVE_STATUSES:
+        # A checker that finished a check takes the oldest one waiting in its pools (backend/check_pools.py).
+        from . import check_pools
+        check_pools.safely(conn, check_pools.freed, row)
     return effective
 
 
@@ -5841,6 +5859,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               and (row["status"] != "waiting" or row.get("waiting_on") != after["waiting_on"])):
             task_report(conn, after, "blocked", f"Waiting on {actor_id(after['waiting_on'])}"
                         + (f": {after['note']}" if after.get("note") else ""))
+    if after.get("step_id") != row.get("step_id") and not closing_step:
+        # A check step with a pool files its check for the current head, as Tico (backend/check_pools.py).
+        from . import check_pools
+        check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
     recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor, told=subtask_told)

@@ -1112,6 +1112,8 @@ def create_app(settings=None):
             value["links"] = H.task_links(c, row["id"])
             from .worktree_waits import for_task as worktree_waits_for
             value["worktree_waits"] = worktree_waits_for(c, row["id"])
+            from .check_pools import for_task as check_waits_for
+            value["check_waits"] = check_waits_for(c, row["id"])     # a check waiting for a free reviewer
             # What it waits for besides tasks: a pull request to merge, a release to be published (Dev 256).
             value["milestone_waits"] = milestone_waits.waits(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)

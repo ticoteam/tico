@@ -806,6 +806,9 @@ class Store:
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.seed_dev(c)
+            from . import check_pools as _check_pools
+            _check_pools.ensure(c)
+            _check_pools.seed(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs

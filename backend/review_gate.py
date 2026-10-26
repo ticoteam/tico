@@ -7,7 +7,7 @@ from . import test_receipts
 
 REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
 # A request to a reviewer, to QA or to Security: a subtask of the ticket, titled by what it asks.
-GATE_CHILD = re.compile(r"^(?:Review [12]|QA|Security)(?:\b|:)", re.I)
+GATE_CHILD = re.compile(r"^(?:Review [12]|QA|Post Release QA|Security)(?:\b|:)", re.I)
 
 
 # The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not one: QA
@@ -29,8 +29,9 @@ def reviewing(c, actor, row):
     return None
 
 
-# One open request per kind of check on a ticket: Review 1, Review 2 or QA (a Security check can be asked again).
-ONE_OPEN = re.compile(r"^(Review [12]|QA)(?:\b|:)", re.I)
+# One open request per kind of check on a ticket: Review 1, Review 2, QA or Post Release QA (a Security check can be
+# asked again).
+ONE_OPEN = re.compile(r"^(Review [12]|QA|Post Release QA)(?:\b|:)", re.I)
 
 
 def heads(c, parent, snapshots=None):
@@ -57,6 +58,15 @@ def refuse_second(c, actor, parent, title, snapshots=None):
         return
     kind = " ".join(kind[1].lower().split())
     wanted = heads(c, parent, snapshots)
+    from . import check_pools
+    for wait in check_pools.waiting(c, parent["id"], kind):
+        judged = set(filter(None, wait["heads"].split(",")))
+        if wanted and judged and not wanted & judged:
+            continue
+        H.refuse(c, actor, "duplicate",
+                 f"{wait['title']} already exists on this ticket{' for this head' if wanted else ''}: Tico filed it to "
+                 f"the step's pool, where it waits for a reviewer ({wait['reason']}). The first free one takes it; "
+                 "you need not file another.")
     for child_id in TR.child_ids(c, parent["id"]):
         other = H.task(c, child_id)
         other_kind = ONE_OPEN.match(str(other.get("title") or "").strip())

@@ -256,6 +256,10 @@ class TaskStepInput(Contract):
     name: ID
     position: int | None = None
     status: Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]
+    # The bots that may do this step's check, and how many open checks each may hold (backend/check_pools.py).
+    # Left out, a step keeps what it had; an empty list makes it no check step.
+    check_pool: list[ID] | None = Field(default=None, max_length=40)
+    check_limit: int | None = Field(default=None, ge=1, le=20)
 
 
 # What every bot may do with a type's tasks beyond its own (hubdb.TYPE_BOTS): parties keeps them to

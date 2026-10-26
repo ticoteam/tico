@@ -645,7 +645,8 @@ SCHEMAS = {
                                         "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
                          "created": "s", "last_message_at": "s", "closed_at": "n"}),
-    "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s"}, required=["id", "type_id", "name", "position", "status"]),
+    "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",
+                     "check_pool": "a", "check_limit": "i"}, required=["id", "type_id", "name", "position", "status"]),
     "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created": "s", "updated": "s", "steps": items(ref("TaskStep"))},
                     bots={"type": ["string", "null"], "enum": ["read", "work", None],
                           "description": "What every bot may do with the type's tasks beyond its own: read "

@@ -69,6 +69,9 @@ def claim(c):
     # A Dev tickets type gets its hand-off wake rules once (rules.seed_dev); they are rows a person can edit.
     from .rules import seed_dev
     seed_dev(c)
+    # ...and its check steps their pools of reviewers and QA (backend/check_pools.py), once.
+    from .check_pools import seed as seed_pools
+    seed_pools(c)
 
 
 def ensure(c):

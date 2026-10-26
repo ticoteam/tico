@@ -44,7 +44,7 @@ TOKEN_SAVER_SECONDS = 30 * 60           # a window this long or longer is what o
 DIGEST_HOUR = 9                         # a lead's digest, in the team's time zone
 MATERIALISED = "profile"                # `created_by` of the rows a custom profile copied into the rules table
 # A review, QA or Security request is a subtask titled so, filed under the ticket it checks (backend/review_gate.py).
-REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Security)\b", re.I)
+REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Post Release QA|Security)\b", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 

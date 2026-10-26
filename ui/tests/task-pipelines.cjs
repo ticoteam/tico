@@ -295,6 +295,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       ['open', 'doing', 'review', 'ready', 'done', 'closed'], 'no step can be waiting or declined');
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Campaigns');
     await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[data-up]').click();
+    // A step's check pool and each checker's limit of open checks (backend/check_pools.py).
+    const firstStep = page.locator('.task-type-editor [data-steps] .task-step-edit').first();
+    await firstStep.locator('[aria-label="Check pool"]').fill('rev-a, rev-b,');
+    await firstStep.locator('[aria-label="Open checks each"]').fill('3');
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
     await page.locator('.task-type-editor [name=typeBots]').selectOption('work');
     await page.locator('.task-type-editor button[type=submit]').click();
@@ -302,6 +306,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const edit = posted.find(item => item.path === '/api/v2/task-types/marketing');
     assert.equal(edit.body.steps[0].id, 'legal', 'editing keeps ids and order');
     assert.equal(edit.body.bots, 'work', 'the editor saves what bots may do with the type');
+    assert.deepEqual([edit.body.steps[0].check_pool, edit.body.steps[0].check_limit], [['rev-a', 'rev-b'], 3], 'a step saves its check pool and limit');
+    assert.deepEqual([edit.body.steps[1].check_pool, edit.body.steps[1].check_limit], [[], 2], 'a step without one saves none');
     await page.locator('#set-types [data-new-type]').click();
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Design');
     await page.locator('.task-type-editor button[type=submit]').click();
