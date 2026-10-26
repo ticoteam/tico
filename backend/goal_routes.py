@@ -467,7 +467,7 @@ def install(app, store, auth, mutate, settings):
             open_counts = {r[0]: r[1] for r in c.execute(
                 "SELECT goal_id, count(*) FROM tasks WHERE goal_id IS NOT NULL AND status IN "
                 f"('open','doing','waiting') AND {readable} GROUP BY goal_id")}
-            by_goal = K.goal_views(c, [r["id"] for r in rows])
+            by_goal = K.goal_views(c, [r["id"] for r in rows], include_archived=True)
             said = {}
             for row in c.execute("SELECT * FROM goal_checkins k WHERE ts=(SELECT max(ts) FROM goal_checkins "
                                  "WHERE goal_id=k.goal_id)"):
@@ -871,6 +871,8 @@ def install(app, store, auth, mutate, settings):
             if K.auto(kid) or not may_edit_kpi(c, who, record):
                 raise Problem("forbidden", "The KPI's owner or someone above them archives or restores it", 403)
             updated = K.set_archived(c, who.actor, kid, archived)
+            for link in K.links_of(c, kpi_id=kid):
+                G.apply_auto(c, link["goal_id"])
             return kpi_detail(c, who, updated)
         return mutate(request, body, work)
 

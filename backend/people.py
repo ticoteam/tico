@@ -359,7 +359,11 @@ def org_parent(kind, ident, roster, employees, archived=()):
     if not slug or slug in archived:
         return ""
     reports = _clean(((employees or {}).get(slug) or {}).get("reports_to"))
+    skipped = set()
     while reports and reports in archived:
+        if reports in skipped:
+            return ""
+        skipped.add(reports)
         reports = _clean(((employees or {}).get(reports) or {}).get("reports_to"))
     if reports and not reports.startswith("human:") and reports not in archived and reports not in (employees or {}):
         # A boss that is not a bot here at all (an assistant the company chose not to have):

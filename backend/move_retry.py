@@ -3,7 +3,7 @@
 The review gate (backend/review_gate.py) refuses a move to Review 1 or Review 2 while CI fails or cannot be read, or
 while no passing receipt names the current head. Each of those clears on its own: the checks finish, a receipt is
 posted, GitHub comes back. So the refusal is remembered on the ticket (task_events field `move_retry`, with the step it
-was going to and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
+was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
 fingerprint changes: a PR link's head or checks, the ticket's note, a new message on the ticket, or another wait
 beside a Blocked hold ending. An unreadable GitHub is retried on a timer instead, and if it is still unreadable it goes
 to DevOps (backend/blockers.py). Nobody has to ask for the retry, and Head of Engineering hears nothing about it.
@@ -32,7 +32,7 @@ CLEARS = {"ci": "the checks on the current head pass",
 
 
 # What the gate's GitHub read reports about why it failed (backend/review_gate.py), kept with the remembered move.
-CAUSE = ("problem_code", "temporary", "devops", "upstream_status")
+CAUSE = ("problem_code", "temporary", "devops", "local", "upstream_status")
 
 
 def outage(text):
@@ -47,8 +47,9 @@ def route_now(notice):
 
 def route_twice(notice):
     """Any other failure that is not temporary (timeout, 5xx, 429), including one GitHub gave no cause for, goes to
-    DevOps when it is still unreadable OUTAGE_EVERY later. A temporary one never does: the timer retries it."""
-    return not notice.get("temporary") and not route_now(notice)
+    DevOps when it is still unreadable OUTAGE_EVERY later. A temporary one never does: the timer retries it. Nor
+    does a local one (an unresolved PR link, no recorded head): relinking the PR clears it, not DevOps."""
+    return not notice.get("temporary") and not notice.get("local") and not route_now(notice)
 
 
 def _route(c, notice, row, twice=False):
@@ -93,18 +94,23 @@ def remember(c, actor, notice):
     step = notice.get("step")
     if not row or not step or row["status"] in ("done", "closed", "declined"):
         return
-    detail = {"step": step, "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
+    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
               "outage": outage(notice.get("text")), "seen": fingerprint(c, row), "at": H.now(),
               "since": notice.get("since") or H.now(),
               "tries": int(notice.get("tries") or 0), "state": "waiting",
               **{key: notice[key] for key in CAUSE if key in notice}}
     if notice.get("problem_code"):
         detail["outage"] = True
+    # Access help is asked once per remembered move, on the first refusal that needs it: a temporary failure first
+    # and a permission one on a later retry still asks, and every later retry reuses that ask.
+    ask = detail["outage"] and route_now(notice) and not notice.get("asked")
+    if ask or notice.get("asked"):
+        detail["asked"] = True
     H._task_event(c, row["id"], H.KEEPER, FIELD, row.get("step_id"), json.dumps(detail, sort_keys=True),
                   "Tico retries this move when " + CLEARS["outage" if detail["outage"] else detail["kind"]]
                   if detail["kind"] in CLEARS else "")
-    if detail["outage"] and route_now(notice) and not detail["tries"]:
-        _route(c, notice, row)          # once per refused move; Tico's own retries reuse that ask
+    if ask:
+        _route(c, notice, row)
 
 
 def _latest(c, task_id):
@@ -144,6 +150,9 @@ def pending(c, at=None):
         if not found:
             continue
         last, detail = found
+        failed = H.parse_ts(detail.get("failed_at"))
+        if failed and at - failed < OUTAGE_EVERY:
+            continue                # a retry that raised waits, whatever refused the move
         if detail.get("outage"):
             if at - H.parse_ts(detail.get("at") or last["ts"]) < OUTAGE_EVERY:
                 continue
@@ -167,15 +176,16 @@ def retry(store, service, row, detail):
         try:
             # The install owner's receipts count as they do on a person's move (backend/app.py).
             settings = getattr(service, "settings", None)
-            H.task_update(c, H.KEEPER, row["id"], step=detail["step"], review_prs=snapshots,
+            H.task_update(c, H.KEEPER, row["id"], type=detail.get("type"), step=detail["step"], review_prs=snapshots,
                           review_reader=detail.get("by") or H.KEEPER,
                           receipt_owner=Access.load_owner(c, settings)["email"] if settings else None)
         except H.Refused as exc:
             c.execute("ROLLBACK TO move_retry")
             c.execute("RELEASE move_retry")
             notice = {**(getattr(exc, "review_gate", None) or {}), "task": row["id"], "step": detail["step"],
+                      "type": detail.get("type"),
                       "tries": int(detail.get("tries") or 0) + 1, "by": detail.get("by"),
-                      "since": detail.get("since") or detail.get("at")}
+                      "since": detail.get("since") or detail.get("at"), "asked": detail.get("asked")}
             notice.setdefault("kind", detail.get("kind"))
             notice.setdefault("text", exc.detail)
             if getattr(exc, "review_gate", None):
@@ -226,4 +236,22 @@ def tick(service, store=None, at=None, force=False):
         except Exception:
             # One ticket's failure must not hold back the others; it is due again on the next pass.
             log.exception("move retry failed for %s", row["id"])
+            _delay_after_failure(store, row, at)
     return moved
+
+
+def _delay_after_failure(store, row, at=None):
+    """A retry that raised instead of being refused remembered nothing, so its row would stay due on every pass for
+    up to RETRY_FOR (an outage by time, any other by its unchanged fingerprint), holding a PER_PASS slot. Wait
+    OUTAGE_EVERY before trying it again."""
+    at = at or datetime.now(timezone.utc)
+    try:
+        with store.transaction() as c:
+            found = remembered(c, H.task(c, row["id"]))
+            if not found:
+                return
+            last, _detail = found
+            c.execute("UPDATE task_events SET new=json_set(new,'$.failed_at',?) WHERE rowid=?",
+                      (at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z", last["rowid"]))
+    except Exception:
+        log.exception("move retry delay failed for %s", row["id"])

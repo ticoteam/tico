@@ -64,7 +64,7 @@ function providersFormHTML(view, models, id, editable = true) {
     <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
       value="${esc((view.check_models || []).join(', '))}"
       placeholder="${esc((view.check_order || []).map(row => row.runtime).join(', ') || 'grok, codex')}"${dis}>
-      <span class="muted">Review and check subtasks run on the first of these from a provider other than the author's, then on the other providers above.</span></label>` : ''}</div>`;
+      <span class="muted">Review and check subtasks prefer the first of these from a provider other than the author's, then the other providers above. With none that can run, they use the author's own rather than wait.</span></label>` : ''}</div>`;
 }
 function providersFillModels(root, view, models, keep) {
   const gateway = providersGatewayIds(view).filter(id => (view.enabled || []).includes(id));

@@ -3,6 +3,8 @@
 Waiting remains the wire status. Engineering types give it a real Blocked column;
 the previous step is retained so clearing a hold never skips a review gate.
 """
+import threading
+import time
 from datetime import datetime
 
 
@@ -122,7 +124,9 @@ def hold(c, task_id, reason, kind='dependency'):
         return
     if row.get('blocked_since'):
         # Retain the first hold time and resume step when another gate also holds it.
-        if kind == 'gate' and row.get('blocked_kind') != 'manual':
+        if (kind == 'gate' and row.get('blocked_kind') != 'manual'
+                or kind == 'check' and row.get('blocked_kind') in ('dependency', 'stranded', 'check')
+                and (row.get('blocked_kind'), row.get('blocked_reason')) != (kind, reason)):
             c.execute('UPDATE tasks SET blocked_kind=?,blocked_reason=?,updated=? WHERE id=?', (kind, reason, H.now(), task_id))
             bump(c, row)
         return
@@ -131,8 +135,10 @@ def hold(c, task_id, reason, kind='dependency'):
     bump(c, row)
 
 
-def reconciliation(c, row):
-    """Read the needed action before taking the writer, then recheck under it."""
+def reconciliation(c, row, snapshots=None):
+    """Read the needed action before taking the writer, then recheck under it. `snapshots` is a fresh GitHub read of
+    the linked PRs (review_gate.snapshot): only from one do all-green hosted checks at the current head clear a gate
+    hold without a receipt (fresh())."""
     from . import hubdb as H, review_gate
     if (not row or not row.get('blocked_since') or row.get('blocked_kind') in ('manual', 'stranded')
             or not review_gate.engineering(c, row)):
@@ -150,11 +156,16 @@ def reconciliation(c, row):
         for pr in review_gate.links(c, row):
             if gate.get('pr') != pr['url']:
                 continue
-            detail = H._json(pr.get('detail_json'), {}) or {}
+            if snapshots is not None:
+                detail = snapshots.get(pr['id']) or {}
+                seen = detail.get('at') or ''
+            else:
+                detail = H._json(pr.get('detail_json'), {}) or {}
+                seen = pr.get('updated') or ''
             if ((gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head'))
-                    and (pr.get('updated') or '') <= gate.get('at', '')):
+                    and seen <= gate.get('at', '')):
                 return None
-        if review_gate.problem(c, row, row['owner'], require_pr=True):
+        if review_gate.problem(c, row, row['owner'], snapshots=snapshots, require_pr=True):
             return None
         if waiting:
             return 'dependency'
@@ -163,10 +174,10 @@ def reconciliation(c, row):
     return 'resume'
 
 
-def reconcile(c, task_id):
+def reconcile(c, task_id, snapshots=None):
     from . import hubdb as H
     row = H.task(c, task_id)
-    action = reconciliation(c, row)
+    action = reconciliation(c, row, snapshots)
     if action == 'dependency':
         c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason='Waiting on a dependency',updated=? WHERE id=?", (H.now(), task_id))
         bump(c, row)
@@ -177,6 +188,62 @@ def reconcile(c, task_id):
     H._set_status(c, H.KEEPER, row, row.get('blocked_from_status') or 'open',
                   step=previous['id'] if previous else None, note='Hold cleared')
     bump(c, row)
+
+
+FRESH_EVERY_S = 60                  # how often fresh() looks
+FRESH_PER_PASS = 20
+_fresh_lock = threading.Lock()
+_fresh = {"at": 0.0, "seen": {}, "tried": {}}
+
+
+def fresh(service, store=None, force=False):
+    """Gate holds the cached read keeps, read once afresh from GitHub per change in what the gate reads: the webhook
+    cache counts skipped checks as passing, so all-green hosted checks at the current head clear a hold only from a
+    fresh read (review_gate.problem). A hold with a move Tico still retries is left to that retry, which reads GitHub
+    itself (backend/move_retry.py). The holds tried longest ago go first, so reads that keep failing on some
+    holds never keep the rest from their turn. Returns the ids of tasks whose hold cleared."""
+    from . import hubdb as H, move_retry, review_gate
+    store = store or service.store
+    with _fresh_lock:
+        if not force and time.monotonic() < _fresh["at"]:
+            return []
+        _fresh["at"] = time.monotonic() + FRESH_EVERY_S
+    due, held = [], set()
+    with store.read() as c:
+        for row in H._rows(c.execute("SELECT * FROM tasks WHERE blocked_since IS NOT NULL AND blocked_kind='gate'")):
+            held.add(row['id'])
+            prs = review_gate.links(c, row)
+            if not prs or reconciliation(c, row) is not None or move_retry.remembered(c, row):
+                continue
+            seen = move_retry.fingerprint(c, row)
+            if _fresh["seen"].get(row['id']) != seen:
+                due.append((row, prs, seen))
+    # Forget holds that ended, so the record stays as small as the holds that are live.
+    for record in (_fresh["seen"], _fresh["tried"]):
+        for task_id in set(record) - held:
+            record.pop(task_id, None)
+    due.sort(key=lambda item: _fresh["tried"].get(item[0]['id'], 0.0))
+    cleared = []
+    for row, prs, seen in due[:FRESH_PER_PASS]:
+        _fresh["tried"][row['id']] = time.monotonic()
+        snapshots = review_gate.snapshot(service, prs)
+        if not snapshots:
+            _fresh["seen"][row['id']] = seen
+            continue                    # no GitHub App configured: the cached read is all there is
+        with store.transaction() as c:
+            now_row = H.task(c, row['id'])
+            # Anything the gate reads that changed while GitHub was read (an edit, or a webhook's newer check result
+            # at the same head, which leaves the task version alone) supersedes this read; the next pass reads again.
+            if (not now_row or now_row.get('version') != row.get('version')
+                    or move_retry.fingerprint(c, now_row) != seen):
+                continue
+            # A failed read is tried again next pass; a complete one waits for the next change in what the gate reads.
+            if not any(s.get('error') for s in snapshots.values()):
+                _fresh["seen"][row['id']] = seen
+            reconcile(c, row['id'], snapshots)
+            if not H.task(c, row['id']).get('blocked_since'):
+                cleared.append(row['id'])
+    return cleared
 
 
 def alert_target(c, row, at):
@@ -222,7 +289,11 @@ def sweep(c, at, task_ids=None):
     for row in H._rows(c.execute("SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
                                 "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready')" + scope, args)):
         if detail := wait(c, row):
-            hold(c, row['id'], 'Waiting on ' + detail['why'])
+            if detail.get('check'):
+                from . import check_blocked
+                check_blocked.apply(c, row['id'])
+            else:
+                hold(c, row['id'], 'Waiting on ' + detail['why'])
     for row in H._rows(c.execute('SELECT t.* FROM tasks t WHERE blocked_since IS NOT NULL' + scope, args)):
         reconcile(c, row['id'])
         row = H.task(c, row['id'])

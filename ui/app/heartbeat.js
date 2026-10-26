@@ -140,22 +140,30 @@ function bindRunnerRestart(root) {
     };
   });
 }
+// A choice saved while the bot was busy keeps the run listed (backend execution.stopped_rows `decided`): its line says
+// what Tico will do and offers no second choice, which the server would refuse. Once some of a run's folded requests
+// have a choice, only that choice is offered, for the rest.
+const stoppedChosen = run => run.decided || run.jobs?.find(job => job.decided)?.decided;
+// Whether a settled line's choice still waits for the bot's turn: a choice the server already held (no `deferred` of
+// this page's own click) was saved while the bot was busy.
+const stoppedWaits = run => !run.jobs || run.jobs.some(job => job.deferred !== false);
 // A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
 // not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule (Chris, Oct 26).
 // Details opens that card (settings.js executionReview) with the evidence.
 function stoppedLines(issue, list) {
   if (!issue.runs?.length) return '';
-  const button = (i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}">${label}</button>`;
+  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
   // When every run stopped the same routine way the card's own line already says it is not a bug.
   const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
-  const line = (run, i) => `<li class="stopped-line" data-run-row="${i}">
+  const line = (run, i) => `<li class="stopped-line" data-run-row="${i}"${run.decided ? ` data-decided="${esc(run.decided)}"` : ''}>
     <span class="stopped-name" title="${esc(run.title || '')}">${esc(run.title || 'A request you can’t open')}</span>
     <span class="stopped-why">${esc(run.why)}${run.routine && !shared ? ' · not a bug' : ''}</span>
-    ${issue.can_review ? `<div class="stopped-picks">${run.retry ? button(i, 'resume', 'Try again', true) + button(i, 'dismiss', 'Don’t retry')
-      : button(i, 'dismiss', 'Don’t retry', true) + button(i, 'resume', 'Try again')}</div>` : ''}
-    <p class="stopped-result" data-result role="status" aria-live="polite"></p></li>`;
+    ${issue.can_review ? `<div class="stopped-picks">${run.retry ? button(run, i, 'resume', 'Try again', true) + button(run, i, 'dismiss', 'Don’t retry')
+      : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
+    <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
   list.push(issue);
-  const risky = issue.can_review && issue.runs.some(run => !run.retry);
+  // Only while a risky line still offers Try again: not once it is decided or its saved requests chose Don't retry.
+  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided && stoppedChosen(run) !== 'dismiss');
   return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
     ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
     ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;
@@ -170,14 +178,19 @@ function bindStoppedLines(panel, list) {
         buttons.forEach(b => b.disabled = true);
         result.classList.remove('err'); result.textContent = 'Saving choice…';
         try {
-          // A message folded into the run rides on it: one choice settles them all.
-          let deferred = false;
-          for (const job of run.jobs) deferred = (await reconcileStopped(job, decision)).deferred || deferred;
-          li.dataset.decided = decision;
-          result.textContent = stoppedOutcome(decision, deferred);
+          // A message folded into the run rides on it: one choice settles them all. A request already settled, by an
+          // earlier click that stopped partway or a choice saved while the bot was busy, is not sent again.
+          for (const job of run.jobs.filter(job => !job.decided)) {
+            const done = await reconcileStopped(job, decision);
+            job.decided = decision; job.deferred = !!done.deferred;
+          }
+          // Kept on the run itself, so Needs you closed and reopened before a refresh still shows the outcome.
+          run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
+          li.dataset.decided = run.decided;
+          result.textContent = stoppedOutcome(run.decided, stoppedWaits(run));
         } catch (e) {
           result.classList.add('err'); result.textContent = e.message;
-          buttons.forEach(b => b.disabled = false);
+          buttons.forEach(b => b.disabled = !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run));
           return;
         }
         if (!ul.querySelector('[data-run-row]:not([data-decided])')) void refresh(false);

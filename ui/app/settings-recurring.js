@@ -137,6 +137,7 @@ async function systemRoutineWrite(key, send, status) {
   try {
     const out = await send();
     systemRoutineReplace(out.job);
+    taskSettingsChanged();
     note = out.running ? 'Running…' : '';
     if (!out.running) toast('Saved');
     again = !!out.running;
@@ -235,7 +236,7 @@ function taskRuleEditor(job) {
     try {
       const out = job ? await put('/v2/task-rules/' + encodeURIComponent(job.key), body) : await post('/v2/task-rules', body);
       if (job) systemRoutineReplace(out.job); else SYSTEM_ROUTINES.jobs.push(out.job);
-      dialog.close(); systemRoutinesPaint();
+      dialog.close(); systemRoutinesPaint(); toast('Saved'); taskSettingsChanged();
     } catch (e) { dialog.querySelector('[data-task-rule-error]').textContent = e.message || 'Could not save the rule'; }
     finally { button.disabled = false; }
   };

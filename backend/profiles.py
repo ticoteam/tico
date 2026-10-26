@@ -206,6 +206,20 @@ def is_review_task(c, row, *, parent_id=None):
                 or auto_tasks.review(c, row, parent_id=parent_id))
 
 
+def is_check(c, row):
+    """A check that finishes only with a verdict: titled Review 1/2, QA or Security under a ticket another owner
+    holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
+    and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
+    child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
+    owner = str(row.get("owner") or "")
+    if H.is_bot(owner) and H.check_model(c, row["id"], owner[len("bot:"):]):
+        return True
+    if H.is_human(owner):
+        return False
+    parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
+    return bool(parent and parent["owner"] != owner and REVIEW_TITLE.match(str(row.get("title") or "").strip()))
+
+
 def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):
     """(rule, why): the refusal rule and the words saying what to do instead, when the bot's profile means it takes no
     such task; None when it does. A Responder is refused like a synced bot (`external-bot`).
