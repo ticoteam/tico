@@ -20,8 +20,10 @@ const {unrouted} = require('./support/routes.cjs');
     const bot = (name, own, task) => ({name, display_name: name[0].toUpperCase() + name.slice(1), role: 'planner', team: 'research', description: 'Drafts forecasts',
       status: 'active', operator: 'ana', can_manage: true, users: [], bot_owners: [], revision: 4, ...choice(own), task_model: task ? choice(task) : null,
       machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}});
+    // `inherit` runs its tasks on its own model with a task context length (a model "" record): search reads it as no task model.
     const bots = [bot('alpha', opus, sonnet), bot('beta', sonnet, opus), bot('gamma', opus, opus), bot('delta', sonnet, null),
-      bot('inherit', opus, null), {...bot('default', '', null), resolved_model: opus, resolved_runtime: 'claude'}];
+      {...bot('inherit', opus, null), task_model: {harness: '', model: '', reasoning_effort: '', runtime: '', compact_at: 600000}},
+      {...bot('default', '', null), resolved_model: opus, resolved_runtime: 'claude'}];
     // The real UI must keep read-only results visible without selecting them.
     bots.push({...bot('readable', sonnet, opus), can_manage: false, operator: 'other'});
     let calls = [], inflight = 0, maxInflight = 0, conflict = '', fail = '';
@@ -42,7 +44,7 @@ const {unrouted} = require('./support/routes.cjs');
           if (body.expected_revision !== e.revision) return json({error: {code: 'version_conflict', detail: 'Wrong revision'}}, 409);
           if (`${slug}/${what}` === fail) { fail = ''; return json({error: {code: 'test_failure', detail: 'Synthetic task save failure'}}, 422); }
           if (what === 'transitions') { Object.assign(e, choice(body.model), {reasoning_effort: body.effort}); e.revision++; return json({state: 'applied'}); }
-          e.task_model = {...choice(body.task_model.model), reasoning_effort: body.task_model.effort}; e.revision++;
+          e.task_model = {...choice(body.task_model.model), reasoning_effort: body.task_model.effort, compact_at: body.task_model.compact_at ?? null}; e.revision++;
           return json({revision: e.revision, task_model: e.task_model, readiness: {can_run: false, problem: 'Provider is signed out'}, warning: 'This bot sends messages. Check task results carefully.'});
         } finally { inflight--; }
       }
@@ -75,6 +77,9 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await reason('alpha'), 'Bot model: Opus 5.5');
     assert.equal(await reason('beta'), 'Task model: Opus 5.5');
     for (const slug of ['gamma', 'inherit', 'default']) assert.equal(await reason(slug), 'Bot model: Opus 5.5 · Task model: Opus 5.5');
+    const mark = slug => page.locator(`[data-settings-bot=${slug}] [data-task-open]`);
+    assert.equal(await mark('inherit').innerText(), 'Tasks · 600k', 'model "" with a context length: tasks differ, no task model');
+    assert.equal(await mark('inherit').evaluate(b => b.classList.contains('on')), true);
     await page.evaluate(() => loadSettings());
     assert.equal(await search.inputValue(), 'OPUS');
     assert.equal(await search.evaluate(e => e === document.activeElement), true, 'refresh preserves typing focus');
@@ -119,7 +124,10 @@ const {unrouted} = require('./support/routes.cjs');
     await capture('desktop-task-dialog');
     await apply();
     assert.deepEqual(calls.map(c => c.slug).sort(), selected, 'one task-model write per matching, manageable bot');
-    assert.ok(calls.every(c => c.what === 'task-model' && c.body.task_model.model === haiku && c.body.expected_revision === 4));
+    assert.ok(calls.every(c => c.what === 'task-model' && c.body.task_model.model === haiku && c.body.task_model.effort === 'high' && c.body.expected_revision === 4));
+    assert.deepEqual(Object.fromEntries(calls.map(c => [c.slug, c.body.task_model.compact_at])),
+      {alpha: null, beta: null, default: null, gamma: null, inherit: 600000}, "each bot keeps its own task context length");
+    assert.equal(bots.find(b => b.name === 'inherit').task_model.compact_at, 600000);
     assert.deepEqual(bots.map(b => [b.name, b.model, b.harness, b.reasoning_effort]), ownBefore, 'task-only never changes bot configuration');
     assert.equal(bots.find(b => b.name === 'delta').task_model, null, 'nonmatching row unchanged');
     assert.equal(bots.find(b => b.name === 'readable').task_model.model, opus, 'read-only row unchanged');

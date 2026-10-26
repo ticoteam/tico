@@ -1,7 +1,7 @@
 // A bot's stopped runs are reviewed from a control a person can reach (Dev 280). One that holds queued work is
 // needs-person (backend/views.py uncertain_work): Settings > System checks lists it with "Review stopped runs" and
-// Needs you opens with "Review now". One that holds nothing stays a note under Health and is still reviewed from
-// there. In v0.3.63 every stopped run was not urgent, so the button rendered nowhere. Every request is intercepted.
+// Needs you opens with one line per run, its own Try again / Don't retry, and Details. One that holds nothing stays a
+// note under Health and is still reviewed from there. In v0.3.63 every stopped run was not urgent, so the button rendered nowhere. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,9 +16,17 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    const holding = {kind: 'uncertain_work', title: 'Builder has 1 stopped run holding up work', bot: 'builder',
-      detail: '"Billing 3/5" (owner Builder) stopped partway. 3 queued requests wait on "Dev 268" until you decide. Choose Try again or Don\'t retry.',
-      severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268']};
+    // Oct 26 (Chris): six stopped runs read as one paragraph of quoted titles beside a button as tall as the card.
+    // Now one line per run, each with its own two buttons; a message folded into a run rides on its row.
+    const stoppedRun = (title, retry, jobs) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
+      routine: true, retry,
+      at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, attempt_id: `a-${jobs[0]}`}))});
+    const holding = {kind: 'uncertain_work', title: 'Builder has 2 stopped runs holding up work', bot: 'builder',
+      detail: 'Its computer interrupted these runs at 05:39 UTC, usually for a restart or update, not a bug. ' +
+        '3 queued requests wait until you decide.',
+      severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268'], can_review: true,
+      runs: [stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
+        stoppedRun('Billing 3/5', true, ['r2'])], more_runs: 1};
     const later = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer',
       detail: 'The bot stopped before returning an answer. Other work can continue. Review it whenever useful.',
       severity: 'warning', needs_person: false, action: 'review'};
@@ -76,10 +84,55 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // Needs you opens by itself for the run holding work, with its review button; the note is not in it.
     const panel = page.locator('.needs-you');
     await panel.waitFor({timeout: t(5000)});
-    assert.match(await panel.innerText(), /Builder has 1 stopped run holding up work/);
-    assert.match(await panel.innerText(), /3 queued requests wait on "Dev 268"/);
-    assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Review now');
+    assert.match(await panel.innerText(), /Builder has 2 stopped runs holding up work/);
+    assert.match(await panel.innerText(), /not a bug\. 3 queued requests wait until you decide\./);
+    assert.doesNotMatch(await panel.innerText(), /"Dev 268"/);
+    const lines = panel.locator('.stopped-line');
+    assert.equal(await lines.count(), 2);
+    assert.equal(await lines.nth(0).locator('.stopped-name').innerText(), 'Review move demands a typed test receipt even when GitHub is green');
+    // The card's own line says it is not a bug, so the row does not repeat it.
+    assert.equal(await lines.nth(0).locator('.stopped-why').innerText(), 'Interrupted on its computer');
+    // The safe pick leads, by the review card's rule: a run that may have acted puts Don't retry first.
+    assert.deepEqual(await lines.nth(0).locator('button').allInnerTexts(), ['Don’t retry', 'Try again']);
+    assert.deepEqual(await lines.nth(1).locator('button').allInnerTexts(), ['Try again', 'Don’t retry']);
+    assert.match(await panel.innerText(), /And 1 more in Details\./);
+    assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Details');
     assert.equal(await panel.locator('[data-execution-review="writer"]').count(), 0);
+    // On a phone: each run is two short lines, every button as tall as its words, the header beside Close and still
+    // there once the list scrolls under it.
+    await page.setViewportSize({width: 390, height: 460});
+    const fit = await panel.evaluate(el => {
+      const box = node => node.getBoundingClientRect();
+      el.scrollTop = el.scrollHeight;
+      const header = box(el.querySelector('header')), title = box(el.querySelector('header h2')), close = box(el.querySelector('[data-close]'));
+      return {panel: box(el), header, title, close, scrolled: el.scrollTop > 0,
+        buttons: [...el.querySelectorAll('.settings-issue button, .settings-issue a')].map(node => box(node).height),
+        lines: [...el.querySelectorAll('.stopped-line')].map(node => box(node).height)};
+    });
+    assert.ok(fit.scrolled, `the fixture is taller than the phone panel: ${JSON.stringify(fit.panel)}`);
+    assert.ok(Math.abs(fit.header.top - fit.panel.top) <= 1.5, 'the header stays at the top while the list scrolls');
+    assert.ok(fit.title.right <= fit.close.left && fit.close.right <= fit.panel.right, 'the title is not under Close');
+    assert.ok(fit.panel.top >= 0 && fit.panel.bottom <= 460 - 64, 'the panel sits between the top edge and the bottom tabs');
+    assert.ok(fit.buttons.every(h => h < 44), `buttons sized to their words: ${fit.buttons}`);
+    assert.ok(fit.lines.every(h => h < 80), `one short entry per run: ${fit.lines}`);
+    await shot('needs-you-stopped-phone');
+    await page.setViewportSize({width: 1280, height: 800});
+    // Try again on a row settles every request folded into its run; a refusal stays on the row and can be retried.
+    refusal = true;
+    await lines.nth(0).locator('[data-run-decision=resume]').click();
+    await lines.nth(0).locator('[data-result]', {hasText: 'This run changed.'}).waitFor();
+    assert.equal(await lines.nth(0).locator('button:enabled').count(), 2);
+    refusal = false;
+    decisions.length = 0;
+    await lines.nth(0).locator('[data-run-decision=resume]').click();
+    await lines.nth(0).locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
+    assert.deepEqual(decisions.map(d => [d.id, d.attempt_id, d.decision, d.acknowledge_uncertain_effects]),
+      [['r1', 'a-r1', 'resume', true], ['r1b', 'a-r1', 'resume', true]]);
+    assert.equal(await lines.nth(0).locator('button:enabled').count(), 0);
+    await lines.nth(1).locator('[data-run-decision=dismiss]').click();
+    await lines.nth(1).locator('[data-result]', {hasText: 'Dismissed.'}).waitFor();
+    assert.deepEqual(decisions.at(-1).id, 'r2');
+    decisions.length = 0;
     await panel.locator('[data-close]').click();
 
     // Settings > System checks lists it with "Review stopped runs".

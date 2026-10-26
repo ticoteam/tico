@@ -243,6 +243,9 @@ def create_app(settings=None):
                 reconcile_worktree_prs(app.state.github_app)
                 # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
                 milestone_waits.recover(app.state.github_app)
+                # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
+                from . import move_retry
+                move_retry.tick(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
@@ -2179,8 +2182,8 @@ def create_app(settings=None):
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
                         "compact_at": compact_at_of(declared),
-                        # What its tasks run on; null is the same as the bot (backend/task_models.py).
-                        "task_model": task_models.of(declared),
+                        # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
+                        "task_model": task_models.stored(declared),
                         "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
@@ -5000,13 +5003,15 @@ def create_app(settings=None):
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
+        # `run_session`: a run's result may say whether it resumed its session or started a new one, and why (an older
+        # one refuses the field). The claim's config may carry `compact_first` for a runner that sends it.
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True, "run_rotation": True,
+                                                          "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
                                                           "attempt_thread": True, "runner_drain": True}}
 

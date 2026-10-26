@@ -157,12 +157,13 @@ async function answered(browser, viewport) {
     for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(sent.shift(), ['s-1', {decision: 'accept', version: 4}], 'Accept names the version the row showed');
 
-    // A suggestion reaches the page's list but the card is not drawn again yet: Accept all sends what is on screen.
+    // A suggestion reaches the page's list but is not drawn before the click: Accept all sends what is on screen.
+    // Keep the push and click in one page turn so a live refresh cannot redraw it between those two actions.
     await page.evaluate(() => {
       const it = S.v2.needs.find(x => x.kind === 'stale');
       it.rows.push({id: 's-4', task: 't-4', title: 'Unseen', status: 'open', reason: 'x', suggest: 'Mark done', action: 'done', version: 1});
+      document.querySelector('[data-stale-all]').click();
     });
-    await shown.locator('[data-stale-all]').click();
     for (let i = 0; i < 50 && !sent.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(sent.shift(), ['accept-all', {rows: [{id: 's-1', version: 4}, {id: 's-3', version: 9}]}],
       'Accept all sends the rows shown that have an action, never one added since');

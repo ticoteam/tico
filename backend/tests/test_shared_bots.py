@@ -37,6 +37,19 @@ def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api)
     branch(api, computer, expected=403)
 
 
+def test_a_saved_config_with_the_removed_rotation_settings_still_loads_and_is_not_followed(api):
+    share(api)
+    computer = runner(api, 'cara')
+    branch(api, computer)
+    with api.app.state.store.transaction() as c:
+        declared = shared_bots.declared(c, 'cpo')
+        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(
+            {**declared, 'model': 'team-model', 'rotate_at': 150000, 'rotate_after_turns': 3}), 'cpo'))
+    assert get(api, 'bots/cpo')
+    config = get(api, 'runners/assignments', computer['token'])[0]['config']
+    assert config['model'] == 'team-model' and 'rotate_at' not in config and 'rotate_after_turns' not in config
+
+
 def test_follows_model_session_fallback_and_refuses_definition_edits(api):
     share(api)
     computer = runner(api, 'cara')

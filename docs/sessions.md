@@ -41,10 +41,14 @@ Set `subtask_session: own` to give every subtask its own session instead.
 Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task. If a task's session can't be
 resumed (a new computer, a cleared thread), the next turn starts a fresh session from that checkpoint.
 
-A session that has grown large also starts fresh, to save tokens: once a bot's last completed turn on it read 400,000
-input tokens or more (the bot's `rotate_at`; `rotate_after_turns` caps its turns, off by default), the next turn gets
-a new session with the task's checkpoint and what was said since that turn, the bot's own replies included, instead of
-re-reading the old transcript. `/compact` keeps its session. The run records it in `turns.rotated` ([hub sql](hub-sql.md)).
+A bot's session and each task's session persist between wakes. Auto-compaction (the bot's **Compact at** size) is
+the only limit on how large one grows, and `/compact` keeps its session. Tico starts a new session only when the old
+one cannot be found or truly cannot continue, and then says why: the run records `turns.session_kind` and
+`turns.session_why` ([hub sql](hub-sql.md)), and the task's history gets a line such as "Started a new session: the old
+one wasn't on this computer". When a prompt is too large to send, the thread's next run compacts its session first;
+only if that run fails the same way does Tico start a new session. Health names a bot that lost its session more than
+twice in a day. Older runners also started a new session when a session passed a size (`rotate_at`,
+`rotate_after_turns`); those settings are gone and a saved config that still carries them is ignored.
 
 **Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
 said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts

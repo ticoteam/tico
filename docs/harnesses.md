@@ -211,18 +211,25 @@ its provider, grant credentials or guarantee model access on a computer.
 
 ### Run a bot's tasks on another model
 
-Use **Task model** to choose a harness, model and effort for a bot's task sessions. Chat keeps the bot's own model.
+Use **Task model**, **Task effort** and **Task context length** for a bot's task sessions. Each starts as
+**Same as bot** and is set on its own: a task effort or context length works without a task model. Chat keeps the
+bot's own model, effort and **Compact at**.
 
 1. Open **Settings > Bots** and click **Tasks** beside the bot's model.
-2. Choose the harness, model and effort in the row that opens.
-3. Click **Apply**.
+2. In the row that opens, choose the harness and model and click **Apply**, or change **Task effort** or
+   **Task context length** (each saves when changed).
 
-The **Tasks** mark gets an accent dot when a task model is set. For example, you can keep a bot on Sonnet 5.5
-and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot editor, then click
-**Save bot**. To clear the choice, pick **Same as bot** and apply it. Changing the bot's own model leaves its task model set.
+**Task effort** lists the efforts of the model that runs tasks: the task model, or the bot's own. **Task context
+length** offers the **Compact at** sizes. The **Tasks** mark gets an accent dot when any of them is set, and names
+a task context length (**Tasks · 600k**). For example, you can keep a bot on Sonnet 5.5 and choose Haiku 5.5 for its
+tasks. You can also set them in the bot editor, then click **Save bot**. Changing one keeps the others: picking
+**Same as bot** for the model keeps the task effort and context length, and tasks are back to the bot's own settings
+only when all three are **Same as bot**. Changing the bot's own model leaves its task settings set; a bulk **Change
+model** for task models keeps each bot's task context length.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
-to the bot's own model and effort; the task history records why. A review or check subtask keeps its check model.
+to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
+A review or check subtask keeps its check model.
 
 #### A warning about a cheaper task model
 
