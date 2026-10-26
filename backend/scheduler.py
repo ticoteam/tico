@@ -603,6 +603,15 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import run_diagnostics
                     run_diagnostics.sweep(c, stamp(at))
+                # Holds include person and approval waits that deliberately
+                # never enter the stall candidate list. Reconcile them independently,
+                # with one short transaction per task so runner writes can progress.
+                from . import task_blocked
+                with self.store.read_transaction() as c:
+                    blocked_ids = task_blocked.candidates(c, stamp(at))
+                for task_id in blocked_ids:
+                    with locked('blocked_check:' + task_id) as c:
+                        task_blocked.sweep(c, stamp(at), task_ids=[task_id])
                 # Discover candidates in a WAL snapshot, then recheck one task under each
                 # short lock. Unrelated runner writes can progress between tasks.
                 with self.store.read_transaction() as c:

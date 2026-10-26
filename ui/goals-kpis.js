@@ -145,7 +145,7 @@ function kpiTargetKinds(form) {
 // the yes button sends: a one-button card that changes nothing ("Got it" on a strategy change the draft holds) rejects.
 function propDoHtml(p, {yes, no = 'No, leave it', line = '', decide = 'confirm'}) {
   if (!p.may_decide) return '';
-  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
+  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
 }
 // What a suggestion would change, as Now and Proposed: rows [{label, now, proposed}], a label only when there are
 // several. Long text is cut to four lines, with one "Show all" opening both.
@@ -166,7 +166,7 @@ function goalPropHtml(p, extra) {
   const pl = p.payload || {}, c = p.card || {}, by = goalActorName(p.proposed_by);
   const goal = `<b>${esc(c.goal_title || extra || 'this goal')}</b>`, kpiName = `<b>${esc(c.kpi_name || extra || 'this measure')}</b>`;
   const why = `<span class="muted kpi-prop-why">${p.reason ? esc(p.reason) + ' · ' : ''}${esc(by)}</span>`;
-  let head, body = '', yes = 'Use this', no = 'No, leave it', more = '';
+  let head, body = '', yes = 'Use this', no = 'No, leave it', more = '', line = '';
   if (p.kind === 'goal_kpi') {
     const m = c.measure || pl.kpi || {}, proposed = c.target_label || '';
     head = `Add the measure <b>${esc(m.name || 'with no name')}</b> to ${goal}`;
@@ -176,9 +176,11 @@ function goalPropHtml(p, extra) {
       ${m.hidden || String(m.source_note || '').trim() ? '' : '<span class="kpi-prop-warn">No data source yet: it will show no numbers until one is set</span>'}`;
     // The target fields of the goal editor, folded away: the card stays short, and blank leaves the measure with none.
     const t = pl.target && pl.target.kind && pl.target.kind !== 'none' ? pl.target : {kind: m.direction === 'range' ? 'maintain' : 'improve'};
-    if (p.may_decide) more = `<details class="kpi-prop-set"${proposed ? ' data-proposed' : ''}><summary>${proposed ? 'Change the target' : 'Set a target (optional)'}</summary>
+    if (p.may_decide && !m.hidden) more = `<details class="kpi-prop-set"${proposed ? ' data-proposed' : ''}><summary>${proposed ? 'Change the target' : 'Set a target (optional)'}</summary>
       <form class="goal-form kpi-prop-tf" data-prop-target novalidate>${kpiTargetFields(t)}</form></details>`;
-    yes = 'Add measure';
+    // Nobody adds a measure they may not read (the server refuses it, as it refuses linking one by hand).
+    yes = m.hidden ? null : 'Add measure';
+    if (m.hidden) line = 'You may not read this measure, so someone who may read it adds it';
   } else if (p.kind === 'kpi_target') {
     head = `New target for ${kpiName} on ${goal}`;
     body = propNowProposedHtml([{now: c.now_label || 'No target', proposed: c.target_label || 'No target'}]);
@@ -189,7 +191,7 @@ function goalPropHtml(p, extra) {
     yes = 'Use new definition';
   } else if (p.kind === 'goal_wording') {
     head = `New wording for ${goal}`;
-    body = propNowProposedHtml(c.changes || [{label: 'Title', now: '', proposed: pl.title}, {label: 'Description', now: '', proposed: pl.body}].filter(r => r.proposed));
+    body = propNowProposedHtml(c.changes || [{label: 'Title', now: '', proposed: pl.title}, {label: 'Description', now: '', proposed: pl.body}].filter(r => r.proposed != null));
     yes = 'Use new wording';
   } else if (p.kind === 'flag') {
     head = `<b>${esc(by)} noticed:</b> ${goal} ${esc(PROP_FLAG[pl.issue] || pl.issue || 'needs a look')}${pl.note ? `: ${esc(pl.note)}` : ''}`;
@@ -204,7 +206,7 @@ function goalPropHtml(p, extra) {
   } else head = `<b>${esc(p.kind)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}`;
   return `<li class="kpi-prop" data-proposal="${esc(p.id)}" data-prop-kind="${esc(p.kind)}"><div class="kpi-prop-main"><span class="kpi-prop-head">${head}</span>${body}
     ${p.kind === 'flag' ? (p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : '') : why}${more}</div>
-    ${propDoHtml(p, {yes, no})}</li>`;
+    ${propDoHtml(p, {yes, no, line})}</li>`;
 }
 // ---------------------------------------------------------------- strategy proposals
 // The strategy's live bets, for the names a proposal leaves out (a retire is just {id, status}).

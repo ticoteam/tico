@@ -556,6 +556,9 @@ def add_blocker(conn, actor, task_id, blocker_id, mover=None, note=""):
     from .roadmap_flow import sync
     from .ticket_notices import blocked
     sync(conn, task_id)               # a roadmap item now waits on this Dev ticket too
+    from .task_blocked import hold
+    if H.task(conn, blocker_id)["status"] in H.ACTIVE_STATUSES:
+        hold(conn, task_id, "Waiting on a dependency")
     blocked(conn, actor, row, blocker_id)
     _tell_requester(conn, actor, H.task(conn, task_id), H.task(conn, blocker_id))
     return True
@@ -572,6 +575,8 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
         H.refuse(conn, actor, "not-found", f"{blocker_id} does not block {task_id}")
     _history(conn, actor, blocker_id, task_id, "blocks", False, note if keeper_note is None else keeper_note)
     H.event(conn, actor, "task.unrelate", task_id, {"task": blocker_id, "kind": "blocked_by"})
+    from .task_blocked import reconcile
+    reconcile(conn, task_id)
     from .roadmap_flow import sync
     sync(conn, task_id)
     return True

@@ -1085,6 +1085,12 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
+        for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
+            value.pop(field, None)
+        # Most list rows have no hold or accumulated clock; omit empty optional fields.
+        for field in ("blocked_since", "blocked_reason", "building_started_at", "building_seconds"):
+            if not value.get(field):
+                value.pop(field, None)
         if pipelines is None:
             if c is None:
                 with store.read() as pipeline_conn:
@@ -3570,11 +3576,15 @@ def create_app(settings=None):
             typ = H.type_get(c, task_type if task_type is not None else row.get("type_id") or H.GENERAL_TYPE)
             if not typ:
                 return {}  # Mutation reports an invalid destination without trusting cached PR evidence.
+            previous_type = row.get("type_id")
             row = {**row, "type_id": typ["id"]}
             if child_title is None:
                 # Match _task_state's destination resolution, including a type-only
                 # move whose retained status selects a review step on the new board.
                 effective = status if status is not None else row.get("status") or "open"
+                if (task_type is not None and typ['id'] != previous_type and row.get('blocked_kind') == 'gate'
+                        and status is None and step is None):
+                    effective = row.get('blocked_from_status') or effective
                 current = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None)
                 if step is not None:
                     named = next((s for s in typ["steps"] if s["id"] == step), None)
@@ -4365,9 +4375,11 @@ def create_app(settings=None):
         def acting_as(principal, cited="", run="live"):
             # Keep the actual bot's credential so writes revalidate its lease under the lock,
             # and private reads intersect the requester with the bot doing the work.
+            # Never confirmed: only the person's own tap on a Confirm card is (auth.py, x-tico-assistant-action), so
+            # every route's "always a click" rule (`risky`) asks them.
             if H.is_human(principal.actor):
                 H.DELEGATION.set({"for": principal.actor, "cited": cited, "run": run})
-            return replace(principal, via="botops", confirmed=True, task_actor=who.actor,
+            return replace(principal, via="botops", confirmed=False, task_actor=who.actor,
                            runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
         message_id = ref
         explicit = bool(ref) and ref not in ("turn", "default")
@@ -4748,8 +4760,42 @@ def create_app(settings=None):
             body = botops_act.parse_body(getattr(request, "_body", b"")) if request.method != "GET" else None
             if botops_act.secret_in_request(request.method, request.url.path, body):
                 raise Problem("secret_in_request", botops_act.DETAIL_SECRET, 422)
+            if H.is_human(acting.actor):
+                card = person_card(c, request, acting, body)
+                if card is not None:
+                    return card, None
             # The ordinary route checks the requester's rights, including its own outbound send switch.
             return None, acting
+
+    def person_card(c, request, acting, body):
+        """BotOps acting for a person: a refusal for a route that hands a secret back, or the Confirm card in their BotOps
+        chat for one that always needs their own tap (`botops_act.card_for_person`). None when the route runs as them."""
+        method, path = request.method, botops_act.normalize(request.url.path)
+        why = botops_act.person_only(method, path)
+        if why:
+            raise Problem("person_only", why, 403, extra=botops_act.refusal_for_person(
+                path, "Do this yourself in " + settings.app_name, settings.public_url))
+        body = {k: v for k, v in body.items() if k != "on_behalf_of"} if isinstance(body, dict) else {}
+        rules = team_rules.load(c)
+
+        def lowers():
+            rest = path[len(botops_act.API):]
+            if rest.startswith("usage/pools/"):
+                scope = rest[len("usage/pools/"):]
+                return usage_limits.pool_only_lowers(c, "company" if scope == "company" else "group:" + scope.split("/", 1)[-1], body)
+            return usage_limits.only_lowers(c, rest[len("usage/limits/"):] if rest.startswith("usage/limits/") else None, body)
+        if not path or not botops_act.card_for_person(method, path, body, rules, lowers):
+            return None
+        # Told at once, not handed a card that fails on the tap.
+        who_may = ("the owner" if botops_act.owner_only(method, path, body) and acting.role != "owner"
+                   else "an owner or an admin" if botops_act.admin_only(method, path) and acting.role != "owner"
+                   and not auth.bot_admin(acting) else "")
+        if who_may:
+            raise Problem("forbidden", "Only " + who_may + " can do this", 403, extra=botops_act.refusal_for_person(
+                path, "Your role can't change this: ask " + who_may, settings.public_url))
+        with store.transaction() as w:
+            card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body))
+        return JSONResponse(card)
 
     def botops_run_identity(c, attempt_id):
         """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
@@ -4772,7 +4818,8 @@ def create_app(settings=None):
         and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
         route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
-        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what)
+        card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what,
+                               routes=app.routes)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}

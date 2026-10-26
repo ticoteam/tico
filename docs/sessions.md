@@ -38,17 +38,34 @@ Set `subtask_session: own` to give every subtask its own session instead.
 
 ## Checkpoints and resume
 
-Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task. If a task's session can't be
-resumed (a new computer, a cleared thread), the next turn starts a fresh session from that checkpoint.
+Each turn on a task leaves a **checkpoint**: the turn's final reply, kept on the task.
 
-A bot's session and each task's session persist between wakes. Auto-compaction (the bot's **Compact at** size) is
-the only limit on how large one grows, and `/compact` keeps its session. Tico starts a new session only when the old
-one cannot be found or truly cannot continue, and then says why: the run records `turns.session_kind` and
-`turns.session_why` ([hub sql](hub-sql.md)), and the task's history gets a line such as "Started a new session: the old
-one wasn't on this computer". When a prompt is too large to send, the thread's next run compacts its session first;
-only if that run fails the same way does Tico start a new session. Health names a bot that lost its session more than
-twice in a day. Older runners also started a new session when a session passed a size (`rotate_at`,
-`rotate_after_turns`); those settings are gone and a saved config that still carries them is ignored.
+A bot's chat and a task each keep one session, however long it runs. The harness compacts it on its own when it nears
+the bot's `compact_at`, and that is the only size limit: Tico never starts a new session to save tokens. The next turn
+resumes the saved session. If the host refuses, Tico asks once more after a short pause.
+
+A new session starts only when the saved one is not on this computer (another computer ran the bot, or its
+files were cleared) or the host refuses it twice. The new session starts from the task's checkpoint and what was said
+since that turn, the bot's own replies included, and it is told so. A session does not move between computers. Every
+run records how its session began (`turns.session_kind`, `turns.session_why`, [hub sql](hub-sql.md)): resumed or new,
+with the reason (`none_saved`, `not_found`, `resume_failed`, `compact_failed`, `interrupted`, `fallback_side`). A new
+session other than the first also leaves a line in the run's diagnostics and in the task's history ("Started a new
+session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
+
+A turn that was cut off (a restart's drain, a **Stop**) leaves its session in place. The next turn resumes it and is
+told to check what the interrupted turn already did before repeating a step.
+
+When a turn runs on a fallback harness or model, it runs in a side session of its own, started from the checkpoint. It
+never replaces the saved session; the next turn on the usual harness resumes that one and is told a side session ran.
+
+When a run fails because the session ran out of room, the next claim for it carries `compact_first`: the saved session
+is resumed and compacted before the turn (Claude Code `/compact`, Codex `thread/compact/start`, other harnesses with
+the `compaction` capability their own way). A harness that cannot compact, or a compaction that fails, starts a new
+session (`compact_failed`). If the compacted run still fails the same way, or an older runner ignores the flag, Tico
+clears the session for the next run. `/compact` keeps its session.
+
+Older runners also started a new session once a session passed a size (`rotate_at`, `rotate_after_turns`); those
+settings are gone, and a saved config that still carries them is ignored.
 
 **Clear** on a bot's chat starts that chat over: the next turn opens a new provider thread and reads only what was
 said after the clear. The main chat is one thread shared by the bot's chats, so a clear in one person's chat starts
@@ -168,7 +185,7 @@ It files a subtask for you under its task, which shows in your Needs you. When y
 original task and continues in the same session.
 
 **A task's session was lost. Does the bot start over?**
-No. The next turn starts a fresh session from the task's last checkpoint.
+Only if it cannot be found on this computer or the host refuses it twice. The next turn then starts a new session from the task's last checkpoint, and the run says why.
 
 **Where did temporary assignments go?**
 They were removed in 0.3.41. Per-task sessions do the same job: give the bot the task, and it gets its own session.
