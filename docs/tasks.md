@@ -513,8 +513,8 @@ work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished
 duplicates are still refused, ignoring case and extra spaces, on create and on rename alike.
 
-A person can close a task only if they are its requester or owner, a party to a task above it, a current delegate,
-or someone who may move tasks. A bot cannot reassign a task a person has closed. Marking a closed task Done or Declined
+A person can close a task only if they are its requester or owner, a party to a task above it, the person it
+waits on, a current delegate, or someone who may move tasks. A bot cannot reassign a task a person has closed. Marking a closed task Done or Declined
 clears its close time. For a Done task, the 24-hour close rule runs again from that completion. Opening a task refreshes
 its GitHub links without changing its activity time or restarting that 24-hour timer; a real change on GitHub is
 recorded in the task's history.
