@@ -322,15 +322,36 @@ def bot_owner_rows(c, registry, slug, people, configs, archived):
     return [{"id": i, "name": (P.person(i, people) or {}).get("name") or i} for i in ids]
 
 
+# A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
+ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness_json,"
+                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities_json")
+ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+
+
+def prime_machines(c, slugs):
+    """Read what machine() and H.status read for each of these bots one table at a time (one query per 500 bots
+    each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
+    from .agents import CONFIG_SQL, ROW_SQL
+    if read_cache.cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(slugs))):
+        marks = ",".join("?" * len(part))
+        for statement, query in ((CONFIG_SQL, f"SELECT config_json,bot FROM bot_config WHERE bot IN ({marks})"),
+                                 (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
+                                 (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
+                                                f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
+                                 ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})")):
+            found = {row["bot"]: row for row in c.execute(query, part)}
+            read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
+
+
 def machine(c, bot):
     from .agents import presence
     from .screen import listing as screen_listing
     external = presence(c, bot)
     if external:
         return external
-    row = c.execute("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness_json,"
-                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities_json "
-                    "FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
+    row = read_cache.one(c, ASSIGNED_SQL, (bot,))
     if not row:
         return {"online": False, "awake": False, "ready": False, "machine": None}
     now = H.now()
@@ -388,7 +409,12 @@ def operation_issues(c, who, auth):
     offline = {}    # runner_id -> {label, since, bots: [display names], queued}
     readable = auth.bot_accesses(c, who)
     bots = H.bots(c)
-    status_inputs = privacy.status_inputs(c, [b["slug"] for b in bots if readable.get(b["slug"], auth.FULL)["read"]])
+    shown = [b["slug"] for b in bots if readable.get(b["slug"], auth.FULL)["read"]]
+    status_inputs = privacy.status_inputs(c, shown)
+    # Each bot's computer, status and queue read together, not a few queries per bot.
+    prime_machines(c, shown)
+    queues = pipeline_stats.job_queues(c, who, [b["slug"] for b in bots if b["slug"] in status_inputs
+                                                and b["state"] != "archived"])
     for bot in bots:
         slug = bot["slug"]
         if not readable.get(slug, auth.FULL)["read"]:
@@ -424,7 +450,8 @@ def operation_issues(c, who, auth):
             since = H.parse_ts(status.get("since"))
             cooldown = limit_cooldown(c, slug)
             if since and since > H.parse_ts(H.shift(H.now(), seconds=-max(3600, cooldown))):
-                config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+                from .agents import CONFIG_SQL
+                config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
                 runtime = providers.bot_choice(c, auth.settings, json.loads(config[0]) if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
@@ -471,7 +498,7 @@ def operation_issues(c, who, auth):
                     add("bot", bot["display_name"] + " needs attention",
                         f"{runtime}; resumes at {retry[11:16]} UTC", bot=slug,
                         severity="warning", needs_person=False)
-        jobs = pipeline_stats.job_queues(c, who, [slug])[slug]
+        jobs = queues[slug]
         queued = jobs["queued"]
         if location.get("agent"):
             # A synced agent is handed its messages at a sync, which marks them delivered; it never reads them in Tico.
@@ -1445,8 +1472,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
+            typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
             item = {**task_view(row, pipelines=pipelines),
                     "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
+                    # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
+                    "steps_only": bool(typ.get("steps_only")),
                     "origin_actor": H.task_origin(c, row), "ask": ask, "open_asks": len(open_asks),
                     "first_line": (row.get("body") or "").split("\n")[0],
                     "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
@@ -1590,7 +1620,9 @@ def needs_bots(items, me):
     counts = {}
     for it in items:
         actor = None
-        if it.get("kind") == "ask":
+        if it.get("kind") == "approval":
+            actor = it.get("requested_by") or it.get("requester")
+        elif it.get("kind") == "ask":
             actor = it.get("requester")
         elif it.get("kind") in ("task", "question", "waiting"):
             ask = it.get("ask") or {}

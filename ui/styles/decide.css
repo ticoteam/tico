@@ -107,6 +107,7 @@
 .dc-actions button{height:52px;min-width:0;padding:0 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface2);color:var(--ink);font:600 var(--t-lg) var(--sans);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-actions button:hover:not(:disabled){border-color:var(--g5)}
 .dc-actions button.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
+.dc-actions a.button{display:flex;align-items:center;justify-content:center;height:52px;min-width:0;padding:0 10px;border-radius:14px;font:600 var(--t-lg) var(--sans);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-actions kbd{display:none;margin-left:8px;font:500 var(--t-xs) var(--mono);opacity:.6}
 .dc-keys{display:none;margin:0;padding:0 0 12px;text-align:center;color:var(--muted);font-size:var(--t-xs)}
 @media (hover:hover) and (pointer:fine) and (min-width:761px){.dc-actions kbd{display:inline}.dc-keys{display:block}.decide.dc-empty .dc-keys{display:none}}

@@ -87,6 +87,7 @@ const writeRequestOnce = async (method, p, body={}, operationId, opts={}) => {
     try {
       const r = await fetch(API + p, {method, headers:{'Content-Type':'application/json', 'Idempotency-Key':key}, body:payload, signal:abort.signal});
       status = r.status;
+      opts.onResponse?.(status);
       window.TicoObservability?.response(r.status);
       if (r.ok) SESSION.seen = true;
       const j = await r.json().catch(error => { if (abort.signal.aborted) throw error; return {}; });
@@ -177,8 +178,11 @@ const formRequestOnce = async (url, body, opts={}) => {
   const signature = url + '\n' + JSON.stringify(fields), key = pendingWrites.get(signature) || newRequestId();
   pendingWrites.set(signature, key);
   for (let attempt = 0; attempt < 3; attempt++) {
+    let status = 0;
     try {
       const response = await fetch(url, {method:'POST', body, redirect:'error', headers:{'Idempotency-Key':key}});
+      status = response.status;
+      opts.onResponse?.(status);
       window.TicoObservability?.response(response.status);
       if (response.status === 401) sessionCheck(response, await response.clone().json().catch(() => ({})));
       if ([429,502,503,504].includes(response.status)) throw new TypeError('Upload temporarily unavailable');
@@ -191,8 +195,8 @@ const formRequestOnce = async (url, body, opts={}) => {
     } catch (error) {
       if (!(error instanceof TypeError)) throw error;
       if (await sessionProbe()) throw signedOutError(true);
-      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this upload saved. Keep the files and retry the same submission in this tab.'), {unconfirmed: true});
-      opts.onRetry?.(attempt + 1, 0);
+      if (attempt === 2) throw Object.assign(new Error('Could not confirm whether this upload saved. Keep the files and retry the same submission in this tab.'), {unconfirmed: true, status});
+      opts.onRetry?.(attempt + 1, status);
       await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
     }
   }
@@ -207,9 +211,14 @@ async function cloudCompose(path, body, files = [], opts = {}) {
   const fd = new FormData();
   for (const [key, value] of Object.entries(body)) fd.append(key, typeof value === 'object' ? JSON.stringify(value) : value);
   files.forEach(file => fd.append('files', file, file.name));
-  const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd, {onRetry: opts.onRetry});
+  const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd, {onRetry: opts.onRetry, onResponse: opts.onResponse});
   const result = await response.json().catch(() => ({}));
-  if (!response.ok || !result.task && !result.message) throw new Error(apiError(result, response) || 'The server did not confirm this upload.');
+  if (!response.ok) {
+    const error = apiFailure(result, response);
+    error.message ||= 'The server did not confirm this upload.';
+    throw error;
+  }
+  if (!result.task && !result.message) throw new Error('The server did not confirm this upload.');
   return result;
 }
 const toast = (msg, isErr, action, opts = {}) => {
