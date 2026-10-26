@@ -42,7 +42,7 @@ hq_url = C.hq_url
 
 
 def off_reason(c, settings):
-    """Why this install sends nothing to Tico HQ: "demo", "TICO_TELEMETRY", "DO_NOT_TRACK", "setting", or "" when it may.
+    """Why this install sends nothing to Tico HQ: "demo", "TICO_REHEARSAL", "TICO_TELEMETRY", "DO_NOT_TRACK", "setting", or "" when it may.
     The same switches as the anonymous usage count (backend/census.py), so turning that off turns this off too."""
     if settings.demo:
         return "demo"

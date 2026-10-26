@@ -409,13 +409,17 @@ def view(record, rows, links=None, at=None):
                                                     "deadline", "min", "max")},
                     target_label=target_label(record, links), status=state["status"], reason=state["reason"],
                     expected=state["expected"])
+        if record.get("archived_at"):
+            base.update(status=None, reason=f"Archived {day(record['archived_at'])}, not counting",
+                        freshness="archived", latest=None, spark=[], expected=None)
     else:
         base.update(status=state["status"], reason=state["reason"])
     return base
 
 
-def goal_views(conn, goal_ids, at=None):
-    """{goal id: [KPI views with their link and status]} for many goals in a few queries."""
+def goal_views(conn, goal_ids, at=None, include_archived=False):
+    """{goal id: [KPI views with their link and status]} in a few queries. Goal panels may include
+    archived links as uncoloured reminders; arithmetic and other consumers keep active measures only."""
     goal_ids = list(dict.fromkeys(goal_ids))
     out = {g: [] for g in goal_ids}
     rows = []
@@ -430,8 +434,8 @@ def goal_views(conn, goal_ids, at=None):
     records = {}
     for start in range(0, len(real), 400):
         chunk = real[start:start + 400]
-        for row in conn.execute(f"SELECT * FROM kpis WHERE id IN ({','.join('?' * len(chunk))}) "
-                                "AND archived_at IS NULL", chunk):
+        active = "" if include_archived else " AND archived_at IS NULL"
+        for row in conn.execute(f"SELECT * FROM kpis WHERE id IN ({','.join('?' * len(chunk))})" + active, chunk):
             records[row["id"]] = dict(row)
     data = effective_many(conn, real)
     for r in rows:
@@ -449,7 +453,7 @@ def goal_views(conn, goal_ids, at=None):
 def goal_link_status(conn, goal_id, at=None):
     """The linked KPIs of one goal that carry a target, judged: what a goal's automatic colour is made of."""
     return [v for v in goal_views(conn, [goal_id], at)[goal_id]
-            if (v.get("link") or {}).get("kind") in ("improve", "maintain")]
+            if not v.get("archived_at") and (v.get("link") or {}).get("kind") in ("improve", "maintain")]
 
 
 # ----------------------------------------------------------------------------- writes
