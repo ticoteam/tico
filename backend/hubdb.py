@@ -4562,7 +4562,8 @@ def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
         return False
     conn.execute("UPDATE tasks SET verdict=?, verdict_head=? WHERE id=?", (verdict, head, row["id"]))
     _task_event(conn, row["id"], actor, "verdict", row.get("verdict"), verdict + (f" {head}" if head else ""), "")
-    from . import review_status
+    from . import review_gate, review_status
+    review_gate.remember_verdict(conn, actor, row, verdict, head)
     review_status.mark_parent(conn, row)
     return True
 
@@ -5539,6 +5540,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if target_step and target_step["name"] in review_gate.PAST_REVIEW and step_id != row.get("step_id"):
             # Past review only once every required review slot approves the change the PR makes now (Dev 567).
             review_gate.passed(conn, actor, {**row, "type_id": type_id}, review_prs, step=target_step["name"])
+        if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
+            from . import review_status
+            review_status.mark(conn, row["id"])  # entering Review 2 makes its slot required
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None

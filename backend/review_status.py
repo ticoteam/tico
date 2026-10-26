@@ -9,12 +9,15 @@ Commit statuses permission set to Read and write; without it nothing is posted a
 import json
 import logging
 import threading
+import time
 from urllib.parse import quote
 
 from . import hubdb as H
 
 CONTEXT = "tico/reviews"
 _dirty = set()
+_retry = {}  # task id -> (monotonic time of the next try, tries so far)
+RETRY_MAX = 1800
 _lock = threading.Lock()
 _started = {"done": False}
 log = logging.getLogger("tico.review_status")
@@ -51,7 +54,9 @@ def describe(missing):
 
 def tick(service):
     """Post every marked ticket's status (from the GitHub sync tick). The first tick after a start marks every Dev
-    ticket with an open pull request, so a status missed while the server was down is posted."""
+    ticket with an open pull request, so a status missed while the server was down is posted. A ticket whose read or
+    post failed is tried again after a growing wait (up to half an hour): a required status that never arrives would
+    hold the merge until something else marks the ticket."""
     if service is None:
         return
     with service.store.read() as c:
@@ -60,41 +65,53 @@ def tick(service):
         if not _started["done"]:
             _started["done"] = True
             from . import review_gate
-            for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_links WHERE kind='pr' "
-                                        "AND state IN ('open','draft')").fetchall():
-                if review_gate.engineering(c, H.task(c, task_id)):
-                    _dirty.add(task_id)
+            found = [task_id for (task_id,) in c.execute("SELECT DISTINCT task_id FROM task_links WHERE kind='pr' "
+                                                         "AND state IN ('open','draft')").fetchall()
+                     if review_gate.engineering(c, H.task(c, task_id))]
+            with _lock:
+                _dirty.update(found)
+    now = time.monotonic()
     with _lock:
-        todo = sorted(_dirty)
+        due = [task_id for task_id, (at, _) in _retry.items() if at <= now and task_id not in _dirty]
+        todo = sorted(_dirty | set(due))
         _dirty.clear()
     for task_id in todo:
         try:
-            sync(service, task_id)
+            done = sync(service, task_id)
         except Exception as exc:
             log.warning("tico/reviews status for %s not posted: %s", task_id, type(exc).__name__)
+            done = False
+        with _lock:
+            if done:
+                _retry.pop(task_id, None)
+            else:
+                tries = _retry.get(task_id, (0, 0))[1] + 1
+                _retry[task_id] = (time.monotonic() + min(RETRY_MAX, 60 * 2 ** (tries - 1)), tries)
 
 
 def sync(service, task_id):
-    """Work out and post the status for each open PR of one ticket. Reads GitHub outside the write lock."""
+    """Work out and post the status for each open PR of one ticket. Reads GitHub outside the write lock. Returns
+    whether every open PR's status is posted (or nothing needs one)."""
     from . import review_gate
     with service.store.read() as c:
         row = H.task(c, task_id)
         if not row or not review_gate.engineering(c, row):
-            return
+            return True
         prs = [p for p in review_gate.judged_links(c, row) if p.get("state") in ("open", "draft")]
     if not prs:
-        return
+        return True
     read = review_gate.snapshot(service, prs) or {}
     with service.store.read() as c:
         wanted = review_gate.wanted_changes(c, row, read)
     compared = review_gate.changes(service, prs, wanted) if wanted else {}
-    results = []
+    results, done = [], True
     with service.store.read() as c:
         row = H.task(c, task_id)
         for pr in prs:
             detail = read.get(pr["id"]) or {}
             head = str(detail.get("head_sha") or "").lower()
             if detail.get("error") or not review_gate.test_receipts.SHA.fullmatch(head):
+                done = False
                 continue
             missing = review_gate.unapproved(c, row, {pr["id"]: head}, review_gate.comparer(compared))
             results.append((pr, head, *describe(missing)))
@@ -103,8 +120,10 @@ def sync(service, task_id):
         if cached.get("posted") and (cached.get("head"), cached.get("state"), cached.get("description")) == (head, state, text):
             continue
         posted, why = post(service, pr, head, state, text)
+        done = done and posted
         record(service, pr["id"], {"head": head, "state": state, "description": text, "posted": posted,
                                    **({"why": why} if why else {}), "at": H.now()})
+    return done
 
 
 def post(service, pr, head, state, text):

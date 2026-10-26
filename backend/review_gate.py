@@ -108,24 +108,56 @@ def judged_links(c, row):
     return [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") != "closed"]
 
 
+def remember_verdict(c, actor, child, verdict, head):
+    """Copy a Review 1 or Review 2 child's verdict onto its Dev ticket the moment it is given, so declining, retitling
+    or unlinking the child later cannot take a `changes` back (slots)."""
+    from . import hubdb as H
+    from . import task_relations as TR
+    kind = SLOT.match(str(child.get("title") or "").strip())
+    parent = kind and H.task(c, TR.parent_of(c, child["id"]) or "")
+    if parent and engineering(c, parent):
+        H._task_event(c, parent["id"], actor, "review_verdict", None,
+                      f"{kind[1]} {verdict} {head or '-'} {child['id']} {child['owner']}", "")
+
+
 def slots(c, row):
     """Each required review slot's verdicts on this ticket, oldest first, as (verdict, head, reviewer, child id).
-    Only a "Review 1" or "Review 2" child fills a slot: a QA verdict, `approve` or `pass`, never does. Review 1 is
-    required on a board that has the step; Review 2 once it was asked or the ticket entered it (small changes skip
-    it, docs/software-factory.md). A child reopened for a new head keeps its old verdict until it gives a new one."""
+    A verdict counts from the copy its ticket keeps (remember_verdict); a child with no copy, from before the copies,
+    counts from its own events while it still carries the title it was filed with. Only a "Review 1" or "Review 2"
+    child fills a slot: a QA verdict, `approve` or `pass`, never does, and neither does a verdict the ticket's own owner
+    gave or was the reviewer for. Review 1 is required on a board that has the step; Review 2 once it was asked or the
+    ticket entered it (small changes skip it, docs/software-factory.md). A child reopened for a new head keeps its old
+    verdict until it gives a new one."""
     from . import hubdb as H
     from . import task_relations as TR
     steps = {r["name"]: r["id"] for r in c.execute("SELECT id,name FROM task_steps WHERE type_id=?", (row.get("type_id"),))}
-    out, asked = {}, {}
+    owner = row.get("owner")
+    out, asked, copied = {}, {}, set()
+    for ts, rowid, actor, new in c.execute("SELECT ts, rowid, actor, new FROM task_events WHERE task_id=? "
+                                           "AND field='review_verdict'", (row["id"],)).fetchall():
+        number, verdict, head, child_id, reviewer = (str(new or "").split(" ") + [""] * 5)[:5]
+        copied.add(child_id)
+        if number not in ("1", "2") or owner in (actor, reviewer):
+            continue
+        name = "Review " + number
+        asked.setdefault(name, [])
+        out.setdefault(name, []).append(((ts, rowid), verdict, "" if head == "-" else head.lower(), reviewer, child_id))
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
         kind = child and SLOT.match(str(child.get("title") or "").strip())
-        if not kind or child["status"] == "declined":
+        if not kind or child["owner"] == owner:
             continue
         name = "Review " + kind[1]
+        events = [] if child_id in copied or c.execute(
+            "SELECT 1 FROM task_events WHERE task_id=? AND field='title' LIMIT 1", (child_id,)).fetchone() else \
+            c.execute("SELECT ts, rowid, actor, new FROM task_events WHERE task_id=? AND field='verdict'",
+                      (child_id,)).fetchall()
+        if child["status"] == "declined" and not events and child_id not in copied:
+            continue
         asked.setdefault(name, []).append(child["owner"])
-        for ts, rowid, new in c.execute("SELECT ts, rowid, new FROM task_events WHERE task_id=? AND field='verdict'",
-                                        (child_id,)).fetchall():
+        for ts, rowid, actor, new in events:
+            if actor == owner:
+                continue
             verdict, _, head = str(new or "").partition(" ")
             out.setdefault(name, []).append(((ts, rowid), verdict, head.strip().lower(), child["owner"], child_id))
     required = {}
@@ -187,11 +219,15 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
     for pr in prs:
         detail = (snapshots or {}).get(pr["id"]) if snapshots is not None else None
         cached = H._json(pr.get("detail_json"), {}) or {}
-        if detail is not None and detail.get("error"):
-            reject(c, actor, row, "reviews", "unknown", pr,
-                   f"Move refused: cannot read the current head of {pr['url']} ({detail.get('why') or 'GitHub read failed'}). "
-                   "Retry the move.", retryable=detail.get("retryable", False))
         head = str((detail or cached).get("head_sha") or "").lower()
+        # A webhook that moved the head after the preflight read GitHub leaves a head nobody compared.
+        changed = detail is not None and not detail.get("error") and (pr.get("updated") or "") > detail.get("at", "") \
+            and str(cached.get("head_sha") or "").lower() != head
+        if detail is not None and detail.get("error") or changed:
+            why = detail.get("why") or "GitHub read failed" if detail.get("error") else "the PR link changed while GitHub was read"
+            reject(c, actor, row, "reviews", "unknown", pr,
+                   f"Move refused: cannot read the current head of {pr['url']} ({why}). "
+                   "Retry the move.", retryable=detail.get("retryable", False))
         heads[pr["id"]] = head if test_receipts.SHA.fullmatch(head) else ""
     read = (snapshots or {}).get(CHANGES) or {}
     missing = unapproved(c, row, heads, comparer(read))
@@ -223,19 +259,21 @@ def comparer(read):
 
 
 def normalized_change(diff):
-    """A diff reduced to what freeze_guard.change_id compares: file headers, modes and every changed line verbatim,
-    without the line numbers, blob ids and context lines that shift when main is merged in."""
+    """A diff reduced to what freeze_guard.change_id compares: file headers, modes, hunk breaks and every changed line
+    verbatim, without the line numbers, blob ids and context lines that shift when main is merged in. None when the
+    diff is empty or changes a binary file."""
     kept, in_body = [], False
     for line in str(diff or "").splitlines():
         if line.startswith("diff --git "):
             kept.append(line)
             in_body = False
-        elif line.startswith(("@@", "GIT binary patch")):
+        elif line.startswith("Binary files"):
+            return None  # GitHub's diff hides binary content, so two different edits would read the same
+        elif line.startswith("@@"):
             in_body = True
-            if not line.startswith("@@"):
-                kept.append(line)
-        elif in_body and line.startswith(("+", "-")) or line.startswith((
-                "new file mode", "deleted file mode", "old mode", "new mode", "Binary files")):
+            kept.append("@@")
+        elif in_body and line.startswith(("+", "-", "\\")) or line.startswith((
+                "new file mode", "deleted file mode", "old mode", "new mode")):
             kept.append(line)
     return "\n".join(kept) or None
 
@@ -254,7 +292,15 @@ def changes(service, prs, wanted):
             base = f"/repos/{quote(repo, safe='/')}"
             auth = {"Authorization": "Bearer " + token}
             data = service._call("GET", base + f"/pulls/{pr['number']}", headers=auth)
-            branch = data.json()["base"]["ref"] if data.status_code == 200 else None
+            pull = data.json() if data.status_code == 200 else {}
+            branch = pull["base"]["ref"] if pull else None
+            if pull.get("merged"):
+                # Once merged, every head is behind the base branch and compares as empty; like freeze_guard, compare
+                # from the base as it stood when the merge landed: the merge commit's first parent.
+                merge = pull.get("merge_commit_sha") or ""
+                commit = service._call("GET", base + f"/commits/{quote(merge, safe='')}", headers=auth) if merge else None
+                parents = commit.json().get("parents") if commit is not None and commit.status_code == 200 else None
+                branch = parents[0]["sha"] if parents else None
         except Exception:
             branch = None
         for sha in shas:
