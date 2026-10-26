@@ -5,6 +5,8 @@ import os
 
 import pytest
 
+from backend import read_cache
+from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 from clients import bot_files as BF
 
@@ -49,6 +51,99 @@ def test_a_private_chats_file_is_invisible_to_everyone_else(api):
     assert api.get("/api/v2/files/" + fid, headers=headers("cara-test")).content == b"# Plan"
     log = api.get("/api/v2/files/" + fid + "/activity", headers=headers("cara-test")).json()["activity"]
     assert [a["action"] for a in log] == ["promoted", "created"]
+
+
+
+def traced(api, request):
+    """(the response, every SQL statement the request ran)."""
+    store, statements = api.app.state.store, []
+    take, give = store._take, store._give
+
+    def tracing():
+        c = take()
+        c.set_trace_callback(statements.append)
+        return c
+
+    def untracing(c):
+        c.set_trace_callback(None)
+        give(c)
+    store._take, store._give = tracing, untracing
+    try:
+        return request(), statements
+    finally:
+        store._take, store._give = take, give
+
+
+def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_each_person_sees(api, monkeypatch):
+    """The page decides every active file to count what the caller may see. Those checks read together, so a bot with
+    many files costs what a bot with a few does, and each decision (and so the page and its total) is the one made
+    file by file: a private task, a private parent blob, a private message or a deleted task still hides a file."""
+    store, media = api.app.state.store, api.app.state.file_metadata
+    media.stop.set()                                     # previews write in the background: count only the page's reads
+    media.wake.set()
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)
+        msg = H.task_comment(c, "human:ben", hidden["id"], "Hush input", wake=False)["id"]
+
+    def add(prefix, n):
+        """n bot-wide files after one that stays in Ben's chat."""
+        made = []
+        for i in range(n + 1):
+            r = publish(api, attempt, f"{prefix}-{i}.md", f"# {prefix} {i}")
+            assert r.status_code == 200, r.text
+            fid = r.json()["file"]["id"]
+            if i:
+                assert api.patch("/api/v2/files/" + fid, json={"promote": True}, headers=headers("ben-test")).status_code == 200
+            made.append(fid)
+        return made
+
+    def blob(c, fid):
+        return c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
+
+    tasked, attached, poster, posted, messaged, trashed = add("hush", 6)[1:]
+    with store.transaction() as c:
+        c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], tasked))
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], blob(c, attached)))
+        c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], blob(c, poster)))
+        c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
+                  (blob(c, poster), blob(c, posted)))
+        c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (msg, blob(c, messaged)))
+        c.execute("INSERT INTO task_trash_assets(task_id,blob_id) VALUES('gone',?)", (blob(c, trashed),))
+    viewers = ("ben-test", "cara-test", "ana-test", attempt["token"])
+
+    def pages(limit=5):
+        """Each viewer's first page and its statements, read once before: a run's and a message's provenance is kept
+        between requests (provenance_clock), whatever the number of files."""
+        out = {}
+        for who in viewers:
+            def page():
+                return api.get(f"/api/v2/bots/ops/files?limit={limit}", headers=headers(who))
+            page()
+            out[who] = traced(api, page)
+        return out
+
+    add("public", 9)
+    few = pages()
+    add("more", 29)
+    many = pages()
+    for who in viewers:
+        assert few[who][0].status_code == many[who][0].status_code == 200, many[who][0].text
+        assert len(many[who][0].json()["files"]) == 5, who
+        assert many[who][0].json()["total"] - few[who][0].json()["total"] == (30 if who in ("ben-test", attempt["token"]) else 29), who
+        assert len(many[who][1]) == len(few[who][1]) < 60, (who, len(few[who][1]), len(many[who][1]))
+
+    whole = {who: response.json() for who, (response, _) in pages(100).items()}
+    assert whole["cara-test"]["total"] == len(whole["cara-test"]["files"]) == 9 + 29
+    assert "hush" not in api.get("/api/v2/bots/ops/files?limit=100", headers=headers("cara-test")).text
+    assert {tasked, attached, poster, posted, messaged} <= {f["id"] for f in whole["ben-test"]["files"]}
+    assert trashed not in {f["id"] for page in whole.values() for f in page["files"]}
+    # The same pages, every file decided alone with nothing read ahead, as before the reads were batched.
+    monkeypatch.setattr(read_cache, "cache", lambda c: None)
+    for who, response in whole.items():
+        again = api.get("/api/v2/bots/ops/files?limit=100", headers=headers(who)).json()
+        assert again == response, who
+        assert again["total"] == len(again["files"]), who
 
 
 def test_refusals_and_a_bot_writes_only_its_own_files(api):
