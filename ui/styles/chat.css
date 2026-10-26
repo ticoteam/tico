@@ -19,7 +19,9 @@
 @media (hover:hover){#pane-chat .conv-run.chat:hover .chat-stamp{opacity:1}}
 @media (hover:none){#pane-chat .chat-stamp{top:50%;right:-70px;width:62px;text-align:right;opacity:1;transform:translateY(-50%)}}
 /* the composer: a small arrow for Send */
-.p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:44px;height:44px;padding:0;border:5px solid transparent;border-radius:50%;background:var(--accent);background-clip:padding-box;color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
+.p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);background-clip:padding-box;color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
+/* Pill composers reserve the hit area in layout; task comment forms retain their compact button. */
+.ask .p-send-icon{width:44px;height:44px;border:5px solid transparent}
 .p-send-icon svg{width:18px;height:18px}
 /* The button, never its replaceable icon, is what a press lands on: a redraw mid-press would otherwise drop the click. */
 .p-send-icon>*{pointer-events:none}

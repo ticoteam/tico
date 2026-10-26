@@ -814,12 +814,14 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
 // After `slow` ms a send says it is still going. One object, so the browser tests can shorten both.
 const CHAT_SEND = {timeout: 30000, slow: 5000};
 function chatSendReason(error) {
-  if (error.status === 413 || error.status === 422 && (error.body?.detail?.some?.(e => e.type === 'string_too_long')
+  if (error.status === 413) return 'The attachments are too large. Remove or shrink a file and try again.';
+  if (error.status === 422 && (error.body?.detail?.some?.(e => e.type === 'string_too_long')
       || /(?:body\.)?text: String should have at most \d+ characters/.test(error.body?.error?.detail || '')))
     return 'This message is too long. Shorten it and try again.';
   if (error.status === 401 || error.signedOut) return "You've been signed out. Sign in again, then try again.";
   if (error.status === 404) return 'This bot is unavailable. Refresh the page or choose another bot.';
-  if (error.status === 429 || error.status >= 500) return `The server is busy (HTTP ${error.status}). Try again shortly.`;
+  if (error.status === 429 || error.status === 503) return `The server is busy (HTTP ${error.status}). Try again shortly.`;
+  if (error.status >= 500) return `The server could not send this message (HTTP ${error.status}). Try again shortly.`;
   return error.message || 'The server refused this message. Try again.';
 }
 // What a send that is taking a while shows under the box, and the one line it leaves in the console when it was slow

@@ -121,8 +121,9 @@ Bot chat sends also report `source=chat_send` when they cross five seconds while
 then report their outcome when a slow send finishes or any send fails. The only send fields are
 `outcome` (a fixed label), `duration_ms`, `retries`, and `status` (the last HTTP status, or zero
 when no response arrived). No message text, bot name, attachment names, raw URL or error text is
-included. A quick successful send generates no Sentry event. Auth failures are reported before
-the identity reset; later callbacks from a retired account cannot report under a new identity.
+included. A quick successful send generates no Sentry event. A send's own auth failure is reported before
+it resets identity, unless another request already reset it. Callbacks from a retired account
+are dropped and cannot report under a new identity.
 This uses the existing per-install `TICO_SENTRY_DSN` and required browser settings above. Leave
 them unset on installs outside an authorized rollout; adding this instrumentation does not enable
 reporting on stock installs. Team and Tidy activation remains a separate operator rollout.

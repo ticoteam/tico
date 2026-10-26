@@ -163,9 +163,9 @@ function makePill(cfg) {
   q('.p-send').onclick = () => pillSend(P);
   // Acknowledge the physical press before validation or any request. Keep the
   // real button as the target, including its transparent border, and retain focus.
-  q('.p-send').addEventListener('pointerdown', event => {
+  el.querySelectorAll('.p-send, .p-stop').forEach(btn => btn.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
-    const btn = q('.p-send'), started = performance.now();
+    const started = performance.now();
     P.releasePress?.();
     btn.classList.add('p-pressed');
     const release = event => {
@@ -181,7 +181,7 @@ function makePill(cfg) {
     window.addEventListener('pointerup', release);
     window.addEventListener('pointercancel', release);
     window.addEventListener('blur', release);
-  });
+  }));
   if (goals) q('.p-stop').onclick = () => pillStop(P);
   // Safari does not focus buttons on tap. Keep the composer in place until its
   // control click runs; restoring navigation on blur can swallow that tap.
@@ -229,6 +229,7 @@ const pillPreview = f => {
   return PILL_PREVIEWS.get(f);
 };
 function pillChips(P) {
+  P.sendNotice = '';
   const el = pq(P, '.p-chips'); if (!el) return;
   el.innerHTML = P.files.map((f, i) => {
     const src = pillPreview(f);
