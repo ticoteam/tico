@@ -576,7 +576,7 @@ def run(args, who=None):
             body = {"version": current["version"], "note": args.note}
             if sub == "done":
                 body["status"] = "done"
-            for field in ("verdict", "verdict_head"):
+            for field in ("verdict", "verdict_head", "children"):
                 if getattr(args, field, None) is not None:
                     body[field] = getattr(args, field)
             if getattr(args, "quiet", False):

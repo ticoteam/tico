@@ -399,6 +399,9 @@ def ask_wait(api, pending, wait, args):
 
 
 # The Assistant, citing the person's message for something they asked for (`_asked`).
+# What finishing a task does with its open subtasks: none stays open under a finished task.
+CHILDREN = _s("Its open subtasks: close them with it (the default), or detach them as standalone tasks",
+              enum=["close", "detach"])
 ASKED = _s("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
            "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
 
@@ -880,7 +883,7 @@ def task_question(api, args):
        "verdict": _s("A review or QA subtask's verdict; the task that asked for it is woken with it",
                      enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
-       "on_behalf_of": ASKED},
+       "children": CHILDREN, "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_update(api, args):
     current = api.get("tasks/" + args["id"])["task"]
@@ -891,7 +894,7 @@ def task_update(api, args):
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
     for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size",
-                  "verdict", "verdict_head"):
+                  "verdict", "verdict_head", "children"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -907,8 +910,8 @@ def task_update(api, args):
 
 @tool("hub_task_done", "Finish a task you own with its result. A review or QA subtask adds its verdict and the pull "
       "request head it judged, and the task that asked for it is woken with both (the same as hub_task_update with "
-      "status done).",
-      {"id": TASK_ID, "note": _s("The result, in a few plain sentences"),
+      "status done). Its open subtasks close with it unless `children` is detach.",
+      {"id": TASK_ID, "note": _s("The result, in a few plain sentences"), "children": CHILDREN,
        "verdict": _s("approve or changes for a review, pass or fail for QA", enum=["approve", "changes", "pass", "fail"]),
        "verdict_head": _s("The pull request head (commit sha, 7 to 40 hex characters) the verdict judged"),
        "quiet": {"type": "boolean", "description": "Keep detailed notes on the task; chat receives only its title and status"},
@@ -2323,8 +2326,9 @@ def docs_links(api, args):
 
 @tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
       "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
-      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
-      {"id": TASK_ID, "note": _s("Why it is closed"),
+      "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done. "
+      "Its open subtasks close with it unless `children` is detach; one you may not close refuses the close.",
+      {"id": TASK_ID, "note": _s("Why it is closed"), "children": CHILDREN,
        "quiet": {"type": "boolean", "description": "Close without waking a bot"}, "on_behalf_of": ASKED},
       required=("id",), writes=True)
 def task_close(api, args):
@@ -2342,6 +2346,8 @@ def task_close(api, args):
             # Fleet work has no human request; BotOps keeps its own task-closing rights.
     current = current or api.get("tasks/" + args["id"])["task"]
     body = {"version": current["version"], "note": args.get("note"), "close": True, "quiet": bool(args.get("quiet"))}
+    if args.get("children"):
+        body["children"] = args["children"]
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(api.post("tasks/" + args["id"], body, key=_key(args)), links)
 

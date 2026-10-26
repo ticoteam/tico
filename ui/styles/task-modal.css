@@ -89,3 +89,8 @@
 .task-chat .task-pill [data-task-chat-status],.task-chat .task-pill [data-task-chat-to]{font-size:var(--t-sm);padding:0 12px}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
+/* Finishing a task with open subtasks: close them with it or keep them as standalone tasks (taskChildrenChoice). */
+.tmodal.task-children-choice{width:min(440px,calc(100vw - 32px));padding:16px}
+.task-children-choice h2{margin:0 0 8px;font-size:var(--t-lg);color:var(--ink)}
+.task-children-choice p{margin:0 0 16px;line-height:1.5}
+.task-children-choice .row{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
