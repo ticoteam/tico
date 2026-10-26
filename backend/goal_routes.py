@@ -414,7 +414,7 @@ def install(app, store, auth, mutate, settings):
             pending = [p for p in G.proposals(c, "pending") if (not p["goal_id"] or p["goal_id"] in visible)
                        and strategy_visible(who, p)]
             return {"goals": rows, "owners": names, "unaligned": unaligned, "other_kpis": other,
-                    "proposals": [{**p, "may_decide": decider(c, who, p)} for p in pending]}
+                    "proposals": [{**p, "card": G.card(c, p, hidden), "may_decide": decider(c, who, p)} for p in pending]}
 
     @app.get("/api/v2/goals/needs-you")
     def goals_needs_you(request: Request):
@@ -434,9 +434,10 @@ def install(app, store, auth, mutate, settings):
                 if p["kind"] not in ("goal_why", "recovery") and decider(c, who, p):
                     goal = G.goal(c, p["goal_id"]) if p["goal_id"] else None
                     record = K.kpi(c, p["kpi_id"]) if p["kpi_id"] else None
-                    items.append(asked.get(p["id"]) or {"kind": "proposal", "ref": p["id"], "proposal": p,
-                                                       "goal_title": goal and goal["title"],
-                                                       "kpi_name": record and record["name"]})
+                    item = asked.get(p["id"]) or {"kind": "proposal", "ref": p["id"], "proposal": p,
+                                                  "goal_title": goal and goal["title"],
+                                                  "kpi_name": record and record["name"]}
+                    items.append({**item, "proposal": {**item["proposal"], "card": G.card(c, p)}})
             return {"actor": who.actor, "items": GA.for_person(c, who.actor, items)}
 
     @app.post("/api/v2/goals/refresh")
@@ -664,7 +665,7 @@ def install(app, store, auth, mutate, settings):
                 "SELECT * FROM goal_checkins WHERE kpi_id=? ORDER BY ts DESC LIMIT 5", (record["id"],)))
         return {"kpi": K.view(record, effective), "links": links, "readings": rows,
                 "definitions": [] if K.auto(record["id"]) else K.definitions(c, record["id"]),
-                "checkins": said, "proposals": [{**p, "may_decide": decider(c, who, p)} for p in G.proposals(c, "pending", kpi_id=record["id"])],
+                "checkins": said, "proposals": [{**p, "card": G.card(c, p), "may_decide": decider(c, who, p)} for p in G.proposals(c, "pending", kpi_id=record["id"])],
                 "may_edit": may_edit_kpi(c, who, record), "may_log": may_log(c, who, record) and not K.auto(record["id"])}
 
     @app.get("/api/v2/kpis")
@@ -815,7 +816,7 @@ def install(app, store, auth, mutate, settings):
                 if (goal and goal["owner"] in hidden) or (record and record["owner"] in hidden):
                     continue
                 rows.append({**p, "goal_title": goal and goal["title"], "kpi_name": record and record["name"],
-                             "may_decide": decider(c, who, p)})
+                             "card": G.card(c, p, hidden), "may_decide": decider(c, who, p)})
             return {"proposals": rows}
 
     @app.post("/api/v2/goal-proposals")
@@ -844,5 +845,6 @@ def install(app, store, auth, mutate, settings):
             if not decider(c, who, item):
                 raise Problem("forbidden", "Whoever owns the goal or the KPI decides, and only a person, on their own click", 403)
             return {"proposal": G.decide(c, who.actor, pid, body.decision, body.note, why=body.why, option=body.option,
-                                         moves=body.moves)}
+                                         moves=body.moves,
+                                         target=body.target.model_dump() if body.target else None)}
         return mutate(request, body, work)

@@ -495,6 +495,7 @@ STABLE = [
      "GoalProposalResult"),
     ("/api/v2/proposals/{pid}/decide", "post", "Goals", "decideGoalProposal",
      "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
+     "An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. "
      "A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what "
      "can't be done comes back as a new recovery saying why", "GoalProposalResult"),
     ("/api/v2/kpis", "get", "KPIs", "listKpis",
@@ -1066,6 +1067,10 @@ SCHEMAS = {
                          "decision_note": "s", "result": {"type": ["object", "null"]}},
                         required=["id", "kind", "goal_id", "kpi_id", "payload", "reason", "proposed_by", "proposed_at", "status"],
                         goal_title={"type": ["string", "null"]}, kpi_name={"type": ["string", "null"]},
+                        card={"type": "object", "description": "What its card says beside the payload: goal_title, kpi_name; "
+                              "an Add a KPI suggestion's measure {name, definition, source_note, unit, direction, existing} "
+                              "and target_label; a new target's now_label and target_label; a new definition's or wording's "
+                              "changes [{label, now, proposed}]"},
                         may_decide={"type": "boolean", "description": "Whether the caller may confirm or reject it"}),
     "GoalView": obj({}, required=["kpis", "children", "chain", "tasks", "events", "checkins", "proposals"],
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),

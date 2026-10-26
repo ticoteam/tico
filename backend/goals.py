@@ -720,6 +720,45 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     return None
 
 
+# What a goal suggestion card says beside the payload (ui/goals-kpis.js goalPropHtml): the names, the measure an Add a
+# KPI suggestion adds (new or reused), targets in words, and Now / Proposed for new wording or a new definition.
+CARD_FIELDS = {"name": "Name", "definition": "Definition", "unit": "Unit", "direction": "Direction",
+               "cadence": "Cadence", "source_note": "Source"}
+
+
+def card(conn, p, hidden=()):
+    """`hidden`: owners whose KPIs the reader may not see; a reused measure of theirs is not named."""
+    pl, kind = p.get("payload") or {}, p["kind"]
+    row = goal(conn, p["goal_id"]) if p.get("goal_id") else None
+    record = kpi(conn, p["kpi_id"]) if p.get("kpi_id") else None
+    out = {"goal_title": row and row["title"], "kpi_name": record and record["name"]}
+    if kind == "goal_kpi":
+        used = kpi(conn, pl["kpi_id"]) if pl.get("kpi_id") else None
+        spec = used or {"direction": "up", **(pl.get("kpi") or {})}
+        if used and used["owner"] in hidden:
+            spec = {"name": "a measure you cannot see", "direction": used["direction"], "unit": used["unit"],
+                    "source_note": "hidden"}
+        out["measure"] = {"name": spec.get("name") or "", "definition": spec.get("definition") or "",
+                          "source_note": spec.get("source_note") or "", "unit": spec.get("unit") or "",
+                          "direction": spec.get("direction") or "up", "existing": bool(used)}
+        out["target_label"] = K.target_label(spec, pl.get("target"))
+    elif kind == "kpi_target" and record:
+        link = next(iter(K.links_of(conn, goal_id=p.get("goal_id"), kpi_id=record["id"])), None) if p.get("goal_id") else None
+        out["now_label"], out["target_label"] = K.target_label(record, link), K.target_label(record, pl)
+    elif kind == "kpi_definition" and record:
+        out["changes"] = [{"label": CARD_FIELDS.get(k, k), "now": record.get(k) or "", "proposed": v}
+                          for k, v in K.clean(dict(pl)).items()]
+    elif kind == "goal_wording" and row:
+        changes = [{"label": label, "now": row.get(k) or "", "proposed": pl[k]}
+                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k)]
+        if pl.get("bet_id"):
+            from . import strategy
+            bet = lambda bid: (strategy.bet(conn, str(bid)) or {}).get("statement") if bid else ""
+            changes.append({"label": "Serves", "now": bet(row.get("bet_id")) or "", "proposed": bet(pl["bet_id"]) or ""})
+        out["changes"] = changes
+    return out
+
+
 WHY_REPLACED = "Replaced by a newer Why"
 
 
@@ -766,11 +805,12 @@ def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)), conn)
 
 
-def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None):
+def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None, target=None):
     """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once.
     A Why may be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options
     (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py). A strategy realignment is
-    confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py)."""
+    confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py). An Add a KPI suggestion may be
+    confirmed with the person's own `target` for the link, checked as any link's target is, in place of its own."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:
@@ -787,6 +827,15 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         H.refuse(conn, actor, "kind", "only a recovery is confirmed with one of its options")
     if moves and (row["kind"] != "strategy_realign" or decision != "confirm"):
         H.refuse(conn, actor, "kind", "only a strategy realignment is confirmed with moves")
+    if target is not None:
+        if row["kind"] != "goal_kpi" or decision != "confirm":
+            H.refuse(conn, actor, "kind", "only an Add a KPI suggestion is confirmed with a target")
+        payload = row["payload"]
+        measure = (kpi(conn, payload["kpi_id"]) if payload.get("kpi_id")
+                   else {"direction": "up", **(payload.get("kpi") or {})}) or {}
+        _, error = K.validate_target(measure, target)
+        if error:
+            _lint(conn, actor, error)
     result = None
     if row["kind"] == "recovery" and decision == "confirm":
         from . import ceo_suggest
@@ -806,7 +855,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         elif row["kind"] == "kpi_target":
             kpi_link(conn, actor, goal_id, kpi_id, payload)
         elif row["kind"] == "goal_kpi":
-            target = payload.get("target") or {"kind": "none"}
+            target = target if target is not None else payload.get("target") or {"kind": "none"}
             if payload.get("kpi_id"):
                 kpi_link(conn, actor, goal_id, payload["kpi_id"], target)
                 result = {"kpi_id": payload["kpi_id"]}

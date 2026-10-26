@@ -193,6 +193,13 @@ function goalPropHtml(p, extra) {
   } else if (p.kind === 'flag') {
     head = `<b>${esc(by)} noticed:</b> ${goal} ${esc(PROP_FLAG[pl.issue] || pl.issue || 'needs a look')}${pl.note ? `: ${esc(pl.note)}` : ''}`;
     yes = 'Got it'; no = null;
+  } else if (p.kind === 'recovery') {
+    // Out of this card's scope: a recovery keeps its own words (recoveryHtml), here its pick on one line.
+    head = `<b>A recovery</b> for ${goal}: ${esc(pl.options?.[pl.pick || 0]?.label || '')}`;
+    yes = 'Approve'; no = 'Reject';
+  } else if (p.kind === 'goal_why') {
+    head = `<b>A Why</b> for ${goal}: ${esc(pl.why || '')}`;
+    yes = 'Accept'; no = 'Reject';
   } else head = `<b>${esc(p.kind)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}`;
   return `<li class="kpi-prop" data-proposal="${esc(p.id)}" data-prop-kind="${esc(p.kind)}"><div class="kpi-prop-main"><span class="kpi-prop-head">${head}</span>${body}
     ${p.kind === 'flag' ? (p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : '') : why}${more}</div>

@@ -576,6 +576,7 @@ class GoalProposalDecision(Contract):
     option: int | None = Field(default=None, ge=0, le=9)     # the option a recovery is confirmed with (its pick if none)
     # A strategy realignment, per goal on the card: keep (the default), retire, or the id of the bet it moves to.
     moves: dict[str, str] | None = Field(default=None, max_length=200)
+    target: KpiTarget | None = None      # an Add a KPI suggestion confirmed with the person's own target on the link
 
 
 # The company at the top of Goals (backend/company.py): only the fields sent change.
