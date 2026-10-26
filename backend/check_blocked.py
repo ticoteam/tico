@@ -57,13 +57,14 @@ def blocked(c, child):
 def detail(c, row):
     """A ticket's wait on a blocked check, as wait_detail gives it, with the ticket's hold reason; else None."""
     H = _H()
-    from . import task_relations as TR
+    from . import profiles, task_relations as TR
     if not row or not review_gate.engineering(c, row):
         return None
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
         label = kind(child)
-        if not label or not H.is_bot(child["owner"]):
+        # A builder's own decision question can be titled Review 1/2 without being a judging check.
+        if not label or not profiles.is_check(c, child):
             continue
         found = blocked(c, child)
         if not found:
