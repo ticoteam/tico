@@ -37,7 +37,7 @@ def heads(c, parent, snapshots=None):
     head the link last recorded. Empty when none is known."""
     from . import hubdb as H
     out = set()
-    for pr in links(c, parent):
+    for pr in review_links(c, parent):
         detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail_json"), {}) or {}
         head = str(detail.get("head_sha") or "").lower()
         if not detail.get("error") and test_receipts.SHA.fullmatch(head):
@@ -80,6 +80,23 @@ def remember_heads(c, actor, child_id, parent, snapshots=None):
     seen = heads(c, parent, snapshots)
     if seen:
         H._task_event(c, child_id, actor, "review_head", None, ",".join(sorted(seen)), "")
+
+
+# A merged PR's head is the change a review filed after the merge judges (Dev 569).
+MERGED = ("merged", "shipped")
+
+
+def review_links(c, row):
+    """The pull requests a Review or QA request on this ticket judges: the open ones, else the merged ones at the head
+    that merged. A PR closed without merging is never judged."""
+    from . import hubdb as H
+    return links(c, row) or [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") in MERGED]
+
+
+def merged_refusal(c, actor, row, kind, head, pr, problem, action, retryable=False):
+    """Refuse a review of a merged PR: say it is merged, which head the review judges, and what to do."""
+    reject(c, actor, row, kind, head, pr, f"Review refused: {pr['url']} is merged, so this review judges its merged "
+                                          f"head {head}. {problem} {action}", retryable=retryable)
 
 
 def engineering(c, row):
@@ -257,9 +274,15 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
     if not engineering(c, row):
         return
     writers = "The owner, a manager above the owner, or a person who may edit this ticket"
-    prs = links(c, row)
+    prs = review_links(c, row) if require_pr else links(c, row)
     if not prs:
         if require_pr:
+            closed = [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") == "closed"]
+            if closed:
+                reject(c, actor, row, "receipt", "unknown", closed[-1],
+                       f"Review refused: {closed[-1]['url']} was closed without merging, so it has no change to review. "
+                       "Link the PR that carries the change (reopen this one or open a new one) before asking a "
+                       "reviewer. The owner or a person who may edit this ticket can link it.")
             reject(c, actor, row, "receipt", "unknown", {"url": "no linked PR"},
                    "Review refused: no linked PR. Link the current PR before asking a reviewer. "
                    "The owner or a person who may edit this ticket can link it.")
@@ -277,6 +300,9 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
+            if pr.get("state") in MERGED:
+                merged_refusal(c, actor, row, "ci", head, pr, f"Cannot verify that head and its CI ({why}).",
+                               "Retry the review request.", retryable=detail.get("retryable", False))
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
             reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
                                                   "Retry the review move. Anyone allowed to move this ticket can retry.",
@@ -284,6 +310,10 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
+            if pr.get("state") in MERGED:
+                merged_refusal(c, actor, row, "ci", head, pr, f"CI failing at that head: {names}.",
+                               "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
+                               "review on that PR.")
             reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
@@ -291,6 +321,21 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
         detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
         head = detail["head_sha"]
         checks = detail.get("checks") or {}
+        if pr.get("state") in MERGED and snapshots is not None:
+            # Head of Engineering, Oct 26: the merge already required green checks, so all-green checks at the merged
+            # head are its receipt. A pending or missing check, or a failed receipt at that head, still refuses.
+            waiting = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in checks.items()
+                             if v not in ("passing", "skipped"))
+            if waiting or "passing" not in checks.values():
+                merged_refusal(c, actor, row, "ci", head, pr,
+                               f"Its checks at that head are not all passing: {', '.join(waiting)} still pending."
+                               if waiting else "No passing GitHub check is recorded at that head.",
+                               "Wait for the checks to pass (or rerun them on GitHub), then ask for the review again.")
+            if test_receipts.at_head(facts, head)[0] == "failed":
+                merged_refusal(c, actor, row, "receipt", head, pr, "A failed test receipt is recorded at that head.",
+                               "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
+                               "review on that PR.")
+            continue
         # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
         # records skipped and neutral checks as passing, so it cannot tell a real pass from a skip.
         if snapshots is not None and checks and "passing" in checks.values() and all(v in ("passing", "skipped") for v in checks.values()):
@@ -298,6 +343,13 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
         state, receipts = test_receipts.at_head(facts, head)
         if state != "passed":
             newest = next((r["head"] for r in reversed(receipts) if r["head"]), "no receipt")
+            if pr.get("state") in MERGED:
+                merged_refusal(c, actor, row, "receipt", head, pr,
+                               f"{state.capitalize()} test receipt at that head; newest receipt head: {newest}.",
+                               "Fix the failure in a follow-up PR and ask for the review on that PR."
+                               if state == "failed" else
+                               "Post a passing test receipt naming the merged head on this ticket, then ask for the "
+                               "review again. " + writers + " can post it.")
             if state == "failed":
                 action = ("Have the owner or another contributor fix the recorded test failure and push a new head, "
                           "then retry with passing CI or a passing receipt. A written same-head rerun cannot clear it; "
