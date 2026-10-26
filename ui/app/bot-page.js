@@ -227,7 +227,7 @@ function botQuarantineCard(slug) {
   if (s?.bot_state !== 'quarantined' || !e || botLimited(e) || !settingsCanManageBot(e)) return '';
   const r = s.quarantine?.review || {};
   return `
-    <section class="card" id="bot-quarantine"><header><h2>Paused for review</h2>
+    <section class="card" id="bot-quarantine"><header><h2>${s.quarantine?.auto ? 'Quarantined for repeated refused writes' : 'Paused for review'}</h2>
         <button class="primary" type="button" data-quarantine-resume>Resume bot</button></header>
       <p>${esc(quarantineWhy(slug))} ${esc(QUARANTINE_RESUME_NOTE)}</p>
       ${r.preview ? `<blockquote class="bot-quarantine-text">${esc(r.preview)}</blockquote>` : ''}

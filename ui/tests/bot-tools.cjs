@@ -273,14 +273,17 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
     for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
       // A quarantine from repeated refusals says when it lifts and offers Resume now to a manager; the message box stays.
       const since = iso(-10 * 60e3), resumes = iso(50 * 60e3);
+      const why = `Quarantined for repeated refused writes (rule 8; 10 repeated refusals today): resumes by itself at ${new Date(resumes).toISOString().slice(0, 16).replace('T', ' ')} UTC; a person who manages it can clear it sooner. Refused write (identity): Only a person changes a task number. <script>throw 1</script>`;
       const held = {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', since, focus: '10 repeated refusals today',
-        quarantine: {since, auto: true, resumes_at: resumes}};
-      const {page, errors, context, cleared} = await open(browser, viewport, {}, {status: held});
+        quarantine: {since, auto: true, resumes_at: resumes, why}};
+      const {page, errors, context, cleared} = await open(browser, viewport, {timezoneId: 'America/Los_Angeles'}, {status: held});
       await page.goto('https://tico-ui.test/#/bot/cmo');
       const banner = page.locator('#conv-paused:not([hidden])');
       await banner.waitFor();
-      const at = await page.evaluate(r => new Date(r).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}), resumes);
-      assert.match(await banner.innerText(), new RegExp(`resumes by itself at ${at.replace(/\s/g, '\\s')}`));
+      assert((await banner.innerText()).includes(why), 'shows Health explanation verbatim, escaped and in UTC');
+      assert.equal(await page.locator('#bot-alert .bot-alert').getAttribute('title'), why);
+      assert((await page.locator('#bot-quarantine').innerText()).includes(why));
+      assert.doesNotMatch(await page.locator('#bot-quarantine h2').innerText(), /review/);
       assert.match(await banner.innerText(), /Your messages are saved and run when it's back/);
       assert.doesNotMatch(await banner.innerText(), /under More/);
       if (shots) await page.screenshot({path: path.join(shots, `bot-quarantine-banner-${viewport.width}.png`)});
