@@ -411,7 +411,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
     hub stall-triage [--on|--off]          quiet task triage: Decide reads a quiet task's last messages before its stall check
-                                           stays silent (the owner or an admin; off by default)
+                                           stays silent (the owner or an admin; on by default)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -2582,8 +2582,10 @@ def parser():
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
     s = sub.add_parser("stall-triage", help="quiet task triage: Decide reads a quiet task before its stall check stays silent (docs/tasks.md)")
-    s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None,
-                   help="--on switches it on, --off off; leave out to read the switch")
+    on = s.add_mutually_exclusive_group()
+    on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
+    on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")
+    on.add_argument("--no-on", dest="on", action="store_false", help=argparse.SUPPRESS)      # the old spelling
     s.set_defaults(fn="stall-triage")
     roadmap = sub.add_parser("roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)").add_subparsers(dest="sub")
     s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")

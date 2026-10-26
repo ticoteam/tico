@@ -301,10 +301,22 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await firstStep.locator('[aria-label="Open checks each"]').fill('3');
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
     await page.locator('.task-type-editor [name=typeBots]').selectOption('work');
+    // A type private by default (the Product roadmap) shows each step's public name too, and a new step left blank
+    // is not given its internal name publicly.
+    assert.equal(await page.locator('.task-type-editor [name=defaultVisibility]').inputValue(), 'private');
+    assert.equal(await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('[aria-label="Public step name"]').isVisible(), true,
+      'the public step name shows on a private-by-default type');
+    await page.locator('.task-type-editor [data-add-step]').click();
+    await page.locator('.task-type-editor [data-steps] .task-step-edit').last().locator('[aria-label="Step name"]').fill('Internal triage');
+    await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('[aria-label="Public step name"]').fill('Under review');
     await page.locator('.task-type-editor button[type=submit]').click();
     await page.getByText('Campaigns', {exact: true}).waitFor();
     const edit = posted.find(item => item.path === '/api/v2/task-types/marketing');
     assert.equal(edit.body.steps[0].id, 'legal', 'editing keeps ids and order');
+    assert.equal(edit.body.steps[0].public_name, 'Under review', 'a public name typed is saved');
+    const added = edit.body.steps.find(step => step.name === 'Internal triage');
+    assert.equal('public_name' in added, false, 'a new step left blank does not send its internal name as its public one');
+    assert.equal(edit.body.steps.find(step => step.id === 'draft').public_name, '', 'an existing step left blank stays off public pages');
     assert.equal(edit.body.bots, 'work', 'the editor saves what bots may do with the type');
     assert.deepEqual([edit.body.steps[0].check_pool, edit.body.steps[0].check_limit], [['rev-a', 'rev-b'], 3], 'a step saves its check pool and limit');
     assert.deepEqual([edit.body.steps[1].check_pool, edit.body.steps[1].check_limit], [[], 2], 'a step without one saves none');

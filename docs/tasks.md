@@ -494,7 +494,7 @@ is preserved, including tasks that older versions closed automatically. Use **Cl
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
 work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished
-duplicates are still refused.
+duplicates are still refused, ignoring case and extra spaces, on create and on rename alike.
 
 ## Types bots work on
 

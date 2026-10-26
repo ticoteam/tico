@@ -215,7 +215,7 @@ function taskTypeEditor(type = null) {
   const addStep = step => {
     const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || '';
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
-      <input ${dialog.querySelector('[name=defaultVisibility]').value === 'public' ? '' : 'hidden'} aria-label="Public step name" value="${esc(step?.public_name ?? step?.name ?? '')}" placeholder="Public step">
+      <input aria-label="Public step name" value="${esc(step?.public_name ?? '')}" placeholder="Public step (blank: not shown)" title="What a public roadmap shows for this step; blank shows none">
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
       <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
       <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
@@ -227,7 +227,6 @@ function taskTypeEditor(type = null) {
     rows.append(row);
   };
   (type?.steps || [{name: 'Open', status: 'open'}]).forEach(addStep);
-  dialog.querySelector('[name=defaultVisibility]').onchange = ev => rows.querySelectorAll('[aria-label="Public step name"]').forEach(input => input.hidden = ev.target.value !== 'public');
   dialog.querySelector('[data-add-step]').onclick = () => addStep();
   const saved = async body => {
     const submit = dialog.querySelector('[type=submit]'); submit.disabled = true;
@@ -239,10 +238,15 @@ function taskTypeEditor(type = null) {
   };
   dialog.querySelector('form').onsubmit = event => {
     event.preventDefault();
-    const steps = [...rows.children].map((row, position) => ({...(row.dataset.stepId ? {id: row.dataset.stepId} : {}),
-      name: row.querySelector('input').value, public_name: row.querySelector('[aria-label="Public step name"]').value || row.querySelector('input').value, status: row.querySelector('select').value, position,
-      check_pool: row.querySelector('[aria-label="Check pool"]').value.split(',').map(slug => slug.trim()).filter(Boolean),
-      check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector('[aria-label="Open checks each"]').value, 10) || 2))}));
+    // A public item on a type private by default shows its step's public name, never the internal one: the field is
+    // always there, and a new step left blank gets the server's default (its name only on a type public by default).
+    const steps = [...rows.children].map((row, position) => {
+      const shown = row.querySelector('[aria-label="Public step name"]').value.trim();
+      return {...(row.dataset.stepId ? {id: row.dataset.stepId} : {}), name: row.querySelector('input').value,
+        ...(shown || row.dataset.stepId ? {public_name: shown} : {}), status: row.querySelector('select').value, position,
+        check_pool: row.querySelector('[aria-label="Check pool"]').value.split(',').map(slug => slug.trim()).filter(Boolean),
+        check_limit: Math.min(20, Math.max(1, parseInt(row.querySelector('[aria-label="Open checks each"]').value, 10) || 2))};
+    });
     void saved({name: dialog.querySelector('[name=typeName]').value, steps, bots: dialog.querySelector('[name=typeBots]').value, default_visibility: dialog.querySelector('[name=defaultVisibility]').value});
   };
   const remove = dialog.querySelector('[data-delete-type]');
