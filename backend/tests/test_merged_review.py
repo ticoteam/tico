@@ -181,18 +181,22 @@ def test_a_refused_review_of_a_merged_pr_holds_the_ticket_until_github_is_seen_a
         assert resumed["step_id"] == task["step_id"] and resumed["blocked_since"] is None
 
 
-def test_a_merged_pr_hold_clears_on_a_fresh_all_green_read_at_its_merged_head(api, monkeypatch):
-    """With no receipt, only a fresh read can show the merged head all green, so the periodic read covers merged PRs."""
+def test_a_merged_pr_hold_clears_on_a_fresh_read_once_a_check_webhook_reports_the_merged_head_green(api, monkeypatch):
+    """With no receipt, only a fresh read can show the merged head all green, so the periodic read covers merged PRs,
+    and a check result arriving for the merged PR is a change that read waits for."""
     from backend import task_blocked
     task = merged(api)
-    github(api, monkeypatch, {"python": "failure"})
+    github(api, monkeypatch, {"python": None})
     assert review(api, task).status_code == 422
     service = api.app.state.github_app
     assert task_blocked.fresh(service, force=True) == []
-    assert get(api, "tasks/" + task["id"])["task"]["blocked_since"], "a failing merged head keeps the hold"
+    assert get(api, "tasks/" + task["id"])["task"]["blocked_since"], "a pending check at the merged head keeps the hold"
     calls = github(api, monkeypatch, {"python": "success"})
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, task["owner"], task["id"], note="Checks rerun on the merged head.")
+    assert task_blocked.fresh(service, force=True) == [], "nothing the gate reads changed, so GitHub is not read again"
+    assert calls == []
+    hook(api, "check_run", {"repository": {"full_name": "ticoteam/tico"}, "check_run": {
+        "name": "python", "status": "completed", "conclusion": "success", "head_sha": HEAD,
+        "pull_requests": [{"number": 412}]}})
     assert task_blocked.fresh(service, force=True) == [task["id"]]
     assert any("/commits/" + HEAD + "/check-runs" in p for p in calls)
     current = get(api, "tasks/" + task["id"])["task"]
