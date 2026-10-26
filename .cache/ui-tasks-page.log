@@ -1,0 +1,20 @@
+rows, tabs, groups: ok
+required task type, persistence, search, creation and filter clearing: ok
+filter chips and the address: ok
+old filters and unknown types: ok
+peek and keys: ok
+properties: ok
+snoozing: ok
+quiet work: ok
+bulk: ok
+Needs you, Done, Closed, Recurring: ok
+plates: ok
+Waiting on you: ok
+Done pagination through filtered empty pages: ok
+ages: ok
+poll reload: ok
+phone: ok
+re-check: saves, errors, menus, dates, drafts: ok
+re-check: pickers, polls, Done, next row, names: ok
+re-check: phone sheet close: ok
+re-check 2: menus, Undo failures, overtaken reloads, names: ok
