@@ -224,7 +224,7 @@ class TaskUpdate(Contract):
     private: StrictBool | None = None
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined", "closed"] | None = None
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
@@ -248,6 +248,14 @@ class TaskUpdate(Contract):
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def closed_status(self):
+        # Use the same permissions, version check and close/edit separation as close:true.
+        if self.status == "closed":
+            self.status = None
+            self.close = True
+        return self
 
 
 class TaskStepInput(Contract):

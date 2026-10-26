@@ -654,7 +654,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     assigned = c.execute('SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not assigned or not readiness_document(assigned['readiness_json']).get('worktrees'):
         raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
-    if who.role == 'bot' and who.runner_id != assigned['id']:
+    if (who.role == 'bot' and who.runner_id != assigned['id']
+            and not (who.actor != task['owner'] and H.task_represents(c, who.actor, task['owner']))):
         raise Problem('forbidden', 'Worktree belongs on the bot\'s computer', 403)
     attaching = path is not None
     short = task['id'][:8]
@@ -771,8 +772,8 @@ def install(app, store, auth, mutate):
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         human = who.role == 'owner' or who.role == 'human' and H.can_move(c, who.actor)
-        if not H.is_bot(row['owner']) or not (human or who.role == 'bot' and who.actor == row['owner']):
-            raise Problem('forbidden', "Only the task's owner bot or a human mover manages its worktrees", 403)
+        if not H.is_bot(row['owner']) or not (human or H.task_represents(c, who.actor, row['owner'])):
+            raise Problem('forbidden', "Only the task's owner bot, its managers or a human mover manages its worktrees", 403)
         return row
 
     @app.post('/api/v2/tasks/{tid}/worktrees')

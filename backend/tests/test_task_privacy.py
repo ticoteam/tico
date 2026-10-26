@@ -19,14 +19,16 @@ def test_private_two_party_matrix(api, requester, owner):
                              private=True, type=typ['id'], lint=False)
         c.execute('INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires) '
                   'VALUES(?,?,?,?,?)', (task['id'], 'bot:cmo', requester, None, H.shift(H.now(), hours=24)))
+    # Ana is the chart's root above cpo even when she is not a task party.
+    readers = {requester, owner, 'human:ana'}
     for actor, token in tokens.items():
         response = api.get('/api/v2/tasks/' + task['id'], headers=headers(token))
-        assert response.status_code == (200 if actor in (requester, owner) else 404), response.text
+        assert response.status_code == (200 if actor in readers else 404), response.text
         listed = get(api, 'tasks', token=token)['tasks']
-        assert (task['id'] in {row['id'] for row in listed}) == (actor in (requester, owner))
+        assert (task['id'] in {row['id'] for row in listed}) == (actor in readers)
         response = api.post('/api/v2/sql', json={'sql': 'SELECT id,title FROM tasks'}, headers=headers(token))
         assert response.status_code == 200, response.text
-        assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in (requester, owner))
+        assert ('Sensitive packet' in response.text or task['id'] in response.text) == (actor in readers)
 
 
 def test_company_read_does_not_grant_work_but_dev_type_does(api):
