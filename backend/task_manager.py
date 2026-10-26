@@ -283,15 +283,15 @@ def _owner_review(c, at):
 
 
 def _duplicates(c):
+    # Titles match by H.title_key, the create refusal's rule, so only pairs of the same requester and owner are read.
     rows = H._rows(c.execute(
         "SELECT * FROM tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') AND id IN ("
         "SELECT id FROM tasks t WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
         "AND EXISTS(SELECT 1 FROM tasks o WHERE o.id<>t.id AND o.requester=t.requester AND o.owner=t.owner "
-        "AND lower(trim(o.title))=lower(trim(t.title)) AND coalesce(o.private,1)=0 "
-        "AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created, id"))
+        "AND coalesce(o.private,1)=0 AND o.status IN ('open','doing','waiting','review','ready'))) ORDER BY created, id"))
     seen, out = {}, []
     for row in rows:
-        key = (row["requester"], row["owner"], row["title"].strip().lower())
+        key = (row["requester"], row["owner"], H.title_key(row["title"]))
         if key in seen:
             if _readable(c, row) and _readable(c, seen[key]):
                 out.append(_item("duplicate", row, f"same title, requester and owner as {seen[key]['id']}",

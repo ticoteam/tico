@@ -67,7 +67,8 @@ unknown task. Contact details are unverified and only for manual follow-up.
 
 Lists accept `limit` (up to 100) and `offset`; follow `next_offset` until null. Pages are capped at
 256 KB. A task contains only `id`, `title` (public title), `summary` (public summary), public step
-name (`public_name` on its step, initially copied from the internal name), requester count and `parts: {done, total}`. Public comments contain only id, text, creation
+name (`public_name` on its step; a step added later to a type that is private by default, such as the Product
+roadmap, has none until you give it one in Settings → Tasks, so its internal name never shows; empty for no step label), requester count and `parts: {done, total}`. Public comments contain only id, text, creation
 time and `author: Team|Visitor`. Nothing returns requester names, contacts, internal discussions,
 attachments, assignees, bot work, labels or child identities. Render public text as text or sanitized
 Markdown. Comments, suggestion titles and suggestion summaries allow at most two links and no embedded
