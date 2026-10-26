@@ -231,12 +231,13 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner: 'human:ana', direction: 'in'}, opsBlocker]};
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
-    // A task that waits on a person keeps their ask: on them directly, or through the ask child a bot's task files.
-    for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker],
-      parent: [{id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner: 'human:ana', direction: 'in'}]}}]) {
+    // A task that waits on a person keeps their ask: on them directly, or through the ask card a bot's task files,
+    // which the server serves as a blocker the person owns, linked after the bot's.
+    for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker,
+      {id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner: 'human:ana', direction: 'in'}]}}]) {
       Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
       await page.evaluate(() => tasksLoad(TASKS_ST));
-      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
+      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
     }
     Object.assign(brief, {status: 'review', note: '', waiting_on: null, relations: {blocks: [opsBlocker]}});
     await page.evaluate(() => tasksLoad(TASKS_ST));

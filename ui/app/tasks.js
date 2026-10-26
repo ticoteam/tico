@@ -44,12 +44,13 @@ const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, r
 // A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
 // must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
 // blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
-// task, the ask child a bot's task files for them, or an open question to them) keeps their ask, so its note is never
-// shown as a bot's reason.
+// task, an open question to them, or any open blocker they own, which is how the ask card a bot's task files for them
+// is served) keeps their ask, so its note is never shown as a bot's reason. A reader who cannot open the first
+// blocker is served only the ones after it, so a second bot's task there is named instead.
 function taskBotWait(t) {
   const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
   if (t?.status !== 'waiting' || actorPerson(t.waiting_on) || taskAskToPerson(t)
-      || taskRels(t, 'parent', 'in').some(r => open(r) && actorPerson(r.owner))) return null;
+      || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
   const b = taskBlockers(t).find(open);
   if (!b || !actorSlug(b.owner)) return null;
   const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';

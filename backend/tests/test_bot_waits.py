@@ -112,6 +112,10 @@ def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
     after = H.task(c, task["id"])
     assert after["waiting_on"] is None and after["note"] == "Needs review."
     assert H.wait_detail(c, after)["on"] == "human:ana"
+    # The screen finds that ask among the blockers the task view serves (ui/app/tasks.js taskBotWait).
+    served = TR.grouped(c, [task["id"]])[task["id"]]
+    assert "parent" not in served
+    assert [b["owner"] for b in served["blocks"] if b["direction"] == "in"] == ["bot:ops", "human:ana"]
     other = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cpo", lint=False)
     H.task_update(c, "bot:cpo", other["id"], status="waiting", waiting_on="ana",
                   note="Approve the launch post? I'll publish it after.")
