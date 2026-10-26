@@ -5,8 +5,8 @@ filter tabs of rows the server checks, counted for each viewer ("me" and "others
 import json
 from datetime import datetime, timedelta, timezone
 
-from backend import hubdb as H
-from backend.tests.test_api import api, as_member, get, put, setup_attempt  # noqa: F401  (api is a fixture)
+from backend import hubdb as H, task_relations as TR
+from backend.tests.test_api import api, as_member, get, post, put, setup_attempt  # noqa: F401  (api is a fixture)
 
 ACTIVE = ["open", "doing", "waiting"]
 OTHERS = {"name": "Assigned to Others", "show_count": True, "conditions": [
@@ -48,6 +48,14 @@ def task(api, title, owner, requester, **columns):
                 value = stamp(value)
             c.execute(f"UPDATE tasks SET {name}=? WHERE id=?", (value, tid))
     return tid
+
+
+def bot_wait(api, title, owner="bot:ops", requester="human:ana", prerequisite_owner="bot:cpo", **columns):
+    tid = task(api, title, owner, requester, status="waiting", **columns)
+    pre = task(api, "Prerequisite for " + title, prerequisite_owner, "human:ana")
+    with api.app.state.store.transaction() as c:
+        TR.relate(c, owner, tid, pre, "blocked_by")
+    return tid, pre
 
 
 def test_a_bot_starts_with_the_new_default_tabs_and_widgets(api):
@@ -213,7 +221,7 @@ def test_each_field_filters(api):
     task(api, "New", "bot:ops", "human:ana", created=1)
     task(api, "Old", "bot:ops", "human:ana", created=10, updated=10)
     task(api, "Waits on Ben", "bot:ops", "human:ana", status="waiting", waiting_on="human:ben", created=10, updated=10)
-    task(api, "Waits on cpo", "bot:ops", "human:ana", status="waiting", waiting_on="bot:cpo", created=10, updated=10)
+    bot_wait(api, "Waits on cpo", created=10, updated=10)
     task(api, "Done lately", "bot:ops", "human:ana", status="done", done_at=5, created=10, updated=5)
     task(api, "Done long ago", "bot:ops", "human:ana", status="done", done_at=40, created=50, updated=40)
     task(api, "Overdue", "bot:ops", "human:ana", due="2020-01-01", created=10, updated=10)
@@ -249,8 +257,8 @@ def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,updated,updated_by) VALUES('ops','',?,?,?)",
                   (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
-    task(api, "Waits on cpo", "bot:ops", "human:ana", status="waiting", waiting_on="bot:cpo")
-    task(api, "Asked of cpo, waiting", "bot:cpo", "bot:ops", status="waiting", waiting_on="bot:finance")
+    bot_wait(api, "Waits on cpo")
+    bot_wait(api, "Asked of cpo, waiting", "bot:cpo", "bot:ops", prerequisite_owner="bot:finance")
     layout = tabs(api, "ops")
     assert layout["saved"] is True and layout["widgets"] == WIDGETS
     assert [t["name"] for t in layout["tabs"]] == ["Done Recently", "Doing", "Waiting on bots", "Product"]
@@ -269,7 +277,7 @@ def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
 def test_default_filters_are_disjoint_and_viewer_relative(api):
     task(api, "Open", "bot:ops", "human:ana", status="open")
     task(api, "Doing", "bot:ops", "human:ana", status="doing")
-    task(api, "Waits on bot", "bot:ops", "human:ana", status="waiting", waiting_on="bot:cpo")
+    bot_wait(api, "Waits on bot")
     task(api, "Waits on Ana", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
     task(api, "Unspecified wait", "bot:ops", "human:ana", status="waiting", waiting_on=None)
     task(api, "Review", "bot:ops", "human:ana", status="review")
@@ -349,3 +357,47 @@ def test_needs_condition_can_be_removed_changed_and_restored(api):
     assert shown(api, "ops")["Needs You"] == (3, ["Bot work", "Mine", "Wait on viewer"])
     save(api, "ops", [DEFAULT[0]])
     assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+
+
+def test_bot_filter_finds_an_api_saved_wait_and_drops_it_on_resolution(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug IN ('ops','cpo')")
+    _, _, attempt = setup_attempt(api, "ops")
+    tid, pre = bot_wait(api, "Ship after the review")
+    before = get(api, "tasks/" + tid, attempt["token"])["task"]
+    saved = post(api, "tasks/" + tid, {"version": before["version"], "status": "waiting",
+                "waiting_on": "bot:cpo", "note": "Needs the review first."}, attempt["token"])
+    saved = saved.get("task", saved)
+    assert saved["waiting_on"] is None and saved["note"] == "Needs the review first."
+    save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]}])
+    out = get(api, "bots/ops/task-tabs/tasks")
+    assert out["tabs"][0]["count"] == 1 and out["tabs"][0]["ids"] == [tid]
+    assert out["tasks"][0]["waiting_on"] is None
+    assert out["tasks"][0]["relations"]["blocks"][0]["owner"] == "bot:cpo"
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:cpo", pre, status="done", note="Reviewed.")
+    out = get(api, "bots/ops/task-tabs/tasks")
+    assert out["tabs"][0]["count"] == 0 and out["tabs"][0]["ids"] == [] and out["tasks"] == []
+
+
+def test_bot_filter_uses_readable_blockers_and_preserves_other_waits(api):
+    normal, _ = bot_wait(api, "Bot prerequisite")
+    person, _ = bot_wait(api, "Person wait", waiting_on="human:ana")
+    for kind in ("gate", "worktree"):
+        bot_wait(api, kind + " hold", blocked_kind=kind)
+    mixed, _ = bot_wait(api, "Person blocker after bot")
+    asked, _ = bot_wait(api, "Open question")
+    hidden, pre = bot_wait(api, "Private prerequisite")
+    with api.app.state.store.transaction() as c:
+        human = H.task_create(c, "human:ana", "Answer the question", "", "human:ana", lint=False, private=False)
+        TR.relate(c, "bot:ops", mixed, human["id"], "blocked_by")
+        H.task_ask(c, "bot:ops", asked, "Is this ready for review?")
+        # The relation existed before its prerequisite became private; Cara must not infer it from the count.
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (pre,))
+    save(api, "ops", [{"name": "Bot waits", "conditions": [{"field": "waiting_on", "value": "bot"}]},
+                      {"name": "People", "conditions": [{"field": "waiting_on", "value": "person"}]}])
+    ana = get(api, "bots/ops/task-tabs/tasks")["tabs"]
+    cara = get(api, "bots/ops/task-tabs/tasks", "cara-test")["tabs"]
+    assert ana[0]["count"] == 2 and set(ana[0]["ids"]) == {normal, hidden}
+    assert cara[0]["count"] == 1 and cara[0]["ids"] == [normal]
+    assert ana[1]["count"] == 1 and ana[1]["ids"] == [person]
