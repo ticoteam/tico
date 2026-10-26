@@ -294,6 +294,52 @@ def set_status(conn, actor, goal_id, status, note=""):
     return goal(conn, goal_id)
 
 
+def _before_finish(conn, goal_id):
+    """The status a done or dropped goal had while it was live: its last change from a live status (or none) to done
+    or dropped. None when it had no colour yet, as a proposed goal has none."""
+    row = conn.execute("SELECT old FROM goal_events WHERE goal_id=? AND field='status' AND new IN ('done','dropped') "
+                       "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY ts DESC, rowid DESC LIMIT 1",
+                       (goal_id,)).fetchone()
+    return row[0] if row else None
+
+
+def was_proposed(conn, row):
+    """A finished goal that ended before anyone gave it a first colour: brought back, it is still a proposal."""
+    return row["status"] in ("done", "dropped") and bool(row["parent_id"]) and _before_finish(conn, row["id"]) is None
+
+
+def reopen(conn, actor, goal_id, status, note="", undo=False):
+    """A done or dropped goal back in the live list. `status` is a colour, which sticks as one set by hand does, or
+    `auto`: the colour it had is put back and the CEO Bot works it out again (a proposed goal stays proposed). The
+    goals that moved up when it was dropped stay where they are. The history says it was reopened, and why; `undo`
+    is the "Goal removed" toast's Undo, which passes the colour and note the goal had."""
+    H._writer(conn, actor)
+    row = goal(conn, goal_id)
+    if not row:
+        H.refuse(conn, actor, "not-found", f"no goal {goal_id}")
+    if row["status"] not in ("done", "dropped"):
+        H.refuse(conn, actor, "kind", "only a done or dropped goal is reopened")
+    if status not in COLOURS + ("auto",):
+        H.refuse(conn, actor, "kind", f"a reopened goal is {'|'.join(COLOURS)}|auto, not {status}")
+    note = " ".join(str(note or "").split())
+    if not note:
+        H.refuse(conn, actor, "lint", "say in one line why it is reopened")
+    ts, rank = H.now(), _next_rank(conn, row["owner"])
+    if status == "auto":
+        new, source, said = _before_finish(conn, goal_id), "auto", ""
+    else:
+        new, source, said = status, "person", note
+    conn.execute("UPDATE goals SET status=?, status_note=?, status_by=?, status_at=?, status_source=?, "
+                 "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated=?, rank=? WHERE id=?",
+                 (new, said, actor, ts, source, ts, rank, goal_id))
+    _event(conn, goal_id, actor, "status", row["status"], new, ("Undo remove: " if undo else "Reopened: ") + note,
+           status_by=actor, status_source=source)
+    H.event(conn, actor, "goal.reopen", goal_id, {"status": new, "source": source, "undo": bool(undo)})
+    if status == "auto":
+        apply_auto(conn, goal_id)
+    return goal(conn, goal_id)
+
+
 def update(conn, actor, goal_id, title=None, body=None, parent_id=None, owner=None, rank=None, top=False,
            bet_id=None):
     """Edit the words, the parent, the owner, the place in the owner's order, or the strategy bet it serves

@@ -45,3 +45,51 @@ def test_a_person_goal_with_goals_under_it_becomes_the_company_goal_on_upgrade(a
 def owner_of(api, goal_id):
     with api.app.state.store.read() as c:
         return c.execute("SELECT owner FROM goals WHERE id=?", (goal_id,)).fetchone()[0]
+
+
+def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts_its_colour_back(api):
+    top = company_goal(api)
+    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
+                token="ben-test")["goal"]
+    post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Design is done."})
+    post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."}, token="ben-test")
+    # Only a finished goal is reopened.
+    post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Back on"}, token="ben-test", expected=422)
+    post(api, f"goals/{mine['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    # Cara may not set its colour, so she may not reopen it; a reason is required.
+    post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Mine now"}, token="cara-test", expected=403)
+    post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": ""}, token="ben-test", expected=422)
+    # Undo passes the colour and the note it had: both come back, and the history says it was undone.
+    back = post(api, f"goals/{mine['id']}/reopen", {"status": "yellow", "note": "Backend is late.", "undo": True},
+                token="ben-test")["goal"]
+    assert (back["status"], back["status_note"], back["status_source"]) == ("yellow", "Backend is late.", "person")
+    assert back["rank"] is not None
+    last = [e for e in back["events"] if e["field"] == "status"][-1]
+    assert (last["old"], last["new"], last["note"]) == ("dropped", "yellow", "Undo remove: Backend is late.")
+    # Done, then reopened with a new colour and one line why.
+    post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
+    again = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"},
+                 token="ben-test")["goal"]
+    assert (again["status"], again["status_by"], again["status_note"]) == ("red", "human:ben", "The launch slipped")
+    last = [e for e in again["events"] if e["field"] == "status"][-1]
+    assert (last["old"], last["new"], last["note"]) == ("done", "red", "Reopened: The launch slipped")
+
+
+def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_one(api):
+    top = company_goal(api)
+    proposed = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
+                    token="ben-test")["goal"]
+    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    # Dropping and reopening is not a way round the acceptance: Ben's own colour is refused, Ana's is the acceptance.
+    post(api, f"goals/{proposed['id']}/reopen", {"status": "green", "note": "Accept it"}, token="ben-test",
+         expected=403)
+    back = post(api, f"goals/{proposed['id']}/reopen", {"status": "auto", "note": "Removed by mistake",
+                                                         "undo": True}, token="ben-test")["goal"]
+    assert back["status"] is None and back["status_source"] == "auto"
+    # A goal the CEO Bot coloured gets that colour back when the arithmetic has nothing new to say.
+    post(api, f"goals/{proposed['id']}/status", {"status": "green", "note": "Accepted."})
+    post(api, f"goals/{proposed['id']}/status/auto", {})
+    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    auto = post(api, f"goals/{proposed['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
+                token="ben-test")["goal"]
+    assert auto["status_source"] == "auto" and auto["status"] is not None and auto["status"] != "dropped"

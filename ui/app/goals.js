@@ -91,7 +91,7 @@ function bindGoalEditor(el, g, done) {
     saving = true;
     try {
       if (text) await post('/v2/goals/' + encodeURIComponent(g.id), {title: text});
-      else { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: 'dropped', note: ''}); toast('Goal removed'); }
+      else { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: 'dropped', note: ''}); goalRemovedToast(g); }
       g.title = text || g.title;
       await goalsRefresh();
       done?.(!text);
@@ -170,6 +170,107 @@ function goalBetHtml(g, may) {
       <option value=""${g.bet_id ? '' : ' selected'}>None</option>${unseen}${options.map(c =>
         `<option value="${esc(c.id)}"${c.id === g.bet_id ? ' selected' : ''}>${esc(c.statement)}</option>`).join('')}</select></label>`;
 }
+// A done or dropped goal comes back (backend/goals.py `reopen`): with a colour that sticks, or `auto`, the colour it had,
+// worked out again by the CEO Bot. The server checks who may, as it does for a colour.
+const goalReopenPost = (id, status, note, undo = false) => post('/v2/goals/' + encodeURIComponent(id) + '/reopen', {status, note, undo});
+// After a removal: the redraw the page needs (the Goals page's tree and panel, else the bot page's cards).
+const goalsAfterChange = () => GOALS_ST && $('#goal-body') ? goalsReload(GOALS_ST) : goalsRefresh();
+// "Goal removed" offers Undo: the goal comes back with the colour it had, as it was set (by hand with its note, else
+// automatic). The goals that moved up when it was dropped stay where they are.
+function goalRemovedToast(g) {
+  const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
+  const panel = document.getElementById('goal-panel'), host = panel?.open ? panel : null;
+  toast('Goal removed', false, {label: 'Undo', run: async () => {
+    await goalReopenPost(g.id, byHand ? g.status : 'auto', byHand && g.status_note ? g.status_note : 'Removed by mistake', true);
+    toast('Goal restored', false, null, {host});
+    await goalsAfterChange();
+  }}, {host});
+}
+// "Finished (N)" under an owner's live goals: their done and dropped goals, closed until opened, newest first, the
+// latest 20 until "Show all". A row opens read only (its KPIs and its updates); whoever may set its colour may reopen
+// it, with a colour (or "Let CEO Bot set it") and one line why. The open state is kept per owner, so a redraw keeps it.
+const GOAL_FINISHED_CAP = 20;
+const GOAL_FINISHED = {};
+const goalFinishedAt = g => g.status_at || g.updated || '';
+const goalFinishedOf = (goals, owner) => goals.filter(g => g.owner === owner && !goalLive(g))
+  .sort((a, b) => String(goalFinishedAt(b)).localeCompare(String(goalFinishedAt(a))));
+function goalFinishedDetailHtml(d) {
+  if (!d) return '<p class="muted">Loading…</p>';
+  if (d.error) return '<p class="err">Could not load the goal.</p>';
+  const kpis = d.kpis || [], checkins = (d.checkins || []).slice().sort((x, y) => String(y.ts).localeCompare(String(x.ts)));
+  const history = (d.events || []).filter(e => e.field === 'status').slice().reverse();
+  const said = e => `${esc(goalActorName(e.actor))} · ${esc(e.new || 'no colour')}${e.note ? ': ' + esc(e.note) : ''} · ${esc(kpiDay(e.ts))}`;
+  return `<div class="goal-fin-detail">
+      <h4 class="kpi-h">Measures</h4>${kpis.length ? `<ul class="goal-fin-kpis">${kpis.map(k => `<li>${gdot(k.status)}<span>${esc(k.name)}</span>${kpiFresh(k) ? ` <span class="muted tnum">${esc(kpiNum(k.latest.value, k.unit))}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted">No KPIs.</p>'}
+      <h4 class="kpi-h">Updates</h4>${checkins.length ? checkins.map(goalCheckinHtml).join('') : '<p class="muted">No check-ins.</p>'}
+      ${history.length ? `<ul class="goal-fin-history">${history.map(e => `<li class="muted">${said(e)}</li>`).join('')}</ul>` : ''}
+    </div>`;
+}
+function goalReopenFormHtml(g) {
+  return `<form class="goal-form goal-reopen" data-fin-reopen-form="${esc(g.id)}" novalidate>
+      <div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
+        <select name="status" aria-label="Colour"><option value="">Choose…</option>${GOAL_COLOURS.filter(([v]) => v !== 'done').map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}<option value="auto">Let ${esc(ceoBotName())} set it</option></select>
+        <input name="note" type="text" maxlength="300" autocomplete="off" placeholder="One line: why it is back" aria-label="Why it is back"></div></div>
+      <div class="goal-actions"><button class="primary" type="submit">Reopen</button><button class="ghost" type="button" data-fin-reopen-cancel>Cancel</button></div>
+    </form>`;
+}
+function goalFinishedHtml(list, goals, F) {
+  const shown = F.all ? list : list.slice(0, GOAL_FINISHED_CAP);
+  const row = g => {
+    const open = F.row === g.id;
+    return `<li class="goal-fin-row" data-fin="${esc(g.id)}">
+        <div class="goal-fin-head"><button class="goal-fin-line" type="button" data-fin-open="${esc(g.id)}" aria-expanded="${open}">
+          <span class="goal-fin-title">${esc(g.title)}</span><span class="goal-fin-what">${g.status === 'done' ? 'Done' : 'Dropped'}</span>
+          <span class="muted goal-fin-when">${esc(kpiDay(goalFinishedAt(g)))}${g.status_by ? ' · ' + esc(goalActorName(g.status_by)) : ''}</span></button>
+          ${goalMayEdit(g, goals) && F.reopen !== g.id ? `<button class="linkish" type="button" data-fin-reopen="${esc(g.id)}">Reopen</button>` : ''}</div>
+        ${F.reopen === g.id ? goalReopenFormHtml(g) : ''}${open ? goalFinishedDetailHtml(F.detail[g.id]) : ''}</li>`;
+  };
+  return `<section class="goal-fin" aria-label="Finished goals">
+      <button class="linkish goal-fin-toggle" type="button" data-fin-toggle aria-expanded="${F.open}">Finished (${list.length})</button>
+      ${F.open ? `<ul class="goal-fin-list">${shown.map(row).join('')}</ul>
+        ${list.length > shown.length ? `<button class="linkish" type="button" data-fin-all>Show all (${list.length})</button>` : ''}` : ''}
+    </section>`;
+}
+// Draws the list into `host` (nothing when the owner has no finished goal). `changed` runs after a reopen.
+function goalFinishedMount(host, owner, goals, changed) {
+  if (!host) return;
+  const list = goalFinishedOf(goals, owner);
+  const F = GOAL_FINISHED[owner] ||= {open: false, all: false, row: '', reopen: '', detail: {}};
+  const draw = () => {
+    host.innerHTML = list.length ? goalFinishedHtml(list, goals, F) : '';
+    host.querySelector('[data-fin-toggle]')?.addEventListener('click', () => { F.open = !F.open; draw(); });
+    host.querySelector('[data-fin-all]')?.addEventListener('click', () => { F.all = true; draw(); });
+    for (const b of host.querySelectorAll('[data-fin-open]')) b.onclick = async () => {
+      const id = b.dataset.finOpen;
+      F.row = F.row === id ? '' : id;
+      draw();
+      if (!F.row || F.detail[id]) return;
+      const r = await v2Get('/v2/goals/' + encodeURIComponent(id));
+      F.detail[id] = r?.goal || {error: true};
+      if (F.row === id) draw();
+    };
+    for (const b of host.querySelectorAll('[data-fin-reopen]')) b.onclick = () => { F.reopen = b.dataset.finReopen; draw(); host.querySelector('[data-fin-reopen-form] select')?.focus(); };
+    const form = host.querySelector('[data-fin-reopen-form]');
+    if (!form) return;
+    form.querySelector('[data-fin-reopen-cancel]').onclick = () => { F.reopen = ''; draw(); };
+    form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); F.reopen = ''; draw(); } };
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      const status = form.elements.status.value, note = form.elements.note.value.trim();
+      if (!status) { form.elements.status.focus(); return; }
+      if (!note) { form.elements.note.focus(); return; }
+      const save = form.querySelector('[type=submit]');
+      save.disabled = true;
+      try {
+        await goalReopenPost(form.dataset.finReopenForm, status, note);
+        F.reopen = ''; delete F.detail[form.dataset.finReopenForm];
+        toast('Goal reopened');
+        await changed?.();
+      } catch (e) { toast(e.message || 'Could not reopen the goal', true); save.disabled = false; }
+    };
+  };
+  draw();
+}
 function goalFormHtml(g, goals, {owner = '', company = false, fixed = false} = {}) {
   company = company || g.owner === GOAL_COMPANY;      // a team goal supports nothing
   const may = !g.id || goalMayEdit(g, goals);
@@ -207,7 +308,7 @@ function bindGoalForm(form, g, goals, {company = false, owner = ''} = {}, done) 
   const remove = form.querySelector('[data-goal-remove]');
   if (remove) remove.onclick = async () => {
     remove.disabled = true;
-    try { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: 'dropped', note: ''}); toast('Goal removed'); await goalsRefresh(); done(true); }
+    try { await post('/v2/goals/' + encodeURIComponent(g.id) + '/status', {status: 'dropped', note: ''}); goalRemovedToast(g); await goalsRefresh(); done(true); }
     catch (e) { toast(e.message || 'Could not remove the goal', true); remove.disabled = false; }
   };
   form.onsubmit = async ev => {
