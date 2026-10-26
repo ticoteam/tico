@@ -166,9 +166,9 @@ def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manage
     closed = change(api, requested, token, close=True)
     assert closed['status'] == 'closed' and closed['closed_by'] == actor
     assert change(api, requested, token, status='doing')['status'] == 'doing'
-    # A person's independent close cannot be undone by the report's requesting bot manager.
+    # A person's close (Ben's, above the requester) cannot be undone by the requester's bot manager.
     if actor.startswith('bot:'):
-        closed = change(api, requested, 'priya-test', close=True)
+        closed = change(api, requested, 'ben-test', close=True)
         post(api, 'tasks/' + requested['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
 
 
