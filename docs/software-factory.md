@@ -53,7 +53,8 @@ approval before merge even when the team's task review policy allows a fixes-onl
    so one model's blind spots don't pass their own review. Set this per bot (its model), or use a check model on a
    subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
-   reason on the ticket. There is no second round of the same review after fixes.
+   reason on the ticket. A `changes` verdict is asked again of the same reviewer on the fixed head, and that review
+   covers only the delta since its last verdict.
 4. **QA runs tests it didn't write.** Head of Product writes the acceptance tests in Given/When/Then form. Each is
    tagged *check live*, *watch live* (unsafe to trigger in production: payments, sending, deleting, third-party
    actions) or *not checkable live*.
@@ -92,8 +93,15 @@ ticket stays at its step with a Waiting tag.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
   and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged.
+- **Past review only with every review approving the current change.** A bot's move to In QA, Pending Release,
+  Post Release QA or Done is refused while a required review slot's latest verdict is `changes` or missing, or approves
+  a head whose change differs from the pull request's current one by more than a clean merge of main. The refusal names
+  the slot, its reviewer and the head to re-review. Review 1 is required on a board that has it; Review 2 once it was
+  asked or the ticket entered it. Only a Review 1 or Review 2 subtask fills a slot: a QA verdict never does. A person
+  may still move the ticket.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
-  for the same check on the same head is refused with the open one's id.
+  for the same check on the same head is refused with the open one's id. A re-review asked of the same reviewer after a
+  push is a new head, so a new check.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
   Rules page (`hub rule list --scope-kind type --scope-id <type>`).

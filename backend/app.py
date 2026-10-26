@@ -243,6 +243,9 @@ def create_app(settings=None):
                 reconcile_worktree_prs(app.state.github_app)
                 # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
                 milestone_waits.recover(app.state.github_app)
+                # The `tico/reviews` commit status of each ticket whose head or verdicts changed (Dev 567).
+                from . import review_status
+                review_status.tick(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
@@ -3577,12 +3580,23 @@ def create_app(settings=None):
                     named = current
                 else:
                     named = next((s for s in typ["steps"] if s["status"] == effective), None)
-                if not named or named["name"] not in ("Review 1", "Review 2"):
+                if not named or named["name"] not in ("Review 1", "Review 2", *review_gate.PAST_REVIEW):
                     return {}
-            if not review_gate.engineering(c, row):
+                past = named["name"] in review_gate.PAST_REVIEW
+            else:
+                past = False
+            if not review_gate.engineering(c, row) or past and H.is_human(who.actor):
                 return {}
-            prs = review_gate.links(c, row)
-        return review_gate.snapshot(app.state.github_app, prs) if prs else {}
+            prs = review_gate.judged_links(c, row) if past else review_gate.links(c, row)
+        if not prs:
+            return {}
+        read = review_gate.snapshot(app.state.github_app, prs)
+        if past and read is not None:
+            # Which heads to compare depends on the verdicts, read again under the write lock (review_gate.passed).
+            with store.read() as c:
+                wanted = review_gate.wanted_changes(c, row, read)
+            read[review_gate.CHANGES] = review_gate.changes(app.state.github_app, prs, wanted) if wanted else {}
+        return read
 
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):

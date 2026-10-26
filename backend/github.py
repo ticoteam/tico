@@ -301,6 +301,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail["tracked"] = True
         if head_sha:
             if detail.get("head_sha") != head_sha:
+                if engineering(c, task):
+                    from . import review_status
+                    review_status.mark(c, task["id"])  # a new head has no `tico/reviews` status yet
                 detail.pop("checks", None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)

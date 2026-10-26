@@ -94,6 +94,199 @@ def links(c, row):
             and p.get("state") not in ("merged", "closed", "shipped")]
 
 
+# A move into one of these steps passes review: every required review slot must approve the change the PR makes now.
+PAST_REVIEW = ("In QA", "Pending Release", "Post Release QA", "Done")
+SLOT = re.compile(r"^Review ([12])(?:\b|:)", re.I)
+# Where the move-time preflight leaves the changes it read from GitHub, beside the PR snapshots (keyed by link id).
+CHANGES = "changes"
+
+
+def judged_links(c, row):
+    """The pull requests a move past review judges: every linked one but a PR closed without merging. A merged or
+    shipped PR still counts, since the Builder merges before Pending Release."""
+    from . import hubdb as H
+    return [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") != "closed"]
+
+
+def slots(c, row):
+    """Each required review slot's verdicts on this ticket, oldest first, as (verdict, head, reviewer, child id).
+    Only a "Review 1" or "Review 2" child fills a slot: a QA verdict, `approve` or `pass`, never does. Review 1 is
+    required on a board that has the step; Review 2 once it was asked or the ticket entered it (small changes skip
+    it, docs/software-factory.md). A child reopened for a new head keeps its old verdict until it gives a new one."""
+    from . import hubdb as H
+    from . import task_relations as TR
+    steps = {r["name"]: r["id"] for r in c.execute("SELECT id,name FROM task_steps WHERE type_id=?", (row.get("type_id"),))}
+    out, asked = {}, {}
+    for child_id in TR.child_ids(c, row["id"]):
+        child = H.task(c, child_id)
+        kind = child and SLOT.match(str(child.get("title") or "").strip())
+        if not kind or child["status"] == "declined":
+            continue
+        name = "Review " + kind[1]
+        asked.setdefault(name, []).append(child["owner"])
+        for ts, rowid, new in c.execute("SELECT ts, rowid, new FROM task_events WHERE task_id=? AND field='verdict'",
+                                        (child_id,)).fetchall():
+            verdict, _, head = str(new or "").partition(" ")
+            out.setdefault(name, []).append(((ts, rowid), verdict, head.strip().lower(), child["owner"], child_id))
+    required = {}
+    for name in ("Review 1", "Review 2"):
+        entered = name in steps and c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='step' AND new=? "
+                                              "LIMIT 1", (row["id"], steps[name])).fetchone()
+        if name in asked or entered or name == "Review 1" and name in steps:
+            events = sorted(out.get(name, []), key=lambda e: e[0])
+            required[name] = {"verdicts": [e[1:] for e in events], "asked": asked.get(name, [])}
+    return required
+
+
+def unapproved(c, row, heads, same=None):
+    """Why this ticket has not passed review: one entry per required slot that lacks an approval of the change at a
+    current PR head, else []. `heads` maps each judged PR link to its current head ('' when unknown); `same(link, a,
+    b)` says whether the change at head b equals the change at head a apart from a clean main merge
+    (freeze_guard.change_id), and is None when no comparison was read."""
+    out = []
+    for name, slot in slots(c, row).items():
+        verdicts = slot["verdicts"]
+        reviewer = (verdicts[-1][2] if verdicts else (slot["asked"] or [None])[-1])
+        current = next((h for h in heads.values() if h), "")
+        if not verdicts:
+            out.append({"slot": name, "reviewer": reviewer, "head": current,
+                        "why": "has no verdict" if slot["asked"] else "was never asked"})
+            continue
+        verdict, judged = verdicts[-1][0], verdicts[-1][1]
+        if verdict != "approve":
+            out.append({"slot": name, "reviewer": reviewer, "head": current,
+                        "why": f"has `{verdict}` at {judged[:12] or 'an unnamed head'}"})
+            continue
+        last_no = max((i for i, v in enumerate(verdicts) if v[0] != "approve"), default=-1)
+        approved = [v[1] for v in verdicts[last_no + 1:] if v[1]]
+        for link, head in heads.items():
+            if not head:
+                continue
+            found = [True if head.startswith(a) or a.startswith(head) else same(link, a, head) if same else None
+                     for a in approved]
+            if True not in found:
+                shown = approved[-1][:12] if approved else "no named head"
+                why = (f"approved {shown}, and the change at {head[:12]} differs from it (more than a clean main merge)"
+                       if False in found else
+                       f"approved {shown}, and GitHub could not compare that change with the one at {head[:12]}")
+                out.append({"slot": name, "reviewer": reviewer, "head": head, "why": why})
+                break
+    return out
+
+
+def passed(c, actor, row, snapshots=None, step="the next step"):
+    """Refuse a move past review while a required Review 1 or Review 2 slot lacks an approval of the current change.
+    A person may still move it; nothing is checked on a ticket with no linked pull request."""
+    from . import hubdb as H
+    if H.is_human(actor) or not engineering(c, row):
+        return
+    prs = judged_links(c, row)
+    if not prs:
+        return
+    heads = {}
+    for pr in prs:
+        detail = (snapshots or {}).get(pr["id"]) if snapshots is not None else None
+        cached = H._json(pr.get("detail_json"), {}) or {}
+        if detail is not None and detail.get("error"):
+            reject(c, actor, row, "reviews", "unknown", pr,
+                   f"Move refused: cannot read the current head of {pr['url']} ({detail.get('why') or 'GitHub read failed'}). "
+                   "Retry the move.", retryable=detail.get("retryable", False))
+        head = str((detail or cached).get("head_sha") or "").lower()
+        heads[pr["id"]] = head if test_receipts.SHA.fullmatch(head) else ""
+    read = (snapshots or {}).get(CHANGES) or {}
+    missing = unapproved(c, row, heads, comparer(read))
+    if not missing:
+        return
+    urls = {pr["id"]: pr["url"] for pr in prs}
+    lines = []
+    for m in missing:
+        who = H.actor_id(m["reviewer"]) if m["reviewer"] else "its reviewer"
+        at = f" on head {m['head']}" if m["head"] else ""
+        lines.append(f"{m['slot']} {m['why']}: ask {who} to re-review{at} (the delta since its last verdict) "
+                     f"and move once it approves.")
+    pr = prs[0]
+    head = missing[0]["head"] or "unknown"
+    reject(c, actor, row, "reviews", head, pr,
+           f"Move to {step} refused: a required review has not approved the current change. " + " ".join(lines)
+           + " A person may still move the ticket.")
+
+
+def comparer(read):
+    """`same(link, a, b)` over the changes a preflight read: whether head b makes head a's change, None if unknown."""
+    def same(link, a, b):
+        left, right = read.get(f"{link} {a}"), read.get(f"{link} {b}")
+        return None if left is None or right is None else left == right
+    return same
+
+
+def normalized_change(diff):
+    """A diff reduced to what freeze_guard.change_id compares: file headers, modes and every changed line verbatim,
+    without the line numbers, blob ids and context lines that shift when main is merged in."""
+    kept, in_body = [], False
+    for line in str(diff or "").splitlines():
+        if line.startswith("diff --git "):
+            kept.append(line)
+            in_body = False
+        elif line.startswith(("@@", "GIT binary patch")):
+            in_body = True
+            if not line.startswith("@@"):
+                kept.append(line)
+        elif in_body and line.startswith(("+", "-")) or line.startswith((
+                "new file mode", "deleted file mode", "old mode", "new mode", "Binary files")):
+            kept.append(line)
+    return "\n".join(kept) or None
+
+
+def changes(service, prs, wanted):
+    """For each (link, head) in `wanted`, the change that head makes on top of its fork from the PR's base branch,
+    read from GitHub's compare (outside the write lock); None when GitHub cannot give it, so the gate refuses."""
+    out = {}
+    for pr in prs:
+        shas = sorted({sha for link, sha in wanted if link == pr["id"]})
+        if not shas:
+            continue
+        try:
+            repo = pr.get("repo")
+            token, _ = service.mint([repo], {"pull_requests": "read", "contents": "read"})
+            base = f"/repos/{quote(repo, safe='/')}"
+            auth = {"Authorization": "Bearer " + token}
+            data = service._call("GET", base + f"/pulls/{pr['number']}", headers=auth)
+            branch = data.json()["base"]["ref"] if data.status_code == 200 else None
+        except Exception:
+            branch = None
+        for sha in shas:
+            text = None
+            if branch:
+                try:
+                    response = service._call("GET", base + f"/compare/{quote(branch, safe='')}...{sha}",
+                                             headers={**auth, "Accept": "application/vnd.github.diff"})
+                    text = normalized_change(response.text) if response.status_code == 200 else None
+                except Exception:
+                    text = None
+            out[f"{pr['id']} {sha}"] = text
+    return out
+
+
+def wanted_changes(c, row, snapshots):
+    """The (link, head) pairs whose changes a move past review compares: each current head and every head a slot
+    approved since its last `changes`, where the two differ."""
+    from . import hubdb as H
+    out = set()
+    required = slots(c, row)
+    for pr in judged_links(c, row):
+        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail_json"), {}) or {}
+        head = str(detail.get("head_sha") or "").lower()
+        if not test_receipts.SHA.fullmatch(head):
+            continue
+        for slot in required.values():
+            verdicts = slot["verdicts"]
+            last_no = max((i for i, v in enumerate(verdicts) if v[0] != "approve"), default=-1)
+            for verdict in verdicts[last_no + 1:]:
+                if verdict[1] and not (head.startswith(verdict[1]) or verdict[1].startswith(head)):
+                    out |= {(pr["id"], head), (pr["id"], verdict[1])}
+    return out
+
+
 def mint_failure(exc, repo):
     """Describe a failed token request without exposing exception text or response bodies."""
     from .store import Problem
