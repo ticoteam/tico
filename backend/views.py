@@ -22,7 +22,7 @@ from . import visuals
 from . import app_delivery, login_holds, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
-from . import auto_tasks, bot_stops, pipeline_stats
+from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
 from pathlib import Path
 
@@ -293,6 +293,13 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
+    # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
+    reason = (detail or {}).get("reason") or "person_clear"
+    task_id = (detail or {}).get("task")
+    if not task_id:
+        room = c.execute("SELECT task_id FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+        task_id = room[0] if room else None
+    run_triggers.new_session(c, task_id, reason, actor)
 
 
 def default_bot(c, settings, botops="botops"):

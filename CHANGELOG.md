@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Bots and tasks keep their session between wakes.** Auto-compaction is the only limit on a session's size, so the size rotation and its `rotate_at` and `rotate_after_turns` settings are gone (saved configs that carry them still load). A new session starts only when the old one is gone or cannot continue, and Tico says why on the run and in the task's history. A prompt too large to send compacts the session first, and only a second failure in a row starts a new one. Health names a bot that lost its session more than twice in a day ([Sessions](docs/sessions.md#checkpoints-and-resume)).
+
 ## [0.4.9] - 2026-10-25
 
 ### Fixed

@@ -2160,6 +2160,15 @@ class RunRotation(Contract):
     limit: int = Field(ge=0)   # the limit it reached, in the unit of `reason`
 
 
+class RunSession(Contract):
+    """Whether the run continued its provider session or started a new one, and why (runner-rs/src/sessions.rs).
+    `why` is one of backend/run_triggers.py SESSION_WHY for a runner of this release; a newer runner may send another,
+    short one, which is kept as it is."""
+    kind: Literal["resumed", "new"]
+    why: str | None = Field(default=None, max_length=60)
+    detail: str | None = Field(default=None, max_length=500)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2188,7 +2197,10 @@ class Completion(Contract):
     # other way. Counted in its `writes` (backend/run_triggers.py).
     pushes: list[RunPush] = Field(default_factory=list, max_length=50)
     # The run started a fresh provider session because the bot's last one had grown past its limit (token saving).
+    # Older runners only: sessions are not rotated for size any more, and a current runner sends `session` instead.
     rotated: RunRotation | None = None
+    # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
+    session: RunSession | None = None
 
 
 class Retry(Contract):
