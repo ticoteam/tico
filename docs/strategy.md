@@ -245,7 +245,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 
 | Route | Who | What it does |
 |---|---|---|
-| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, health_by_bet}`; `draft` only when `may_edit`; `goals_by_bet` lists only goals the caller may read; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
+| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, live_by_bet, health_by_bet}`; `draft` only when `may_edit`; `goals_by_bet` lists only goals the caller may read, at most 20 per bet; `live_by_bet` counts every one of those not done or dropped; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
 | `PUT /strategy/draft` | the owner only | partial merge of `{summary?, vision?, sections?}`; `""` clears a key; needs `revision`, answers `409` on a mismatch; summary and vision at most 400 characters |
 | `POST /strategy/publish` | the owner only | `{note, revision}`; refuses unless the [preconditions](#publishing) hold; answers the new version |
 | `GET /strategy/versions`, `/strategy/versions/{n}` | any reader | the list, newest first; one version |

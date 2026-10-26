@@ -1,11 +1,17 @@
-"""The model a bot's tasks run on: `task_model` in its config, beside its own model, harness and effort.
+"""What a bot's tasks run on: `task_model` in its config, beside its own model, harness and effort.
 
-Empty means the same as the bot. A turn that carries a task in its own session (clients/sessions.py, a `task:` key)
-runs on it; chat with the bot, and a bot on `session: bot`, stays on the bot's model. A check subtask's model
-(backend/check_models.py) wins over it. A task model that cannot run here (retired, its provider off, not installed
-or not signed in on its computer) never holds or fails the turn: it runs on the bot's own model and effort, and the
-run and the task say so. Each turn's choice is kept on its attempt (`model_json`) for its run history
-(usage_records.ran_on)."""
+The record is {harness, model, reasoning_effort, runtime, compact_at}, and each part is optional on its own. A model
+is the task model: its tasks run on that harness, model and effort. An empty model means the bot's own model, so a
+record can carry only a task effort, only a task context length (`compact_at`), or both, and the bot keeps its model
+(one record, not a second key, because a task's effort and context length are read on the same turn as its model and
+are cleared the same way). Effort is checked against the model that runs: the task model's own at save, and on a
+fallback or an empty model, the model that actually runs (`_fits`). Chat with the bot, and a bot on `session: bot`,
+never changes. A turn that carries a task in its own session (clients/sessions.py, a `task:` key) gets them.
+A check subtask keeps its check model (backend/check_models.py) and the task context length. A task model that cannot
+run here (retired, its provider off, not installed or not signed in on its computer) never holds or fails the turn: it
+runs on the bot's own model, with the task context length and any task effort that model takes, and the run and the
+task say so. Each turn's choice is kept on its attempt (`model_json`) for its run history (usage_records.ran_on).
+A config with no model, effort or context length is the same as the bot."""
 import json
 
 from clients import sessions
@@ -19,16 +25,51 @@ from .store import readiness_document
 KEY = "task_model"
 
 
-def of(config):
-    """The task model a bot's config sets, {harness, model, reasoning_effort, runtime}, or None for the same as the bot."""
+def stored(config):
+    """The task settings a bot's config sets, {harness, model, reasoning_effort, runtime, compact_at}, with an empty
+    model where the bot's own model runs its tasks, or None when no part is set. `harness` and `runtime` are empty
+    without a model."""
     chosen = (config or {}).get(KEY)
-    if not isinstance(chosen, dict) or not str(chosen.get("model") or "").strip():
+    if not isinstance(chosen, dict):
         return None
-    model = str(chosen["model"]).strip()
+    model = str(chosen.get("model") or "").strip()
+    effort = str(chosen.get("reasoning_effort") or "")
+    compact_at = _context(chosen.get("compact_at"))
+    if not (model or effort or compact_at):
+        return None
+    if not model:
+        return {"harness": "", "model": "", "reasoning_effort": effort, "runtime": "", "compact_at": compact_at}
     row = providers.MODEL_BY_ID.get(model) or {}
     harness = str(chosen.get("harness") or "").strip()
-    return {"harness": harness, "model": model, "reasoning_effort": str(chosen.get("reasoning_effort") or ""),
-            "runtime": str(chosen.get("runtime") or "") or runtime_of(harness) or str(row.get("runtime") or "")}
+    return {"harness": harness, "model": model, "reasoning_effort": effort,
+            "runtime": str(chosen.get("runtime") or "") or runtime_of(harness) or str(row.get("runtime") or ""),
+            "compact_at": compact_at}
+
+
+def of(config):
+    """The task model a bot's config sets, {harness, model, reasoning_effort, runtime, compact_at}, or None when its
+    tasks run on the bot's own model (with or without a task effort or context length)."""
+    record = stored(config)
+    return record if record and record["model"] else None
+
+
+def _context(value):
+    """A task context length in tokens, or None when unset (the same as the bot's Compact at)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _fits(model, effort):
+    """Whether `effort` is one `model` takes: a task effort is kept only when the model that runs it takes it."""
+    return bool(effort) and effort in tuple((providers.MODEL_BY_ID.get(model or "") or {}).get("efforts") or ())
+
+
+def _size(tokens):
+    """A context length as Compact at names it: 600k, 1M."""
+    return f"{tokens // 1_000_000}M" if tokens >= 1_000_000 and tokens % 1_000_000 == 0 else f"{tokens // 1000}k"
+
+
+def _context_said(compact_at):
+    return f", context {_size(compact_at)}" if compact_at else ""
 
 
 def label(choice):
@@ -168,48 +209,97 @@ def warning(c, settings, bot, config, choice):
             f"{found[0]['risk']}. It still saves, and its tasks run on it.")
 
 
+def _turn(config, effort="", compact_at=None):
+    """The bot's config for one turn, with a task effort and context length when set; the rest stays as it is."""
+    out = dict(config)
+    if effort:
+        out["reasoning_effort"] = effort
+    if compact_at:
+        out["compact_at"] = compact_at
+    return out
+
+
 def apply(config, choice):
-    """The bot's config for a turn on the task model: its runtime, harness, model and effort. The bot's fallback,
-    session and everything else stay as they are."""
+    """The bot's config for a turn on the task model: its runtime, harness, model and effort, and the task context
+    length when set. The bot's fallback, session and everything else stay as they are."""
     out = dict(config)
     out.update(runtime=choice["runtime"], model=choice["model"], harness=choice["harness"])
     if choice["reasoning_effort"]:
         out["reasoning_effort"] = choice["reasoning_effort"]
     else:
         out.pop("reasoning_effort", None)
+    if choice["compact_at"]:
+        out["compact_at"] = choice["compact_at"]
     return out
 
 
+def _effort_on(model, effort):
+    """(applied, dropped): the task effort when `model` takes it, else "" and the effort that was dropped, so the bot's
+    own effort runs and the run says so."""
+    applied = effort if _fits(model, effort) else ""
+    return applied, ("" if applied else effort or "")
+
+
 def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, runner_id, job_id=None, check=None):
-    """(config, record) for a claimed turn. `record` is None for a turn the task model does not cover; otherwise it
-    says what the turn was handed and why: `task` (the task model), `fallback` (the task model could not run; the bot's
-    own model ran), or `check` (a check subtask kept its check model over the task model)."""
-    choice = of(followed)
-    if not choice or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
+    """(config, record) for a claimed turn. `record` is None for a turn the task settings do not cover; otherwise it
+    says what the turn was handed and why: `task` (the task model, or the bot's own model with the task effort or
+    context length), `fallback` (the task model could not run; the bot's own model ran), or `check` (a check subtask
+    kept its check model over the task model). `effort` and `compact_at` in the record are what was applied."""
+    tasks = stored(followed)
+    if not tasks or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
         return followed, None
-    asked = {k: choice[k] for k in ("runtime", "harness", "model", "reasoning_effort")}
+    choice = of(followed)
+    compact_at = tasks["compact_at"]
     if check:
-        return followed, {"source": "check", "asked": asked,
-                          "note": f"Kept the check model ({check['runtime']}:{check['model']}) over the bot's task "
-                                  f"model {label(choice)}"}
+        out = _turn(followed, compact_at=compact_at)
+        if not choice:
+            return out, None
+        return out, {"source": "check", "asked": _asked(choice), "effort": "", "compact_at": compact_at,
+                     "note": f"Kept the check model ({check['runtime']}:{check['model']}) over the bot's task "
+                             f"model {label(choice)}{_context_said(compact_at)}"}
+    if not choice:
+        # The bot's own model runs the task, with its task effort when that model takes it. The task model field goes
+        # off this turn: there is no other model to switch to, and the runner reads that field as one.
+        own = providers.bot_choice(c, settings, followed)[1]
+        applied, dropped = _effort_on(own, tasks["reasoning_effort"])
+        out = _turn({k: v for k, v in followed.items() if k != KEY}, applied, compact_at)
+        note = f"Ran on the bot's model {own}" if own else "Ran on the bot's model"
+        note += f" at task effort {applied}" if applied else ""
+        note += _context_said(compact_at)
+        note += f" (task effort {dropped} is not one {own or 'its model'} takes)" if dropped else ""
+        return out, {"source": "task", "asked": {"model": "", "reasoning_effort": tasks["reasoning_effort"]},
+                     "effort": applied, "compact_at": compact_at, "note": note}
+    asked = _asked(choice)
     why = why_not(c, settings, bot, choice, runner_id, job_id)
     if why:
-        own = providers.bot_choice(c, settings, followed)[1] or "the bot's own model"
-        effort = followed.get("reasoning_effort") or ""
+        own_model = providers.bot_choice(c, settings, followed)[1]
+        own = own_model or "the bot's own model"
+        bot_effort = followed.get("reasoning_effort") or ""
+        applied, dropped = _effort_on(own_model, choice["reasoning_effort"])
+        at = f" at task effort {applied}" if applied else (f" ({bot_effort})" if bot_effort else "")
+        note = (f"Ran on the bot's model {own}{at}{_context_said(compact_at)}: task model {label(choice)} could not "
+                f"run ({why})")
+        note += f" (task effort {dropped} is not one {own} takes)" if dropped else ""
         # A provider thread on the bot's runtime can predate task-model turns on another runtime. Each fallback
         # starts fresh from the task checkpoint rather than resuming that incomplete history. This flag is only
         # handed to this turn; it is never stored in the bot's configuration.
-        return {**followed, "task_model_fallback": True}, {"source": "fallback", "asked": asked, "why": why,
-                          "ran": f"{own}{f' ({effort})' if effort else ''}",
-                          "note": f"Ran on the bot's model {own}{f' ({effort})' if effort else ''}: task model "
-                                  f"{label(choice)} could not run ({why})"}
-    record = {"source": "task", "asked": asked, "note": f"Ran on the bot's task model {label(choice)}"}
+        out = _turn(followed, applied, compact_at)
+        ran_effort = applied or bot_effort
+        return {**out, "task_model_fallback": True}, {"source": "fallback", "asked": asked, "why": why,
+                          "effort": applied, "compact_at": compact_at,
+                          "ran": f"{own}{f' ({ran_effort})' if ran_effort else ''}", "note": note}
+    record = {"source": "task", "asked": asked, "effort": choice["reasoning_effort"], "compact_at": compact_at,
+              "note": f"Ran on the bot's task model {label(choice)}{_context_said(compact_at)}"}
     own = providers.bot_choice(c, settings, followed)[1]
     if below_minimum(own, choice) and stakes(c, settings, bot):
         # Below the minimum for what this bot does: it runs all the same, and the run says so (task 7a9b30d4).
         record.update(below_minimum=True, note=f"{record['note']}, below the minimum for this bot: a cheaper model "
                                                f"than its own {own} on a bot that sends, spends, publishes or writes")
     return apply(followed, choice), record
+
+
+def _asked(choice):
+    return {k: choice[k] for k in ("runtime", "harness", "model", "reasoning_effort")}
 
 
 def handed(c, attempt_id, task_id, record):
@@ -228,7 +318,10 @@ def handed(c, attempt_id, task_id, record):
 
 
 def handed_out(c, attempt_id):
-    """The task model the claim handed this attempt, {runtime, model, ...}, or None when it ran on another."""
+    """The task model the claim handed this attempt, {runtime, model, ...}, or None when it ran on another. A task with
+    only an effort or context length runs on the bot's own model, so it is None too."""
     row = c.execute("SELECT model_json FROM attempts WHERE id=?", (attempt_id,)).fetchone()
     record = H._json(row[0]) if row and row[0] else None
-    return record["asked"] if isinstance(record, dict) and record.get("source") == "task" else None
+    if not isinstance(record, dict) or record.get("source") != "task" or not (record.get("asked") or {}).get("model"):
+        return None
+    return record["asked"]

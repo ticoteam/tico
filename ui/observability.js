@@ -8,6 +8,16 @@
   const ACTIONS = new Set(['view', 'send', 'create', 'update', 'decide', 'save', 'start', 'stop', 'retry', 'delete', 'transition']);
   const OUTCOMES = new Set(['started', 'completed', 'failed']);
   const EVENTS = new Set(['workflow_started', 'workflow_completed', 'workflow_failed', 'route_viewed', 'active_time']);
+  const SEND_OUTCOMES = new Set(['slow', 'sent', 'unconfirmed', 'timeout', 'network', 'refused']);
+  function sendProperties(properties) {
+    const p = properties || {}, clean = {};
+    if (!SEND_OUTCOMES.has(p.outcome)) return null;
+    clean.outcome = p.outcome;
+    for (const [key, max] of [['duration_ms', 86400000], ['retries', 100], ['status', 599]]) {
+      if (Number.isFinite(p[key]) && p[key] >= 0) clean[key] = Math.round(Math.min(p[key], max));
+    }
+    return clean;
+  }
   const opaque = value => typeof value === 'string' && /^tico:[a-f0-9]{64}$/.test(value);
   function routeTemplate(hash) {
     const path = String(hash || '').split(/[?#]/).filter(Boolean)[0] || '/overview';
@@ -61,14 +71,18 @@
     const frames = (event.exception?.values || []).flatMap(value => value.stacktrace?.frames || []).slice(-30)
       .map(frame => {
         // Only known static application filenames, no origin/query/hash/function/source text.
-        const match = /(?:^|\/)(index\.html|observability\.js|observability-vendors\.js|docs-ask\.js|docs-page\.js|docs-search\.js|docs-pr-chat\.js|changelog\.js)(?:[?#].*)?$/.exec(frame.filename || '');
+        const match = /(?:^|\/)(app\/(?:pill|chat|api|session)\.js|app\.bundle\.js|index\.html|observability\.js|observability-vendors\.js|docs-ask\.js|docs-page\.js|docs-search\.js|docs-pr-chat\.js|changelog\.js)(?:[?#].*)?$/.exec(frame.filename || '');
         return match ? {filename: match[1], ...(Number.isInteger(frame.lineno) ? {lineno: frame.lineno} : {}),
           ...(Number.isInteger(frame.colno) ? {colno: frame.colno} : {})} : null;
       }).filter(Boolean);
+    const send = event.tags?.source === 'chat_send' ? sendProperties(event.extra) : null;
     return {event_id: /^[a-f0-9]{32}$/.test(event.event_id || '') ? event.event_id : undefined,
       platform: 'javascript', level: 'error', environment,
       ...(typeof release === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(release) ? {release} : {}), user: {id: identity}, tags: {app: 'tico'},
-      exception: {values: [{type: 'FrontendError', value: 'Frontend operation failed', stacktrace: {frames}}]}};
+      ...(send ? {tags: {app: 'tico', source: 'chat_send', outcome: send.outcome}, extra: send,
+        fingerprint: ['chat_send', send.outcome]} : {}),
+      exception: {values: [{type: send ? 'ChatSend' : 'FrontendError',
+        value: send ? `Chat send ${send.outcome}` : 'Frontend operation failed', stacktrace: {frames}}]}};
   }
   function effectiveConfig(value) {
     const next = value || {};
@@ -164,7 +178,18 @@
       }
     }
     function response(status) { if (status === 401 || status === 403) reset(); }
-    return {start, reset, route, run, response, activity, visibility:tick, flush};
+    // Bind diagnostics to this authenticated generation. A late send may not
+    // attach its event to a different account after sign-out or config changes.
+    function chatSend() {
+      const owner = identity, token = generation;
+      return properties => {
+        try {
+          const clean = sendProperties(properties);
+          if (owner && identity === owner && token === generation && clean) adapters?.chatSend(clean);
+        } catch (_) { /* reporting must never affect sending */ }
+      };
+    }
+    return {start, reset, route, run, response, chatSend, activity, visibility:tick, flush};
   }
   const exports = {create, routeTemplate, workflow, safeProperties, scrubPosthog, scrubSentry};
   if (typeof module !== 'undefined' && module.exports) module.exports = exports;

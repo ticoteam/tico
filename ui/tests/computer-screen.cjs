@@ -97,7 +97,7 @@ const {fakeVnc, exposeRoutedSockets} = require('./support/fake-vnc.cjs');
     assert.equal(await page.locator('#scr-retry').isVisible(), true);
     // Back leaves the viewer and closes the session.
     await page.locator('#scr-back').click();
-    await page.waitForFunction(() => location.hash === '#/settings' && !document.querySelector('#scr'));
+    await page.waitForFunction(() => S.route === '#/settings' && location.hash === '#/settings/devices' && !document.querySelector('#scr'));
     // At View the viewer opens a view session and offers no switch.
     answer = true;
     await page.locator('[data-settings-tab=devices]').click();

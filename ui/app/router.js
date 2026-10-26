@@ -19,6 +19,8 @@ function route() {
   $('#main').classList.remove('overview-layout');
   const from = LAST_ROUTE;
   S.route = LAST_ROUTE = location.hash || UPDATES;
+  // The tab address Settings wrote for itself is still Settings: a redraw (route() called again) keeps the page as it is.
+  if (from === SETTINGS && S.route === SETTINGS_ADDRESS) S.route = LAST_ROUTE = SETTINGS;
   if (S.route !== SETTINGS) { clearTimeout(SETTINGS_PRESENCE.timer); SETTINGS_PRESENCE.timer = null; }
   const botOf = r => r.startsWith('#/bot/') ? r.slice(6).split('/')[0] : '';
   const botHere = botOf(S.route);
@@ -103,12 +105,19 @@ function route() {
     // ?task=<id>, ?bot=<slug>, or the API's own scope_kind=task|bot&scope_id=<id>.
     const q = new URLSearchParams(S.route.split('?')[1] || ''), kind = q.get('task') ? 'task' : q.get('bot') ? 'bot' : q.get('scope_kind');
     const id = q.get('task') || q.get('bot') || q.get('scope_id') || '';
+    RULES_OPEN = Object.fromEntries(q);
     RULES_FOR = ['task', 'bot'].includes(kind) && id ? `${kind}:${id}` : ''; RULES_FOR_TITLE = '';
     SETTINGS_TAB = 'recurring'; SETTINGS_REVEAL = RULES_FOR ? '#set-rules-card' : ''; location.replace(SETTINGS); return;
   }
   else if (S.route === '#/settings/routines') { SETTINGS_TAB = 'recurring'; location.replace(SETTINGS); return; }   // General > Team's moved switches
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
+  // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
+  // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
+  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
+    const [tab, card] = S.route.slice(11).split('?')[0].split('/'); SETTINGS_TAB = tab; SETTINGS_REVEAL = card ? '#' + card : ''; location.replace(SETTINGS); return;
+  }
   else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();
   else if (S.route === MAIL || S.route.startsWith(MAIL + '?')) pageMail();

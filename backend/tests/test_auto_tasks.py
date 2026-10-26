@@ -1,4 +1,6 @@
 """Assigned work starts without a notice, within task caps and the existing execution fences."""
+import pytest
+
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_task_lanes import task_bot
@@ -102,11 +104,12 @@ def test_setting_revision_permissions_and_private_counters(api):
     assert get(api, 'bots/ops', token='ben-test')['task_flow']['going'] == 0
 
 
-def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api):
+@pytest.mark.parametrize('step', ['Review 1', 'Post Release QA'])
+def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step):
     machine = task_bot(api, lanes=True, capacity=10)
-    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': 'Review 1', 'status': 'review'}]})['type']
+    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': step, 'status': 'review'}]})['type']
     parent = post(api, 'tasks', {'owner': 'finance', 'title': 'Implementation awaiting review', 'body': 'Review it.',
-                                 'type': typ['id'], 'step': 'Review 1'})
+                                 'type': typ['id'], 'step': step})
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',
                  'relations': [{'kind': 'parent', 'task': parent['id']}]}) for i in range(11)]
     with api.app.state.store.transaction() as c:

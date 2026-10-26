@@ -74,6 +74,14 @@ const {unrouted} = require('./support/routes.cjs');
     const harnessOptions = () => page.locator('[data-add-choice] [data-choice-harness] option').evaluateAll(
       options => options.map(o => ({value: o.value, text: o.textContent, disabled: o.disabled})));
     await page.goto('https://tico-ui.test/#/settings');
+    // The fixture switches providers behind the page's back, so a settings read already in flight (a dialog
+    // closing reloads settings) must finish first: finishing later, or shared with the next read, it would
+    // put the old provider list back.
+    await page.evaluate(() => {
+      const load = loadSettings, running = window.settingsLoads = new Set();
+      loadSettings = (...args) => { const p = load(...args); running.add(p); p.finally(() => running.delete(p)); return p; };
+    });
+    const settle = () => page.evaluate(() => Promise.allSettled([...window.settingsLoads]));
     await openAdd();
     let options = await harnessOptions();
     assert.ok(options.some(o => o.value === 'codex' && !o.disabled), 'Codex is offered');
@@ -91,6 +99,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#set-providers').waitFor();
     await page.evaluate(() => document.querySelector('#bot-editor').close());
     // Enabling Meta makes Muse Code pickable and lists the Wonder models under it.
+    await settle();
     enabled = ['openai', 'anthropic', 'meta'];
     await page.evaluate(() => loadSettings());
     await openAdd();
@@ -104,6 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(models.includes('muse-wonder-1.0'), 'Wonder is listed under Muse Code');
     assert.ok(models.includes('muse-wonder-full-1.0'), 'Wonder Full is listed under Muse Code');
     // A member gets no way in, just the clean list: no off harness, no off line.
+    await settle();
     enabled = ['openai', 'anthropic'];
     await page.evaluate(() => document.querySelector('#bot-editor').close());
     await page.evaluate(() => { S.me.role = 'member'; return loadSettings(); });
@@ -113,6 +123,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('[data-add-choice] [data-choice-off]').count(), 0, 'members get no off line');
     await page.evaluate(() => { S.me.role = 'owner'; });
     // A bot already on a switched-off harness keeps one row for it, not a current+off pair.
+    await settle();
     enabled = ['openai', 'anthropic'];
     await page.evaluate(() => loadSettings());
     const solo = await page.evaluate(() => {

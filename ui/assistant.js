@@ -17,6 +17,7 @@
 .asst-state{font-size:12.5px;color:var(--muted)}
 .asst-off{padding:14px 0}
 .asst-err{color:var(--fail);font-size:12.5px}
+.asst-card .asst-once code{color:var(--ink);user-select:all;font-size:13px}
 `;
 
   function style() {
@@ -32,6 +33,15 @@
   // The title is always plain words: the server's sentence, or for a card with none (stored before its route had one)
   // a plain line saying who asks. The method, path and the fields it sends are under a closed Details.
   const RAW_TITLE = /^(GET|POST|PUT|PATCH|DELETE) \//;
+  // A one-time value the Confirm answered with (a new computer's code): kept in this page only, never stored anywhere
+  // the proposing bot reads, so it shows on its card until the page is reloaded.
+  const shownOnce = new Map();
+  function onceHTML(id, esc) {
+    const once = shownOnce.get(id);
+    if (!once?.code) return '';
+    const until = once.expires ? new Date(once.expires).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
+    return `<div class="asst-once" data-shown-once><span class="asst-state">One-time code for a new computer${until ? `, until ${esc(until)}` : ''}. It is shown only here and works once: use it where the computer's setup asks for a code (Settings &gt; Computers &gt; Add computer shows the commands).</span><code>${esc(once.code)}</code></div>`;
+  }
   const SENT = new Set(['message', 'body', 'text', 'comment']);
   function actionCard(action, esc, open = false) {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
@@ -69,7 +79,7 @@
         ? `<div class="asst-row"><button class="primary" type="button" data-confirm>Confirm</button>
             <button class="ghost" type="button" data-cancel>Cancel</button>
             <span class="asst-state">Runs as you, only when you confirm.</span></div>`
-        : `<div class="asst-state">${esc(done || action.status)}</div>`}</div>`;
+        : `<div class="asst-state">${esc(done || action.status)}</div>${onceHTML(action.id, esc)}`}</div>`;
   }
 
   // The Confirm cards left in a chat (the Assistant's, and BotOps' for what a person asked it for that always needs
@@ -119,7 +129,11 @@
         seenActions.set(action.id, {...action, status: 'running'});
         deciding.add(action.id);
         let next = null;
-        try { next = (await post(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {})).action; }
+        try {
+          const answer = await post(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {});
+          if (answer?.shown_once) shownOnce.set(action.id, answer.shown_once);
+          next = answer.action;
+        }
         catch (e) { toast?.(e.message, true); }
         if (!next) try { next = (await get(`/v2/assistant/actions/${encodeURIComponent(action.id)}`)).action; } catch { /* kept as it was */ }
         deciding.delete(action.id);

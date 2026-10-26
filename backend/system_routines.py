@@ -112,6 +112,8 @@ ACTIONS = {
     "resend_questions": ("send questions unanswered for two business days back to their bots",
                          ("question", "remind", "unanswered")),
     "start_task": ("start the highest-ranked eligible assigned task in its own session", ("task", "start", "assigned", "On Deck", "prerequisite")),
+    "recover_assignment": ("wake an unattempted assignment once after one hour; show it in Health and its manager's Needs you two hours later",
+                           ("task", "assigned", "not started", "wake", "health", "manager")),
     "start_routines": ("start each bot routine that is due", ("routine", "start")),
     "free_dead_starts": ("free turns proven dead: process gone and lease lost, or stopped before they started",
                          ("turn", "start", "dead", "stuck", "free", "busy")),
@@ -153,6 +155,10 @@ JOBS = [
     Job("assigned_tasks", "Start assigned tasks",
         "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity.",
         HOUSEKEEPING, "When a turn is free", records=False, then=("start_task",), when="free_turn"),
+    Job("assignment_recovery", "Recover unstarted assignments",
+        "One recovery wake after an hour without an attempt, including Leads; waits and snoozes stay parked. "
+        "Still unstarted two hours later appears in Health and the manager's Needs you. Execution gates still apply.",
+        HOUSEKEEPING, "Every 10 seconds", 10, records=False, then=("recover_assignment",)),
     Job("stale_review", "Stale ticket review",
         "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
         CHECKS, "Hourly", 3600, ai=True, control=True, labels=("stale-review",), then=("check_stale", "suggest_owner")),
@@ -739,6 +745,8 @@ def listing(c, settings, now=None, who=None, auth=None):
             item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
         rows.append(item)
     rows.extend(task_rules.listing(c, settings, who, auth, now))
+    from . import task_settings
+    rows = [task_settings.describe_job(row) for row in rows]
     return {"jobs": rows, "departments": list(chart.values()), "task_rule_departments": task_rules.departments(settings),
             "task_rule_department": task_rules.department_of(c, settings, who.actor) if who else None,
             "can_create_task_rule": bool(who and auth and (task_rules.department_of(c, settings, who.actor) or auth.bot_admin(who)) and not who.support),

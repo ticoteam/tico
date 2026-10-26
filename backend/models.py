@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -175,6 +175,13 @@ class TaskRelationRef(Contract):
     kind: RelationKind = "related"
 
 
+class TaskBlocker(Contract):
+    """What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."""
+    repo: str = Field(min_length=3, max_length=200)
+    status: StrictInt = Field(ge=100, le=599)
+    endpoint: str = Field(min_length=1, max_length=200)
+
+
 class TaskCreate(Contract):
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
@@ -193,6 +200,7 @@ class TaskCreate(Contract):
     change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
     qa: StrictBool | None = None
     qa_not_checkable_live: StrictBool = False
+    blocker: TaskBlocker | None = None
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).
@@ -224,7 +232,7 @@ class TaskUpdate(Contract):
     private: StrictBool | None = None
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined", "closed"] | None = None
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
@@ -248,6 +256,14 @@ class TaskUpdate(Contract):
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def closed_status(self):
+        # Use the same permissions, version check and close/edit separation as close:true.
+        if self.status == "closed":
+            self.status = None
+            self.close = True
+        return self
 
 
 class TaskStepInput(Contract):
@@ -478,6 +494,12 @@ class GoalStatus(Contract):
     note: str = Field(default="", max_length=2000)
 
 
+class GoalReopen(Contract):
+    status: Literal["red", "yellow", "green", "auto"] | None = None
+    note: str = Field(default="", max_length=300)
+    undo: bool = False
+
+
 class GoalUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     body: str | None = Field(default=None, max_length=100_000)
@@ -576,6 +598,7 @@ class GoalProposalDecision(Contract):
     option: int | None = Field(default=None, ge=0, le=9)     # the option a recovery is confirmed with (its pick if none)
     # A strategy realignment, per goal on the card: keep (the default), retire, or the id of the bet it moves to.
     moves: dict[str, str] | None = Field(default=None, max_length=200)
+    target: KpiTarget | None = None      # an Add a KPI suggestion confirmed with the person's own target on the link
 
 
 # The company at the top of Goals (backend/company.py): only the fields sent change.
@@ -1704,9 +1727,18 @@ class BotKeepTasksGoing(Contract):
     expected_revision: int
 
 
+class BotTaskChoice(Contract):
+    """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
+    only the task effort or only the task context length (backend/task_models.py)."""
+    harness: ID | None = None
+    model: ID | None = None
+    effort: ID | None = None
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+
+
 class BotTaskModel(Contract):
-    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
-                                                 "null is the same as the bot")
+    task_model: BotTaskChoice | None = Field(None, description="Harness, model, effort and context length for the "
+                                             "bot's tasks; a missing model is the bot's own, and null clears all of it")
     expected_revision: int = Field(ge=1)
 
 
@@ -1723,14 +1755,15 @@ class BotWakePreset(Contract):
 class BotTaskCondition(Contract):
     """One row of a filter tab (backend/bot_task_tabs.py FIELDS): a task must match every row. A list value is "any
     of"; days are whole numbers. bot_task_tabs.condition checks each value against the field."""
-    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "created_within",
+    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "needs", "created_within",
                    "updated_within", "done_within", "due", "label"]
     value: int | str | list[str]
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): a built-in view, or a filter of rows that a task must
-    all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's filter, still accepted and stored as rows."""
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
+    filter, still accepted and stored as rows."""
     name: str = Field(min_length=1, max_length=40)
     builtin: Literal["needs", "active", "blocked", "done"] | None = None
     show_count: bool = True
@@ -2152,6 +2185,15 @@ class RunRotation(Contract):
     limit: int = Field(ge=0)   # the limit it reached, in the unit of `reason`
 
 
+class RunSession(Contract):
+    """Whether the run continued its provider session or started a new one, and why (runner-rs/src/sessions.rs).
+    `why` is one of backend/run_triggers.py SESSION_WHY for a runner of this release; a newer runner may send another,
+    short one, which is kept as it is."""
+    kind: Literal["resumed", "new"]
+    why: str | None = Field(default=None, max_length=60)
+    detail: str | None = Field(default=None, max_length=500)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2180,7 +2222,10 @@ class Completion(Contract):
     # other way. Counted in its `writes` (backend/run_triggers.py).
     pushes: list[RunPush] = Field(default_factory=list, max_length=50)
     # The run started a fresh provider session because the bot's last one had grown past its limit (token saving).
+    # Older runners only: sessions are not rotated for size any more, and a current runner sends `session` instead.
     rotated: RunRotation | None = None
+    # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
+    session: RunSession | None = None
 
 
 class Retry(Contract):
@@ -2241,6 +2286,14 @@ class TaskSnooze(Contract):
     until: str = Field(min_length=10, max_length=40)
 
 
+class TaskQaWaiver(Contract):
+    # A person waives a Dev ticket's In QA step for one exact pull request head, with a reason (backend/qa_waivers.py).
+    # Never a QA verdict; CI, both reviews and release approval stay required.
+    head: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    reason: str = Field(min_length=1, max_length=2000)
+    step: str | None = Field(default=None, max_length=200)    # the step to waive; only "In QA" is accepted
+
+
 class TaskDefer(Contract):
     # Exactly one (backend/quiet_work.py defer): a task to wait for, a time, the next run, or "handled".
     after: str | None = Field(default=None, min_length=1, max_length=80)
@@ -2268,6 +2321,16 @@ class ReleaseScheduleUpdate(Contract):
     times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
     bot: str | None = Field(default=None, max_length=100)
     writer: str | None = Field(default=None, max_length=100)
+
+
+class SettingsPlan(Contract):
+    """Set one settings catalogue entry (backend/settings_catalog.py): the value, and the bot, computer or person it is
+    for when the setting is set per one."""
+    value: Any = None
+    bot: str | None = Field(default=None, max_length=200)
+    computer: str | None = Field(default=None, max_length=200)
+    person: str | None = Field(default=None, max_length=200)
+    id: str | None = Field(default=None, max_length=200)
 
 
 class ReleaseNow(Contract):

@@ -1,7 +1,7 @@
 // A bot's stopped runs are reviewed from a control a person can reach (Dev 280). One that holds queued work is
 // needs-person (backend/views.py uncertain_work): Settings > System checks lists it with "Review stopped runs" and
-// Needs you opens with "Review now". One that holds nothing stays a note under Health and is still reviewed from
-// there. In v0.3.63 every stopped run was not urgent, so the button rendered nowhere. Every request is intercepted.
+// Needs you opens with one line per run, its own Try again / Don't retry, and Details. One that holds nothing stays a
+// note under Health and is still reviewed from there. In v0.3.63 every stopped run was not urgent, so the button rendered nowhere. Every request is intercepted.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,15 +16,25 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    const holding = {kind: 'uncertain_work', title: 'Builder has 1 stopped run holding up work', bot: 'builder',
-      detail: '"Billing 3/5" (owner Builder) stopped partway. 3 queued requests wait on "Dev 268" until you decide. Choose Try again or Don\'t retry.',
-      severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268']};
+    // Oct 26 (Chris): six stopped runs read as one paragraph of quoted titles beside a button as tall as the card.
+    // Now one line per run, each with its own two buttons; a message folded into a run rides on its row.
+    const stoppedRun = (title, retry, jobs) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
+      routine: true, retry,
+      at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, attempt_id: `a-${jobs[0]}`}))});
+    const holding = {kind: 'uncertain_work', title: 'Builder has 2 stopped runs holding up work', bot: 'builder',
+      detail: 'Its computer interrupted these runs at 05:39 UTC, usually for a restart or update, not a bug. ' +
+        '3 queued requests wait until you decide.',
+      severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268'], can_review: true,
+      runs: [stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
+        stoppedRun('Billing 3/5', true, ['r2'])], more_runs: 1};
     const later = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for later', bot: 'writer',
       detail: 'The bot stopped before returning an answer. Other work can continue. Review it whenever useful.',
       severity: 'warning', needs_person: false, action: 'review'};
     const reviewed = [], decisions = [];
     const shot = async name => { if (process.env.SHOTS) await page.screenshot({path: `${process.env.SHOTS}/${name}.png`}); };
+    // `refusal` is true to refuse every choice, or one job's id to refuse only that one.
     let refusal = false, deferred = false;
+    const extra = [];
     // Keep a safe default first, with supporting evidence folded.
     const job = (id, title, stopped, acted, tools) => ({id, attempt_id: `a-${id}`, readable: true, stopped, acted,
       task: {id: `t-${id}`, title, status: 'doing', owner: 'bot:builder', owner_name: 'Builder'},
@@ -55,14 +65,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
-      if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [holding, later]});
+      if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [holding, later, ...extra]});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});
       if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [holding, later]});
       const reconcile = p.match(/^\/api\/v2\/jobs\/([^/]+)\/reconcile$/);
       if (reconcile) {
         const body = route.request().postDataJSON(); decisions.push({id: reconcile[1], ...body});
-        if (refusal) return json({error: {code: 'uncertain', detail: 'This run changed. Refresh and review it again.'}}, 409);
+        if (refusal === true || refusal === reconcile[1]) return json({error: {code: 'uncertain', detail: 'This run changed. Refresh and review it again.'}}, 409);
         const state = body.decision === 'resume' ? 'queued' : 'cancelled';
         return json({job_id: reconcile[1], state: deferred ? 'uncertain' : state, deferred});
       }
@@ -76,10 +86,64 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // Needs you opens by itself for the run holding work, with its review button; the note is not in it.
     const panel = page.locator('.needs-you');
     await panel.waitFor({timeout: t(5000)});
-    assert.match(await panel.innerText(), /Builder has 1 stopped run holding up work/);
-    assert.match(await panel.innerText(), /3 queued requests wait on "Dev 268"/);
-    assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Review now');
+    assert.match(await panel.innerText(), /Builder has 2 stopped runs holding up work/);
+    assert.match(await panel.innerText(), /not a bug\. 3 queued requests wait until you decide\./);
+    assert.doesNotMatch(await panel.innerText(), /"Dev 268"/);
+    const lines = panel.locator('.stopped-line');
+    assert.equal(await lines.count(), 2);
+    assert.equal(await lines.nth(0).locator('.stopped-name').innerText(), 'Review move demands a typed test receipt even when GitHub is green');
+    // The card's own line says it is not a bug, so the row does not repeat it.
+    assert.equal(await lines.nth(0).locator('.stopped-why').innerText(), 'Interrupted on its computer');
+    // The safe pick leads, by the review card's rule: a run that may have acted puts Don't retry first.
+    assert.deepEqual(await lines.nth(0).locator('button').allInnerTexts(), ['Don’t retry', 'Try again']);
+    assert.deepEqual(await lines.nth(1).locator('button').allInnerTexts(), ['Try again', 'Don’t retry']);
+    assert.match(await panel.innerText(), /Try again tells the bot/);
+    assert.match(await panel.innerText(), /And 1 more in Details\./);
+    assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Details');
     assert.equal(await panel.locator('[data-execution-review="writer"]').count(), 0);
+    // On a phone: each run is two short lines, every button as tall as its words, the header beside Close and still
+    // there once the list scrolls under it.
+    await page.setViewportSize({width: 390, height: 460});
+    const fit = await panel.evaluate(el => {
+      const box = node => node.getBoundingClientRect();
+      el.scrollTop = el.scrollHeight;
+      const header = box(el.querySelector('header')), title = box(el.querySelector('header h2')), close = box(el.querySelector('[data-close]'));
+      return {panel: box(el), header, title, close, scrolled: el.scrollTop > 0,
+        buttons: [...el.querySelectorAll('.settings-issue button, .settings-issue a')].map(node => box(node).height),
+        lines: [...el.querySelectorAll('.stopped-line')].map(node => box(node).height)};
+    });
+    assert.ok(fit.scrolled, `the fixture is taller than the phone panel: ${JSON.stringify(fit.panel)}`);
+    assert.ok(Math.abs(fit.header.top - fit.panel.top) <= 1.5, 'the header stays at the top while the list scrolls');
+    assert.ok(fit.title.right <= fit.close.left && fit.close.right <= fit.panel.right, 'the title is not under Close');
+    assert.ok(fit.panel.top >= 0 && fit.panel.bottom <= 460 - 64, 'the panel sits between the top edge and the bottom tabs');
+    assert.ok(fit.buttons.every(h => h < 44), `buttons sized to their words: ${fit.buttons}`);
+    assert.ok(fit.lines.every(h => h < 80), `one short entry per run: ${fit.lines}`);
+    await shot('needs-you-stopped-phone');
+    await page.setViewportSize({width: 1280, height: 800});
+    // Try again on a row settles every request folded into its run; a refusal stays on the row and can be retried.
+    refusal = true;
+    await lines.nth(0).locator('[data-run-decision=resume]').click();
+    await lines.nth(0).locator('[data-result]', {hasText: 'This run changed.'}).waitFor();
+    assert.equal(await lines.nth(0).locator('button:enabled').count(), 2);
+    // Dev 561: one folded request settles and the next is refused. Only that choice is offered for the rest, and the
+    // next click sends only the request still open, not the settled one again.
+    refusal = 'r1b';
+    decisions.length = 0;
+    await lines.nth(0).locator('[data-run-decision=resume]').click();
+    await lines.nth(0).locator('[data-result]', {hasText: 'This run changed.'}).waitFor();
+    assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1', 'resume'], ['r1b', 'resume']]);
+    assert.deepEqual(await lines.nth(0).locator('button:enabled').allInnerTexts(), ['Try again']);
+    refusal = false;
+    decisions.length = 0;
+    await lines.nth(0).locator('[data-run-decision=resume]').click();
+    await lines.nth(0).locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
+    assert.deepEqual(decisions.map(d => [d.id, d.attempt_id, d.decision, d.acknowledge_uncertain_effects]),
+      [['r1b', 'a-r1', 'resume', true]]);
+    assert.equal(await lines.nth(0).locator('button:enabled').count(), 0);
+    await lines.nth(1).locator('[data-run-decision=dismiss]').click();
+    await lines.nth(1).locator('[data-result]', {hasText: 'Dismissed.'}).waitFor();
+    assert.deepEqual(decisions.at(-1).id, 'r2');
+    decisions.length = 0;
     await panel.locator('[data-close]').click();
 
     // Settings > System checks lists it with "Review stopped runs".
@@ -169,6 +233,64 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('dialog.stopped-runs-dialog [data-result]', {hasText: 'Choice saved. The bot is busy'}).waitFor();
     assert.equal(await page.locator('dialog.stopped-runs-dialog form button:enabled').count(), 0);
     assert.deepEqual(reviewed, ['builder', 'writer', 'writer', 'writer']);
+    await page.locator('dialog.stopped-runs-dialog [data-close]').click();
+
+    // Dev 561: after a refresh, a run whose choice was saved while the bot was busy (stopped_rows `decided`) says what
+    // Tico will do and offers no second choice; one with a folded request saved offers only that choice, for the rest.
+    holding.runs = [{...stoppedRun('Billing 3/5', true, ['r2']), decided: 'resume',
+      jobs: [{id: 'r2', attempt_id: 'a-r2', decided: 'resume'}]},
+    {...stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
+      decided: null, jobs: [{id: 'r1', attempt_id: 'a-r1', decided: 'dismiss'}, {id: 'r1b', attempt_id: 'a-r1'}]},
+    // The Details card decided each folded request on its own, differently: the line is settled all the same.
+    {...stoppedRun('Rotate the deploy keys', false, ['r3', 'r3b']), decided: 'mixed',
+      jobs: [{id: 'r3', attempt_id: 'a-r3', decided: 'resume'}, {id: 'r3b', attempt_id: 'a-r3', decided: 'dismiss'}]},
+    {...stoppedRun('Weekly digest', true, ['r4']), decided: null}];
+    // A reader who is not the bot's operator (can_review false) gets the lines without handles: no decision buttons.
+    extra.push({...holding, bot: 'legal', title: 'Legal has 2 stopped runs holding up work', can_review: false,
+      runs: [{title: null, cause: 'interrupted', why: 'Interrupted on its computer', routine: true, retry: false,
+        at: '2026-10-26T05:39:09Z', decided: null},
+      {title: 'Counsel memo', cause: 'stopped', why: 'Stopped by a person', routine: false, retry: false,
+        at: '2026-10-26T05:41:00Z', decided: 'dismiss'}], more_runs: 0});
+    decisions.length = 0;
+    await page.evaluate(async () => { await refresh(true); needsYou(); });
+    const builderRows = panel.locator('.settings-issue', {hasText: 'Builder has 2 stopped runs'}).locator('.stopped-line');
+    const saved = builderRows.nth(0);
+    assert.equal(await saved.locator('[data-result]').innerText(),
+      'Choice saved. The bot is busy; Tico will try again when its turn ends.');
+    assert.equal(await saved.locator('button').count(), 2);
+    assert.equal(await saved.locator('button:enabled').count(), 0);
+    const partway = builderRows.nth(1), mixed = builderRows.nth(2), open = builderRows.nth(3);
+    assert.deepEqual(await partway.locator('button:enabled').allInnerTexts(), ['Don’t retry']);
+    assert.equal(await mixed.locator('[data-result]').innerText(),
+      'Choices saved. The bot is busy; Tico will apply them when its turn ends.');
+    assert.equal(await mixed.locator('button:enabled').count(), 0);
+    // The only risky line still open can only be dismissed now, so the Try again hint is gone.
+    const builderCard = panel.locator('.settings-issue', {hasText: 'Builder has 2 stopped runs'});
+    assert.doesNotMatch(await builderCard.innerText(), /Try again tells the bot/);
+    // The rest goes through at once, but the request saved earlier still waits for the bot's turn, so the line says so.
+    deferred = false;
+    await partway.locator('[data-run-decision=dismiss]').click();
+    await partway.locator('[data-result]', {hasText: 'Tico will dismiss this run when its turn ends.'}).waitFor();
+    assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1b', 'dismiss']]);
+    // Needs you closed and reopened before a refresh (a line is still open) keeps the outcome and offers nothing more.
+    await page.evaluate(() => needsYou());
+    assert.equal(await partway.locator('[data-result]').innerText(),
+      'Choice saved. The bot is busy; Tico will dismiss this run when its turn ends.');
+    assert.equal(await partway.locator('button:enabled').count(), 0);
+    // Deciding the last open line refreshes the card.
+    const reread = page.waitForResponse(r => new URL(r.url()).pathname === '/api/status', {timeout: 5000});
+    await open.locator('[data-run-decision=resume]').click();
+    await open.locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
+    await reread;
+    assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1b', 'dismiss'], ['r4', 'resume']]);
+    const legal = panel.locator('.settings-issue', {hasText: 'Legal has 2 stopped runs'});
+    assert.equal(await legal.locator('.stopped-line').count(), 2);
+    assert.equal(await legal.locator('.stopped-line').nth(0).locator('.stopped-name').innerText(), 'A request you can’t open');
+    assert.equal(await legal.locator('[data-run-decision]').count(), 0);
+    assert.equal(await legal.locator('.stopped-picks').count(), 0);
+    assert.equal(await legal.locator('.stopped-line').nth(1).locator('[data-result]').innerText(),
+      'Choice saved. The bot is busy; Tico will dismiss this run when its turn ends.');
+    assert.doesNotMatch(await legal.innerText(), /Try again tells the bot/);
     assert.deepEqual(errors, []);
     console.log(`PASS: stopped runs are reviewed from Needs you, Settings and Health (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   } finally { await browser.close(); }

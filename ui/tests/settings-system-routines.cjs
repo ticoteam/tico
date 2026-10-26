@@ -104,6 +104,12 @@ async function open(browser, role) {
   return {page, errors, asked, writes};
 }
 const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
+// A change on a row is saved once its write has gone, the row is no longer busy, and it shows no error ("Saved" is a toast).
+const saved = async (page, writes, count, key) => {
+  for (let i = 0; i < 200 && writes.length < count; i++) await page.waitForTimeout(25);
+  assert.ok(writes.length >= count, `the ${key} change is sent`);
+  await page.waitForFunction(k => !SYSTEM_ROUTINE_BUSY.has(k) && !document.querySelector(`[data-system-routine="${k}"] [data-sysr-status].err`), key);
+};
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -170,11 +176,11 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
         }
         // Every 4 hours: saved, and the row reads it back.
         await row(page, 'stale_review').locator('[data-sysr-preset]').selectOption('4h');
-        await page.waitForFunction(() => document.querySelector('[data-system-routine="stale_review"] [data-sysr-status]')?.textContent === 'Saved');
+        await saved(page, writes, 1, 'stale_review');
         assert.match(await row(page, 'stale_review').locator('[data-sysr-rule]').innerText(), /^WHEN every 4 hours THEN/);
         // Switch Topic changed on; Run now on the stale review lands its result on the row.
         await row(page, 'topic_fresh').locator('[data-sysr-on]').check();
-        await page.waitForFunction(() => document.querySelector('[data-system-routine="topic_fresh"] [data-sysr-status]')?.textContent === 'Saved');
+        await saved(page, writes, 2, 'topic_fresh');
         await row(page, 'stale_review').locator('[data-sysr-run]').click();
         await page.waitForFunction(() => /4 checked, 1 suggestion/.test(document.querySelector('[data-system-routine="stale_review"] [data-sysr-result]')?.textContent || ''));
         // The daily time saves once, when the box is left, not after the hour alone.
@@ -184,7 +190,7 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
         await page.keyboard.type('AM');
         assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-sysr-at]')), true, 'focus stays while typing');
         await page.keyboard.press('Enter');
-        await page.waitForFunction(() => document.querySelector('[data-system-routine="still_wanted"] [data-sysr-status]')?.textContent === 'Saved');
+        await saved(page, writes, 4, 'still_wanted');
         assert.deepEqual(writes, [{method: 'PUT', key: 'stale_review', body: {preset: '4h'}},
           {method: 'PUT', key: 'topic_fresh', body: {on: true}}, {method: 'POST', key: 'stale_review', body: {}},
           {method: 'PUT', key: 'still_wanted', body: {at: '10:30'}}]);
@@ -210,8 +216,9 @@ const row = (page, key) => page.locator(`[data-system-routine="${key}"]`);
       await page.locator('.task-rule-dialog button[type=submit]').click();
       await page.locator('.task-rule-dialog').waitFor({state: 'detached'});
       assert.match(await rule().innerText(), /48 hours/);
+      const before = writes.length;
       await rule().locator('[data-sysr-on]').uncheck();
-      await page.waitForFunction(() => document.querySelector('[data-system-routine="task-rule-close-after-done"] [data-sysr-status]')?.textContent === 'Saved');
+      await saved(page, writes, before + 1, 'task-rule-close-after-done');
       assert.equal(await rule().locator('[data-sysr-on]').isChecked(), false);
       await page.locator('[data-task-rule-new]').click();
       assert.equal(await page.locator('.task-rule-dialog select[name=department]').inputValue(), 'engineering');

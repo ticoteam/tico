@@ -202,13 +202,14 @@ def test_a_ceo_bot_run_files_exactly_one_strategy_draft_proposal_and_never_write
     pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
     assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:goal-manager"
     payload = pending[0]["payload"]
-    assert payload["source"] == "lens" and payload["lens"] == "blue-ocean"
+    assert payload["source"] == "lens" and payload["lens"] == "blue-ocean" and pending[0]["lens_name"] == "Blue Ocean"
     assert payload["summary"].startswith("Acme runs rentals") and payload["sections"] == {"not": "No per-seat pricing."}
     assert payload["bets"] == [{"id": second["id"], "status": "retired"}]
     assert draft(api) == before                                                    # the draft is the owner's to change
     sync(api)
     [ask] = [a for a in asks(api) if a["kind"] == "proposal"]
-    assert ask["title"].endswith("from the Blue Ocean lens") and "because" not in ask["body"]
+    assert ask["title"] == "Decide a suggested change to your strategy from the Blue Ocean lens"
+    assert "because" not in ask["body"] and "Add to draft writes it to your draft" in ask["body"]
     # No change, no proposal; an owner's run never files one.
     model["result"] = result(first["id"])
     assert start(api, token=ceo)["proposal_id"] is None

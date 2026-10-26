@@ -22,6 +22,17 @@ function taskVerdictHTML(t) {
     ? ` <code class="tnum" data-verdict-head>${esc(head)}</code>` : ''}</span>`;
 }
 
+// A person's QA waiver on a Dev ticket (`qa_waivers`, backend/qa_waivers.py): amber, never green, and always the words
+// "QA waived", so it never reads as a QA pass. A waiver for a head the pull request has moved on from says so.
+function taskQaWaiverHTML(w) {
+  if (!w?.head) return '';
+  const head = String(w.head).slice(0, 7);
+  const tip = `QA waived on ${head} by ${actorLabel(w.actor)}: ${w.reason || 'no reason given'}. A waiver, not a QA pass.${
+    w.current ? '' : ' The pull request has a newer head, which this waiver does not cover.'}`;
+  return `<span class="verdict-chip waived" data-qa-waiver data-current="${w.current ? 'yes' : 'no'}" title="${esc(tip)}" aria-label="${esc(tip)}">QA waived <code class="tnum">${
+    esc(head)}</code>${w.current ? '' : ' · old head'}</span>`;
+}
+
 // ---- Code: one line per worktree and per pull request
 const taskLinkDetail = l => {
   let d = l.detail || l.detail_json || {};

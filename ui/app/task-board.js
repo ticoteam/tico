@@ -40,10 +40,12 @@ function taskBoardShows(it, state) {
 // ---- blocked: a card with open blockers says so at its top; the strip focuses the board on it and them
 const taskOpenBlockers = t => taskBlockers(t).filter(r => !['done', 'closed', 'declined'].includes(String(r.status || '')));
 function taskBlockedStrip(it) {
-  const open = taskOpenBlockers(it.task); if (!open.length) return '';
+  const t = it.task;
+  const hold = t.blocked_since ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
+  const open = taskOpenBlockers(t); if (!open.length) return hold;
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
-  return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}" title="${esc(`Blocked by ${all}`)}"><span>Blocked by ${esc(name)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  return hold + `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}" title="${esc(`Blocked by ${all}`)}"><span>Blocked by ${esc(name)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;
@@ -281,7 +283,11 @@ function taskBoardDrop(state, d) {
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
-  taskBoardSave(state, t, body, fields, 'Not moved');
+  if (moving && step.name === 'Blocked') {
+    void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
+      if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
+    });
+  } else taskBoardSave(state, t, body, fields, 'Not moved');
   return true;
 }
 // A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.

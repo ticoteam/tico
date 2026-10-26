@@ -36,6 +36,18 @@ impl Host {
         }
     }
 
+    /// Compacts a saved thread before a turn runs on it (`compact_first`). The call returns once the compaction has
+    /// started; the thread's own `turn_completed` / `turn_failed` says when it is done. A harness without
+    /// `compaction` is refused by the caller before this.
+    pub async fn compact(&self, thread: &str, effort: Option<&str>) -> Result<String, HostError> {
+        match self {
+            Host::Codex(h) => h.compact(thread).await,
+            Host::Claude(h) => h.start_turn(thread, "/compact", effort),
+            #[allow(unreachable_patterns)]
+            _ => Err(failed("this harness cannot compact a session")),
+        }
+    }
+
     /// Goal records the harness keeps outside its event stream (Claude's transcript).
     pub fn poll_goal(&self, thread: &str) {
         if let Host::Claude(h) = self {

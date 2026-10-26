@@ -264,6 +264,12 @@ while a live run of the bot is on the same task (or the same chat, or the same t
 when that run ends. When the runner itself reported the run interrupted
 (it restarted), such a run resumes at once; when the same computer picks it up again it continues
 the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+A quarantine stops each running turn through the runner's normal Stop response, carrying
+`stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
+(or *until a person clears it*). Its jobs return to the queue until the quarantine lifts;
+the bot's activity says they will run again. A real lease loss still says the computer
+stopped answering. Later held runs are named on the bot's existing review task, and
+closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
@@ -369,8 +375,9 @@ The bot's operator or BotOps checks what happened before choosing to resume or d
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
 failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage limit and holds the login until the reset it names. An
-error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) starts the bot's next run in a
-fresh provider session, as Clear does, instead of resuming the session into the same error.
+error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
+thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
+([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
@@ -415,8 +422,8 @@ it completes or the reset time passes ([Health Monitor](health-monitor.md), `def
 The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
-pick is the first from a provider other than the one the work was written on; with none, it is refused rather than
-run on the author's own provider. An entry whose provider is off or whose model is retired is skipped, and a
+pick is the first from a provider other than the one the work was written on; with none that can run, it runs on
+the author's own provider and the task's history says so. Another provider is preferred, never required. An entry whose provider is off or whose model is retired is skipped, and a
 runtime alone follows its provider's current model. `check_order` in the same view is the order in effect.
 
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's
@@ -482,7 +489,7 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA subtasks only; any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
@@ -509,7 +516,7 @@ a Responder with tasks, and a Doer whose runs for a week all did nothing.
 
 A human is normally the browser sign-in (Cloudflare Access). A **personal API token** is the
 same human from a script, a cron job or another computer, with no browser: any human (the owner may
-limit it to admins, Settings > Humans) opens **Connect an external agent** beside their email
+limit it to admins, Settings > People) opens **Connect an external agent** beside their email
 (or **Settings → Computers → API tokens**), gives the
 token a label and a life (90 days unless changed, a year at most), and copies it once; it is
 not shown again and only its hash is kept. Then:

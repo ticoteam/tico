@@ -458,8 +458,8 @@ def with_gateway(record, connected):
 def load(c, settings=None):
     """The company's choice. Before the owner has saved one, the environment's seed stands in
     (`source: environment`), so a deployment that sets TICO_ENABLED_PROVIDERS works at once."""
-    from . import gateway_connection
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    from . import gateway_connection, read_cache
+    row = read_cache.metadata(c, KEY)
     if row:
         record = _record(row[0])
     else:
@@ -643,17 +643,15 @@ def author_provider(author):
 
 
 def check_choice(record, author, available=None):
-    """The check model for work written on `author` (a provider, model or runtime): the first in check_order from
-    another provider, and on a runtime in `available` (the signed-in runtimes) when that is given. A check that
-    runs on the author's own provider is no second opinion, so it is refused rather than picked."""
+    """The check model for work written on `author` (a provider, model or runtime): the first in check_order on a
+    runtime in `available` (the signed-in runtimes) when that is given, from another provider when one qualifies. A
+    second opinion from another provider is preferred; with none, the author's own provider still checks the work."""
     own = author_provider(author)
-    for row in check_order(record):
-        if row["provider"] == own or (available is not None and row["runtime"] not in available):
-            continue
+    rows = [row for row in check_order(record) if available is None or row["runtime"] in available]
+    for row in [r for r in rows if r["provider"] != own] + [r for r in rows if r["provider"] == own]:
         return row
-    raise ProviderError("check_model", "No check model from a provider other than "
-                        f"{PROVIDER_BY_ID[own]['label'] if own else 'the author'}: enable or sign in another AI "
-                        "provider in Settings > Computers, or name one with --check-model", 409)
+    raise ProviderError("check_model", "No check model can run: enable or sign in an AI provider in "
+                        "Settings > Computers, or name one with --check-model", 409)
 
 
 # ----------------------------------------------------------------------------- resolution

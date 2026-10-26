@@ -35,14 +35,15 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 - **Builder: use the strongest model at high effort.** Today that is Claude Opus. It writes the code and makes the
   final call on every review comment, so don't save money here.
-- **Reviewers: use a different model family from the Builder.** What matters most is that Reviewer 1 and Reviewer 2
-  come from model families other than the Builder's (for example GPT or Grok against a Claude Builder), so they
-  catch what the Builder's model misses. The Builder still decides what to act on.
+- **Reviewers: prefer a different model family from the Builder.** Reviewer 1 and Reviewer 2 from model families
+  other than the Builder's (for example GPT or Grok against a Claude Builder) catch what the Builder's model misses.
+  It is a preference, not a gate: when no reviewer from another family is free, a same-family reviewer reviews
+  rather than the change waiting. The Builder still decides what to act on.
 - **For reliability, turn effort up.** Higher effort on the Builder, the reviewers and QA catches more before
   release.
 - **To save money:**
   - drop Reviewer 2
-  - run the reviewers on lower-effort or cheaper models, keeping them in a different family from the Builder
+  - run the reviewers on lower-effort or cheaper models, in a different family from the Builder where one is available
   - don't cut the Builder
 
 ## Rules that make it work
@@ -97,6 +98,13 @@ ticket stays at its step with a Waiting tag.
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
   Rules page (`hub rule list --scope-kind type --scope-id <type>`).
+- **A ticket at a working step (In Progress or a Fixes step) shows its age at that step** on its card (`step_since`
+  on the task), amber past 4 hours. Waiting time is not counted: the clock restarts when the ticket comes back to
+  work. After 2 hours with no activity (no update, checkpoint or message), its bot owner is woken once for a status,
+  even when the ticket stands as at its last checkpoint and the plain status check would be held, and unless it waits on
+  something recorded (a question, a snooze, a due date, a blocker, a subtask) or a run of it is going. After 4 hours at
+  the step, the type's manager (Head of Engineering), or else the owner's manager, is woken once to unblock or reroute
+  it. Each happens once per stay at the step.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 

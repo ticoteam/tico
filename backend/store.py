@@ -408,6 +408,12 @@ def refused(c, identity, exc):
     if getattr(exc, "review_gate", None):
         from . import review_gate
         review_gate.notify(c, identity.actor, exc.review_gate)
+        # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
+        from . import move_retry
+        move_retry.remember(c, identity.actor, exc.review_gate)
+    if notice := getattr(exc, "task_hold", None):
+        from .task_blocked import hold
+        hold(c, notice["task"], notice["reason"], notice["kind"])
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
@@ -416,7 +422,8 @@ def refused(c, identity, exc):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422)
+    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
+                   retryable=getattr(exc, "retryable", False))
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -806,6 +813,7 @@ class Store:
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.seed_dev(c)
+            _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs

@@ -41,7 +41,33 @@ const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
+function taskBlockedReason(t, source = document.activeElement) {
+  return new Promise(resolve => {
+    const opener = source, dialog = document.createElement('dialog');
+    dialog.className = 'tmodal task-block-reason';
+    dialog.innerHTML = `<form class="tmodal-body"><h2>Block task</h2>
+      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(t.blocked_reason || '')}</textarea></label>
+      <div class="row"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Block</button></div></form>`;
+    let value = null;
+    dialog.querySelector('form').onsubmit = event => {
+      event.preventDefault();
+      const reason = dialog.querySelector('textarea').value.trim();
+      if (!reason) return;
+      value = reason; dialog.close();
+    };
+    dialog.querySelector('[data-cancel]').onclick = () => dialog.close();
+    dialog.addEventListener('close', () => { dialog.remove(); if (opener?.isConnected) opener.focus(); resolve(value); }, {once: true});
+    document.body.append(dialog); dialog.showModal(); dialog.querySelector('textarea').focus();
+  });
+}
+function taskBlockedLine(t) {
+  const blocker = taskBlockers(t).find(b => !['done', 'closed', 'declined'].includes(b.status));
+  const reason = t.blocked_reason === 'Waiting on a dependency' && blocker?.title
+    ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
+  return `${reason} · since ${fmt(t.blocked_since)}`;
+}
 function taskWaitLine(t) {
+  if (t?.blocked_since) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
@@ -145,6 +171,7 @@ function taskWaitingOn(t) {
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {
   if (!t) return '';
+  if (t.blocked_since) return 'Blocked';
   if (t.step?.name && pipelineTypeId(t) !== 'general') return t.step.name;
   return STATUS_WORD[t.status] || String(t.status || '');
 }
@@ -300,6 +327,15 @@ function taskRelChip(t) {
   const words = `${n} related task${n === 1 ? '' : 's'}`;
   return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
 }
+// A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
+// told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
+const STEP_LATE_MS = 4 * 3600e3;
+function taskStepAge(t) {
+  const since = Date.parse(t?.step_since || ''); if (!since) return '';
+  const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
+  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}${late ? ': over 4 hours' : ''}`;
+  return `<span class="bcard-step-age tnum${late ? ' late' : ''}" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
+}
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
 function taskCard(it) {
@@ -309,7 +345,8 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}

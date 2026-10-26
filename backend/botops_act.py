@@ -2,7 +2,9 @@
 
 The server dispatcher (app.py) resolves the human or bot that requested the run and applies
 that identity's own rights to every v2 route by default. No requester means BotOps' own rights.
-The route tables and classifier remain for older callers; they do not limit that dispatcher.
+For a person, the dispatcher answers a few routes with a Confirm card in their chat instead (`card_for_person`)
+and refuses those that hand a secret back (`person_only`); the identity it lends is never confirmed, so a route's
+own "always a click" rule asks too. Only the person's tap on the card runs it.
 Secrets go through Credentials, never arbitrary API request bodies.
 """
 import json
@@ -193,29 +195,47 @@ DO = _routes(
     # are direct unless the owner's rule says otherwise (TIGHTENED).
     ("POST", rf"(runners|computers)/{_S}/(restart|inbox-only|logins|screen)"), ("POST", rf"(runners|computers)/{_S}/logins/{_S}/cancel"),
     ("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"), ("PUT", rf"usage/pools/(company|groups/{_S})"),
+    # The Tico AI Gateway off or back to automatic is a provider change too (the owner's, which the route checks). Saving
+    # its key is a secret, refused in the request; checking it changes nothing.
+    ("DELETE", r"providers/gateway"), ("POST", r"providers/gateway/automatic"),
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),
     ("POST", r"system/update(/check)?"),
     # Sleep when idle: an owner's or an admin's call, which the route checks.
     ("POST", r"sleep"),
+    # Incoming triggers and their Tico Gateway addresses: whoever manages the trigger (backend/triggers.py), never
+    # BotOps' own right to manage every trigger while it works for someone.
+    ("POST", r"triggers"), ("POST", rf"triggers/{_S}"), ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
+    ("POST", rf"triggers/{_S}/deliveries/.+/replay"), ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
+    # Task types and tags (movers, a tag's owner), the release schedule and Release now, the team's run budget and
+    # Tico's own jobs (an owner or an admin): each route checks the person.
+    ("POST", r"task-types"), ("POST", rf"task-types/{_S}(/delete)?"), ("DELETE", rf"task-types/{_S}"),
+    ("POST", r"tags"), ("POST", rf"tags/{_S}(/instances)?"),
+    ("PATCH", r"release-schedule"), ("POST", r"release/now"),
+    ("POST", r"settings/turn-budgets"),
+    ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
 # still direct: app.py checks it against what is set.
+GATEWAY = _routes(("DELETE", r"providers/gateway"), ("POST", r"providers/gateway/automatic"))
 TIGHTENED = _routes(("PUT", r"providers"), ("PUT", r"usage/limits"), ("PUT", rf"usage/limits/{_S}"),
-                    ("PUT", rf"usage/pools/(company|groups/{_S})"))
+                    ("PUT", rf"usage/pools/(company|groups/{_S})")) + GATEWAY
 LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 
 # Comes back as a Confirm card; it runs only on the person's own click, as them.
 CONFIRM = _routes(
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
+    ("POST", rf"routines/{_S}/delete"),
     ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
     ("PATCH", rf"files/{_S}"),
     ("PUT", r"directory"), ("POST", r"directory/sync"), ("POST", r"directory/preview"),
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
+    # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
+    ("POST", rf"seats/{_S}/hire"),
 )
 
 # The messages route is a card unless it names a bot (`classify`).
@@ -229,13 +249,33 @@ ADMIN_ONLY = _routes(
     ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
 )
 
+# Always the person's own tap when BotOps acts for them, whatever they said in chat: handing over the company, updating
+# Tico, and a computer's one-time code (shown on the card once they tap, never in BotOps' answer).
+ALWAYS = _routes(("POST", r"access/owner"), ("POST", r"system/update"), ("POST", r"enrollments"))
+# Owner-only: a member or an admin is told so at once, not handed a card that fails (the Gateway connection included).
+OWNER_ONLY = _routes(("POST", r"access/owner")) + GATEWAY
+# Team rules that set BotOps' own powers: a change to one of them is always the person's own tap.
+OWN_POWER_RULES = ("botops_direct", "botops_manages_bots")
+RULES = re.compile(API + r"access/rules")
+
+# Hand a secret's value back to whoever calls: BotOps acting for a person is refused, with where the person does it.
+PERSON_ONLY = [
+    ("POST", re.compile(API + rf"credentials/{_S}/reveal"), "A stored credential's value is shown only to a person, in Credentials"),
+    ("POST", re.compile(API + rf"access/(people|humans)/{_S}/password"), "A person makes someone a password in Settings > Humans"),
+    ("POST", re.compile(API + r"me/tokens"), "A person makes their own personal API token in Settings"),
+    ("POST", re.compile(API + r"directory/scim-token"), "The owner makes a SCIM token in Settings > Humans"),
+]
+DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
+
 # Read as the person, except what hands back a secret or is a computer's own channel.
 NO_READ = re.compile(API + r"(credential-runtime|runner-credential-(migration|grants)|me/tokens.*|mcp|agents/setup-script|jobs.*|attempts.*"
                      r"|runner-logins.*|runner-(model|gateway)-credentials|runners/desired|runners/assignments|runners/eligible|runners/me/events|directory/scim-token)")
 
 # Named like a secret: refused whatever route it is on.
 SECRET_KEYS = re.compile(r"^(secret|password|passwd|passphrase|token|access_token|refresh_token|api_key|apikey|"
-                         r"private_key|client_secret|authorization|bearer)$", re.I)
+                         r"private_key|client_secret|authorization|bearer|bot_token|app_token)$", re.I)
+# Names that are a secret on one route only: elsewhere `key` names a setting, a field or an idempotency key.
+ROUTE_SECRETS = [(("PUT",), re.compile(API + r"providers/gateway"), ("key",))]
 
 DETAIL_SECRET = ("A secret does not go in a request. Ask the person for it with a credential card "
                  "(`hub credential request`): the value goes straight to Credentials and never through you.")
@@ -270,6 +310,67 @@ def classify(method, path, body=None, rules=None, to_bot=None):
     if any(m == method and p.fullmatch(path) for m, p in DO):
         return "do"
     return None
+
+
+def person_only(method, path):
+    """Why BotOps acting for a person may not make this call (the route hands a secret's value back), or ""."""
+    path, method = normalize(path), str(method or "").upper()
+    return next((why + DETAIL_PERSON_ONLY for m, p, why in PERSON_ONLY if path and m == method and p.fullmatch(path)), "")
+
+
+def owner_only(method, path, body=None):
+    """A card only the owner may ask for: handing over the company, and the team rules that set BotOps' own powers."""
+    path, method = normalize(path), str(method or "").upper()
+    if not path:
+        return False
+    return (any(m == method and p.fullmatch(path) for m, p in OWNER_ONLY)
+            or (method == "PUT" and bool(RULES.fullmatch(path)) and own_powers(body)))
+
+
+def own_powers(body):
+    return isinstance(body, dict) and any(body.get(name) is not None for name in OWN_POWER_RULES)
+
+
+def card_for_person(method, path, body=None, rules=None, lowers=None):
+    """Whether BotOps acting for a person answers with a Confirm card in their chat instead of making the change: the
+    routes that always need their own tap (ALWAYS, a team rule on BotOps' own powers), the CONFIRM routes and, when
+    the team turned `botops_direct` off, providers and limits (TIGHTENED) unless `lowers()` says the change only lowers
+    a limit. Taking a credential grant back stays direct, as giving one to a bot is. A run never confirms for anyone."""
+    path, method = normalize(path), str(method or "").upper()
+    if not path or method in ("GET", "HEAD", "OPTIONS"):
+        return False
+    match = lambda routes: any(m == method and p.fullmatch(path) for m, p in routes)
+    if match(ALWAYS) or match(CONFIRM):
+        return True
+    if method == "PUT" and RULES.fullmatch(path) and own_powers(body):
+        return True
+    if match(TIGHTENED):
+        if rules is None or rules.get("botops_direct", True):
+            return False
+        return not (LIMITS.fullmatch(path) or path.startswith(API + "usage/pools/")) or not (lowers and lowers())
+    return False
+
+
+# The card's line for what BotOps asked to do, in plain words; the card lists every field it sends.
+SUMMARIES = [
+    ("POST", re.compile(API + r"access/owner"), "Hand ownership of the team to another person"),
+    ("POST", re.compile(API + r"system/update"), "Update Tico now (the server restarts)"),
+    ("POST", re.compile(API + r"enrollments"), "Make a one-time code to add a computer: it shows here once you confirm"),
+    ("PUT", RULES, "Change the team's rules"),
+    ("PUT", re.compile(API + r"providers"), "Change the team's AI providers"),
+    ("DELETE", re.compile(API + r"providers/gateway"), "Turn off the Tico AI Gateway (its saved key is forgotten)"),
+    ("POST", re.compile(API + r"providers/gateway/automatic"), "Connect the Tico AI Gateway automatically again"),
+    ("PUT", re.compile(API + rf"usage/(limits(/{_S})?|pools/.+)"), "Change a spending limit"),
+]
+
+
+def card_summary(method, path, body=None):
+    path, method = normalize(path) or "", str(method or "").upper()
+    found = next((text for m, p, text in SUMMARIES if m == method and p.fullmatch(path)), None)
+    if found:
+        return found
+    _, _, where = _place(path)
+    return "Make this change in " + where.replace("its ", "the bot's ") + " for you"
 
 
 # What a request a bot carried for a person (app.py carried_request) does with the person's rights: their own work
@@ -334,6 +435,12 @@ def secret_in_request(method, path, body):
     """`secret_in` for a request: on a tool route only, a secret-named `mcp.headers` key passes when its value is
     `placeholder_only` for the body's `env`. Every other key, and every other route, is checked as `secret_in`."""
     path = normalize(path)
+    if path and isinstance(body, dict):
+        for methods, route, names in ROUTE_SECRETS:
+            if str(method).upper() in methods and route.fullmatch(path):
+                found = next((name for name in names if body.get(name) not in (None, "")), None)
+                if found:
+                    return found
     mcp = body.get("mcp") if isinstance(body, dict) else None
     if (not path or not isinstance(mcp, dict) or not isinstance(mcp.get("headers"), dict)
             or not any(m == str(method).upper() and p.fullmatch(path) for m, p in TOOL_ROUTES)):
@@ -376,6 +483,10 @@ def default_delegable(method, path, body=None):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False
+    # The person's own card or plain refusal (`card_for_person`, `person_only`) reaches a client that sends no
+    # header too, not BotOps' own 403.
+    if any(m == str(method).upper() and p.fullmatch(path) for m, p in ALWAYS) or person_only(method, path):
+        return True
     return classify(method, path, body) in ("do", "confirm")
 
 
@@ -397,6 +508,13 @@ def _place(path):
     if parts[0] in ("runners", "computers"):
         return "#/settings", "", "Settings > Computers"
     return "#/settings", "", "Settings"
+
+
+def refusal_for_person(path, text, base=""):
+    """`{"fix", "link"}` for a refusal decided for the person BotOps acts for (`person_only`, a role): what they do
+    themselves, and where."""
+    link = _place(path)[0]
+    return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}
 
 
 def mail_settings_hint(bot, slug=""):
