@@ -371,7 +371,7 @@ def reject(c, actor, row, kind, head, pr, text, retryable=False, auth=False, loc
         # never routes; an access failure routes on the first refusal; a local one (Tico's own link record) never
         # routes. `remember` keeps these (backend/move_retry.py).
         exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text,
-                           "temporary": bool(retryable), "devops": bool(auth), "local": bool(local)}
+                           "local": bool(local)}
         raise
 
 
