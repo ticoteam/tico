@@ -107,7 +107,8 @@ question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and
 answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.
 Write the ask to them: one or two plain sentences saying what you need and what happens after, at most 40 words,
 with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare `#1555` is not); Tico refuses it
-otherwise. A refusal for length gives you a rewrite: retry once with it and put the rest in a comment. Working notes go
+otherwise. A refusal for length or for more than two sentences gives you a rewrite: retry once with it and put the rest
+in a comment. When no shorter wording keeps the decision, it gives the exact fix instead and nothing is sent. Working notes go
 in a comment.
 One question, one card. Don't file a separate task just to ask, and don't hand another bot a subtask that waits on
 the same person for the same thing: if the card this asks for is already open in the task's tree, your ask joins it.

@@ -1048,6 +1048,10 @@ class WaitingWithDependency(HubCase):
         # A single sentence over the limit only by its context keeps the request; one with no outcome keeps it alone.
         self.assertEqual(H.person_ask_rewrite("Merge PR #1555. " + "The runner was slow all day. " * 8),
                          ("Merge PR #1555.", ""))
+        # What happens after is the sentence that answers the request, not context that only opens like one.
+        self.assertEqual(H.person_ask_rewrite("Approve the merge of PR #1555? Then the runner failed three times. "
+                                              "If yes, I will run the tests today."),
+                         ("Approve the merge of PR #1555? If yes, I will run the tests today.", ""))
 
     def test_an_ask_no_shorter_wording_keeps_gets_a_repair_and_nothing_is_sent(self):
         task = H.task_create(self.conn, CMO, 'Get the Settings change tested', 'All the runner notes.', CMO,
@@ -1057,6 +1061,11 @@ class WaitingWithDependency(HubCase):
                 # Two decisions: picking one would change what the person is asked.
                 ("Approve the merge of PR #1555? Or should I close it and open a new one?" + context,
                  'it asks 2 things ("Approve the merge of PR #1555?"; "Or should I close it and open a new one?")'),
+                # A question and a request are two decisions too: keeping only the question drops the merge.
+                ("Can you approve the merge today? Approve PR #1555 so QA can test it. The hosted checks failed three "
+                 "times today on the same browser test and I cannot tell yet whether the runner or the change is at "
+                 "fault.",
+                 'it asks 2 things ("Can you approve the merge today?"; "Approve PR #1555 so QA can test it.")'),
                 ("The runner is slow." + context + context, 'none of its sentences asks for anything'),
                 ("Approve the merge of PR #1555 " + "and the follow-up fixes " * 9 + "today?" + context,
                  'its request alone is 43 words: shorten'),
@@ -1067,12 +1076,13 @@ class WaitingWithDependency(HubCase):
             self.assertIn('No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. '
                           f'To fix it, {repair}', refused.exception.detail)
             self.assertIn('then retry once', refused.exception.detail)
+            self.assertNotIn('Retry once with this ask', refused.exception.detail)
             after = H.task(self.conn, task['id'])
             self.assertEqual((after['status'], after['waiting_on'], after['body'], TR.child_ids(self.conn, task['id'])),
                              ('open', None, 'All the runner notes.', []))
         # The refusals are recorded, so the blocker is never invisible, and none counts toward a quarantine.
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND rule='lint'",
-                                           (CMO,)).fetchone()[0], 4)
+                                           (CMO,)).fetchone()[0], 5)
         self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
 
     def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
@@ -1080,11 +1090,14 @@ class WaitingWithDependency(HubCase):
         sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
         for note, ident in [('Approve the fix in db14c907.', 'db14c907'), (f'Approve the fix in {sha}.', sha),
                             ('Approve the fix in 3f2a9c1.', '3f2a9c1'), ('Review #388 before Friday.', '#388'),
-                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f')]:
+                            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f'),
+                            ('Merge #1555.', '#1555'), ('Merge PR#1555 today.', '#1555'),
+                            ('Read #1555/files today.', '#1555')]:
             self.assertEqual(flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note)
         for note in ['Approve the $250000 budget.', 'Approve the £1500000 offer.', 'Approve the €250000 and ¥9000000 quotes.',
                      'Name the deadbeef test host.', 'Pick a date after 2026-10-11 for the launch.',
-                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.']:
+                     'Approve upgrading to 0.3.40 and Python 3.12.', 'Tell me if the defaced page is back up.',
+                     'Merge PR #1555.']:
             self.assertEqual(flagged(note), [], note)
         # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
         self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))

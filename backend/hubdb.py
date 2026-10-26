@@ -1591,7 +1591,8 @@ def lint_waiting_note(note, person, asked=False):
     unref = LINT_PR_REF.sub("PR", text)
     m = LINT_HEX_ID.search(unref) or next((i for i in LINT_IDENT.finditer(unref)
                                            if not (i.start() and unref[i.start() - 1] in LINT_CURRENCY)
-                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None)
+                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None) \
+        or LINT_BARE_REF.search(unref)
     if m:
         problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
     n = len(text.split())
@@ -1658,7 +1659,10 @@ def lint_person_ask(text):
 
 # What a too-long ask is cut down to: the one sentence that asks for something, and the one after it that says what
 # happens then ("If yes, I'll ...", "Then ...", "I will ..."). The rest is the bot's context and goes under Details.
-LINT_OUTCOME = re.compile(r"(?:if (?:yes|so|not|no|approved|you (?:agree|approve|do|say yes))\b|then\b|once\b"
+# A sentence that answers the request ("If yes, ...") is the outcome over one that only opens like one ("Then the
+# runner failed."), wherever it comes after the request.
+LINT_IF_YES = re.compile(r"if (?:yes|so|not|no|approved|you (?:agree|approve|do|say yes))\b", re.I)
+LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|then\b|once\b"
                           r"|after (?:that|you|it)\b|i(?:'ll|\s+will|\s+can|\s+then)\b|we(?:'ll|\s+will)\b"
                           r"|th(?:at|is) (?:lets|unblocks|means)\b)", re.I)
 
@@ -1680,8 +1684,9 @@ def person_ask_rewrite(text):
     to change when no shorter wording keeps the same decision. Deterministic, like lint_person_ask: the bot retries
     once with the rewrite and puts the other sentences under Details, so nothing is lost or decided for it."""
     sentences = ask_sentences(str(text or "").strip())
-    questions = [i for i, s in enumerate(sentences) if s.rstrip("\"')] ").endswith("?")]
-    asks = questions or [i for i, s in enumerate(sentences) if _asks_for_something(s)]
+    # Every question and every request counts: an ask that asks one thing and requests another is two decisions,
+    # and keeping only one of them would change what the person is asked.
+    asks = [i for i, s in enumerate(sentences) if _asks_for_something(s)]
     if not asks:
         return "", ("none of its sentences asks for anything: open it with the one question or request, "
                     "then say what happens after")
@@ -1690,7 +1695,8 @@ def person_ask_rewrite(text):
         return "", (f"it asks {len(asks)} things ({quoted}): keep the one decision this ask is for in one sentence, "
                     "ask any other separately, and put the reasons in the details")
     i = asks[0]
-    outcome = next((s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)), None)
+    after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
+    outcome = next((s for s in after if LINT_IF_YES.match(s)), after[0] if after else None)
     kept = [sentences[i], *([outcome] if outcome else [])]
     rewrite = " ".join(kept)
     n = len(rewrite.split())
