@@ -843,7 +843,7 @@ function chatSendWatch(P, fileCount) {
       status = code;
       // Auth failures retire telemetry immediately in api.js; report before that
       // privacy boundary, never restore the retired identity to send an event.
-      if ((code === 401 || code === 403) && !accessReported) { diagnostic('unconfirmed'); accessReported = true; }
+      if ((code === 401 || code === 403) && !accessReported) { diagnostic(P.unconfirmed ? 'unconfirmed' : 'refused'); accessReported = true; }
     },
     retry(attempt, code) { retries = attempt; status = code || status; say(); P.sendRetrying = true; pillWhy(P); },
     end(outcome, code) {

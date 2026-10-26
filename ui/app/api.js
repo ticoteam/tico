@@ -213,7 +213,11 @@ async function cloudCompose(path, body, files = [], opts = {}) {
   files.forEach(file => fd.append('files', file, file.name));
   const response = await formFetch(API + path.replace('/v2/', '/v2/uploads/'), fd, {onRetry: opts.onRetry, onResponse: opts.onResponse});
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw apiFailure(result, response);
+  if (!response.ok) {
+    const error = apiFailure(result, response);
+    error.message ||= 'The server did not confirm this upload.';
+    throw error;
+  }
   if (!result.task && !result.message) throw new Error('The server did not confirm this upload.');
   return result;
 }

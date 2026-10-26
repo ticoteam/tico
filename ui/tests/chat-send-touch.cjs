@@ -31,6 +31,7 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/uploads/chat/botops') {
         uploads.push(route.request().postDataBuffer().length);
+        if (answer === 'upload-auth') return json({error:{code:'forbidden',detail:'Access refused'}}, 403);
         return json({error:{code:'too_large',detail:'Request exceeds the upload limit'}}, 413);
       }
       if (p === '/api/v2/chat/botops') {
@@ -106,6 +107,31 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
       window.diagnostics = [];
       TicoObservability.chatSend = () => properties => diagnostics.push(properties);
     });
+    // A response with no JSON reason or HTTP status text still explains an upload failure.
+    const uploadFailure = await page.evaluate(async () => {
+      const original = window.fetch;
+      window.fetch = (url, opts) => String(url).endsWith('/v2/uploads/tasks')
+        ? Promise.resolve(new Response('', {status:400, statusText:''})) : original(url, opts);
+      try {
+        await cloudCompose('/v2/tasks', {title:'Fixture'}, [new File(['x'], 'fixture.txt')]);
+        return null;
+      } catch (error) { return {message:error.message, status:error.status, body:error.body}; }
+      finally { window.fetch = original; }
+    });
+    assert.ok(uploadFailure?.message, 'non-chat upload refusals always have an explanation');
+    assert.equal(uploadFailure.status, 400, 'fallback preserves the structured refusal');
+    assert.deepEqual(uploadFailure.body, {});
+    answer = 'upload-auth';
+    await page.locator('#chat-composer .p-file').setInputFiles({name:'fixture.txt',mimeType:'text/plain',buffer:Buffer.from('x')});
+    await box.fill('A refused upload');
+    await send.tap();
+    await page.waitForFunction(() => !BOT_PILL.sending);
+    assert.deepEqual(await page.evaluate(() => ({...diagnostics.at(-1), duration_ms:0})),
+      {outcome:'refused',duration_ms:0,retries:0,status:403}, 'auth refusal without pending text is reported as refused');
+    assert.equal(await box.inputValue(), 'A refused upload');
+    assert.equal(await page.locator('#chat-composer .p-chips [data-rm]').count(), 1);
+    await page.locator('#chat-composer .p-chips [data-rm]').click();
+    answer = 'ok';
     await box.fill('Tap the outer edge');
     await page.evaluate(() => {
       window.pressSeen = [];
