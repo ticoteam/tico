@@ -1142,7 +1142,14 @@ def busy_folded_run(api):
     return line['jobs']
 
 
-def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api):
+def beside_open_work(monkeypatch):
+    """Another stopped run that still holds work up keeps the bot's card listing its runs: a run whose every request
+    has a saved choice holds nothing up (execution.held_back), so alone it leaves the card."""
+    from backend import execution
+    monkeypatch.setattr(execution, 'held_back', lambda *args, **kwargs: (1, ['Another task']))
+
+
+def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api, monkeypatch):
     """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
     a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
     choice saved for it; the line carries it once every request it settles has one, so the card shows the outcome."""
@@ -1154,6 +1161,8 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api)
     [line] = stopped_issue(api)['runs']
     assert [j.get('decided') for j in line['jobs']] == ['resume', None] and line['decided'] is None
     assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'attempt_id': second['attempt_id']})['deferred'] is True
+    assert 'runs' not in stopped_issue(api)
+    beside_open_work(monkeypatch)
     [line] = stopped_issue(api)['runs']
     assert [j['decided'] for j in line['jobs']] == ['resume', 'resume'] and line['decided'] == 'resume'
     # A reader who may not decide still sees that a choice is saved, without the handles.
@@ -1161,7 +1170,7 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api)
     assert seen['decided'] == 'resume' and 'jobs' not in seen
 
 
-def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api):
+def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api, monkeypatch):
     """The Details card decides each folded request on its own, so one can be saved as Try again and the other as
     Don't retry. The line is still settled ("mixed"): without it the card offered a choice that sends nothing."""
     first, second = busy_folded_run(api)
@@ -1169,6 +1178,7 @@ def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api)
     for job, decision in ((first, 'resume'), (second, 'dismiss')):
         assert post(api, f"jobs/{job['id']}/reconcile",
                     {**body, 'decision': decision, 'attempt_id': job['attempt_id']})['deferred'] is True
+    beside_open_work(monkeypatch)
     [line] = stopped_issue(api)['runs']
     assert [j['decided'] for j in line['jobs']] == ['resume', 'dismiss'] and line['decided'] == 'mixed'
 
