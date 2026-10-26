@@ -3008,6 +3008,9 @@ class Execution:
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
             task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
+            if task and task["owner"] == actor:
+                # Record the owner's final verdict even when the reply is withheld until Done.
+                H.record_verdict(c, actor, task, text=text)
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):

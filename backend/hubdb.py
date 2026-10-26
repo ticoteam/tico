@@ -2618,10 +2618,10 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     from . import bot_to_bot
     # A delegated verdict belongs to the requesting task's session. Keep the original on the review,
     # quietly, and deliver once on the parent, including when the runner posts the review's final reply.
-    from .wake_rules import VERDICT
+    from .wake_rules import VERDICT_FIELDS
     result_task = (task(conn, _task_ref(refs.get("task")) or "")
                    if kind in ("say", "notice") and is_bot(actor) and is_bot(target)
-                   and not refs.get("quiet") and VERDICT.search(str(body or "")) else None)
+                   and not refs.get("quiet") and VERDICT_FIELDS.search(str(body or "")) else None)
     result_parent = (_subtask_result_parent(conn, result_task) if result_task and result_task["owner"] == actor
                      and result_task["requester"] == target else None)
     result_key = _subtask_result_key(conn, result_task, body) if result_parent and result_parent["owner"] == target else None
@@ -2635,8 +2635,6 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s, check_cap=True,
                          decided=decided)
-    if result_task and result_parent:
-        record_verdict(conn, actor, result_task, text=body)
     if result_key:
         _deliver_subtask_result(conn, result_task, result_parent, body, result_key, source=msg["id"], resume_hint=True)
     if waits:
@@ -2907,6 +2905,12 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, :in_reply_to, "
         ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
+    # Notes, comments and runner final replies all pass here, including quiet ones
+    # and checks requested by a person. Only the check owner may supply its verdict.
+    if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
+        reviewed = task(conn, message_task_id({"refs": refs or {}}, conv) or "")
+        if reviewed and reviewed["owner"] == actor:
+            record_verdict(conn, actor, reviewed, text=body)
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
@@ -4493,10 +4497,9 @@ def _subtask_result_parent(conn, row):
 def _subtask_result_key(conn, row, text):
     """The same gate verdict in a comment, Done note, final reply or the verdict fields is one delivery per review
     cycle: keyed by the verdict and the head it judged, however it was given, so a new verdict or head is news."""
-    from .wake_rules import VERDICT, VERDICT_FIELDS
-    if VERDICT.search(str(text or "")):
-        found = VERDICT_FIELDS.search(str(text))
-        verdict, head = found[1], found[2]
+    from .wake_rules import verdict_fields
+    if found := verdict_fields(text):
+        verdict, head = found
     elif row.get("verdict"):
         verdict, head = row["verdict"], row.get("verdict_head")
     else:
@@ -4516,16 +4519,16 @@ HEAD_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
-    """Set a review or QA child's `verdict` and `verdict_head`: from the flag, else from a `VERDICT:` line in `text`
-    (the prose keeps working and fills the field; the latest line wins, as a review of a new head replaces the last).
+    """Set a review or QA child's `verdict` and `verdict_head`: from the flag, else from a `VERDICT:` clause in `text`
+    (the prose keeps working and fills the field; the latest clause wins, as a review of a new head replaces the last).
     Only the child's own owner records one, and only on a subtask. Returns whether the fields changed."""
-    from .wake_rules import VERDICT_FIELDS
+    from .wake_rules import verdict_fields
     flagged = verdict is not None or head is not None
     if not flagged:
-        found = VERDICT_FIELDS.search(str(text or ""))
+        found = verdict_fields(text)
         if not found:
             return False
-        verdict, head = found[1], found[2]
+        verdict, head = found
     # A new verdict judged a head of its own: one given alone leaves the head unknown, a head given alone keeps the verdict.
     verdict = str(verdict).strip().lower() if verdict is not None else row.get("verdict")
     head = str(head).strip().lower() or None if head is not None else None
@@ -5481,6 +5484,30 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
             status = effective
+        if effective == "done":
+            from . import profiles
+            from .wake_rules import verdict_fields
+            if profiles.is_review_task(conn, row) or check_model(conn, row["id"]):
+                supplied = verdict is not None or actor == row["owner"] and verdict_fields(note)
+                if not (row.get("verdict") or supplied):
+                    # Older releases missed inline clauses. Recover only the owner's
+                    # saved words, never a requester or another participant's verdict.
+                    sources = _rows(conn.execute(
+                        "SELECT ts AS at, new AS text FROM task_events WHERE task_id=? AND actor=? AND field='note' "
+                        "UNION ALL SELECT created AS at, body AS text FROM messages WHERE conversation_id=? "
+                        "AND from_actor=? AND kind IN ('say','notice') AND deleted_at IS NULL "
+                        "AND (json_extract(refs_json,'$.task')=? OR (json_extract(refs_json,'$.task') IS NULL "
+                        "AND conversation_id IN (SELECT id FROM conversations WHERE task_id=?))) "
+                        "ORDER BY at DESC", (task_id, row["owner"], row["conversation_id"], row["owner"], task_id, task_id)))
+                    for source in sources:
+                        if verdict_fields(source["text"]):
+                            record_verdict(conn, row["owner"], row, text=source["text"])
+                            row = task(conn, task_id)
+                            break
+                if not (row.get("verdict") or supplied):
+                    refuse(conn, actor, "verdict",
+                           "Finish a review or QA check with --verdict approve|changes|pass|fail "
+                           "and --head <sha>, or record a VERDICT: clause in its note, comment or final reply")
         # A hand-off to a review step (from another review step too) or to done, with pushed work no pull request
         # carries, leaves an orphan worktree.
         if (effective == "done" and row["status"] != "done"
