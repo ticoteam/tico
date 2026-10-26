@@ -109,7 +109,8 @@ def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monk
     assert [m["id"] for m in inbox["messages"]] == readable[:INBOX_LIMIT][::-1] and inbox["more_messages"] is True
     assert walked == readable, len(walked)
     with store.transaction() as c:
-        c.executemany("UPDATE messages SET read_at=? WHERE id=?", [(H.now(), mid) for mid in readable[:INBOX_LIMIT]])
+        c.executemany("UPDATE messages SET read_at=?, delivered_at=? WHERE id=?",
+                      [(H.now(), H.now(), mid) for mid in readable[:INBOX_LIMIT]])
     inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
     assert [m["id"] for m in inbox["messages"]] == [msg["id"]] and inbox["more_messages"] is False
 
