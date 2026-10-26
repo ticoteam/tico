@@ -79,8 +79,16 @@ def steps_report(c, typ, rows, now):
     for r in rows:
         by_step.setdefault(r["step_id"] if r["step_id"] in known else None, []).append(r)
 
+    def age(row):
+        from .task_blocked import clocks
+        if row.get("blocked_since"):
+            return clocks(row, now)["blocked_seconds"] / 3600
+        if row.get("building_started_at"):
+            return clocks(row, now)["building_seconds"] / 3600
+        return hours(entered.get(row["id"]) or row["created"], now)
+
     def one(items):
-        ages = [hours(entered.get(r["id"]) or r["created"], now) for r in items]
+        ages = [age(r) for r in items]
         ages = [a for a in ages if a is not None]
         owners, waits, on = {}, {"bot": 0, "person": 0, "external": 0, "nothing": 0}, {}
         open_prs = [at for r in items for at in prs.get(r["id"], [])]
@@ -90,7 +98,7 @@ def steps_report(c, typ, rows, now):
             waits[waits_kind(target)] += 1
             if target:
                 on[target] = on.get(target, 0) + 1
-        oldest = max(items, key=lambda r: (hours(entered.get(r["id"]) or r["created"], now) or 0), default=None)
+        oldest = max(items, key=lambda r: age(r) or 0, default=None)
         label = (lambda r: r["number"]) if typ["numbered"] else (lambda r: r["id"])
         return {"count": len(items), "snoozed": sum(1 for r in items if H.TS.snoozed(r)),
                 "oldest_hours": max(ages) if ages else None, "median_hours": round(median(ages), 1) if ages else None,

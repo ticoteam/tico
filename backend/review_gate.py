@@ -93,10 +93,10 @@ def review_links(c, row):
     return links(c, row) or [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") in MERGED]
 
 
-def merged_refusal(c, actor, row, kind, head, pr, problem, action, retryable=False):
-    """Refuse a review of a merged PR: say it is merged, which head the review judges, and what to do."""
-    reject(c, actor, row, kind, head, pr, f"Review refused: {pr['url']} is merged, so this review judges its merged "
-                                          f"head {head}. {problem} {action}", retryable=retryable, move=False)
+def merged_notice(kind, head, pr, problem, action, retryable=False):
+    """A review of a merged PR is refused saying it is merged, which head the review judges, and what to do."""
+    return (kind, head, pr, f"Review refused: {pr['url']} is merged, so this review judges its merged head {head}. "
+                            f"{problem} {action}", retryable, False)
 
 
 def engineering(c, row):
@@ -272,7 +272,8 @@ def evidence(c, row, actor, receipt_owner=None):
 def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=None, receipt_owner=None):
     from . import hubdb as H
     try:
-        _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner)
+        if notice := problem(c, row, actor, snapshots, note, require_pr, receipt_owner, reader=reader):
+            reject(c, actor, row, *notice)
     except H.Refused as exc:
         # The mover a refused move is retried as (backend/move_retry.py): the actor the move was made as, which can
         # differ from the request's caller (BotOps acting for a person, a service key acting as Tico).
@@ -281,7 +282,8 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=Non
         raise
 
 
-def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
+def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_owner=None, reader=None):
+    """Read the current gate without writing refusals; shared by automatic hold clearing."""
     from . import hubdb as H
     if not engineering(c, row):
         return
@@ -291,14 +293,15 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
         if require_pr:
             closed = [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") == "closed"]
             if closed:
-                reject(c, actor, row, "receipt", "unknown", closed[-1],
-                       f"Review refused: {closed[-1]['url']} was closed without merging, so it has no change to review. "
-                       "Link the PR that carries the change (reopen this one or open a new one) before asking a "
-                       "reviewer. The owner or a person who may edit this ticket can link it.", move=False)
-            reject(c, actor, row, "receipt", "unknown", {"url": "no linked PR"},
-                   "Review refused: no linked PR. Link the current PR before asking a reviewer. "
-                   "The owner or a person who may edit this ticket can link it.", move=False)
+                return ("receipt", "unknown", closed[-1],
+                        f"Review refused: {closed[-1]['url']} was closed without merging, so it has no change to review. "
+                        "Link the PR that carries the change (reopen this one or open a new one) before asking a "
+                        "reviewer. The owner or a person who may edit this ticket can link it.", False, False)
+            return ("receipt", "unknown", {"url": "no linked PR"},
+                    "Review refused: no linked PR. Link the current PR before asking a reviewer. "
+                    "The owner or a person who may edit this ticket can link it.", False, False)
         return  # A board-only step move has no software reviewer to wake.
+    move = not require_pr
     # Tico's retry of a refused move (backend/move_retry.py) reads as whoever made the move: the keeper is on no private
     # task, and evidence that mover cannot read must not pass the move for them.
     facts = evidence(c, row, reader or actor, receipt_owner)
@@ -315,23 +318,23 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
             if pr.get("state") in MERGED:
-                merged_refusal(c, actor, row, "ci", head, pr, f"Cannot verify that head and its CI ({why}).",
-                               "Retry the review request.", retryable=detail.get("retryable", False))
+                return merged_notice("ci", head, pr, f"Cannot verify that head and its CI ({why}).",
+                                     "Retry the review request.", detail.get("retryable", False))
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
-            reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
-                                                  "Retry the review move. Anyone allowed to move this ticket can retry.",
-                   retryable=detail.get("retryable", False), move=not require_pr)
+            return ("ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
+                                  "Retry the review move. Anyone allowed to move this ticket can retry.",
+                    detail.get("retryable", False), move)
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
             if pr.get("state") in MERGED:
-                merged_refusal(c, actor, row, "ci", head, pr, f"CI failing at that head: {names}.",
-                               "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
-                               "review on that PR.")
-            reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
+                return merged_notice("ci", head, pr, f"CI failing at that head: {names}.",
+                                     "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
+                                     "review on that PR.")
+            return ("ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.",
-                   move=not require_pr)
+                   False, move)
     for pr in prs:
         detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
         head = detail["head_sha"]
@@ -342,14 +345,14 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             waiting = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in checks.items()
                              if v not in ("passing", "skipped"))
             if waiting or "passing" not in checks.values():
-                merged_refusal(c, actor, row, "ci", head, pr,
-                               f"Its checks at that head are not all passing: {', '.join(waiting)} still pending."
-                               if waiting else "No passing GitHub check is recorded at that head.",
-                               "Wait for the checks to pass (or rerun them on GitHub), then ask for the review again.")
+                return merged_notice("ci", head, pr,
+                                     f"Its checks at that head are not all passing: {', '.join(waiting)} still pending."
+                                     if waiting else "No passing GitHub check is recorded at that head.",
+                                     "Wait for the checks to pass (or rerun them on GitHub), then ask for the review again.")
             if test_receipts.at_head(facts, head)[0] == "failed":
-                merged_refusal(c, actor, row, "receipt", head, pr, "A failed test receipt is recorded at that head.",
-                               "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
-                               "review on that PR.")
+                return merged_notice("receipt", head, pr, "A failed test receipt is recorded at that head.",
+                                     "A merged PR takes no new head: fix the failure in a follow-up PR and ask for the "
+                                     "review on that PR.")
             continue
         # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
         # records skipped and neutral checks as passing, so it cannot tell a real pass from a skip.
@@ -359,12 +362,12 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
         if state != "passed":
             newest = next((r["head"] for r in reversed(receipts) if r["head"]), "no receipt")
             if pr.get("state") in MERGED:
-                merged_refusal(c, actor, row, "receipt", head, pr,
-                               f"{state.capitalize()} test receipt at that head; newest receipt head: {newest}.",
-                               "Fix the failure in a follow-up PR and ask for the review on that PR."
-                               if state == "failed" else
-                               "Post a passing test receipt naming the merged head on this ticket, then ask for the "
-                               "review again. " + writers + " can post it.")
+                return merged_notice("receipt", head, pr,
+                                     f"{state.capitalize()} test receipt at that head; newest receipt head: {newest}.",
+                                     "Fix the failure in a follow-up PR and ask for the review on that PR."
+                                     if state == "failed" else
+                                     "Post a passing test receipt naming the merged head on this ticket, then ask for the "
+                                     "review again. " + writers + " can post it.")
             if state == "failed":
                 action = ("Have the owner or another contributor fix the recorded test failure and push a new head, "
                           "then retry with passing CI or a passing receipt. A written same-head rerun cannot clear it; "
@@ -372,8 +375,8 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             else:
                 action = ("Post a passing test receipt naming the current head on this ticket, then retry the review move. "
                           + writers + " can post it.")
-            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}",
-                   move=not require_pr)
+            return ("receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}",
+                    False, move)
 
 
 def reject(c, actor, row, kind, head, pr, text, retryable=False, move=True):
@@ -395,6 +398,11 @@ def notify(c, actor, notice):
     """After refusal rollback, keep one Builder comment per ticket/head/check kind."""
     from . import hubdb as H
     row = H.task(c, notice["task"])
+    if row:
+        from .task_blocked import hold
+        hold(c, row["id"], notice["text"], "gate")
+        c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
+            json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
     if not row or actor == row["owner"]:
         return
     conv = H.conversation(c, row["conversation_id"])

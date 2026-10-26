@@ -571,6 +571,22 @@ are not asked "Still wanted?", their goal asks the bot to move them to a step an
 rather than marking them done or closed. Without it, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
 
+Engineering boards include **Blocked** immediately before In Progress. Its status is `waiting`;
+it does not change a task's labels. The owner can select Blocked and write the reason in its note:
+
+```sh
+hub task update <task-id> --step "Blocked" --note "Waiting for a test machine"
+```
+
+A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
+Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
+dependency on one of those checks holds it.
+The card and task show what it waits for and since when. When an automatic hold clears, the task
+returns to the step it left, without advancing through the refused gate. An owner-declared hold
+is cleared by moving back to a working step. The active Building clock pauses while blocked;
+a separate blocked age alerts the type's manager after four hours, once per hold. The bot rail's
+Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs You tasks.
+
 A task also has a place within its step, `step_rank`, lower first, apart from `rank`, its place in
 its owner's queue. A task that enters a step, when it is created or its step, type or status
 changes, goes to the end of the step, or to the top when it is created with `top`. The people on
