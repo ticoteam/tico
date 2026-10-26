@@ -26,7 +26,7 @@ def ticket(api, receipt=None, **fields):
 
 def move(api, task, step='Review 1'):
     return api.post('/api/v2/tasks/' + task['id'], headers=headers(),
-                    json={'version': task['version'], 'step': step})
+                    json={'version': get(api, 'tasks/' + task['id'])['task']['version'], 'step': step})
 
 
 def test_qa_pending_marker_is_scoped_to_each_links_task(api):
@@ -65,7 +65,7 @@ def test_receipt_at_current_head_allows_review_child_and_other_receipts_do_not_w
         assert bool(c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()) is allowed
     if not allowed:
         current = get(api, 'tasks/' + task['id'])['task']
-        assert current['step']['name'] == 'In Progress' and current['version'] == task['version']
+        assert current['step']['name'] == 'Blocked' and current['version'] > task['version']
         assert HEAD in response.text and (OLD if receipt else 'no receipt') in response.text
         assert len(notices(api, task)) == 1  # child request and step retries share the fixed notice
 
@@ -155,14 +155,19 @@ def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomic
     refused = api.post('/api/v2/tasks/' + task['id'], headers=headers(), json=body)
     assert refused.status_code == 422 and OLD in refused.text and 'python' in refused.text, refused.text
     current = get(api, 'tasks/' + task['id'])['task']
-    assert (current['type_id'], current['step_id'], current['version']) == (task['type_id'], task['step_id'], task['version'])
+    assert current['type_id'] == task['type_id'] and current['status'] == 'waiting'
+    assert current['blocked_since'] and 'CI failing' in current['blocked_reason']
+    assert current['version'] > task['version']
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
     assert any('/commits/' + OLD + '/check-runs' in p for p in calls)
+    body['version'] = current['version']
     fresh.update(head=HEAD, conclusion='success')
     allowed = api.post('/api/v2/tasks/' + task['id'], headers=headers(), json=body)
     assert allowed.status_code == 200, allowed.text
-    assert allowed.json()['task']['step']['name'] in ('Review 1', 'Review 2')
+    resumed = allowed.json()['task']
+    assert resumed['step']['name'] in ('Review 1', 'Review 2')
+    assert not resumed.get('blocked_since') and not resumed.get('blocked_reason')
 
 
 def test_fresh_github_snapshot_head_and_checks_are_used_and_races_refuse(api, monkeypatch):
@@ -254,12 +259,12 @@ def test_gate_consumes_each_agreed_receipt_source(api, where):
     assert move(api, task).status_code == 200
 
 
-def test_fresh_checks_failure_pending_and_old_statuses(api, monkeypatch):
+def test_fresh_checks_failure_pending_and_status_failure_history(api, monkeypatch):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
-    state = ['failure']
+    state, old_failure = ['failure'], [True]
     def fetch(method, path, **kw):
         if '/pulls/' in path:
             data = {'head': {'sha': HEAD}}
@@ -267,12 +272,17 @@ def test_fresh_checks_failure_pending_and_old_statuses(api, monkeypatch):
             data = {'check_runs': [{'id': 1, 'name': 'python', 'conclusion': state[0]},
                                   {'id': 2, 'name': 'browser', 'conclusion': None}]}
         else:
-            data = [{'context': 'deploy', 'state': 'success'}, {'context': 'deploy', 'state': 'failure'}]
+            data = [{'context': 'deploy', 'state': 'success'}]
+            if old_failure[0]:
+                data.append({'context': 'deploy', 'state': 'failure'})
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     r = move(api, task)
     assert r.status_code == 422 and 'python' in r.text and 'browser' not in r.text
     state[0] = None
+    r = move(api, task)
+    assert r.status_code == 422 and 'deploy (earlier failure)' in r.text
+    old_failure[0] = False
     assert move(api, task).status_code == 200
 
 
@@ -316,6 +326,9 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
 @pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
 def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
     task = ticket(api, private=False)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
         c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=?, note=? WHERE id=?",
@@ -351,7 +364,7 @@ def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatc
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     assert move(api, task).status_code == 422
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'In Progress'
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
 
 
 def test_author_labels_override_pr_path_default(api):

@@ -98,6 +98,9 @@ function taskPropsHTML(t, opts = {}) {
     rows.push(row('step', 'Step', step ? txt(step.name) : txt('Add step'), {edit: r.edit || (!r.live && r.reopen), empty: !step, words: step?.name || 'none'}));
   }
   if (t.verdict) rows.push(row('verdict', 'Verdict', taskVerdictHTML(t), {words: VERDICT_WORDS[t.verdict]?.[0] || t.verdict}));
+  const waiver = (t.qa_waivers || []).at(-1);
+  if (waiver) rows.push(row('qa-waiver', 'QA', taskQaWaiverHTML(waiver), {words: `waived on ${String(waiver.head).slice(0, 7)}, not a QA pass`,
+    extra: `<small>${esc(actorLabel(waiver.actor))}: ${esc(waiver.reason || '')}</small>`}));
   if (S.me?.cloud && t.id) rows.push(taskWakeRulesRowHTML(t));
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
@@ -274,9 +277,11 @@ function taskPropsBind(d, task, change) {
     const key = b.dataset.prop;
     if (key === 'status') {
       if (typed) {
-        propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: it => {
+        propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: async it => {
           if (it.value === task.step_id) return;
-          void save('status', {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})});
+          const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
+          if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+          void save('status', body);
         }});
         return;
       }
@@ -284,9 +289,11 @@ function taskPropsBind(d, task, change) {
         html: `<span>${esc(STATUS_WORD[s] || s)}</span>`, checked: task.status === s})),
         onPick: it => { if (it.value !== task.status) void save('status', {status: it.value}); }});
     } else if (key === 'step' && typed) {
-      propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: it => {
+      propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: async it => {
         if (it.value === (task.step_id || '')) return;
-        void save('step', {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})});
+        const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
+        if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+        void save('step', body);
       }});
     } else if (key === 'type') {
       taskTypeMenu(d, b, task, save);

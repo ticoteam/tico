@@ -1,12 +1,12 @@
 # Starter bots
 
-There are 98 templates: 95 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
-Product and Engineering), a small Leadership extra and one message bot, enough to staff a team of ten to two hundred humans. **Every
+There are 98 role templates: 96 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
 action. Messages to outsiders stay drafts until the owner turns on sending for that bot; after that,
-requested work needs no separate approval for each action. Every bot is created parked in
+requested work needs no separate approval for each action. A role is a Recruiting seat until someone recruits it; the bot it becomes is created parked in
 "Needs setup" and costs nothing until someone sets it up; it then gets a first useful, reviewable result in its first
 session. The template format is in [Finish setup](onboarding.md); how to write and tune a bot is in [Creating bots](creating-bots.md).
 
@@ -234,7 +234,7 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
    so nobody approves it separately, and the bot logs it.
 4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
    (Settings → Bots → Mail sending). Once it is on, the bot sends within the requested work and granted Tools.
-5. **Parked until then.** Finish setup creates every starter `needs_setup`: it answers a human's message and nothing else
+5. **Parked until then.** Recruiting a seat creates the starter as `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
    conversation. Parked starters do not count toward a member's bot limit. See [A bot's stages](onboarding.md#a-bots-stages).

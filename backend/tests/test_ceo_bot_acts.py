@@ -230,6 +230,9 @@ def test_a_private_task_never_reaches_the_ceo_bot_log_or_the_owners_proposal(api
     ceo = with_ceo_bot(api)
     bot(api, "ops")
     level(api, 3)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         hidden = H.task_create(c, OWNER, "Fire the vendor quietly", "Secret body", OWNER, private=True,
                                lint=False)["id"]
@@ -350,6 +353,9 @@ def test_only_the_owner_reads_the_log_and_it_names_a_task_as_it_is_now(api):
     ceo = with_ceo_bot(api)
     bot(api, "ops")
     level(api, 3)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         merge = H.task_create(c, CEO, "Merge with Globex", "Secret terms", "bot:ops", lint=False)["id"]
         report = H.task_create(c, CEO, "Write the board report", "Numbers", "bot:ops", lint=False)["id"]

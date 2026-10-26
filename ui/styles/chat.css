@@ -19,11 +19,14 @@
 @media (hover:hover){#pane-chat .conv-run.chat:hover .chat-stamp{opacity:1}}
 @media (hover:none){#pane-chat .chat-stamp{top:50%;right:-70px;width:62px;text-align:right;opacity:1;transform:translateY(-50%)}}
 /* the composer: a small arrow for Send */
-.p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+.p-send-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:var(--accent);background-clip:padding-box;color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
+/* Pill composers reserve the hit area in layout; task comment forms retain their compact button. */
+.ask .p-send-icon{width:44px;height:44px;border:5px solid transparent}
 .p-send-icon svg{width:18px;height:18px}
 /* The button, never its replaceable icon, is what a press lands on: a redraw mid-press would otherwise drop the click. */
 .p-send-icon>*{pointer-events:none}
 .p-send-icon:hover:not(:disabled,.p-off){filter:brightness(1.06)}
+.p-send-icon.p-pressed{filter:brightness(.8);box-shadow:inset 0 0 0 2px var(--accent-ink)}
 .p-send-icon:disabled,.p-send-icon.p-off{opacity:.45;cursor:default}
 .p-send-icon[hidden]{display:none}
 /* sending: a spinner in place of the arrow, at full strength so it never reads as the empty box's dimmed Send */
@@ -37,6 +40,7 @@
 /* why a disabled Send or Stop is disabled: its hover title and screen-reader description; a phone, with no hover,
    shows a busy reason as a line after a second (a quick send never jumps the page) until "Still sending…" takes over */
 .p-why{display:none;padding:0 4px;font-size:var(--t-sm);max-height:0;overflow:hidden}
+.p-why.p-why-notice{display:block;max-height:none;padding-top:4px}
 @media (max-width:760px){.p-slow[hidden]+.p-why.p-why-busy{display:block;animation:p-why-in .15s 1s forwards}}
 @keyframes p-why-in{to{max-height:3em;padding-top:4px}}
 /* a phone gives the bot page the whole screen: no bottom bar, the composer on the bottom edge */

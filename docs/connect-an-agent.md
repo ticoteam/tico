@@ -10,7 +10,7 @@ elsewhere, such as a cleaning company's MCP server, give the bot a Tool instead:
 
 **Connect an external agent** is the plug button beside your email (and a step in Finish setup). Until one of your
 tokens has reached Tico, your own row on the team chart also shows **Connect**, which opens the same dialog. Any human can
-make a personal token, and it sees what they see; the owner may limit tokens to admins (Settings > Humans).
+make a personal token, and it sees what they see; the owner may limit tokens to admins (Settings > People).
 
 1. Pick the agent.
 2. **Create token**. It is named after the agent and the day (`Grok · 2026-09-30`), lasts 90 days, and

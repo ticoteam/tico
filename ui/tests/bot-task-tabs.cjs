@@ -19,6 +19,7 @@ const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bo
 const TASKS = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: 'bot:qa', blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
   task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
   task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
   task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
@@ -28,11 +29,19 @@ const OTHERS = {name: 'Assigned to Others', show_count: true, conditions: [{fiel
   {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]};
 const DEFAULT = [{builtin: 'needs', name: 'Needs You', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
                  {builtin: 'blocked', name: 'Blocked', show_count: true}, OTHERS];
+const CONDITIONS = {
+  needs: [{field: 'needs', value: 'you'}],
+  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
+  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
+};
+const normalized = tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin]} : tab;
 const WIDGETS = ['tasks', 'updates', 'files', 'routines'].map(id => ({id, hidden: false, height: null}));
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
+  if (field === 'needs') return (t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
+  if (field === 'waiting_on') return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana' : true);
   if (field === 'type') return value.includes(t.type_id || 'general');
   if (field === 'asked_by') return t.requester === who;
   if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner) : t.owner === who;
@@ -53,6 +62,7 @@ async function open(browser, viewport, colorScheme, server) {
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', path: uiFile('vendor/fonts/material-symbols-outlined.woff2')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -80,20 +90,20 @@ async function open(browser, viewport, colorScheme, server) {
     }
     const filtered = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs\/tasks$/);
     if (filtered) {
-      const bot = filtered[1], tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab, key: 'c' + at})).filter(({tab}) => !tab.builtin);
+      const bot = filtered[1], tabs = (server.layouts[bot] || {tabs: DEFAULT}).tabs.map((tab, at) => ({tab: normalized(tab), key: tab.builtin || 'c' + at})).filter(({tab}) => tab.builtin !== 'done');
       // A page of server.page rows; `before` here is the index the next page starts at.
       if (q.get('tab') && server.moreHold) await server.moreHold;
       const from = Number(q.get('before') || 0), wanted = tabs.filter(({key}) => !q.get('tab') || key === q.get('tab'));
       const counted = wanted.map(({tab, key}) => {
-        const all = TASKS.filter(t => matches(bot, tab, t)).map(t => t.id), ids = all.slice(from, from + server.page);
+        const all = (server.tasks || TASKS).filter(t => matches(bot, tab, t)).map(t => t.id), ids = all.slice(from, from + server.page);
         return {key, name: tab.name, count: all.length, ids, next: from + server.page < all.length ? String(from + server.page) : null};
       });
-      return json({bot, tabs: counted, tasks: TASKS.filter(t => counted.some(c => c.ids.includes(t.id)))});
+      return json({bot, tabs: counted, tasks: (server.tasks || TASKS).filter(t => counted.some(c => c.ids.includes(t.id)))});
     }
     if (p === '/api/v2/tasks') {
       const who = q.get('owner') || q.get('requester'), field = q.get('owner') ? 'owner' : 'requester';
       const status = q.get('status');
-      return json({tasks: TASKS.filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
+      return json({tasks: (server.tasks || TASKS).filter(t => t[field] === 'bot:' + who && (!status || status === 'all' || status.split(',').includes(t.status)))});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -131,14 +141,20 @@ async function open(browser, viewport, colorScheme, server) {
       release();
       await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
-      assert.deepEqual(await tabTexts(), ['Needs You', 'Doing 3', 'Blocked 1', 'Assigned to Others 1'], at);
+      assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1'], at);
+      await pill('Blocked').click();
+      assert.deepEqual(await rail.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for QA']);
+      assert.match(await rail.locator('#t-blocked .trow-waits').innerText(), /Waiting for the test machine.*since/);
+      await pill('Doing').click();
+      // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
+      assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
       assert.deepEqual(await order(), ['tasks', 'updates', 'files', 'routines']);
       await pill('Assigned to Others').click();
       assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);
-      // One pencil, no gear; the Board link stays.
+      // One pencil, no gear or board icon.
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
       assert.equal(await page.locator('#bot-tasks-settings').count(), 0);
-      assert.equal(await rail.locator('#bot-tasks-board').isVisible(), true);
+      assert.equal(await rail.locator('#bot-tasks-board').count(), 0);
       assert.equal(await rail.locator('.bot-rail-editbar').isHidden(), true);
       assert.equal(await widget('tasks').locator('[data-w-grip]').isHidden(), true, 'no handles outside edit mode');
       // Tasks stops at 500px by default and a short list stays short.
@@ -155,10 +171,10 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.waitFor();
       await dialog.locator('[data-filter-name]').fill('Busy');
       await dialog.getByRole('button', {name: 'Save'}).click();
-      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs You', 'Busy 3']);
+      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs You 1', 'Busy 2']);
       await rail.locator('#bot-sidebar-cancel').click();
       assert.equal(server.puts.length, 0);
-      assert.deepEqual(await tabTexts(), ['Needs You', 'Doing 3', 'Blocked 1', 'Assigned to Others 1']);
+      assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1']);
       assert.equal(await widget('files').getAttribute('data-off'), null);
 
       // Edit again: hide Files, move Routines up by keyboard and Updates down by dragging its handle, set Tasks' height
@@ -197,11 +213,17 @@ async function open(browser, viewport, colorScheme, server) {
       const updatesHeight = Number(await widget('updates').getAttribute('data-h'));
       assert.ok(Math.abs(updatesHeight - Math.max(80, Math.round(before + 300))) <= 2, `${before} -> ${updatesHeight}`);
 
-      // A built-in tab's pop-up: Name and Show count, Delete and Save, nothing else. Turn Doing's count off.
+      // A default tab has ordinary editable conditions and Reset. Turn Doing’s count off.
       await pill('Doing').click();
       await dialog.waitFor();
-      assert.equal(await dialog.locator('[data-cond-field], [data-cond-add]').count(), 0);
-      assert.deepEqual((await dialog.locator('button, label').allInnerTexts()).map(s => s.trim()).filter(Boolean), ['Name', 'Show count', 'Delete', 'Save']);
+      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll(els => els.map(el => el.value)), ['assigned_to', 'status']);
+      assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'this_bot');
+      assert.deepEqual(await dialog.locator('[data-cond-value="1"]:checked').evaluateAll(els => els.map(el => el.value)), ['open', 'doing']);
+      await dialog.locator('[data-cond-remove="0"]').click();
+      await dialog.locator('[data-cond-add]').click();
+      assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
+      await dialog.getByRole('button', {name: 'Reset to default'}).click();
+      assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll(els => els.map(el => el.value)), ['assigned_to', 'status']);
       assert.equal(await dialog.locator('[data-filter-count]').isChecked(), true);
       await dialog.locator('[data-filter-count]').uncheck();
       await dialog.getByRole('button', {name: 'Save'}).click();
@@ -277,13 +299,13 @@ async function open(browser, viewport, colorScheme, server) {
       assert.deepEqual(server.puts[1], server.puts[0]);
       assert.deepEqual(server.puts[1], {bot: 'lead', body: {
         tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
-               {builtin: 'needs', name: 'Needs You', show_count: true}, {builtin: 'active', name: 'Doing', show_count: false},
-               {builtin: 'blocked', name: 'Blocked', show_count: true}],
+               {builtin: 'needs', name: 'Needs You', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
+               {builtin: 'blocked', name: 'Blocked', show_count: true, conditions: CONDITIONS.blocked}],
         widgets: [{id: 'tasks', hidden: false, height: null}, {id: 'routines', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent.trim() === '2');
-      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs You', 'Doing', 'Blocked 1']);
+      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs You 1', 'Doing', 'Blocked 1']);
       await pill('product tasks').click();
       // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
       // starts while Show more is on its way.
@@ -301,10 +323,45 @@ async function open(browser, viewport, colorScheme, server) {
       await page.evaluate(() => botTaskFilterRead('lead'));
       assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
       assert.equal(await rail.locator('#t-c0 [data-bot-filter-more]').count(), 0);
+      // A default tab uses exactly its edited conditions after Done and reload; Reset restores its full default.
+      await rail.locator('#bot-sidebar-edit').click();
+      await pill('Blocked').click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
+      assert.equal(await dialog.locator('[data-cond-value="2"]').inputValue(), 'not_me');
+      await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({path: `/tmp/dev511-blocked-${scheme}-${viewport.width}.png`});
+      await dialog.locator('[data-cond-remove="2"]').click();
+      await dialog.locator('[data-cond-value="1"][value="waiting"]').uncheck();
+      await dialog.locator('[data-cond-value="1"][value="open"]').check();
+      await dialog.getByRole('button', {name: 'Save'}).click();
+      await rail.locator('#bot-sidebar-done').click();
+      await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
+      await goto('#/bot/lead');
+      await page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
+      await pill('Blocked').click();
+      assert.deepEqual(await rail.locator('#t-blocked .trow .ttl').allInnerTexts(), ['Plan the import page']);
+      await rail.locator('#bot-sidebar-edit').click();
+      await pill('Blocked').click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
+      await dialog.getByRole('button', {name: 'Reset to default'}).click();
+      assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
+      await dialog.getByRole('button', {name: 'Save'}).click();
+      await pill('Needs You').click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
+      assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
+      assert.ok((await dialog.innerText()).includes('approvals and questions for you'));
+      await dialog.getByRole('button', {name: 'Save'}).click();
+      await rail.locator('#bot-sidebar-done').click();
+      await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
+      await page.waitForFunction(() => document.querySelector('#t-blocked .ttl')?.textContent === 'Wait for QA');
       // Outside edit mode: Files is not drawn, the rest in the new order, and Updates' height is its most.
       assert.equal(await widget('files').isHidden(), true);
       assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
       assert.equal(await widget('updates').locator('.rail-sec').evaluate(el => getComputedStyle(el).maxHeight), updatesHeight + 'px');
+      await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}.png`});
 
       // Next visit: drawn from this browser's copy at once, while the server's answer is still on its way.
@@ -323,9 +380,24 @@ async function open(browser, viewport, colorScheme, server) {
       // The edit view, for the record.
       await goto('#/bot/lead');
       await rail.locator('#bot-sidebar-edit:not([hidden])').click();
+      await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}-edit.png`});
       await context.close();
     }
+    // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
+    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner: 'bot:qa', status: 'waiting', waiting_on: 'bot:lead'})]};
+    const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
+    await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
+    await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
+    assert.equal(await readOnly.page.locator('#cnt-active').innerText(), '0');
+    assert.equal(await readOnly.page.locator('#bot-tasks-board').count(), 0);
+    assert.equal(await readOnly.page.locator('#bot-sidebar-edit').isHidden(), true);
+    await readOnly.page.locator('#bot-tab-t-blocked').click();
+    assert.deepEqual(await readOnly.page.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for the builder']);
+    await readOnly.page.locator('#bot-tab-t-active').click();
+    assert.equal(await readOnly.page.locator('#t-open .trow').count(), 0);
+    assert.deepEqual(readOnly.errors, []);
+    await readOnly.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

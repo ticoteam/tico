@@ -78,12 +78,13 @@ async function renderSettingsSleep() {
     </div>
     ${line ? `<p class="settings-cell-note" data-sleep-status>${line}</p>` : ''}
     ${v.last_error ? `<p class="settings-cell-note err" data-sleep-error>Last stop failed: ${esc(v.last_error)}</p>` : ''}
-    <p class="settings-cell-note err" role="status" data-sleep-note hidden></p>`;
+    <p class="settings-cell-note err" role="status" data-sleep-note hidden></p>
+    ${admin ? '' : settingsWhoCanHTML('this', {admins: true})}`;
   if (!admin) return;
   const save = async (body, input) => {
     const note = host.querySelector('[data-sleep-note]');
     input.disabled = true; note.hidden = true;
-    try { await post('/v2/sleep', body); await renderSettingsSleep(); }
+    try { await post('/v2/sleep', body); toast('Saved'); await renderSettingsSleep(); }
     catch (e) { note.textContent = e.message; note.hidden = false; input.disabled = false; }
   };
   const pick = host.querySelector('[data-sleep-hours]'), runners = host.querySelector('[data-sleep-runners]');

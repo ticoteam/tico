@@ -272,7 +272,8 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
     by_endpoint = {hook["id"]: {s["subject"] for s in sends(api, hook["id"]) if s["type"] == "task.created"}
                    for hook in (ben, priya, ana)}
     assert by_endpoint[ben["id"]] == {private["id"], public["id"]}
-    assert by_endpoint[priya["id"]] == {public["id"]} == by_endpoint[ana["id"]]
+    assert by_endpoint[priya["id"]] == {public["id"]}
+    assert by_endpoint[ana["id"]] == {private["id"], public["id"]}  # The bot party's manager is a reader.
     for row in sends(api, priya["id"]):
         assert "sensitive" not in row["body"]
     envelope = json.loads(next(s for s in sends(api, ben["id"]) if s["subject"] == public["id"] and s["type"] == "task.created")["body"])

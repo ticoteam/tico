@@ -174,10 +174,11 @@ function stateOf(slug) {
 }
 const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // What needs you from that bot, grouped the way the Needs you list groups it (companyNeedActor). The org tree's
-// number and the bot page's Needs you section both read this, so the number is always the rows.
+// number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug));
+    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug)
+    || (it.kind === 'approval' && (it.requested_by || it.requester) === 'bot:' + slug));
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -189,7 +190,7 @@ function needsMeCounts() {
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'ask' ? it.requester : null;
+      : it.kind === 'ask' ? it.requester : it.kind === 'approval' ? it.requested_by || it.requester : null;
     if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;

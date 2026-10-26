@@ -15,7 +15,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, tool_summary, Events, HostError, Settings};
+use super::{event, failed, hub_mcp_server, is_auth_retryable, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
 use crate::util::{iso, log, py_dumps, text_of};
 
 pub const STREAM_ARGS: &[&str] = &[
@@ -116,6 +116,8 @@ pub(crate) struct Thread {
     started: bool,
     fork_from: Option<String>,
     session_id: Option<String>,
+    /// The saved session was not on this computer and the thread restarted as a new one under the same id.
+    restored: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -514,17 +516,22 @@ impl ClaudeHost {
 
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None });
+        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None, restored: false });
         id
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
-        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, fork_from: None, session_id: None });
+        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, fork_from: None, session_id: None, restored: false });
         thread_id.into()
     }
 
     pub fn session_id(&self, thread_id: &str) -> String {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone()).unwrap_or_else(|| thread_id.to_string())
+    }
+
+    /// Whether the thread's saved session was not on this computer, so Claude began a new one under its id.
+    pub fn restored(&self, thread_id: &str) -> bool {
+        self.inner().threads.get(thread_id).is_some_and(|t| t.restored)
     }
 
     /// The session Claude said it runs `thread_id` as (its system init), once it has.
@@ -852,6 +859,7 @@ impl ClaudeHost {
                             t.started = false;
                             t.fork_from = None;
                             t.session_id = None;
+                            t.restored = true;
                             let t = t.clone();
                             self.launch(&tid, &t, effort.as_deref()).ok().map(|(c, s, r)| {
                                 inner.reaping = r;
@@ -1222,6 +1230,11 @@ impl ClaudeHost {
         // A tool server's arguments are its own: a `path` or `command` there can carry anything.
         let summary = if name.starts_with("mcp__") { String::new() } else { tool_summary(input) };
         let mut fields = json!({"tool": name, "status": "started", "item_id": id, "summary": summary, "parent_id": parent});
+        if name == "Bash" {
+            if let Some(command) = input["command"].as_str() {
+                fields["outside_actions"] = json!(shell_outside_actions(command));
+            }
+        }
         if let Some(s) = subagent {
             fields["subagent"] = s;
         }
@@ -1528,7 +1541,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fake-claude-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let cmd = fake_claude(&dir);
-        for (path, expected) in crate::hosts::fixtures::cases("claude") {
+        for (path, mut expected) in crate::hosts::fixtures::cases("claude") {
             let (tx, mut rx) = mpsc::unbounded_channel();
             let host = ClaudeHost::new("acme", vec![cmd.clone()], tx);
             host.start().await.unwrap();
@@ -1547,6 +1560,12 @@ mod tests {
                     break;
                 }
             }
+            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            for event in &mut expected {
+                if event["tool"] == "Bash" && event["status"] == "started" {
+                    event["outside_actions"] = json!([]);
+                }
+            }
             assert_eq!(got, expected, "{}", path.display());
             // The init line hands the session to Claude: the next turn resumes it.
             let sid = host.session_id(&thread);
@@ -1555,6 +1574,19 @@ mod tests {
             assert_eq!(&argv[argv.len() - 2..], &["--resume".to_string(), sid]);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recovery_shell_events_match_the_shared_api_fixture() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        for case in cases {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let host = ClaudeHost::new("acme", vec![], tx);
+            host.tool_started(&json!({"id": "tool-1", "name": "Bash", "input": {"command": case["command"]}}), None, "th", "tu");
+            let got = rx.try_recv().unwrap();
+            assert_eq!(got, case["claude"], "{}", case["command"]);
+            assert!(!got.to_string().contains("synthetic-private-marker"));
+        }
     }
 
     #[test]

@@ -69,7 +69,8 @@ def canonical(c, runner_id, profile, runtime):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile."""
     from .store import readiness_document
-    row = c.execute("SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,)).fetchone()
+    from .read_cache import one
+    row = one(c, "SELECT readiness_json,capabilities_json FROM runners WHERE id=?", (runner_id,))
     ready = readiness_document(row["readiness_json"]) if row else {}
     from .subscriptions import computer_logins
     current = row and computer_logins(row, ready)
@@ -86,8 +87,8 @@ def canonical(c, runner_id, profile, runtime):
 
 
 def get(c, runner_id, profile, runtime):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?",
-                    (key(runner_id, profile, runtime),)).fetchone()
+    from .read_cache import metadata
+    row = metadata(c, key(runner_id, profile, runtime))
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:

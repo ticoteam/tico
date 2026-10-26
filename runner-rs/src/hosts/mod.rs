@@ -237,6 +237,27 @@ pub fn tool_summary(input: &Value) -> String {
     text("command").map(command_program).unwrap_or_default()
 }
 
+/// Only fixed operation labels leave the computer. Commands can contain private text and credentials,
+/// while a program-only display summary cannot distinguish `gh pr view` from `gh pr merge`.
+pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
+    static RULES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+    let rules = RULES.get_or_init(|| [
+        ("merge pull request", r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)"),
+        ("publish release", r"\bgh\s+release\s+create\b|\bhub\s+release\s+now\b"),
+        ("publish package", r"\b(?:npm|cargo)\s+publish\b|\btwine\s+upload\b|\bdocker\s+(?:image\s+)?push\b"),
+        ("consume approval", r"\b(?:hub\s+)?approval\s+consume\b"),
+        ("send email", r"\b(?:hub\s+)?(?:mail|email)\s+send\b|\bsendmail\b"),
+        ("send webhook", r"\b(?:hub\s+)?webhook\s+(?:send|retry|recover)\b"),
+        ("send support report", r"\bhub\s+support\s+send\b"),
+        ("make payment", r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
+    ].into_iter().map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap())).collect());
+    // Normalize shell quoting as well as scanning the raw command: quoted subcommands and nested shell
+    // wrappers must retain their action. Matching mentions can conservatively hold; it never exports them.
+    let normalized = shell_words(command).map(|words| words.join(" ")).unwrap_or_default();
+    rules.iter().filter(|(_, pattern)| pattern.is_match(command) || pattern.is_match(&normalized))
+        .map(|(label, _)| *label).collect()
+}
+
 /// The program a shell command runs: leading `NAME=value` assignments are skipped, a `sh -c` wrapper is unwrapped,
 /// and only the program's file name is kept. Words are split the way a shell quotes them, so a quoted value with a
 /// space stays one word; a command whose quoting does not close gives nothing, and so does one whose program could
@@ -638,6 +659,16 @@ impl Host {
     /// Gemini's init, Pi's session line, Codex's first turn/started). A new thread on one is kept only then.
     pub fn confirms_threads(&self) -> bool {
         matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
+    }
+
+    /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
+    /// new session in its place (Claude Code and Gemini find out only when the turn runs).
+    pub fn restored(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.restored(thread_id),
+            Host::Gemini(h) => h.restored(thread_id),
+            _ => false,
+        }
     }
 
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host

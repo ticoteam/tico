@@ -63,7 +63,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await name.inputValue(), 'Acme Tico', 'App name survives the refresh');
 
     // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
-    await page.goto('https://tico-ui.test/#/settings');
+    await page.goto('https://tico-ui.test/#/settings/devices');
     const machine = page.locator('#machine-label'), token = page.locator('#settings-token-form input[name=label]');
     await machine.waitFor(); await token.waitFor();
     await machine.fill('Build server'); await token.fill('CI script');

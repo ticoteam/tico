@@ -149,7 +149,7 @@ EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in A
 # refs.wake spellings the writers use -> the event a rule names.
 WAKE_ALIASES = {"stalled": "stall", "stuck_retry": "stall", "stuck_cause": "stall", "occurrence": "routine",
                 "next-run": "next_run", "background-done": "background_done", "watcher-done": "watcher",
-                "held-messages": "backlog"}
+                "held-messages": "backlog", "step_status": "status_check"}
 # `trigger` (an incoming webhook's id) and `type` (its extracted type, a trailing * matches a prefix) are read only for
 # events without a task.
 WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type")
@@ -521,9 +521,10 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
     if PROFILE_RULES:
         profile = [{**r, "scope_kind": "bot", "scope_id": slug} for r in PROFILE_RULES.get(profile_of(conn, slug), ())
                    if r["event"] in (event, "*")]
-    if event in AWAITED_NAMES or event == "digest":
-        # What the bot waits on wakes it, and a digest is held news let go: a `*` row (a lead's batch-everything, a
-        # note-everything) does not reach either, only a row that names the event.
+    if event in AWAITED_NAMES or event in ("digest", "step_entered"):
+        # What the bot waits on wakes it, a digest is held news let go, and a step move is news only for a bot a row
+        # names: a `*` row (a lead's batch-everything, a note-everything) reaches none of them, only a row that names
+        # the event.
         rows = [r for r in rows if r["event"] != "*"]
         profile = [r for r in profile if r["event"] != "*"]
     if not rows and not profile:
@@ -1140,10 +1141,35 @@ def seed_dev(conn):
         return
 
 
-def step_entered(conn, actor, row):
+STEP_NOISE_DROPPED = "rules.step_noise_dropped"
+
+
+def drop_step_noise(conn):
+    """Once per install: cancel the Release Manager's queued step-entry notices a profile catch-all held for its digest
+    (before only a row naming `step_entered` could reach it, every task's step move did). Nothing else is touched: a
+    note, another bot's jobs, a job already let go, a notice a team's own step_entered row batched. Quietly does
+    nothing before the tables exist."""
+    try:
+        if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (STEP_NOISE_DROPPED,)).fetchone():
+            return 0
+        flow = _release_flow()
+        manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
+        dropped = conn.execute(
+            "UPDATE jobs SET state='cancelled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
+            "(SELECT id FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' "
+            "AND json_extract(refs_json,'$.wake_batch')='rule' AND json_extract(refs_json,'$.rule')='profile_lead_digest')",
+            (manager,)).rowcount if manager else 0
+        H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager or "", {"jobs": dropped})
+        return dropped
+    except sqlite3.OperationalError:
+        return 0
+
+
+def step_entered(conn, actor, row, *, skip=()):
     """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
     else hears nothing. Only rows that name `step_entered` start this, so a team without them writes no message on a
-    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach."""
+    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
+    Callers can skip recipients already notified by the event that moved the task."""
     try:
         if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
             return
@@ -1153,7 +1179,7 @@ def step_entered(conn, actor, row):
         who = [row.get("owner"), row.get("requester"), H.bot_actor(qa) if qa else None,
                H.bot_actor(manager) if manager else None]
         conv = H.conversation(conn, row.get("conversation_id"))
-        for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor):
+        for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
             if _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
@@ -1410,14 +1436,17 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
     """Built-ins first (on the first page of an unfiltered or built-in listing), then the table rows the viewer may
     see, each with its 7-day run count and no-op rate and whether the viewer may change it. Paged and byte-capped:
     `more` says another page waits, at `next_offset`."""
+    from . import task_settings
     limit = max(1, min(int(limit or 200), MAX_ROWS))
     counts = usage(c, who.actor)
     items = []
     if scope_kind in (None, "builtin") and not offset and not scope_id:
-        items = [_with_usage({**r, "can_change": False}, counts) for r in BUILTINS if event in (None, r["event"])]
+        items = [task_settings.describe_rule(_with_usage({**r, "can_change": False}, counts))
+                 for r in BUILTINS if event in (None, r["event"])]
     more = False
     if scope_kind == "bot" and scope_id and not offset:
-        items += [_with_usage(r, counts) for r in profile_listing(c, scope_id) if event in (None, r["event"])]
+        items += [task_settings.describe_rule(_with_usage(r, counts))
+                  for r in profile_listing(c, scope_id) if event in (None, r["event"])]
     if scope_kind != "builtin":
         sql, args = "SELECT * FROM rules WHERE 1=1", []
         for column, value in (("scope_kind", scope_kind), ("scope_id", scope_id), ("event", event)):
@@ -1433,13 +1462,13 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
                 more, next_offset = True, offset + n
                 break
             if _visible(c, who, row):
-                item = _with_usage({**view(row), "can_change": can_change(
-                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts)
+                item = task_settings.describe_rule(_with_usage({**view(row), "can_change": can_change(
+                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts))
                 items.append(item)
                 spent += len(json.dumps(item))
         else:
             next_offset = offset + min(len(rows), limit)
-    out = {"rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
+    out = {"task_builtins": task_settings.builtins(c), "rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
            "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS)}
     if more:
         out["next_offset"] = next_offset

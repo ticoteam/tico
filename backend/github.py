@@ -259,12 +259,12 @@ def record_health_wait(link, detail):
         detail["health_wait"] = {"reason": reason, "since": H.now(), "head": head}
 
 
-def pull_request(c, payload, review_role="", release_repo=""):
+def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=False):
     from .review_gate import engineering
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
-    registered = register_worktree_pr(c, pr)
+    registered = set() if read_refresh else register_worktree_pr(c, pr)
     links = _links_for(c, url)
     for link in links:
         task = H.task(c, link["task_id"])
@@ -330,18 +330,28 @@ def pull_request(c, payload, review_role="", release_repo=""):
                             **({"checks": "pending"} if new_head else {})}, detail)
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
-        if any(current[field] != link.get(field) for field in ("state", "mergeable", "repo", "number", "branch", "checks")):
+        changed = [field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)]
+        # GitHub computes unknown mergeability after a push, without a corresponding user action.
+        if link.get("mergeable") in ("clean", "conflict") and mergeable in ("clean", "conflict") and link["mergeable"] != mergeable:
+            changed.append("mergeable")
+        if new_head:
+            changed.append("head")
+        if changed and not read_refresh:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
         item = f"{link['title']} {state}" if state != "closed" else f"{link['title']} was closed without merging"
         if mergeable == "conflict":
             item += ": Merge conflict"
+        if changed:
+            H._task_event(c, task["id"], H.KEEPER, "github", f"{link['title']} {link.get('state') or 'unknown'}", item,
+                          f"GitHub: {item} ({', '.join(changed)})")
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
         if (state == "closed" and link["state"] != state and link["id"] not in registered
                 or conflict_wake):
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
-        _review_role(c, task, payload, review_role)
+        if not read_refresh:
+            _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     woken = []
     if pr.get("merged"):
@@ -622,7 +632,6 @@ def refresh_task_prs(service, task_id):
                     if response.status_code == 200:
                         pr = response.json()
                         pr["html_url"] = link["url"]
-                        paths = creation_paths(service, pr, {"Authorization": "Bearer " + token})
                         head = (pr.get("head") or {}).get("sha")
                         head_login = None
                         if head:
@@ -643,8 +652,7 @@ def refresh_task_prs(service, task_id):
                                 continue
                             pull_request(c, {"action": "refresh", "pull_request": pr, "head_login": head_login},
                                          review_role=service.settings.github_review_role,
-                                         release_repo=service.settings.release_repo)
-                            apply_creation_qa(c, pr, paths)
+                                         release_repo=service.settings.release_repo, read_refresh=True)
                         success = True
                 except Exception:
                     logging.getLogger("tico.github").exception("PR refresh failed for %s #%s", *key)

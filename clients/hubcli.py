@@ -66,6 +66,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
+    hub task waive-qa <id> --head SHA --reason "..."
+                                           a person waives a Dev ticket's In QA step for that exact head; a waiver,
+                                           never a QA pass (CI and both reviews on that head stay required)
     hub task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
     hub task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
@@ -251,6 +254,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub sleep set --hours N [--runners on|off]
                                            1-24 quiet hours, 0 = off; bot computers stop with it unless --runners off
     hub notice list                        notices from Tico Team, newest first (tico.notice in rules)
+    hub settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
+    hub settings show <key> [--bot B|--computer C|--person P|--id I]
+                                           its value, who may change it and the link to its card
+    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I]
+                                           change it as yourself (BotOps: as the person who asked; a confirm one is
+                                           their Confirm card, a person-only one says why and links the card)
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -411,7 +420,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task-manager run                   run the department check now
     hub task-manager bot on|off            turn the Task Manager bot itself on or off (the owner)
     hub stall-triage [--on|--off]          quiet task triage: Decide reads a quiet task's last messages before its stall check
-                                           stays silent (the owner or an admin; off by default)
+                                           stays silent (the owner or an admin; on by default)
     hub service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
@@ -913,8 +922,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--check-model", metavar="RUNTIME[:MODEL]", nargs="?", const="auto",
                    help="run this subtask of yours on another model, in its own session (e.g. grok, codex:gpt-6.1-sol); "
-                        "with no value (put the flag after the parent id), the company's check model from a provider other "
-                        "than the parent's authors")
+                        "with no value (put the flag after the parent id), the company's check model, from a provider other "
+                        "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
                    help="with --check-model: what the other model is asked for (default check)")
     s.set_defaults(fn="task child create")
@@ -942,6 +951,9 @@ def parser():
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
     s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
     s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
+    s.add_argument("--blocker", nargs=3, metavar=("REPO", "STATUS", "ENDPOINT"),
+                   help="what refused, for a task to DevOps or a person: e.g. ticoteam/tico 403 workflow_dispatch. "
+                        "An open ask about the same three joins this task instead of a second ask")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")
@@ -1015,7 +1027,9 @@ def parser():
                         "ahead on its own: a send, spending or a delete waits for an answer")
     s.add_argument("--by", help="ISO-8601 date-time: go ahead then, instead of after the team's days (default 3)")
     s.set_defaults(fn="task question")
-    s = task.add_parser("update")
+    s = task.add_parser("update", description="Move your task; to reopen, set doing or open; the requester closes. "
+                        "Putting it back to open requires a note. Automatic starts wait 60 minutes unless it gets "
+                        "a comment, a new link or a blocker finishes.")
     s.add_argument("--visibility", choices=['public', 'private'])
     s.add_argument("--public-title", dest="public_title")
     s.add_argument("--public-summary", dest="public_summary")
@@ -1230,6 +1244,12 @@ def parser():
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")
+    s = task.add_parser("waive-qa", help="a person waives a Dev ticket's current In QA step for one exact pull "
+                        "request head, with a reason; recorded as a waiver, never as a QA pass")
+    s.add_argument("id")
+    s.add_argument("--head", required=True, help="the pull request's current head: the full 40-character sha")
+    s.add_argument("--reason", required=True, help="why QA is waived, in plain words")
+    s.set_defaults(fn="task waive-qa")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")
@@ -1851,6 +1871,23 @@ def parser():
     s = notice.add_parser("list", help="the notices Tico Team sent, newest first")
     s.set_defaults(fn="notice list")
 
+    catalogue = sub.add_parser("settings", help="find, read and change a control in Settings by its words "
+                               "(docs/permissions.md)").add_subparsers(dest="sub")
+    s = catalogue.add_parser("find", help="settings whose name, place or key hold these words")
+    s.add_argument("words")
+    s.set_defaults(fn="settings find")
+    for leaf, text in (("show", "one setting: its value, who may change it and its card"),
+                       ("set", "change one setting as yourself, or BotOps as the person who asked")):
+        s = catalogue.add_parser(leaf, help=text)
+        s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
+        if leaf == "set":
+            s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
+        target = s.add_mutually_exclusive_group()
+        target.add_argument("--bot", help="the bot, for a setting set per bot")
+        target.add_argument("--computer", help="the computer, for a setting set per computer")
+        target.add_argument("--id", help="the one thing it sets: a trigger, webhook, rule, routine, repository...")
+        target.add_argument("--person", help="the person's id, for a setting set per person")
+        s.set_defaults(fn="settings " + leaf)
     release = sub.add_parser("release", help="the team's releases: ask for one now, or set the daily hour").add_subparsers(dest="sub")
     s = release.add_parser("now", help="ask the Release Manager to release what is at Pending Release now (hotfix, "
                                        "midday release); one task listing the tickets")
@@ -2582,8 +2619,10 @@ def parser():
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
     s = sub.add_parser("stall-triage", help="quiet task triage: Decide reads a quiet task before its stall check stays silent (docs/tasks.md)")
-    s.add_argument("--on", dest="on", action=argparse.BooleanOptionalAction, default=None,
-                   help="--on switches it on, --off off; leave out to read the switch")
+    on = s.add_mutually_exclusive_group()
+    on.add_argument("--on", dest="on", action="store_true", default=None, help="switch it on")
+    on.add_argument("--off", dest="on", action="store_false", help="switch it off; leave both out to read the switch")
+    on.add_argument("--no-on", dest="on", action="store_false", help=argparse.SUPPRESS)      # the old spelling
     s.set_defaults(fn="stall-triage")
     roadmap = sub.add_parser("roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)").add_subparsers(dest="sub")
     s = roadmap.add_parser("tasks", help="roadmap tasks ranked by requests, organization or size")

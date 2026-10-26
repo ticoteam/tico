@@ -144,7 +144,6 @@ troubleshoot
 unarchive
 verified_user
 view_agenda
-view_kanban
 view_timeline
 warning
 waving_hand

@@ -212,7 +212,13 @@ function nvRenderPop() {
     <div id="nv-out"></div>
     <button class="nv-dismiss" id="nv-dismiss" type="button">Dismiss for this version</button>`;
 }
-function nvOut(html) { const el = $('#nv-out'); if (el) el.innerHTML = html; }
+// Progress shows in the sidebar's pop-up and under Health > Version's Update now, whichever started it.
+let NV_OUT_HTML = '';
+function nvOut(html) {
+  NV_OUT_HTML = html;
+  const el = $('#nv-out'); if (el) el.innerHTML = html;
+  document.querySelectorAll('[data-hl-update-out]').forEach(out => { out.innerHTML = html; });
+}
 async function nvStart() {
   const u = S.config.update, from = u.current;
   nvBusy = true;

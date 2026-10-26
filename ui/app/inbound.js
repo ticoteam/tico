@@ -8,7 +8,7 @@ async function inboundMount() {
   if (!host) return;
   const version = ++INBOUND_VIEW;
   clearInterval(INBOUND_TIMER);
-  host.innerHTML = `<header><h2>Inbox</h2></header>
+  host.innerHTML = `<header><h2>Email &amp; Phone</h2></header>
     <p>Incoming messages for your company’s agents. Every company agent can check these inboxes. Reading a message leaves it available to everyone else.</p>
     <p id="inbound-status" role="status"></p>
     ${settingsIsAdmin() ? `<details id="inbound-connection"><summary>Connect Inbox to Tico account/company</summary>

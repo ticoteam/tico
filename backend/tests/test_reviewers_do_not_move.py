@@ -28,7 +28,8 @@ def test_a_reviewer_or_security_cannot_move_the_ticket_and_is_told_to_give_a_ver
             with pytest.raises(Refused, match="Finish your review task"):
                 H.task_update(c, who, ticket["id"], **kwargs)
         assert H.task(c, ticket["id"])["status"] == "doing"
-        H.task_update(c, who, review["id"] if who == "bot:finance" else security["id"], status="done", note="Fine.")
+        H.task_update(c, who, review["id"] if who == "bot:finance" else security["id"], status="done", note="Fine.",
+                      verdict="approve", verdict_head="a" * 40)
 
 
 def test_qa_the_builder_and_people_still_move_the_ticket(api):

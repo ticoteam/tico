@@ -253,3 +253,49 @@ def test_a_deleted_task_whose_step_was_retired_still_comes_back(api):
     assert post(api, "tasks/52/restore", {}, token="ben-test")["restored"] == ticket["id"]
     with store.read() as c:
         assert c.execute("SELECT number, step_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[:] == (52, None)
+
+
+def test_a_task_filed_with_a_check_model_deletes_and_comes_back_with_it(api):
+    from backend import check_models
+    store = api.app.state.store
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Check the pricing copy", "body": "x"}, token="ben-test")
+    with store.transaction() as c:
+        check_models.record(c, "bot:ops", ticket["id"], {"runtime": "codex", "model": "gpt-test", "harness": "codex",
+                                                         "effort": "", "role": "review"})
+    assert post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test") == {"deleted": ticket["id"]}
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM task_check_models WHERE task_id=?", (ticket["id"],)).fetchone()[0] == 0
+    post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")
+    with store.read() as c:
+        assert c.execute("SELECT model, role FROM task_check_models WHERE task_id=?",
+                         (ticket["id"],)).fetchone()[:] == ("gpt-test", "review")
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_every_table_that_points_at_a_task_is_moved_kept_or_refuses_the_delete(api):
+    # A new table with a key to tasks(id) must be named in task_delete, or deleting a task that has a row in it fails.
+    from backend import task_delete as D
+    named = set(D.TASK_ROWS) | set(D.TASK_WORK) | {t for t, _ in D.FILE_WORK} | {t for t, _ in D.MESSAGE_ROWS}
+    named |= {t for t, _ in D.CONVERSATION_ROWS} | {t for t, _, _ in D.POINTERS} | set(D.CORE) | {"task_relations"}
+    with api.app.state.store.read() as c:
+        tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        pointing = {t for t in tables for fk in c.execute(f"PRAGMA foreign_key_list('{t}')") if fk[2] == "tasks"}
+    assert pointing - named == set()
+
+
+def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_general(api):
+    store = api.app.state.store
+    typ = post(api, "task-types", {"name": "Sales", "steps": [{"name": "Lead", "status": "open"},
+                                                            {"name": "Won", "status": "closed"}]})["type"]
+    ticket = post(api, "tasks", {"owner": "priya", "title": "Call the florist", "body": "x", "type": "Sales",
+                                 "step": "Lead"}, token="ben-test")
+    post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
+    post(api, f"task-types/{typ['id']}/delete", {})          # no live task uses it
+    assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]
+    after = get(api, "tasks/" + ticket["id"], token="ben-test")["task"]
+    assert (after["type_id"], after["step_id"], after["status"]) == ("general", None, "open")
+    with store.read() as c:
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+        detail = c.execute("SELECT detail_json FROM events WHERE action='task.restored' AND target=?",
+                           (ticket["id"],)).fetchone()[0]
+    assert "type" in detail

@@ -112,6 +112,18 @@ async function check(engine) {
       subscribed.searchParams.delete('after'); expected.searchParams.delete('after');
       return subscribed.href === expected.href;
     }, allowSignedOut);
+    // Support starts its first read from a delayed load callback. An empty reads set
+    // does not mean that callback has fired. Observe the real response for each
+    // document, including its body, so reloads cannot interrupt that startup read.
+    // The original WebKit access-control error's exact mechanism is still unproven.
+    const loaded = async navigate => {
+      const support = page.waitForResponse(response => response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === '/api/v2/support/tickets');
+      await navigate();
+      const response = await support;
+      assert.equal(await response.finished(), null, 'the delayed Support startup read finishes');
+      await ready();
+    };
     const readsSettled = async () => {
       const deadline = Date.now() + 30000;
       do {
@@ -130,10 +142,9 @@ async function check(engine) {
         liveConnected() && LIVE.es?.readyState === EventSource.OPEN), true,
         'the fixture stream is settled for the current session before navigation');
     };
-    await page.goto(origin + '/#/bot/botops');
+    await loaded(() => page.goto(origin + '/#/bot/botops'));
     const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
     const slow = page.locator('#chat-composer .p-slow');
-    await ready();
     await page.evaluate(() => { CHAT_SEND.slow = 300; });
 
     // The empty box dims Send; a send that is out shows a spinner at full strength, and after a moment says so in words.
@@ -232,12 +243,11 @@ async function check(engine) {
     assert.equal(await page.evaluate(() => !!BOT_PILL.unconfirmed?.refused), false, 'the pending send is not a confirmed refusal');
     assert.equal(await page.evaluate(() => SESSION.out), true, '401 activates sign-in recovery');
     assert.ok(await page.locator('#signed-out').isVisible(), 'the sign-in banner offers recovery');
-    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*Invalid credential.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
+    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*signed out.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
     assert.ok(!(await page.locator('.toast.err').allInnerTexts()).some(t => /Not sent:/.test(t)), 'the UI does not claim the original was unsent');
     assert.equal(await box.inputValue(), uncertainText);
     await readsSettled();
-    await page.reload();
-    await ready();
+    await loaded(() => page.reload());
     // The replay below must succeed, and the deadline covers the sign-in check too: a short one ends it unconfirmed on a busy computer.
     await page.evaluate(() => { CHAT_SEND.timeout = 30000; });
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), uncertainKey, 'reload preserves the uncertain key');
@@ -333,8 +343,7 @@ async function check(engine) {
     assert.equal(await page.evaluate(signature => pendingWrites.has(signature), uploadSignature), false, 'the old text request leaves the cache');
     assert.equal(await page.evaluate(() => CHAT_PENDING.has('botops')), false, 'the old identity is removed from the per-tab map');
     await readsSettled();
-    await page.reload();
-    await ready();
+    await loaded(() => page.reload());
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'reload cannot restore the acknowledged identity');
     await box.fill(uploadText); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer textarea').value);
@@ -391,8 +400,7 @@ async function check(engine) {
     assert.equal(keys.at(-1), expiredKey, 'a late failed retry keeps the first identity');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed.at), originalAt, 'retry does not restart replay retention');
     await readsSettled();
-    await page.reload();
-    await ready();
+    await loaded(() => page.reload());
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.key), expiredKey, 'same-tab reload keeps the key with the draft');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed?.at), originalAt, 'reload keeps original replay age');
     await page.evaluate(() => { window.chatRealNow = Date.now; });

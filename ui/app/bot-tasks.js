@@ -28,7 +28,7 @@ function v2TaskRow(t, slug, showStatus = true, below = '') {
   const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner : taskRequester(t);
   const age = taskAge(t);
   return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"><div class="trow-head">
-      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
+      ${showStatus ? `<span class="pill ${V2_PILL[t.status] ?? ''}">${esc({open: !actorPerson(t.owner) ? 'Doing · starting' : actorPerson(t.owner) === S.me?.id ? 'Needs you' : 'To do', waiting: t.blocked_since ? 'Blocked' : 'Waiting', doing: 'Doing'}[t.status] || t.status || '')}</span>${taskStatusText(t)}` : ''}
       <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
       <span class="tags">${actorChip(other)}</span>${actorAvatarOnly(t.owner)}
       <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
@@ -110,10 +110,8 @@ async function loadBotChatTasks(slug) {
   }
   botChatTasksRender(slug, [...unique.values()]);
 }
-// Needs you leads: what this bot needs from the person, the rows its number in the org tree counts (botNeeds),
-// whoever owns the task. Doing, Blocked and Done Recently are views into the bot's own work; every other tab is a
-// filter the server counts for the person looking (botTaskFilterRead). A task in Needs you is not listed again
-// below it. A failed load is retried, never shown as an empty list.
+// The server counts editable filters for the viewer; Needs You also keeps questions and approvals.
+// Done Recently uses the bot’s finished work. A failed task load is retried, never shown as an empty list.
 async function loadBotTasksV2(slug) {
   const pane = $('#t-open'); if (!pane) return;
   const seen = BOT_TASKS_CACHE.get(slug);
@@ -148,19 +146,28 @@ async function loadBotTasksV2(slug) {
   botTasksRender(slug, owned);
   await filtered;
 }
-// The built-in views of the bot's work: what needs the viewer, everything open (the full list), what waits on someone
-// else, and what finished in the last two weeks. [key, label, count id]; the ids predate the tabs. A bot that is not
+// Default tab identities (also used by non-Keeper bots) and Done Recently. [key, label, count id]; the ids predate the tabs. A bot that is not
 // on Tico's task list (Issues) shows these four.
 const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 'cnt-active'],
                        ['blocked', 'Blocked', 'cnt-blocked'], ['done', 'Done Recently', 'cnt-done']];
 const BOT_DONE_RECENT_DAYS = 14;
+const BOT_TASK_DEFAULT_CONDITIONS = {
+  needs: [{field: 'needs', value: 'you'}],
+  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
+  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
+};
+// Upgrade browser caches too, keeping the key, name, order and count setting of old layouts.
+function botTaskTabDefaults(tab) {
+  const rows = BOT_TASK_DEFAULT_CONDITIONS[tab.builtin];
+  return rows && !Array.isArray(tab.conditions) ? {...tab, conditions: JSON.parse(JSON.stringify(rows))} : tab;
+}
 // The tab a person picked on each bot's page, for this visit; until they pick, Needs You leads while it has rows.
 const BOT_TASK_TAB = new Map();
 // The bot's tabs in order, each with its key: a built-in's own, or c0, c1… for its filters by place. They come from
 // the bot's sidebar layout (ui/app/bot-sidebar.js); while it edits, from the draft.
 function botTaskTabList(slug) {
   const tabs = (BOT_EDIT?.slug === slug ? BOT_EDIT.tabs : botSidebarLayout(slug)?.tabs) || BOT_TASK_TABS.map(([builtin, name]) => ({builtin, name}));
-  return tabs.map((tab, at) => ({...tab, key: tab.builtin || 'c' + at}));
+  return tabs.map((tab, at) => ({...botTaskTabDefaults(tab), key: tab.builtin || 'c' + at}));
 }
 // [key, label, count id], as Part 1 and 3 read them.
 function botTaskTabs(slug) {
@@ -169,10 +176,8 @@ function botTaskTabs(slug) {
 // A tab's count; a tab the bot does not show has none to set.
 function botTaskCount(id, n) {
   const el = document.getElementById(id);
-  if (el) el.textContent = n || '';
+  if (el) el.textContent = ['cnt-needs', 'cnt-active', 'cnt-blocked'].includes(id) ? n : n || '';
 }
-// The board, filtered to this bot as owner; the owner chip there can be changed or removed.
-const botTaskBoardHref = slug => `${TASKS}?owner=bot:${encodeURIComponent(slug)}&view=board`;
 // A tab whose count is off keeps it in the page, unseen, so a redraw has one place to write it.
 function botTaskTabsBarHTML(slug) {
   return botTaskTabList(slug).map(({key, name, show_count: count}) =>
@@ -260,11 +265,28 @@ function botTaskFilterTurn(slug, job) {
 }
 const botTaskFilterRead = slug => botTaskFilterTurn(slug, () => botTaskFilterReadNow(slug));
 async function botTaskFilterReadNow(slug) {
-  const got = await v2Get(botTaskFilterPath(slug));
+  // Keep each URL below common proxy limits even after many Needs You pages have been read.
+  const extras = botNeedsExtras(slug), chunks = [];
+  let query = '';
+  for (const id of new Set(extras.map(it => String(it.id)))) {
+    const encoded = encodeURIComponent(id);
+    if (query && query.length + encoded.length + 3 > 4000) { chunks.push(query); query = ''; }
+    query += (query ? '%2C' : '') + encoded;
+  }
+  if (query) chunks.push(query);
+  const first = chunks.shift();
+  const got = await v2Get(botTaskFilterPath(slug) + (first ? '?match_ids=' + first : ''));
   if (!got || BOT?.slug !== slug) return;
+  const needs = got.tabs?.find(tab => tab.key === 'needs');
+  for (const chunk of needs ? chunks : []) {
+    const more = await v2Get(botTaskFilterPath(slug) + '?tab=needs&match_ids=' + chunk);
+    const matched = more?.tabs?.find(tab => tab.key === 'needs');
+    if (!matched || BOT?.slug !== slug) return;
+    needs.matched_ids = [...new Set([...(needs.matched_ids || []), ...(matched.matched_ids || [])])];
+  }
   const was = BOT_TASK_FILTERED.get(slug)?.tabs || {};
   const read = {tabs: Object.fromEntries((got.tabs || []).map(tab => [tab.key, tab])),
-                tasks: new Map((got.tasks || []).map(t => [String(t.id), t]))};
+                tasks: new Map((got.tasks || []).map(t => [String(t.id), t])), extras};
   // A tab someone read further into stays that far on a refresh: its later pages are read again after the fresh first.
   for (const tab of Object.values(read.tabs)) {
     const before = was[tab.key];
@@ -274,6 +296,9 @@ async function botTaskFilterReadNow(slug) {
   if (BOT?.slug !== slug) return;
   BOT_TASK_FILTERED.set(slug, read);
   botTaskFilterPaint(slug);
+  // The initial Needs You read or a live event may finish while this request is in flight.
+  const latest = botNeedsExtras(slug).map(it => String(it.id)).sort().join(',');
+  if (latest !== extras.map(it => String(it.id)).sort().join(',')) void botTaskFilterRead(slug);
 }
 // The tab's next page onto the rows it holds; false when it could not be read or the tab is no longer the one asked.
 async function botTaskFilterPage(slug, tab, tasks) {
@@ -291,14 +316,16 @@ async function botTaskFilterPage(slug, tab, tasks) {
 function botTaskFilterPaint(slug) {
   const got = BOT_TASK_FILTERED.get(slug);
   if (!got || BOT?.slug !== slug) return;
-  for (const tab of botTaskTabList(slug).filter(tab => !tab.builtin)) {
-    const counted = got.tabs[tab.key], list = $('#t-' + tab.key);
+  for (const tab of botTaskTabList(slug).filter(tab => tab.key !== 'done' && tab.key !== 'needs')) {
+    const counted = got.tabs[tab.key], list = $(tab.key === 'active' ? '#t-open' : '#t-' + tab.key);
     if (!counted || counted.name !== tab.name) continue;
     botTaskCount('cnt-' + tab.key, counted.count);
     const rows = counted.ids.map(id => got.tasks.get(String(id))).filter(Boolean);
     if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>',
       counted.next ? `<button type="button" class="ghost bot-done-more" data-bot-filter-more="${tab.key}">Show more</button>` : '');
   }
+  const needed = botNeedsPaint(slug);
+  botTaskTabShow(slug, botTaskTabFirst(slug, needed.size));
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('[data-bot-filter-more]'), slug = BOT?.slug, key = button?.dataset.botFilterMore;
@@ -315,24 +342,36 @@ document.addEventListener('click', async ev => {
 });
 // What a blocked task waits on: the person or bot it names, else the first line of its note.
 function botTaskWaitsOn(t) {
+  if (t.blocked_since) return taskBlockedLine(t);
   if (t.waiting_on) return `Waits on ${actorPerson(t.waiting_on) === S.me?.id ? 'you' : actorLabel(t.waiting_on)}`;
   const line = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean);
   return line ? (line.length > 140 ? line.slice(0, 139) + '…' : line) : 'Waits on: not said';
 }
-// The Needs you section from the list the page holds, so it moves with the org tree's number; returns its ids.
+// Questions and approvals remain in Needs You even when its task filter is changed.
+function botNeedsExtras(slug) {
+  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.to_actor === myActor());
+}
+// Keep questions, approvals and matching tasks once each; preserve half-written question replies on refresh.
 function botNeedsPaint(slug) {
-  const host = $('#bot-needs'), items = botNeeds(slug);
+  const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
+  // Supplemental rows and their overlap count belong to the same completed filter read.
+  // New questions wait for that read instead of being added again to its task count.
+  const extras = counted && filtered.extras ? filtered.extras : botNeedsExtras(slug);
+  const tasks = counted ? counted.ids.map(id => filtered.tasks.get(String(id))).filter(Boolean) : [];
+  const items = counted ? [...extras, ...tasks.filter(t => !extras.some(it => String(it.id) === String(t.id)))]
+    : [...extras, ...botNeeds(slug).filter(it => it.kind === 'waiting' && !extras.some(extra => extra.id === it.id))];
   if (!host || BOT?.slug !== slug) return new Set();
-  botTaskCount('cnt-needs', Math.max(items.length, needsMeCount(slug)));
+  botTaskCount('cnt-needs', counted ? counted.count + extras.filter(it => !(counted.matched_ids || counted.ids).includes(String(it.id))).length : Math.max(items.length, needsMeCount(slug)));
   // A question opened here, and an answer half typed into it, survive the redraw.
-  const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask]')].map(d =>
-    [d.dataset.ask, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
+  const list = $('#t-needs'), kept = new Map([...list.querySelectorAll('details[data-ask], details[data-v2-id]')].map(d =>
+    [d.dataset.ask || 'approval:' + d.dataset.v2Id, {open: d.open, text: d.querySelector('textarea')?.value || ''}]));
   // Some of this bot's items may be on Needs you pages not read yet.
-  const more = needsMeCount(slug) > items.length ? needsMoreButton() : '';
+  const more = needsMoreButton()
+    + (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(it =>
-    it.kind === 'ask' ? looseAskRow(it) : v2TaskRow(it, slug)).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
-  for (const d of list.querySelectorAll('details[data-ask]')) {
-    const was = kept.get(d.dataset.ask);
+    it.kind === 'ask' ? looseAskRow(it) : it.kind === 'approval' ? needsV2Item(it, false) : v2TaskRow(it, slug)).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
+  for (const d of list.querySelectorAll('details[data-ask], details[data-v2-id]')) {
+    const was = kept.get(d.dataset.ask || 'approval:' + d.dataset.v2Id);
     if (!was) continue;
     d.open = was.open;
     const box = d.querySelector('textarea');
@@ -340,19 +379,22 @@ function botNeedsPaint(slug) {
   }
   return new Set(items.map(it => String(it.id)));
 }
-// Needs you moved: redraw the rail from the tasks it last read, without reading them again.
+// Needs You changed: keep the draft replies, then refresh filter membership and supplement deduplication.
 function botNeedsChanged(slug) {
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen && BOT?.loaded?.has('tasks')) botTasksRender(slug, seen.owned);
+  if (seen && BOT?.loaded?.has('tasks')) {
+    botTasksRender(slug, seen.owned);
+    void botTaskFilterRead(slug);
+  }
 }
 function botTasksRender(slug, owned) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
   const needed = botNeedsPaint(slug);
   const mine = owned.tasks || [];
   const newest = (a, b) => String(b.created || '').localeCompare(String(a.created || ''));
-  // Doing is the full list: every open task the bot holds, of every type, newest first. The other tabs are views into it.
-  const active = mine.filter(t => V2_ACTIVE.includes(String(t.status))).sort(newest);
-  const blocked = active.filter(t => t.status === 'waiting');
+  // Fallback while filters load (and for non-Keeper bots); saved filters are painted from server results below.
+  const active = mine.filter(t => ['open', 'doing'].includes(String(t.status))).sort(newest);
+  const blocked = mine.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:' + S.me?.id).sort(newest);
   // Done Recently: the bot's own work finished in the last two weeks, most recently done first. A routine's runs (a
   // sweep every 30 minutes) are not work a person asked for; they live under Recurring.
   const doneAt = t => String(t.done_at || t.closed_at || t.updated || '');

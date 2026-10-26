@@ -120,7 +120,7 @@ def _person_above(c, pid, slug):
 def may_complete(auth, c, who, slug):
     """Whether this caller may mark the bot's onboarding complete: the owner, or a person above it on the org chart.
     Not the bot itself, another bot, a co-owner or an admin who is not above it."""
-    return (who.role in ("owner", "human") and (not who.via or who.confirmed)
+    return (who.role in ("owner", "human") and (not who.via or who.confirmed or who.via == "botops")
             and auth.manages(c, who, "bot", slug))
 
 
@@ -216,7 +216,9 @@ def _may_place(auth, c, who, reports_to):
     if who.role == "owner":
         return
     reports_to = _anchor(c, reports_to)
-    if who.role == "human" and (not who.via or who.confirmed):
+    # BotOps acting on the person's own request counts as them (its lent identity is never confirmed: only their tap
+    # on a card is); the Assistant's own turn does not.
+    if who.role == "human" and (not who.via or who.confirmed or who.via == "botops"):
         if reports_to == who.actor:
             return
         if reports_to.startswith("human:") and auth.manages(c, who, "person", reports_to[6:]):

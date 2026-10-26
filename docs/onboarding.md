@@ -55,7 +55,7 @@ named on the setup record (`company_import.strategy.skipped`). A format 0.2 file
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:
 they are kept on the setup record to invite, and a role under them reports to the owner until they are invited
-(Settings > Humans > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
+(Settings > People > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
 the seats waiting on them under them and sends the invite, see [People](people.md#invites)). Other coworkers, existing
 external agents and custom rules are refused with an explanation. The file's goals are imported onto
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
@@ -154,10 +154,10 @@ The browser only ever talks to its own server:
 
 Both are for the owner and bot administrators, and neither is part of the stable v2 contract (like the rest of the wizard's routes).
 
-The group card carries a toggle, **Suggestions from Tico HQ**, with a privacy link and the exact payload: group, answer,
+The team builder has one **Suggestions from Tico HQ** toggle, and its setting covers every group you answer. It comes with a privacy link and the exact payload: group, answer,
 team description, customer type, software choice, catalog version and install ID (when counting is on and its notice has been shown). It is on by default and off (and disabled, with the
 reason) when the install may not ask HQ. The server asks Tico HQ (`POST <TICO_HQ_URL>/v1/recruit`, [Tico HQ](tico-hq.md)) only when the
-toggle is on **and** none of these is true: demo mode, `TICO_TELEMETRY=off`, `DO_NOT_TRACK` set, or the anonymous usage count switched off
+toggle is on **and** none of these is true: demo mode, `TICO_REHEARSAL=1`, `TICO_TELEMETRY=off`, `DO_NOT_TRACK` set to any value other than empty, `0`, `false` or `no`, or the anonymous usage count switched off
 in Settings (`hq.off_by` says which). It sends the group, the answer, three facts from "About the team" (`what`, at most 500
 characters; `sells_to`; `software`), the template version and, while the usage count is on and its notice has been shown, its install id; it waits at most 6 seconds and
 keeps only template ids that are this group's in its own templates. HQ answers template ids and a short why, never text a bot would
@@ -465,7 +465,7 @@ Open a seat from its row on the team chart (`person_search` icon, **Recruiting**
 - Who may recruit and pick: the owner for any seat; a person for a seat under themselves or someone below them. Bots open
   and read seats but do not recruit.
 
-The separate [LinkedBots directory](https://agents.tico.dev/) has a playful feed and a small Tico Recruit workspace.
+The separate [LinkedBots directory](https://linkedbots.ai/) has a playful feed and a small Tico Recruit workspace at [recruit.tico.dev](https://recruit.tico.dev/).
 It can hand a selected template and role brief into your Tico using a URL fragment; it does not authenticate you or
 create a bot automatically. Sign in, review the role and explicitly choose Create. The provider's magic-link editing
 session on that site grants no access to your Tico. Older installs can select the named template manually.
@@ -487,7 +487,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
+Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
@@ -570,7 +570,7 @@ offer, and the bots screen says so. On a hosted server that means the release di
 **A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's chat message: a task
 message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its chat, and answer its
 questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a member's bot at their limit answers
-`bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > Humans. An owner or a bot's manager can
+`bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > People. An owner or a bot's manager can
 also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.

@@ -51,7 +51,9 @@ def keep_stderr(c, row, text):
 
 def reason(c, row, outcome, summary=''):
     if row['stop_requested'] and outcome != 'completed':
-        return 'Cancelled by ' + row['stop_requested']
+        from .quarantine_stops import stopped_by
+        # A quarantine's Stop reads as the quarantine, never as a lost computer or the keeper (Dev 573).
+        return stopped_by(c, row) or 'Cancelled by ' + row['stop_requested']
     if outcome in ('completed', 'ok'):
         return 'Finished'
     if row['state'] == 'expired':

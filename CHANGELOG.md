@@ -7,6 +7,61 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.12] - 2026-10-26
+
+### Added
+- **Set a bot's task effort and context length.** Each starts as **Same as bot** and can be set without a task model, so a longer context can run with the bot's own model. Chat keeps the bot's own settings ([Task settings](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **See finished goals.** Done and dropped goals sit under **Finished (N)** in each owner's panel and on a bot's page, newest first. Open one to read it, **Reopen** it, or use **Undo** after **Goal removed** ([Goals](docs/goals-and-kpis.md#the-goals-page)).
+- **Read and change settings from the command line.** `hub settings find`, `show` and `set` reach every Settings control that writes, with its name, its place and who may change it. A change uses your own rights ([Settings catalogue](docs/permissions.md#the-settings-catalogue)).
+
+### Changed
+- **Bots and tasks keep one session.** A bot's chat and each task keep one session across wakes. Auto-compaction is the only size limit, and a run that hits "prompt too long" compacts first. Each new session says why it started ([Sessions](docs/sessions.md#the-main-chat-and-task-sessions)).
+- **Blocked tasks show before In Progress.** A task that cannot move appears in **Blocked** with its reason and start time. Its build clock pauses while blocked, and clearing a hold returns it to its previous step ([Blocked](docs/tasks.md#numbers-and-the-order-within-a-step)).
+- **Stopped runs take one line each.** Needs you lists a bot's stopped runs one by one, each with its own **Try again** and **Don't retry** buttons. A computer restart or a usage limit is named as the reason ([Stopped runs](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Bot task filters are editable.** On a bot's Tasks page, **Needs You**, **Doing** and **Blocked** can be changed, and **Reset to default** restores them. The board icon in the Tasks header is gone ([Tasks](docs/tasks.md)).
+- **Suggestion cards say what yes does.** An **Add a KPI** card reads "Add the measure … to …" and can take a target. A Strategy change reads **Add to draft** or **No, leave it**, with one realign button that counts what changes ([Proposals](docs/goals-and-kpis.md#proposals)).
+- **Quiet Dev tickets get noticed sooner.** A ticket at a working step shows its age, amber after four hours. Its owner is woken once after two hours without activity, and the manager once after four hours ([Waiting work](docs/tasks.md#work-that-is-waiting)).
+- **Step changes wake a bot only through a rule.** A task's step change reaches a bot only when a wake rule names it, so the Release Manager no longer gets every step change in its digest ([Wake rules](docs/tasks.md#wake-rules)).
+- **Green checks count as review evidence.** When every GitHub check on a pull request is green, a Review step needs no written test receipt. A failed check still blocks, even when a rerun on the same head passes ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Refused review moves retry themselves.** When a Review 1 or Review 2 move is refused, Tico retries it once the cause clears. GitHub access blockers go to DevOps, not Head of Engineering ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **BotOps waits for your Confirm tap.** A change BotOps makes for you, such as a role change, a new computer's code or a team rule, needs your tap on a Confirm card in your own BotOps chat ([BotOps](docs/permissions.md#botops-uses-the-requesters-rights)).
+- **Chat Send responds at once.** Send and Stop acknowledge a tap immediately. A failed send says why: offline, signed out, rate limited, a busy server or an oversized attachment. Your draft and files stay ([Messaging](docs/messaging.md)).
+- **Settings addresses open their tab.** Every Settings address opens its tab, so it can be bookmarked. A card you cannot edit names who can. **Remove bot** is now **Archive bot**, which asks first ([Navigation](docs/navigation.md)).
+
+### Fixed
+- **Tasks leave Closed on schedule.** A task moved out of Closed kept its old close time, so the 24-hour auto-close never ran again. The fix clears that time, and a one-time cleanup repairs existing tasks ([Done and Closed](docs/tasks.md#done-and-closed)).
+- **Tasks finish without stale waits.** Old waits, ask cards and automated notices no longer keep a task open. Opening a task no longer restarts its auto-close timer ([Done and Closed](docs/tasks.md#done-and-closed)).
+- **Tasks with a check model delete.** Deleting a task filed with a check model failed with a server error. It now deletes and restores in full. Restoring a task whose type was deleted puts it on General ([Deleting tasks](docs/tasks.md#deleting-tasks-made-by-mistake)).
+- **Missed assignments start.** A bot assignment whose wake never ran gets one wake after an hour. After two more hours, Health and the manager's Needs you show the task and why its queued work still waits ([Health](docs/health-monitor.md)).
+- **Reopened tasks start their queued work.** A stale next-run gate no longer holds a reopened task's queued job. Real waits still hold it ([Picking work back up](docs/tasks.md#picking-work-back-up)).
+- **Held runs stay under review.** A held run keeps its review task across sweeps. Undecided for two hours, it appears in Health and the operator's Needs you, and queued work on the same task folds into the resumed run ([Why a run stopped](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Your messages reach a busy computer.** A message you send starts on a busy computer ahead of queued bot work ([Computers](docs/computers.md)).
+- **Support replies stay visible after a send.** A slow refresh no longer replaces the message you just sent with an older view of the ticket ([Support](docs/support.md)).
+- **Review token failures name their cause.** A failed GitHub sign-in shows the safe problem code and HTTP status. Timeouts and rate limits say to retry ([GitHub App](docs/github-app.md)).
+- **Busy pages load faster on large teams.** Status, Health, Inbox and Files read each table once, not once per bot or file ([Health](docs/health-monitor.md)).
+
+### Security
+- **A bot's KPI stays hidden from people who cannot read the bot.** A goal names its KPIs to everyone who reads it. Linking a bot's KPI to a goal is now refused when a goal reader cannot read that bot, and a confirmed hidden KPI stays hidden ([Goals permissions](docs/goals-and-kpis.md#permissions)).
+- **BotOps settings commands use the asker's rights.** A release schedule, team budget, task type, trigger or tag changed through BotOps now needs the rights of the person who asked, not BotOps' own ([BotOps](docs/permissions.md#botops-uses-the-requesters-rights)).
+
+### Known issues
+- Saving a bot's task effort without a task model returns a 422 error for bots on the company default model. Not fixed in 0.4.12.
+- Compact-first is tracked per conversation. A session shared across conversations can miss one compaction. Not fixed in 0.4.12.
+
+## [0.4.9] - 2026-10-25
+
+### Fixed
+- **Setup recovers from interrupted research.** After a server restart, the strategy step shows a form instead of waiting for research that can no longer finish ([Setup](docs/strategy.md#setup)).
+- **Late research leaves your strategy draft alone.** Research that runs past 10 minutes shows as failed. A late answer no longer fills the draft after the form has returned ([Setup](docs/strategy.md#setup)).
+- **Clearing setup inputs cancels the old research.** Clearing both the website and description stops the running research and returns the strategy step to a form ([Setup](docs/strategy.md#setup)).
+- **Setup recovers when a research start goes unconfirmed.** Going back and clicking **Next** again checks for matching research already started before creating another run ([Setup](docs/strategy.md#setup)).
+- **Setup refuses non-public websites when you save.** An internal or private address is rejected before it can reach the Librarian's market task ([Setup](docs/strategy.md#setup)).
+- **Goals keep links to hidden bets.** Saving a goal no longer clears its link to a retired or unpublished bet the editor cannot see. The selector shows **Retired or unpublished** instead of **None** ([Goals](docs/goals-and-kpis.md#the-goals-page)).
+- **Summary autosaves no longer disrupt other strategy edits.** Saving a bet or publishing uses the latest draft revision after the summary saves, avoiding a false conflict ([Strategy](docs/strategy.md#the-page)).
+- **Publish recognizes citation and guide changes.** The button becomes available when only a bet's citations or the strategy guide changed ([Publishing](docs/strategy.md#publishing)).
+- **Moving bets detects conflicting strategy edits.** Each position change checks the draft revision. If a move fails partway through, the page reloads the saved order ([Strategy](docs/strategy.md#the-page)).
+- **SQL reads show the team's current vision.** The company profile follows the vision visible to the team, including after upgrades and the first strategy publication ([Strategy](docs/strategy.md#what-bots-see)).
+
 ## [0.4.8] - 2026-10-25
 
 ### Added
@@ -4400,7 +4455,9 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.12...HEAD
+[0.4.12]: https://github.com/ticoteam/tico/compare/v0.4.11...v0.4.12
+[0.4.9]: https://github.com/ticoteam/tico/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/ticoteam/tico/compare/v0.4.6...v0.4.7
 [0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
