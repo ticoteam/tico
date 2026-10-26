@@ -162,7 +162,8 @@ function stoppedLines(issue, list) {
       : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
     <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
   list.push(issue);
-  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided);
+  // Only while a risky line still offers Try again: not once it is decided or its saved requests chose Don't retry.
+  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided && stoppedChosen(run) !== 'dismiss');
   return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
     ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
     ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;

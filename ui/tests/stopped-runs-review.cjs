@@ -97,6 +97,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // The safe pick leads, by the review card's rule: a run that may have acted puts Don't retry first.
     assert.deepEqual(await lines.nth(0).locator('button').allInnerTexts(), ['Don’t retry', 'Try again']);
     assert.deepEqual(await lines.nth(1).locator('button').allInnerTexts(), ['Try again', 'Don’t retry']);
+    assert.match(await panel.innerText(), /Try again tells the bot/);
     assert.match(await panel.innerText(), /And 1 more in Details\./);
     assert.equal(await panel.locator('[data-execution-review="builder"]').innerText(), 'Details');
     assert.equal(await panel.locator('[data-execution-review="writer"]').count(), 0);
@@ -263,20 +264,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.equal(await mixed.locator('[data-result]').innerText(),
       'Choices saved. The bot is busy; Tico will apply them when its turn ends.');
     assert.equal(await mixed.locator('button:enabled').count(), 0);
+    // The only risky line still open can only be dismissed now, so the Try again hint is gone.
     const builderCard = panel.locator('.settings-issue', {hasText: 'Builder has 2 stopped runs'});
-    assert.match(await builderCard.innerText(), /Try again tells the bot/);
+    assert.doesNotMatch(await builderCard.innerText(), /Try again tells the bot/);
     // The rest goes through at once, but the request saved earlier still waits for the bot's turn, so the line says so.
     deferred = false;
     await partway.locator('[data-run-decision=dismiss]').click();
     await partway.locator('[data-result]', {hasText: 'Tico will dismiss this run when its turn ends.'}).waitFor();
     assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1b', 'dismiss']]);
-    // Needs you closed and reopened before a refresh (a line is still open) keeps the outcome and offers nothing more;
-    // the hint about Try again goes once no risky line is left to decide.
+    // Needs you closed and reopened before a refresh (a line is still open) keeps the outcome and offers nothing more.
     await page.evaluate(() => needsYou());
     assert.equal(await partway.locator('[data-result]').innerText(),
       'Choice saved. The bot is busy; Tico will dismiss this run when its turn ends.');
     assert.equal(await partway.locator('button:enabled').count(), 0);
-    assert.doesNotMatch(await builderCard.innerText(), /Try again tells the bot/);
     // Deciding the last open line refreshes the card.
     const reread = page.waitForResponse(r => new URL(r.url()).pathname === '/api/status', {timeout: 5000});
     await open.locator('[data-run-decision=resume]').click();
