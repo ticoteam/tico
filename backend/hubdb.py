@@ -3104,7 +3104,7 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
-    """Private tasks are read by their parties, their org-chart managers, and their one guest (task_reach)."""
+    """Private tasks admit their parties, bot parties’ org-chart managers and their one guest (task_reach)."""
     if not row:
         return False
     row = dict(row)

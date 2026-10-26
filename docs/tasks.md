@@ -193,7 +193,7 @@ letters and digits in any script, case folded; one with none is refused.
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
 the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
-about. Only the bot that owns the task names the person, and a private task can only ask a person who can read it,
+about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
 person on it: its guest").
 
@@ -663,9 +663,9 @@ Subtasks never inherit a human's delegation anchor from a bot's request. BotOps 
 filing bot's rights when that bot asks it to work on a subtask.
 
 Parent owners can track descendants they can read, without gaining Read on hidden bots.
-Only the task's owner or requester, or a human mover, can re-parent it; bots must also own,
+Only the task's owner, requester, their managers or a human mover can re-parent it; bots must also own,
 request or manage the new parent. Moving or detaching a subtask also requires its current
-parent's owner or requester, or a human mover. Moving a task moves its whole subtree,
+parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
@@ -1064,13 +1064,14 @@ New ordinary tasks are readable by active company people and bots. Reading does 
 permission to change, reassign or complete work. Type bot settings continue to grant comment,
 subtask and work permissions; they cannot override Private or restricted bot activity.
 
-Turn on **Private** in the existing task controls to limit future reads to the requester and
-current assignee, human or bot. The assignee may tighten visibility; only the human requester
+Turn on **Private** in the existing task controls to limit future reads to the requester,
+current assignee and the managers of any bot party. Tasks with only person parties remain
+private to those parties and their guest. The assignee or its managers may tighten visibility; only the human requester
 can publish again. Bots cannot publish a private task, including when acting for a person.
 Bot-requested private work stays private until a future explicit human publication mechanism
-exists. Mentions, administrators, managers, parent ownership and delegations grant no access.
+exists. Mentions, administrator status, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester. Reassignment never clears Private.
+future access unless they remain its requester or manage a current bot party. Reassignment never clears Private.
 
 ### A private task with no person on it: its guest
 
@@ -1086,7 +1087,7 @@ who it reached, and its Private row names them.
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
 - There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the
+- Only the bot that owns the task or its managers bring a guest in; the requesting bot cannot. Reassigning the task ends the
   guest's access; a new bot owner may then bring in one person of its own.
 - When a private task above it has a person on it, only someone who reads that task above can become the guest. From
   the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
