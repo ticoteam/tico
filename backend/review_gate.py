@@ -202,8 +202,11 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
     for m in missing:
         who = H.actor_id(m["reviewer"]) if m["reviewer"] else "its reviewer"
         at = f" on head {m['head']}" if m["head"] else ""
-        lines.append(f"{m['slot']} {m['why']}: ask {who} to re-review{at} (the delta since its last verdict) "
-                     f"and move once it approves.")
+        if m["why"] == "was never asked":
+            lines.append(f"{m['slot']} was never asked: file {m['slot']}{at} and move once it approves.")
+        else:
+            lines.append(f"{m['slot']} {m['why']}: ask {who} to re-review{at} (the delta since its last verdict) "
+                         f"and move once it approves.")
     pr = prs[0]
     head = missing[0]["head"] or "unknown"
     reject(c, actor, row, "reviews", head, pr,

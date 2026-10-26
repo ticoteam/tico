@@ -81,7 +81,8 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     # The builder moves it elsewhere: the remembered move is dropped even when a receipt then arrives.
     fresh = get(api, 'tasks/' + task['id'])['task']
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.KEEPER, task['id'], step='Done')
+        # A person: a bot's move to Done needs every review slot approved (review_gate.passed).
+        H.task_update(c, 'human:ana', task['id'], step='Done')
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert fresh['step']['name'] == 'In Progress'
     assert tick(api) == [] and step(api, task) == 'Done'

@@ -73,7 +73,7 @@ def test_an_open_changes_verdict_refuses_every_move_past_review_and_names_slot_r
 def test_a_slot_with_no_verdict_or_never_asked_refuses(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        with pytest.raises(Refused, match="Review 1 was never asked"):
+        with pytest.raises(Refused, match="Review 1 was never asked: file Review 1 on head " + A):
             H.task_update(c, "bot:cpo", row["id"], step="In QA")
         r1 = child(c, row, "Review 1: PR #7", "bot:finance")
         with pytest.raises(Refused, match="Review 1 has no verdict: ask finance"):
