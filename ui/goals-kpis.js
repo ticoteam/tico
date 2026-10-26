@@ -141,10 +141,11 @@ function kpiTargetKinds(form) {
 
 // ---------------------------------------------------------------- suggestion cards
 // The yes / no row every suggestion card ends with, shared with the strategy cards: yes first, saying what it does, then
-// "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons.
-function propDoHtml(p, {yes, no = 'No, leave it', line = ''}) {
+// "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons. `decide` is what
+// the yes button sends: a one-button card that changes nothing ("Got it" on a strategy change the draft holds) rejects.
+function propDoHtml(p, {yes, no = 'No, leave it', line = '', decide = 'confirm'}) {
   if (!p.may_decide) return '';
-  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}<button class="primary" type="button" data-decide="confirm" data-prop-yes>${esc(yes)}</button>${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
+  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
 }
 // What a suggestion would change, as Now and Proposed: rows [{label, now, proposed}], a label only when there are
 // several. Long text is cut to four lines, with one "Show all" opening both.
@@ -200,44 +201,100 @@ function goalPropHtml(p, extra) {
 // ---------------------------------------------------------------- strategy proposals
 // The strategy's live bets, for the names a proposal leaves out (a retire is just {id, status}).
 const stratPropBets = () => GOALS_ST?.strategy?.bets || [];
-const stratPropOne = () => (GOALS_ST?.strategy?.label_one || 'Bet').toLowerCase();
-// A change to the strategy draft (backend/strategy.py proposal_error): what it changes, one line each, then Confirm or
-// Reject. A wrong-if that tripped prefixes it with "Bet may be wrong".
+const stratPropOne = () => GOALS_ST?.strategy?.label_one || 'Bet';
+// A bet by the number the Strategy page shows it under: its place among the live bets, "Bet 2".
+function stratPropBetName(id) {
+  const n = stratPropBets().filter(b => b.status !== 'retired').findIndex(b => b.id === id);
+  return n < 0 ? `a ${stratPropOne().toLowerCase()}` : `${stratPropOne()} ${n + 1}`;
+}
+// A wrong-if in plain text, as the Strategy page words it.
+function stratPropWrongText(w) {
+  if (!w) return '';
+  const el = document.createElement('span');
+  el.innerHTML = strategyWrongIfHtml(w);
+  return el.textContent.trim();
+}
+// One changed thing on a strategy card: its name, then Now / Proposed (or only what is proposed without a draft to read).
+const stratPropRow = (k, block) => `<li><span class="strat-prop-k">${k}</span><div class="strat-prop-v">${block}</div></li>`;
+// A change to the strategy draft (backend/strategy.py proposal_error): who suggests it and why, each change as Now /
+// Proposed against the draft as it is now, then "Add to draft" / "No, leave it". Nothing it does is published.
 function strategyDraftPropHtml(p) {
-  const pl = p.payload || {}, rows = [], one = stratPropOne();
-  const row = (k, html) => rows.push(`<li><span class="strat-prop-k">${esc(k)}</span><span>${html}</span></li>`);
-  if (stratText(pl.summary)) row('Summary', esc(pl.summary));
-  if (stratText(pl.vision)) row('Vision', esc(pl.vision));
-  const secs = pl.sections || {}, titles = [];
-  for (const sec of STRAT_SECTIONS) if (sec.key in secs) titles.push(sec.title);
-  for (const [key, x] of Object.entries(secs.extra || {})) titles.push(x?.title || key);
-  if (titles.length) row('Sections', esc(titles.join(', ')));
+  const pl = p.payload || {}, st = GOALS_ST?.strategy || null, d = st?.draft || null, one = stratPropOne();
+  const rows = [], by = goalActorName(p.proposed_by);
+  const same = (a, b) => stratText(a) === stratText(b);
+  // A text field: left out when the proposal says what the draft already says.
+  const text = (k, now, proposed) => {
+    if (d && same(now, proposed)) return;
+    rows.push(stratPropRow(esc(k), propNowProposedHtml([{now: d ? now : '', proposed}])));
+  };
+  if (pl.summary != null) text('Summary', d?.summary, pl.summary);
+  if (pl.vision != null) text('Vision', d?.vision, pl.vision);
+  const secs = pl.sections || {};
+  for (const sec of STRAT_SECTIONS) if (sec.key in secs) text(sec.title, d?.sections?.[sec.key], secs[sec.key]);
+  for (const [key, x] of Object.entries(secs.extra || {})) text(x?.title || d?.sections?.extra?.[key]?.title || key, d?.sections?.extra?.[key]?.body, x?.body);
+  const fields = [['statement', 'Statement'], ['why', 'Why'], ['rules_out', 'Rules out'], ['wrong_if', 'Wrong if'], ['cites', 'Cites']];
+  const value = (k, v) => k === 'wrong_if' ? stratPropWrongText(v) : k === 'cites' ? (v || []).join(', ') : v;
   for (const b of pl.bets || []) {
     const was = b.id ? stratPropBets().find(x => x.id === b.id) : null;
-    const what = !b.id ? `New ${one}` : b.status === 'retired' ? `Retire ${one}` : `Change ${one}`;
-    const wrong = b.wrong_if ? `<span class="muted strat-prop-wrong">Wrong if ${strategyWrongIfHtml(b.wrong_if)}</span>` : '';
-    row(what, `${esc(b.statement || was?.statement || b.id)}${wrong}`);
+    if (!b.id) {
+      const lines = fields.filter(([k]) => k !== 'cites' && stratText(value(k, b[k])))
+        .map(([k, label]) => `<div class="prop-np-row"><span class="prop-np-k">${label}</span><span class="prop-np-v">${esc(value(k, b[k]))}</span></div>`).join('');
+      rows.push(stratPropRow(`New ${esc(one.toLowerCase())}`, `<div class="prop-np">${lines}</div>${b.status === 'active' ? ''
+        : `<p class="muted strat-prop-note">It starts as proposed; you make it active on the Strategy page.</p>`}`));
+    } else if (b.status === 'retired') {
+      const serve = ((st?.goals_by_bet || {})[b.id] || []).filter(g => !['done', 'dropped'].includes(g.status)).length;
+      rows.push(stratPropRow(`Retire ${esc(stratPropBetName(b.id))}`, `<span class="strat-prop-st">${esc(was?.statement || b.statement || '')}</span>${serve
+        ? `<p class="muted strat-prop-note">${serve} goal${serve === 1 ? ' serves' : 's serve'} it. When you publish, you'll be asked what happens to ${serve === 1 ? 'it' : 'them'}.</p>` : ''}`));
+    } else {
+      const changed = fields.filter(([k]) => k in b && !(was && same(value(k, was[k]), value(k, b[k]))))
+        .map(([k, label]) => ({label, now: was ? value(k, was[k]) : '', proposed: value(k, b[k])}));
+      if (b.status && b.status !== was?.status) changed.push({label: 'Status', now: was?.status || '', proposed: b.status});
+      // One field changed: its name goes with the bet's, since the block shows a name only for two or more.
+      if (changed.length) rows.push(stratPropRow(`Change ${esc(stratPropBetName(b.id))}${changed.length === 1 ? ` <span class="muted">· ${esc(changed[0].label)}</span>` : ''}`, propNowProposedHtml(changed)));
+    }
   }
-  const head = `${pl.source === 'bet_tripped' ? `${esc(GOALS_ST?.strategy?.label_one || 'Bet')} may be wrong · ` : ''}Strategy change`;
+  const lens = pl.source === 'lens' ? p.lens_name : '', tripped = pl.source === 'bet_tripped';
+  const from = lens ? ` from the <b>${esc(lens)}</b> lens` : pl.source === 'briefing' ? " from this week's market briefing"
+    : tripped ? ` because <b>${esc(stratPropBetName((pl.bets || []).find(b => b.id)?.id))}</b> may be wrong${p.reason ? `: ${esc(p.reason)}` : ''}` : '';
+  const empty = !rows.length;
+  const line = st?.current?.n ? `Yes adds this to your strategy draft. Bots keep reading v${st.current.n} until you publish it on the Strategy page.`
+    : 'Nothing is published until you publish it on the Strategy page.';
   return `<li class="kpi-prop strat-prop" data-proposal="${esc(p.id)}" data-strategy-draft><div class="kpi-prop-main">
-      <span><b>${head}</b> <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
-      ${rows.length ? `<ul class="strat-prop-list">${rows.join('')}</ul>` : ''}
-      <span class="muted kpi-prop-why">${p.reason ? esc(p.reason) + ' · ' : ''}${esc(goalActorName(p.proposed_by))}</span></div>
-    ${propDoHtml(p, {yes: 'Confirm', no: 'Reject'})}</li>`;
+      <span class="kpi-prop-head"><b>${esc(by)}</b> suggests a change to your strategy${from} <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
+      ${empty ? '<span class="kpi-prop-detail">Your draft already says this.</span>' : `<ul class="strat-prop-list">${rows.join('')}</ul>`}
+      ${p.reason && !tripped ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}</div>
+    ${empty ? propDoHtml(p, {yes: 'Got it', no: null, decide: 'reject'}) : propDoHtml(p, {yes: 'Add to draft', line})}</li>`;
 }
-// The goals of bets a publish retired or rewrote (backend/strategy.py realign): per goal Keep, Retire or Move to one of
-// the active bets, confirmed together as `moves`.
+// What the realign card's one button says: what the choices change, or that every goal stays.
+function stratRealignYes(open, retire, move) {
+  if (!open) return 'Got it';
+  if (!retire && !move) return open === 1 ? 'Keep this goal as it is' : `Keep all ${open} goals as they are`;
+  const parts = [];
+  if (retire) parts.push(`retire ${retire} goal${retire === 1 ? '' : 's'}`);
+  if (move) parts.push(`move ${move}${retire ? '' : ` goal${move === 1 ? '' : 's'}`}`);
+  const out = parts.join(', ');
+  return out[0].toUpperCase() + out.slice(1);
+}
+// The goals of bets a publish retired or reworded (backend/strategy.py realign): per goal Keep as it is, Retire goal or
+// Move to one of the active bets, sent together as `moves` by one button that says what they change. No Reject: every
+// goal on Keep is the no. A goal finished or dropped since (`closed_goals`) reads Already closed, with no choice.
 function strategyRealignPropHtml(p) {
-  const pl = p.payload || {}, one = GOALS_ST?.strategy?.label_one || 'Bet';
-  const moveTo = (pl.bets || []).map(b => `<option value="${esc(b.id)}">${esc(one)} ${esc(b.number)}: ${esc(b.statement)}</option>`).join('');
-  const goals = (pl.goals || []).map(g => `<li class="strat-realign-goal"><span class="strat-realign-t"><b>${esc(g.title)}</b>
-      <span class="muted">${esc(goalActorName(g.owner))} · ${g.change === 'retired' ? `${esc(one)} retired` : `${esc(one)} rewritten`}: ${esc(g.statement || '')}</span></span>
-      <label class="goal-f strat-realign-f"><span class="sr-only">${esc(g.title)}</span><select data-realign-goal="${esc(g.goal_id)}" aria-label="${esc(g.title)}"${p.may_decide ? '' : ' disabled'}>
-        <option value="keep" selected>Keep</option><option value="retire">Retire</option>${moveTo ? `<optgroup label="Move to">${moveTo}</optgroup>` : ''}</select></label></li>`).join('');
+  const pl = p.payload || {}, one = stratPropOne(), closed = new Set(p.closed_goals || []);
+  const moveTo = (pl.bets || []).map(b => `<option value="${esc(b.id)}">Move to ${esc(one)} ${esc(b.number)}: ${esc(b.statement)}</option>`).join('');
+  const bet = g => g.change === 'retired' ? `<span class="muted">Its ${esc(one.toLowerCase())} was retired: ${esc(g.statement || '')}</span>`
+    : `<div class="prop-np strat-realign-bet">${g.was ? `<div class="prop-np-row"><span class="prop-np-k">Before v${esc(pl.n)}</span><span class="prop-np-v">${esc(g.was)}</span></div>` : ''}<div class="prop-np-row"><span class="prop-np-k">Now</span><span class="prop-np-v">${esc(g.statement || '')}</span></div></div>`;
+  const goals = (pl.goals || []).map(g => `<li class="strat-realign-goal${closed.has(g.goal_id) ? ' closed' : ''}"><span class="strat-realign-t"><b>${esc(g.title)}</b>
+      <span class="muted">${esc(goalActorName(g.owner))}</span>${bet(g)}</span>
+      ${closed.has(g.goal_id) ? '<span class="muted strat-realign-closed">Already closed</span>' : `<label class="goal-f strat-realign-f"><span class="sr-only">${esc(g.title)}</span><select data-realign-goal="${esc(g.goal_id)}" aria-label="${esc(g.title)}"${p.may_decide ? '' : ' disabled'}>
+        <option value="keep" selected>Keep as it is</option><option value="retire">Retire goal</option>${moveTo}</select></label>`}</li>`).join('');
+  const count = (pl.goals || []).length, open = (pl.goals || []).filter(g => !closed.has(g.goal_id)).length;
+  const head = `Strategy v${esc(pl.n)} changed ${count === 1 ? 'a bet that 1 goal serves' : `bets that ${count} goals serve`}`;
+  const line = open ? 'Choose what happens to each goal. Nothing changes until you press the button.' : 'These goals were closed since; nothing to decide.';
   return `<li class="kpi-prop strat-prop" data-proposal="${esc(p.id)}" data-realign><div class="kpi-prop-main">
-      <span><b>Goals after the strategy change</b>${pl.n ? ` <span class="muted">· v${esc(pl.n)}</span>` : ''} <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
+      <span class="kpi-prop-head"><b>${head}</b> <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
+      <span class="kpi-prop-detail">${line}</span>
       <ul class="strat-realign">${goals}</ul></div>
-    ${propDoHtml(p, {yes: 'Confirm', no: 'Reject'})}</li>`;
+    ${propDoHtml(p, {yes: stratRealignYes(open, 0, 0), no: null})}</li>`;
 }
 function proposalHtml(p, extra = '') {
   if (p.kind === 'strategy_draft') return strategyDraftPropHtml(p);
@@ -259,6 +316,12 @@ function bindProposals(root, after) {
     for (const b of li.querySelectorAll('[data-np-all]')) b.onclick = () => { b.closest('.prop-np').classList.remove('prop-np-clamp'); b.remove(); };
     const form = li.querySelector('[data-prop-target]');
     if (form) { kpiTargetKinds(form); form.onsubmit = ev => { ev.preventDefault(); li.querySelector('[data-prop-yes]')?.click(); }; }
+    // The realign card's button follows the choices: "Retire 1 goal, move 2", or every goal kept.
+    const sels = li.hasAttribute('data-realign') ? [...li.querySelectorAll('[data-realign-goal]')] : [];
+    for (const sel of sels) sel.onchange = () => {
+      const yes = li.querySelector('[data-prop-yes]');
+      if (yes) yes.textContent = stratRealignYes(sels.length, sels.filter(x => x.value === 'retire').length, sels.filter(x => !['keep', 'retire'].includes(x.value)).length);
+    };
   }
   for (const li of root.querySelectorAll('[data-proposal]')) for (const b of li.querySelectorAll('[data-decide]')) b.onclick = async () => {
     b.disabled = true;

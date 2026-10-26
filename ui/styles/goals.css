@@ -219,13 +219,15 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
 .strat-prop-open{margin-left:6px;font-size:var(--t-sm)}
 .strat-prop-list,.strat-realign{list-style:none;margin:2px 0;padding:0;display:grid;gap:4px}
-.strat-prop-list li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
+.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
 .strat-prop-k{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .strat-prop-wrong{display:block;font-size:var(--t-sm)}
 .strat-realign-goal{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 0}
 .strat-realign-t{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;font-size:var(--t-base);overflow-wrap:anywhere}
 .strat-realign-t .muted{font-size:var(--t-sm)}
 .strat-realign-f{flex:0 0 220px}
+.strat-prop-v{min-width:0}.strat-prop-v .prop-np{margin:0}.strat-prop-note{margin:2px 0 0;font-size:var(--t-sm)}
+.strat-realign-bet{margin:2px 0 0;font-size:var(--t-sm)}.strat-realign-closed{flex:0 0 auto;font-size:var(--t-sm)}
 @media (max-width:760px){
   .strat-prop-list li{grid-template-columns:1fr;gap:0}
   .strat-realign-goal{flex-direction:column;align-items:stretch;gap:6px}

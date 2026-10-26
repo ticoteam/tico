@@ -373,30 +373,86 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A strategy change from the CEO Bot in Needs you: what it changes in a short list, then Confirm or Reject.
+    // A strategy change from the CEO Bot in Needs you: who suggests it and why, each change as Now / Proposed against the
+    // draft, then "Add to draft" / "No, leave it" with the line that nothing is published (Dev 533).
     {
       const proposal = {id: 'p-draft', kind: 'strategy_draft', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'bot:goal-manager',
         proposed_at: new Date().toISOString(), reason: 'Margin per job fell to 22% for two months.',
-        payload: {source: 'bet_tripped', summary: 'Acme cleans homes in Austin at a fair price.', sections: {sell: 'Weekly at $99.', extra: {brand: {title: 'Brand', body: 'Fair, on time.'}}},
+        payload: {source: 'bet_tripped', summary: 'Acme cleans homes in Austin at a fair price.', vision: v1.vision,
+          sections: {sell: 'Weekly at $99.', extra: {brand: {title: 'Brand', body: 'Fair, on time.'}}},
           bets: [{id: 'b-price', status: 'retired'}, {statement: 'Price at the market and win on reliability.', rules_out: 'Discounts.',
             wrong_if: {kind: 'text', text: 'Churn above 5% a month', check_by: '2027-03-01'}}, {id: 'b-offices', why: 'Managers sign yearly.'}]}};
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-draft', owner: 'human:ana', proposal}]});
       const card = page.locator('#goal-needs [data-proposal="p-draft"]');
       await card.waitFor();
-      assert.match(await card.locator('b').first().innerText(), /^Bet may be wrong · Strategy change$/);
+      const flat = t => t.replace(/\s+/g, ' ').trim();
+      assert.equal(flat(await card.locator('.kpi-prop-head').innerText()),
+        'CEO Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
       assert.equal(await card.locator('.strat-prop-open').getAttribute('href'), '#/strategy');
-      assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(r => r.replace(/\s+/g, ' ').trim())), [
-        'Summary Acme cleans homes in Austin at a fair price.',
-        'Sections What we sell, and for how much, Brand',
-        'Retire bet ' + bets()[0].statement,
-        'New bet Price at the market and win on reliability. Wrong if Churn above 5% a month · check by 1 Mar 2027',
-        'Change bet ' + bets()[1].statement]);
+      // The vision it proposes is the draft's already: no row for it.
+      assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(flat)), [
+        `Summary Now ${v1.summary} Proposed Acme cleans homes in Austin at a fair price.`,
+        `What we sell, and for how much Now ${sections.sell} Proposed Weekly at $99.`,
+        `Brand Now ${sections.extra.brand.body} Proposed Fair, on time.`,
+        `Retire Bet 1 ${bets()[0].statement} 2 goals serve it. When you publish, you'll be asked what happens to them.`,
+        'New bet Statement Price at the market and win on reliability. Rules out Discounts. Wrong if Churn above 5% a month · check by 1 Mar 2027 It starts as proposed; you make it active on the Strategy page.',
+        `Change Bet 2 · Why Now ${bets()[1].why} Proposed Managers sign yearly.`]);
+      assert.equal(await card.locator('.kpi-prop-line').innerText(), 'Yes adds this to your strategy draft. Bots keep reading v1 until you publish it on the Strategy page.');
+      assert.deepEqual(await card.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
+      assert.equal(await card.getByText(/^(Confirm|Reject)$/).count(), 0);
       await shot(page, 'proposal-draft');
+      await page.setViewportSize(PHONE);
+      await card.scrollIntoViewIfNeeded();
+      await shot(page, 'proposal-draft-phone', ['dark']);
+      await page.setViewportSize(DESKTOP);
       await card.locator('[data-decide="confirm"]').click();
       await card.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/proposals/p-draft'), ['POST', '/proposals/p-draft', {decision: 'confirm'}]);
       assert.deepEqual(errors, []);
       await page.close();
+    }
+    // A lens's long section is cut to four lines with one Show all; a change the draft already holds is "Got it", which
+    // sets it aside; "No, leave it" rejects; with nothing published the line says so.
+    {
+      const long = Array.from({length: 8}, (_, i) => `Line ${i + 1} of who we serve.`).join('\n');
+      const card = (id, payload, extra = {}) => ({kind: 'proposal', ref: id, owner: 'human:ana', proposal: {id, kind: 'strategy_draft', goal_id: null, kpi_id: null,
+        status: 'pending', proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), reason: '', payload, ...extra}});
+      const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [
+        card('p-lens', {source: 'lens', lens: 'blue-ocean', sections: {serve: long}}, {lens_name: 'Blue Ocean'}),
+        card('p-same', {source: 'briefing', vision: v1.vision})]});
+      const lens = page.locator('#goal-needs [data-proposal="p-lens"]'), same = page.locator('#goal-needs [data-proposal="p-same"]');
+      await lens.waitFor();
+      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^CEO Bot suggests a change to your strategy from the Blue Ocean lens/);
+      const values = lens.locator('.prop-np-v');
+      const tall = () => values.evaluateAll(els => els.map(el => el.scrollHeight > el.clientHeight + 1));
+      // The draft's own text is short, so only Proposed is cut; both are clamped to four lines until Show all.
+      assert.deepEqual(await tall(), [false, true], 'the long Proposed is cut to four lines');
+      assert.deepEqual(await values.evaluateAll(els => els.map(el => getComputedStyle(el).webkitLineClamp)), ['4', '4']);
+      await lens.locator('[data-np-all]').click();
+      assert.deepEqual(await tall(), [false, false], 'one Show all opens both');
+      assert.match(await same.locator('.kpi-prop-head').innerText(), /from this week's market briefing/);
+      assert.equal(await same.locator('.kpi-prop-detail').innerText(), 'Your draft already says this.');
+      assert.deepEqual(await same.locator('.kpi-prop-do button').allInnerTexts(), ['Got it']);
+      assert.deepEqual(await lens.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
+      await same.locator('[data-prop-yes]').click();
+      await same.waitFor({state: 'detached'});
+      assert.deepEqual(sent.find(x => x[1] === '/proposals/p-same'), ['POST', '/proposals/p-same', {decision: 'reject'}]);
+      assert.deepEqual(errors, []);
+      await page.close();
+      const no = await open(browser, {route: '#/goals', needs: [card('p-lens', {source: 'lens', lens: 'blue-ocean', sections: {serve: long}}, {lens_name: 'Blue Ocean'})]});
+      const left = no.page.locator('#goal-needs [data-proposal="p-lens"]');
+      await left.getByRole('button', {name: 'No, leave it'}).click();
+      await left.waitFor({state: 'detached'});
+      assert.deepEqual(no.sent.find(x => x[1] === '/proposals/p-lens'), ['POST', '/proposals/p-lens', {decision: 'reject'}]);
+      assert.deepEqual(no.errors, []);
+      await no.page.close();
+      const fresh = await open(browser, {route: '#/goals', fresh: true, needs: [card('p-new', {vision: 'Every home in Austin.'})]});
+      const first = fresh.page.locator('#goal-needs [data-proposal="p-new"]');
+      await first.waitFor();
+      assert.equal(await first.locator('.kpi-prop-line').innerText(), 'Nothing is published until you publish it on the Strategy page.');
+      assert.equal((await first.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Vision Now Empty Proposed Every home in Austin.');
+      assert.deepEqual(fresh.errors, []);
+      await fresh.page.close();
     }
     // A goal serving a bet this person can't see (retired, or not published) keeps it when saved for something else.
     {
@@ -426,22 +482,35 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // After a publish retired or rewrote bets: each of their goals is kept, retired or moved, confirmed together.
+    // After a publish retired or reworded bets: each of their goals is kept, retired or moved, sent together by one button
+    // that counts what changes (no Reject); a reworded bet shows its wording before and now (Dev 533).
     {
-      const proposal = {id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',
-        proposed_at: new Date().toISOString(), reason: 'strategy v2 retired or rewrote the bets these goals serve',
+      const realign = (closed = []) => ({id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',
+        proposed_at: new Date().toISOString(), reason: 'strategy v2 retired or rewrote the bets these goals serve', closed_goals: closed,
         payload: {n: 2, goals: [
           {goal_id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', bet_id: 'b-price', change: 'retired', statement: bets()[0].statement},
-          {goal_id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', bet_id: 'b-offices', change: 'rewritten', statement: 'Sell to offices through managers and agents.'}],
-          bets: [{id: 'b-offices', number: 1, statement: 'Sell to offices through managers and agents.'}, {id: 'b-weekly', number: 2, statement: bets()[2].statement}]}};
+          {goal_id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', bet_id: 'b-offices', change: 'rewritten', statement: 'Sell to offices through managers and agents.',
+           was: bets()[1].statement}],
+          bets: [{id: 'b-offices', number: 1, statement: 'Sell to offices through managers and agents.'}, {id: 'b-weekly', number: 2, statement: bets()[2].statement}]}});
+      const proposal = realign();
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal}]});
       const card = page.locator('#goal-needs [data-proposal="p-realign"]');
       await card.waitFor();
-      assert.match(await card.locator('b').first().innerText(), /^Goals after the strategy change$/);
-      const top = card.locator('[data-realign-goal="g-top"]'), cmo = card.locator('[data-realign-goal="g-cmo"]');
+      assert.match(await card.locator('.kpi-prop-head').innerText(), /^Strategy v2 changed bets that 2 goals serve/);
+      assert.equal(await card.locator('.kpi-prop-detail').innerText(), 'Choose what happens to each goal. Nothing changes until you press the button.');
+      const top = card.locator('[data-realign-goal="g-top"]'), cmo = card.locator('[data-realign-goal="g-cmo"]'), yes = card.locator('[data-prop-yes]');
       assert.equal(await top.inputValue(), 'keep', 'Keep by default');
-      assert.deepEqual(await top.locator('option').allInnerTexts(), ['Keep', 'Retire', 'Bet 1: Sell to offices through managers and agents.', 'Bet 2: ' + bets()[2].statement]);
-      assert.match(await card.locator('.strat-realign-goal').first().innerText(), /Margin per job ≥ 30%[\s\S]*Bet retired: Price at half/);
+      assert.deepEqual(await top.locator('option').allInnerTexts(), ['Keep as it is', 'Retire goal', 'Move to Bet 1: Sell to offices through managers and agents.', 'Move to Bet 2: ' + bets()[2].statement]);
+      const rows = card.locator('.strat-realign-goal');
+      assert.match(await rows.first().innerText(), /Margin per job ≥ 30%[\s\S]*Its bet was retired: Price at half/);
+      assert.ok((await rows.nth(1).innerText()).replace(/\s+/g, ' ').includes(`Before v2 ${bets()[1].statement} Now Sell to offices through managers and agents.`));
+      assert.deepEqual(await card.locator('.kpi-prop-do button').allInnerTexts(), ['Keep all 2 goals as they are'], 'one button, no Reject');
+      await top.selectOption('retire');
+      assert.equal(await yes.innerText(), 'Retire 1 goal');
+      await cmo.selectOption('b-weekly');
+      assert.equal(await yes.innerText(), 'Retire 1 goal, move 1');
+      await top.selectOption('keep');
+      assert.equal(await yes.innerText(), 'Move 1 goal');
       await top.selectOption('retire');
       await cmo.selectOption('b-offices');
       await shot(page, 'proposal-realign');
@@ -449,11 +518,26 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await card.scrollIntoViewIfNeeded();
       await shot(page, 'proposal-realign-phone', ['dark']);
       await page.setViewportSize(DESKTOP);
-      await card.locator('[data-decide="confirm"]').click();
+      await yes.click();
       await card.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/proposals/p-realign'), ['POST', '/proposals/p-realign', {decision: 'confirm', moves: {'g-top': 'retire', 'g-cmo': 'b-offices'}}]);
       assert.deepEqual(errors, []);
       await page.close();
+      // A goal closed since reads Already closed and is not counted; every goal closed is "Got it", which changes nothing.
+      for (const [closed, button, line] of [[['g-top'], 'Keep this goal as it is', /^Choose what happens/], [['g-top', 'g-cmo'], 'Got it', /^These goals were closed since; nothing to decide\.$/]]) {
+        const again = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal: realign(closed)}]});
+        const c = again.page.locator('#goal-needs [data-proposal="p-realign"]');
+        await c.waitFor();
+        assert.match(await c.locator('.strat-realign-goal').first().innerText(), /Already closed/);
+        assert.equal(await c.locator('[data-realign-goal="g-top"]').count(), 0);
+        assert.match(await c.locator('.kpi-prop-detail').innerText(), line);
+        assert.deepEqual(await c.locator('.kpi-prop-do button').allInnerTexts(), [button]);
+        await c.locator('[data-prop-yes]').click();
+        await c.waitFor({state: 'detached'});
+        assert.deepEqual(again.sent.find(x => x[1] === '/proposals/p-realign')[2], {decision: 'confirm', moves: closed.length === 2 ? {} : {'g-cmo': 'keep'}});
+        assert.deepEqual(again.errors, []);
+        await again.page.close();
+      }
     }
     // A member has no Bet flag on a group.
     {
