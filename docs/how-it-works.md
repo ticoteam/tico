@@ -266,9 +266,12 @@ when that run ends. When the runner itself reported the run interrupted
 the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 A quarantine stops each running turn through the runner's normal Stop response, carrying
 `stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
-(or *until a person clears it*). Its jobs return to the queue until the quarantine lifts;
-the bot's activity says they will run again. A real lease loss still says the computer
-stopped answering. Later held runs are named on the bot's existing review task, and
+(or *until a person clears it*). A run that only read, on a host that reports its tool calls,
+and used no approval returns to the queue until the quarantine lifts; the bot's activity says it
+will run again. Any other stopped run (one that used a tool that can change things, or whose host
+does not report its calls) is held for review like a lost run, so lifting the quarantine never
+repeats an outside action. An answer the run finished as the quarantine began is kept on the run,
+never posted. A real lease loss still says the computer stopped answering. Later held runs are named on the bot's existing review task, and
 closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those

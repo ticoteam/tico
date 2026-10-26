@@ -1862,11 +1862,13 @@ class Execution:
                                  "WHERE j.attempt_id=? AND j.state IN ('leased','running','input')", (row["id"],)).fetchall()
                 # A lost lease may retry open work, but cannot undo Stop or resurrect a finished task.
                 # Inputs folded into a running turn have their own jobs: Stop applies only to its original request.
-                # A quarantine's Stop is not the person's choice to drop the request: its job goes back in the queue to
-                # run when the quarantine lifts, as it does when the runner hears that Stop (Dev 573).
+                # A quarantine's Stop is not the person's choice to drop the request: a run safe to repeat goes back in
+                # the queue to run when the quarantine lifts, as it does when the runner hears that Stop (Dev 573). Any
+                # other run is held for review like a lost one: running it again could repeat an outside action.
                 benched = quarantine_stops.stopped_by(c, row)
+                held_back = bool(benched) and not quarantine_stops.requeues(c, row)
                 if benched:
-                    retry_state = state = "queued"
+                    retry_state = state = "uncertain" if held_back else "queued"
                 cancelled = {job["id"] for job in jobs if (row["stop_requested"] and job["id"] == row["job_id"] and not benched)
                              or job["task_status"] in ("done", "closed", "declined")}
                 if row["job_id"] in cancelled:
@@ -1908,7 +1910,7 @@ class Execution:
                     job = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
                                     (row["job_id"],)).fetchone()
                     if job:
-                        self.stopped(c, row, job["conversation_id"])
+                        self.stopped(c, row, job["conversation_id"], held=held_back)
                 elif state == "cancelled":
                     settle_status(c, row["bot"], "idle", "", claimed=row["created"])
                 elif row["state"] == "leased" and state == "queued":
@@ -2740,12 +2742,14 @@ class Execution:
         return {"attempt_id": row["id"], "outcome": body.outcome, "message": None, "filed": True}
 
     @staticmethod
-    def stopped(c, row, conversation_id):
+    def stopped(c, row, conversation_id, held=False):
         """A turn a person stopped is over: the bot is idle, told quietly who stopped it, and gives up its worktree wait.
-        A turn a quarantine stopped says why and that its run is back in the queue (`quarantine_stops`)."""
+        A turn a quarantine stopped says why, and that its run is back in the queue or, `held`, held for review
+        (`quarantine_stops.requeues`)."""
         person = row["stop_requested"]
         benched = quarantine_stops.stopped_by(c, row)
-        said = f"{benched}. {quarantine_stops.REQUEUED}" if benched else f"Stopped by {stopper(c, person)}"
+        then = quarantine_stops.HELD if held else quarantine_stops.REQUEUED
+        said = f"{benched}. {then}" if benched else f"Stopped by {stopper(c, person)}"
         settle_status(c, row["bot"], "idle", "", claimed=row["created"])
         # Quiet: the bot reads it with the room next time; it does not start a run of its own. A quarantined bot's
         # full held queue withholds only this line.
@@ -2753,7 +2757,8 @@ class Execution:
                                              kind="notice", refs={"quiet": True, "stopped_by": person,
                                                                   "turn_id": row["id"]}))
         H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person,
-                                                            **({"quarantine": benched, "requeued": True} if benched else {})})
+                                                            **({"quarantine": benched, "requeued": not held}
+                                                               if benched else {})})
         # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
         from .worktree_waits import cancel_for_attempt
         cancel_for_attempt(c, row["id"], benched or f"Stopped by {stopper(c, person)}")
@@ -3196,8 +3201,10 @@ class Execution:
     def complete(self, c, who, aid, body):
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
-        # finished in the seconds before its runner heard stays on the run, and its job goes back in the queue with
-        # the rest of the turn's work, to run when the quarantine lifts (Dev 573).
+        # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
+        # rest of the turn's work, to run when the quarantine lifts, only when running it again repeats nothing
+        # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
+        # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
         if benched and body.outcome == "completed":
             body = body.model_copy(update={"outcome": "interrupted"})
@@ -3232,7 +3239,7 @@ class Execution:
             return self.hand_back(c, row, body)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
             filed = self.file_result(c, row, body)
-            if row["stop_requested"] and self.holds(c, who, row):
+            if row["stop_requested"] and not benched and self.holds(c, who, row):
                 # The Stop stands over the answer, and over a second run of the request too: the job ends as a
                 # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
                 # never received go back in the queue, as they do for a Stop the runner heard.
@@ -3341,6 +3348,8 @@ class Execution:
         # interrupted or failed work, which may have acted, is held for review.
         # A turn a person stopped is over by their choice: nothing to retry and nothing to review.
         stopped = bool(row["stop_requested"]) and body.outcome != "completed" or skipped
+        # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not cancelled.
+        held_back = bool(benched) and not quarantine_stops.requeues(c, row)
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
         # send starts the next run in a fresh session (backend/run_backoff.py).
         failure = run_backoff.classify(c, aid, body) if body.outcome == "failed" and not stopped else None
@@ -3422,7 +3431,8 @@ class Execution:
         refused = gateway.run_status(tico_code, tico_error) if tico_code and not (limited or retryable or rejected) else ""
         requeue = not rejected_acted if rejected else limited or retryable or silent or yielded
         c.execute("UPDATE jobs SET state=? WHERE id=?",
-                  ("completed" if body.outcome == "completed" else "queued" if benched else "cancelled" if stopped
+                  ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
+                   else "cancelled" if stopped
                    else "queued" if requeue else "uncertain", row["job_id"]))
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
@@ -3455,7 +3465,8 @@ class Execution:
                                     (task_id, actor, row["started"] or row["created"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
             state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else
-                     "queued" if benched else "cancelled" if stopped else "queued" if requeue else "uncertain")
+                     "uncertain" if held_back else "queued" if benched else "cancelled" if stopped
+                     else "queued" if requeue else "uncertain")
             c.execute("UPDATE jobs SET state=?,attempt_id=CASE WHEN ? THEN NULL ELSE attempt_id END WHERE message_id=?",
                       (state, deferred, incoming["message_id"]))
         if body.outcome == "completed":
@@ -3560,7 +3571,7 @@ class Execution:
             settle_status(c, row["bot"], "idle", "", claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot"], "job_id": row["job_id"]})
         elif stopped:
-            self.stopped(c, row, conv["id"])
+            self.stopped(c, row, conv["id"], held=held_back)
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's
@@ -4060,7 +4071,9 @@ class Execution:
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue
-                if row['stop_requested'] and row['id'] == row['attempt_job']:
+                # A quarantine's Stop is not a person's: its run is judged like any other lost run below.
+                if (row['stop_requested'] and row['id'] == row['attempt_job'] and not quarantine_stops.stopped_by(
+                        c, {'stop_requested': row['stop_requested'], 'id': row['attempt_id']})):
                     # A person pressed Stop and the computer never reported back: the request is over by their
                     # choice, as it would be had the runner heard it, so it is not resumed. A late answer is only
                     # filed. A message folded into the turn is not what they stopped and is judged as before.
