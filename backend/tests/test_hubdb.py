@@ -948,6 +948,7 @@ class WaitingWithDependency(HubCase):
         for ask, failed in [("Approve it. I send it. Then I book it.", "3 sentences"),
                             ("Approve PO-1234? If yes, I pay it.", 'id or hash: "PO-1234"'),
                             ("Approve invoice #4821?", 'id or hash: "#4821"'),
+                            ("Approve invoice #4821.", 'id or hash: "#4821"'),
                             ("Ship the fix in app.js?", 'file path: "app.js"'),
                             # An error class name is the bot's record even with no message after it.
                             ("Retry the import? It stopped on a TypeError.", 'error output: "TypeError"')]:
@@ -984,6 +985,95 @@ class WaitingWithDependency(HubCase):
         self.assertIn('first paragraph of the task body', refused.exception.detail)
         made = H.task_create(self.conn, CMO, 'Approve the video tool trial', f'{plain}\n\nThe notes: reports/x.md', ANA)
         self.assertEqual(made['owner'], ANA)
+
+    # The refused escalations of 2026-10-26: a pull request named in the ask, and a 71-word ask in four sentences.
+    BLOCKER = "Approve the merge of PR #1555 so QA can test it? If yes, I will run the tests today."
+    LONG_BLOCKER = ("The hosted checks for the Settings change failed three times today on the same browser test, "
+                    "and I cannot tell yet whether the runner or the change is at fault. "
+                    "Approve the merge of PR #1555 so QA can test it on the release candidate? "
+                    "If yes, I will run the tests today and post the results. "
+                    "If no, I will keep it parked and ask DevOps to check the runner.")
+
+    def test_a_person_ask_may_name_a_pull_request_and_nothing_else(self):
+        # "PR #<number>" is public and a person can look it up; it stays in the ask as written.
+        for ask in [self.BLOCKER, "Merge PR #1555.", "Review PR #12 and PR #1555 today? If yes, I merge both."]:
+            self.assertEqual(H.lint_person_ask(ask), [], ask)
+        self.assertEqual(H.task_update(self.conn, CMO, H.task_create(self.conn, CMO, 'Merge the fix', '', CMO,
+                                                                     private=False)['id'],
+                                       status='waiting', waiting_on='ana', note=self.BLOCKER)['note'],
+                         f'Blocked on Ana Rivera: {self.BLOCKER}')
+        # Any other form is a reference number, as is a hash, a private task id, a path, a tool name or error output,
+        # even beside a pull request; all of it goes under Details.
+        for ask, failed in [("Approve the merge of #1555 so QA can test it?", '#1555'), ("Merge #1555.", '#1555'),
+                            ("Merge PR#1555?", '#1555'), ("Merge pr #1555?", '#1555'), ("Merge PR #1555/files?", '#1555'),
+                            ("Merge PR #1555 at 3f2a9c1d?", 'id or hash: "3f2a9c1d"'),
+                            ("Merge PR #1555 for 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f?",
+                             'id or hash: "8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f"'),
+                            ("Merge PR #1555 with backend/hubdb.py?", 'file path: "backend/hubdb.py"'),
+                            ("Merge PR #1555 with hub task update?", 'tool or field name: "hub task"'),
+                            ("Merge PR #1555? It failed with ValueError: bad date.", 'error output: "ValueError"')]:
+            self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
+        made = H.task_create(self.conn, CMO, 'Approve the merge', f'{self.BLOCKER}\n\nDetails: head 3f2a9c1d, '
+                             'backend/hubdb.py, ValueError: bad date.', ANA)
+        self.assertEqual(made['owner'], ANA)
+
+    def test_a_too_long_ask_is_refused_with_a_rewrite_the_bot_retries_once(self):
+        task = H.task_create(self.conn, CMO, 'Get the Settings change tested', '', CMO, private=False)
+        before = H.task(self.conn, task['id'])
+        with self.assertRaises(H.Refused) as refused:
+            H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=self.LONG_BLOCKER)
+        detail = refused.exception.detail
+        self.assertEqual(refused.exception.rule, 'lint')
+        self.assertIn('Your ask to ana is 71 words in 4 sentences. Retry once with this ask', detail)
+        rewrite = re.search(r'what happens after: "(.+?)" Put the rest of your text in a comment on the task', detail)[1]
+        # The rewrite keeps the request, the pull request and what happens after, and passes on its own.
+        self.assertEqual(rewrite, "Approve the merge of PR #1555 so QA can test it on the release candidate? "
+                                  "If yes, I will run the tests today and post the results.")
+        self.assertEqual(H.lint_person_ask(rewrite), [])
+        self.assertEqual(H.task(self.conn, task['id'])['version'], before['version'], 'nothing written on refusal')
+        # The one retry with it reaches the person; the bot's context goes in a comment.
+        H.task_comment(self.conn, CMO, task['id'], self.LONG_BLOCKER)
+        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=rewrite)
+        self.assertEqual((after['note'], H.task(self.conn, after['asked_in']['id'])['body']),
+                         (f'Blocked on Ana Rivera: {rewrite}', rewrite))
+        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
+        # A task given to a person: the rewrite opens the body and the original text stays below it.
+        with self.assertRaises(H.Refused) as refused:
+            H.task_create(self.conn, CMO, 'Approve the merge', self.LONG_BLOCKER, ANA)
+        self.assertIn(f'"{rewrite}" Put the rest of your text in the body under it, after a blank line',
+                      refused.exception.detail)
+        made = H.task_create(self.conn, CMO, 'Approve the merge', f'{rewrite}\n\n{self.LONG_BLOCKER}', ANA)
+        self.assertEqual((made['owner'], H.task(self.conn, made['id'])['body']),
+                         (ANA, f'{rewrite}\n\n{self.LONG_BLOCKER}'))
+        # A single sentence over the limit only by its context keeps the request; one with no outcome keeps it alone.
+        self.assertEqual(H.person_ask_rewrite("Merge PR #1555. " + "The runner was slow all day. " * 8),
+                         ("Merge PR #1555.", ""))
+
+    def test_an_ask_no_shorter_wording_keeps_gets_a_repair_and_nothing_is_sent(self):
+        task = H.task_create(self.conn, CMO, 'Get the Settings change tested', 'All the runner notes.', CMO,
+                             private=False)
+        context = " The runner failed three times today on the same browser test, and nobody knows why yet."
+        for ask, repair in [
+                # Two decisions: picking one would change what the person is asked.
+                ("Approve the merge of PR #1555? Or should I close it and open a new one?" + context,
+                 'it asks 2 things ("Approve the merge of PR #1555?"; "Or should I close it and open a new one?")'),
+                ("The runner is slow." + context + context, 'none of its sentences asks for anything'),
+                ("Approve the merge of PR #1555 " + "and the follow-up fixes " * 9 + "today?" + context,
+                 'its request alone is 43 words: shorten'),
+                ("Approve the merge of 3f2a9c1d today? If yes, I run the tests." + context,
+                 'its request "Approve the merge of 3f2a9c1d today? If yes, I run the tests." has an id or hash')]:
+            with self.assertRaises(H.Refused) as refused:
+                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
+            self.assertIn('No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. '
+                          f'To fix it, {repair}', refused.exception.detail)
+            self.assertIn('then retry once', refused.exception.detail)
+            after = H.task(self.conn, task['id'])
+            self.assertEqual((after['status'], after['waiting_on'], after['body'], TR.child_ids(self.conn, task['id'])),
+                             ('open', None, 'All the runner notes.', []))
+        # The refusals are recorded, so the blocker is never invisible, and none counts toward a quarantine.
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND rule='lint'",
+                                           (CMO,)).fetchone()[0], 4)
+        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
 
     def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
         flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]

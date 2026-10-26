@@ -106,7 +106,9 @@ they own, its title your question and its body your note, with Yes and No on the
 question. Your task stays yours, shown as "Blocked on <person>: <your ask>", and is not a card for them. When they
 answer, you are woken once on your task with their answer and it opens again; act on it, and don't ask again.
 Write the ask to them: one or two plain sentences saying what you need and what happens after, at most 40 words,
-with no ids, hashes, file paths, `s3://` links or tool names; Tico refuses it otherwise. Working notes go in a comment.
+with no ids, hashes, file paths, `s3://` links or tool names (`PR #1555` is fine; a bare `#1555` is not); Tico refuses it
+otherwise. A refusal for length gives you a rewrite: retry once with it and put the rest in a comment. Working notes go
+in a comment.
 One question, one card. Don't file a separate task just to ask, and don't hand another bot a subtask that waits on
 the same person for the same thing: if the card this asks for is already open in the task's tree, your ask joins it.
 - Good: `--on ana --note "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."`
