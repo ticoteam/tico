@@ -157,7 +157,7 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
       const {page, errors, state} = await open(browser, '#/triggers');
       const pane = page.locator('#settings-webhooks');
       await pane.locator('[data-wh-open="shop"]').waitFor();
-      assert.equal(new URL(page.url()).hash, '#/settings');
+      assert.equal(new URL(page.url()).hash, '#/settings/webhooks');
       assert.equal(await page.locator('[data-settings-tab="webhooks"]').innerText(), 'Webhooks');
       assert.equal(await pane.locator('[data-wh-tab="incoming"]').getAttribute('aria-checked'), 'true');
       assert.match(await pane.locator('[data-wh-open="shop"]').innerText(), /12 in 24h · 2 refused/);

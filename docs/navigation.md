@@ -1,7 +1,12 @@
 # Navigation
 
-The current paths in Tico. Settings is under your email; Tools is in the sidebar.
-Controls appear when your rights allow the action.
+The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
+shown in the address bar while the tab is open (`#/settings/people`, `#/settings/gateway`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
+Tools is in the sidebar.
+Controls appear when your rights allow the action. A card you can read but cannot change names who can.
+For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
+
+**Picks and services** opens Gateway. **Key and connection** opens Computers and scrolls to the Models card.
 
 | To | Open |
 |---|---|
@@ -22,7 +27,9 @@ Controls appear when your rights allow the action.
 | Check problems and recovery | Settings → Health |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
-| Add or manage Humans and member rules | Settings → Humans |
+| Add or manage people and member rules | Settings → People |
+| Connect your Google account | Settings → My Google account |
+| Manage shared email and phone numbers | Settings → More → Email & Phone |
 | Choose AI providers | Settings → Computers → Models |
 | Connect the Tico AI Gateway | Settings → Computers → Models → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
@@ -40,6 +47,10 @@ Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.
 See [Using Tico](using-tico.md), [Credentials](credential-vault.md) and [Updates](updates.md).
+
+![General selected in Settings, with Team, Tico company, Assistant and Privacy cards](images/settings-stage1/settings-general.png)
+
+*Synthetic Acme example. Settings opens on General.*
 
 ## Tags
 

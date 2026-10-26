@@ -458,8 +458,8 @@ def with_gateway(record, connected):
 def load(c, settings=None):
     """The company's choice. Before the owner has saved one, the environment's seed stands in
     (`source: environment`), so a deployment that sets TICO_ENABLED_PROVIDERS works at once."""
-    from . import gateway_connection
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    from . import gateway_connection, read_cache
+    row = read_cache.metadata(c, KEY)
     if row:
         record = _record(row[0])
     else:

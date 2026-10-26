@@ -80,15 +80,15 @@ that trigger workflows and review handoff checks retain their existing restricti
 
 ## Software review handoffs and QA defaults
 
-On the engineering board, moving a ticket with a linked open PR into **Review 1** or **Review 2** checks CI first, then the test receipt. Creating a **Review 1:** or **Review 2:** child task makes the same checks before queuing its reviewer. A review child also needs a linked PR. Other boards keep their usual flow.
+On the engineering board, moving a ticket with a linked open PR into **Review 1** or **Review 2** checks CI first. All-green checks at each PR's current head count as passing test evidence without a written receipt, even when a note reports a failure there. Creating a **Review 1:** or **Review 2:** child task makes the same checks before queuing its reviewer. A review child also needs a linked PR. Other boards keep their usual flow.
 
-A failing check refuses the move and names the check. Pending checks are allowed. A missing, stale, failed or unrecognised test receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
+A failing check refuses the move and names the check. A failed GitHub check attempt still blocks after a green rerun at the same head: fix the failure and push a new head. The server requests all check attempts rather than GitHub's default latest-only results; legacy commit statuses keep the latest status per context and any earlier failure. Pending checks are allowed with a passing written receipt. No checks, or only skipped/neutral checks, also require a written passing receipt naming the current head. At least one successful check and no pending or failed checks are needed to replace that receipt; skipped/neutral companions are allowed. A missing, stale, failed or unrecognised receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
 
 A ticket has at most one open **Review 1**, **Review 2** or **QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
 A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` line in its note or comment fills the same fields when no flag is given; the latest one wins. The ticket's owner is woken once with the verdict and the head it judged (`verdict`, `verdict_head`), and the subtask shows both.
 
-Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. The reader evaluates the sentence containing the head, so separate sentences about corrected historical failures or other checks still pending do not override that result. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. It accepts `356 pass / 0 fail`, distinguishes an unrecognised receipt from no receipt, and rejects failures such as `40 passed, 2 failing/errored`. A recorded failure at a head cannot be cleared by a passing rerun at that same head.
+Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. Each result clause belongs to its own head. Phrases about earlier or repaired failures do not claim that the current run failed; an explicit result such as `40 passed, 2 failing/errored` still does. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. The review gate also counts receipts posted by bots above the owner in its `reports_to` chain and people who may edit the ticket. This changes neither their task permissions nor privacy: the mover and Builder must both be able to read the evidence. A written failure cannot be cleared by another written passing rerun at that same head; all-green GitHub checks can supersede it. Refusals name the next action and who can supply it.
 
 At engineering-ticket creation, `change_paths` supplies the known paths for the QA rule. The CLI accepts repeated `--change-path` flags. An explicit `qa` boolean (`--qa yes` or `--qa no`) overrides the rule; an author-supplied `qa` tag is retained.
 
@@ -122,6 +122,27 @@ and a Reviewer is given only a review or QA subtask: filing any other task for i
 Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/keep-tasks-going` use
 the same permissions and revision check. **Settings → Rules** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
+
+Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
+own session and can start on a free turn; it does not need another Lead turn for each ticket.
+The ordinary task cap and prerequisite checks still apply to the whole batch.
+
+If an open assignment has no attempt after one hour, **Recover unstarted assignments** wakes its
+owner once, including a Lead. Waiting, snoozed and deferred work is excluded. The recovery wake
+does not bypass a task cap, an explicit automatic-start off switch or any execution hold. If it
+still has no attempt two hours after that wake, Health and its manager's Needs you show
+**Assigned, not started**, the task title and its current refusal reason. Only readers of that
+task see it; being the manager does not grant access to a private task. An attempt, a wait or
+completion clears the item. A new assignment starts its own one-hour clock.
+
+Health checks the queued job's lane and claim refusal even when the bot has another turn running.
+For claimable work it measures the job the claim would take first, including priority for a person's
+message, so an older job does not hide a person waiting for a reply or make a young queue look stuck.
+The oldest queued job outside a running lane continuously observed refusing claims for twelve
+hours becomes a stuck item, with the current reason. A different job or reason, a pause or hold,
+or a gap of more than five minutes in observations starts a new clock. An old queue alone does
+not establish twelve hours of refusal. Missing task conversations and failed recovery delivery
+are recorded once and shown with the unstarted assignment, rather than silently omitted.
 
 ## Work that is waiting
 
@@ -378,7 +399,7 @@ nothing by then (the team's days after the ask, 3 by default, or its later `by`;
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
 spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
-or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
+or changes the days, in Settings > People (**Bots go ahead on their recommendation**).
 
 A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
 written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is
@@ -505,7 +526,7 @@ is preserved, including tasks that older versions closed automatically. Use **Cl
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
 work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished
-duplicates are still refused.
+duplicates are still refused, ignoring case and extra spaces, on create and on rename alike.
 
 ## Types bots work on
 

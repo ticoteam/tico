@@ -44,7 +44,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       const errors = [], calls = [];
       // `seen`: how many of a request's replies the person has read (POST tickets/<id>/read).
       // `gate`: a promise that holds a follow-up's POST until the test resolves it (a slow HQ).
-      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, gate: null};
+      const hq = {tickets: seed, seen: {}, reply: false, fail: false, abort: false, pollFail: false, confirm: true, asked: [], access, gate: null, refreshGate: null, refreshStarted: null};
       const unread = t => t.messages.filter(m => m.from === 'staff').length - (hq.seen[t.id] || 0);
       const out = t => ({...t, unread: unread(t)});
       const view = () => ({enabled, tickets: hq.tickets.map(out), unread: hq.tickets.reduce((n, t) => n + unread(t), 0)});
@@ -84,6 +84,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
             if (hq.pollFail) return json({error: {detail: 'Could not reach Tico support. Try again in a moment.'}}, 502);
             if (hq.reply && hq.tickets[0] && !hq.tickets[0].messages.some(m => m.from === 'staff'))
               Object.assign(hq.tickets[0], {status: 'answered', messages: [...hq.tickets[0].messages, {id: 1, created: new Date().toISOString(), from: 'staff', body: 'Try the latest release. ' + HOSTILE}]});
+            const snapshot = view();
+            if (hq.refreshGate) { hq.refreshStarted?.(); await hq.refreshGate; return json(snapshot); }
             return json(view());
           }
           if (rest === 'tickets' && req.method() === 'POST') {
@@ -389,13 +391,24 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await slow.locator('[name=message]').press('Enter');
     await v.page.waitForFunction(() => document.querySelector('#support-pop .support-send')?.getAttribute('aria-busy') === 'true');
     await v.page.keyboard.press('Escape');
+    let releaseRefresh;
+    v.hq.refreshGate = new Promise(resolve => { releaseRefresh = resolve; });
+    const staleRefreshStarted = new Promise(resolve => { v.hq.refreshStarted = resolve; });
     await openSupport(v.page);
+    await staleRefreshStarted;
     assert.equal(await slow.locator('[name=message]').isDisabled(), true, 'the box stays locked while the send is on its way');
     assert.equal(await slow.locator('.support-send').isDisabled(), true);
     assert.equal(await slow.locator('.support-send').getAttribute('aria-busy'), 'true');
     await slow.locator('[data-compose]').evaluate(f => f.requestSubmit());
     release();
     await slow.locator('.support-msg.you', {hasText: 'First words'}).waitFor();
+    const staleResponse = v.page.waitForResponse(response => response.url().includes('/support/tickets/refresh'));
+    releaseRefresh();
+    await staleResponse;
+    await v.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await slow.locator('.support-msg.you', {hasText: 'First words'}).count(), 1, 'an older reopen refresh cannot erase a completed send');
+    v.hq.refreshGate = null;
+    v.hq.refreshStarted = null;
     assert.equal(posted(), 1, 'sent once');
     assert.equal(await slow.locator('[name=message]').isDisabled(), false);
     assert.equal(await slow.locator('[name=message]').inputValue(), '');

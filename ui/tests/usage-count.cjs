@@ -65,7 +65,11 @@ const {unrouted} = require('./support/routes.cjs');
     await v.page.waitForFunction(() => document.querySelector('.toast'));
     assert.ok(v.calls.some(c => c.startsWith('PUT') && c.includes('"enabled":false')), 'the toggle is saved');
     await v.page.locator('#privacy-reset').click();
-    await v.page.waitForFunction(() => [...document.querySelectorAll('.toast')].some(t => /New install ID/.test(t.textContent)));
+    // Reset install ID asks first: nothing is sent until it is confirmed.
+    await v.page.locator('dialog.settings-confirm').waitFor();
+    assert.ok(!v.calls.some(c => c.startsWith('POST /api/v2/system/usage-count/reset')), 'nothing reset before the confirm');
+    await v.page.locator('dialog.settings-confirm [data-confirm-ok]').click();
+    for (let i = 0; i < 100 && !v.calls.some(c => c.startsWith('POST /api/v2/system/usage-count/reset')); i++) await v.page.waitForTimeout(50);
     assert.ok(v.calls.some(c => c.startsWith('POST /api/v2/system/usage-count/reset')), 'the ID is reset');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();

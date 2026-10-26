@@ -254,12 +254,12 @@ def test_gate_consumes_each_agreed_receipt_source(api, where):
     assert move(api, task).status_code == 200
 
 
-def test_fresh_checks_failure_pending_and_old_statuses(api, monkeypatch):
+def test_fresh_checks_failure_pending_and_status_failure_history(api, monkeypatch):
     task = ticket(api, f'Tests: head {HEAD}: 9 passed')
     service = api.app.state.github_app
     monkeypatch.setattr(service, 'row', lambda c: {'org': 'ticoteam'})
     monkeypatch.setattr(service, 'mint', lambda *a: ('synthetic', 'later'))
-    state = ['failure']
+    state, old_failure = ['failure'], [True]
     def fetch(method, path, **kw):
         if '/pulls/' in path:
             data = {'head': {'sha': HEAD}}
@@ -267,12 +267,17 @@ def test_fresh_checks_failure_pending_and_old_statuses(api, monkeypatch):
             data = {'check_runs': [{'id': 1, 'name': 'python', 'conclusion': state[0]},
                                   {'id': 2, 'name': 'browser', 'conclusion': None}]}
         else:
-            data = [{'context': 'deploy', 'state': 'success'}, {'context': 'deploy', 'state': 'failure'}]
+            data = [{'context': 'deploy', 'state': 'success'}]
+            if old_failure[0]:
+                data.append({'context': 'deploy', 'state': 'failure'})
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     r = move(api, task)
     assert r.status_code == 422 and 'python' in r.text and 'browser' not in r.text
     state[0] = None
+    r = move(api, task)
+    assert r.status_code == 422 and 'deploy (earlier failure)' in r.text
+    old_failure[0] = False
     assert move(api, task).status_code == 200
 
 

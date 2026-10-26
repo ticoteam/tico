@@ -41,6 +41,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     Object.assign(tasks[1], {labels: [tag.key], tags: [tag]});
     // Waiting is a tag on a task that stays in its step.
     tasks[0].status = 'waiting';
+    // A Dev ticket at a working step carries when it got there; past four hours its card says so in amber.
+    tasks[3].step_since = new Date(Date.now() - 5 * 3600e3).toISOString();
+    tasks[1].step_since = new Date(Date.now() - 30 * 60e3).toISOString();
     tasks.push({...tasks[2], id: 'closed-task', title: 'Dropped campaign', step_id: 'archive', step: types[1].steps[4], status: 'closed'});
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -106,6 +109,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
     assert.equal(await page.locator('#task-body .tl-waiting').count(), 1);
+    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-3"] [data-step-age].late').allTextContents(), ['5h in step']);
+    assert.deepEqual(await page.locator('#task-body [data-task-key="ttask-1"] [data-step-age]:not(.late)').allTextContents(), ['30m in step']);
+    assert.equal(await page.locator('#task-body [data-step-age]').count(), 2, 'only a ticket with a step clock shows one');
     // An unfolded finished strip is remembered: a fresh page opened straight on the board, before Done or Closed was ever
     // visited, reads the finished tasks for it, and the ordinary refresh keeps them current.
     const boardLoaded = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
@@ -297,10 +303,22 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('.task-type-editor [data-steps] .task-step-edit').nth(1).locator('[data-up]').click();
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
     await page.locator('.task-type-editor [name=typeBots]').selectOption('work');
+    // A type private by default (the Product roadmap) shows each step's public name too, and a new step left blank
+    // is not given its internal name publicly.
+    assert.equal(await page.locator('.task-type-editor [name=defaultVisibility]').inputValue(), 'private');
+    assert.equal(await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('[aria-label="Public step name"]').isVisible(), true,
+      'the public step name shows on a private-by-default type');
+    await page.locator('.task-type-editor [data-add-step]').click();
+    await page.locator('.task-type-editor [data-steps] .task-step-edit').last().locator('[aria-label="Step name"]').fill('Internal triage');
+    await page.locator('.task-type-editor [data-steps] .task-step-edit').first().locator('[aria-label="Public step name"]').fill('Under review');
     await page.locator('.task-type-editor button[type=submit]').click();
     await page.getByText('Campaigns', {exact: true}).waitFor();
     const edit = posted.find(item => item.path === '/api/v2/task-types/marketing');
     assert.equal(edit.body.steps[0].id, 'legal', 'editing keeps ids and order');
+    assert.equal(edit.body.steps[0].public_name, 'Under review', 'a public name typed is saved');
+    const added = edit.body.steps.find(step => step.name === 'Internal triage');
+    assert.equal('public_name' in added, false, 'a new step left blank does not send its internal name as its public one');
+    assert.equal(edit.body.steps.find(step => step.id === 'draft').public_name, '', 'an existing step left blank stays off public pages');
     assert.equal(edit.body.bots, 'work', 'the editor saves what bots may do with the type');
     await page.locator('#set-types [data-new-type]').click();
     await page.locator('.task-type-editor input[aria-label="Type name"]').fill('Design');

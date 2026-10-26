@@ -110,6 +110,32 @@ def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
     assert draft(api)["summary"] == "First."
 
 
+def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):
+    # 20 closed goals sort first (owner ana before cara), so the sample of 20 holds none of the 21 live ones.
+    bet = ready(api)
+    closed = [post(api, "goals", {"title": f"Old {i}", "owner": "ana", "bet_id": bet["id"]})["goal"]["id"] for i in range(20)]
+    for i in range(21):
+        post(api, "goals", {"title": f"Live {i}", "owner": "cara", "bet_id": bet["id"]})
+    with api.app.state.store.transaction() as c:
+        c.execute(f"UPDATE goals SET status='done' WHERE id IN ({','.join('?' * len(closed))})", closed)
+    view = get(api, "strategy")
+    assert {g["status"] for g in view["goals_by_bet"][bet["id"]]} == {"done"}
+    assert view["live_by_bet"][bet["id"]] == 21
+
+
+def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(api):
+    ready(api)
+    write(api, sections={"extra": {"brand": {"title": "Brand", "body": "Plain."}}})
+    publish(api)
+    ceo = with_ceo_bot(api)
+    pid = post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {
+        "sections": {"extra": {"brand": {"title": "Positioning", "body": "Plain."}}}}}, token=ceo)["proposal"]["id"]
+    post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+    assert draft(api)["sections"]["extra"]["brand"] == {"title": "Positioning", "body": "Plain."}
+    current = get(api, "strategy")["current"]
+    assert current["n"] == 1 and current["sections"]["extra"]["brand"]["title"] == "Brand"
+
+
 def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are_gray(api):
     bet = ready(api)
     mine = post(api, "goals", {"title": "Sign 10 landlords", "owner": "ana", "bet_id": bet["id"]})["goal"]
@@ -165,14 +191,60 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
         proposal = H._one(c, "SELECT * FROM goal_proposals WHERE kind=?", (S.REALIGN,))
         task = H._one(c, "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.kind='proposal' AND "
                          "a.ref=?", (proposal["id"],))
-    assert task and task["owner"] == "human:ana" and "Realign 1 goal" in task["title"]
+    assert task and task["owner"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
+    assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
     payload = json.loads(proposal["payload_json"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
-        assert H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))["status"] in ("done", "closed")
+        closed = H._one(c, "SELECT status, note FROM tasks WHERE id=?", (task["id"],))
+        assert closed["status"] in ("done", "closed")
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
+    assert closed["note"] == "Resolved: the goals were realigned with the strategy."
+
+
+def realign_card(api):
+    """A published bet reworded under two live goals: the realign card and the task it filed."""
+    with_ceo_bot(api)
+    one = ready(api)
+    add_bet(api, "Landlords refer landlords")
+    goals = [post(api, "goals", {"title": title, "owner": "cara", "bet_id": one["id"]})["goal"]
+             for title in ("Sign 10 landlords", "Sign 20 landlords")]
+    publish(api)
+    post(api, f"strategy/bets/{one['id']}", {"statement": "Small landlords pay $99 a month"})
+    publish(api, "Second")
+    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == S.REALIGN]
+    with api.app.state.store.read() as c:
+        task = H._one(c, "SELECT t.* FROM goal_asks a JOIN tasks t ON t.id=a.task_id WHERE a.ref=?", (card["id"],))
+    return card, task, goals
+
+
+def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_they_stay(api):
+    card, task, goals = realign_card(api)
+    assert [(g["change"], g["statement"], g["was"]) for g in card["payload"]["goals"]] == [
+        ("rewritten", "Small landlords pay $99 a month", "Small landlords pay for bots")] * 2
+    assert card["closed_goals"] == []
+    assert task["title"] == "Choose what happens to 2 goals after strategy v2" and "reworded" in task["body"]
+    post(api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
+    assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
+    with api.app.state.store.read() as c:
+        assert H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"] == \
+            "Resolved: the goals stay as they are."
+
+
+def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(api):
+    card, task, goals = realign_card(api)
+    post(api, f"goals/{goals[0]['id']}/status", {"status": "done", "note": "Signed"})
+    [card] = [p for p in get(api, "goal-proposals")["proposals"] if p["id"] == card["id"]]
+    assert card["closed_goals"] == [goals[0]["id"]]
+    out = post(api, f"goal-proposals/{card['id']}/decide",
+               {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}})["proposal"]
+    assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
+    assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
+    with api.app.state.store.read() as c:
+        assert H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"] == \
+            "Resolved: the goals stay as they are."
 
 
 def test_publishing_files_the_realign_card_even_when_the_ceo_bot_used_its_5_today(api):

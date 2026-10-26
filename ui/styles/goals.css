@@ -134,6 +134,19 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-actions{display:flex;gap:8px;margin:12px 0 4px}
 .gp-add{margin-top:8px}
 .gp-history{margin:14px 0 4px;padding-top:10px;border-top:1px solid var(--line)}
+.goal-fin{margin:12px 0 4px}
+.goal-fin-list{list-style:none;margin:6px 0 0;padding:0}
+.goal-fin-row{padding:4px 0;border-top:1px solid var(--line)}
+.goal-fin-head{display:flex;align-items:center;gap:8px}
+.goal-fin-line{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:4px 0;text-align:left;color:inherit;font:inherit;cursor:pointer}
+.goal-fin-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goal-fin-what{flex:none;font-size:12px;padding:0 6px;border:1px solid var(--line);border-radius:999px}
+.goal-fin-when{flex:none;font-size:12px}
+.goal-fin-detail{padding:4px 0 8px 8px}
+.goal-fin-kpis,.goal-fin-history{list-style:none;margin:2px 0 6px;padding:0}
+.goal-fin-kpis li{display:flex;align-items:center;gap:6px}
+.goal-fin-history li{font-size:12px}
+.goal-reopen{margin:4px 0 8px}
 .gp-history-list{margin-top:4px}
 .gp-history-list .kpi-lines{margin-left:0}
 .kpi-archived{padding:8px 10px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}
@@ -219,15 +232,33 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gt-needs .strat-prop .kpi-prop-main,.strat-prop .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:4px}
 .strat-prop-open{margin-left:6px;font-size:var(--t-sm)}
 .strat-prop-list,.strat-realign{list-style:none;margin:2px 0;padding:0;display:grid;gap:4px}
-.strat-prop-list li{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
+.strat-prop-list li{display:grid;grid-template-columns:128px minmax(0,1fr);gap:8px;font-size:var(--t-base);line-height:1.4;overflow-wrap:anywhere}
 .strat-prop-k{color:var(--muted);font-size:var(--t-sm);font-weight:600}
 .strat-prop-wrong{display:block;font-size:var(--t-sm)}
 .strat-realign-goal{display:flex;align-items:center;gap:12px;min-width:0;padding:4px 0}
 .strat-realign-t{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px;font-size:var(--t-base);overflow-wrap:anywhere}
 .strat-realign-t .muted{font-size:var(--t-sm)}
 .strat-realign-f{flex:0 0 220px}
+.strat-prop-v{min-width:0}.strat-prop-v .prop-np{margin:0}.strat-prop-note{margin:2px 0 0;font-size:var(--t-sm)}
+.strat-realign-bet{margin:2px 0 0;font-size:var(--t-sm)}.strat-realign-closed{flex:0 0 auto;font-size:var(--t-sm)}
 @media (max-width:760px){
   .strat-prop-list li{grid-template-columns:1fr;gap:0}
   .strat-realign-goal{flex-direction:column;align-items:stretch;gap:6px}
   .strat-realign-f{flex-basis:auto}
 }
+/* Goal suggestion cards (ui/goals-kpis.js goalPropHtml): what yes changes on one line, then what it would change, why,
+   and the buttons named for what they do. The target fields of an Add a KPI card stay folded until opened. */
+.kpi-prop[data-prop-kind]{align-items:flex-start}
+.kpi-prop[data-prop-kind] .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:3px}
+.kpi-prop-head{overflow-wrap:anywhere}.kpi-prop-target{font-size:var(--t-base)}
+.kpi-prop-warn{font-size:var(--t-sm)}.kpi-prop-warn::before{content:'';display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--wait);vertical-align:1px}
+.kpi-prop-line{margin:0 0 4px;font-size:var(--t-sm);flex-basis:100%}
+.kpi-prop-do:has(.kpi-prop-line){flex-wrap:wrap;max-width:280px}
+.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--accent,inherit);width:max-content}
+.kpi-prop-tf{margin-top:6px;display:grid;gap:var(--s2,8px)}
+.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:1.4}
+.prop-np-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
+.prop-np-k{color:var(--muted);font-size:var(--t-sm)}.prop-np-v{overflow-wrap:anywhere;white-space:pre-line}
+.prop-np-label{margin-top:4px;font-weight:600;font-size:var(--t-sm)}
+.prop-np-clamp .prop-np-v{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.prop-np>.linkish{justify-self:start;font-size:var(--t-sm)}

@@ -1,7 +1,7 @@
 // A bot Tico stopped (backend/bot_stops.py: five fast failed runs, or over its run budget). Guards: the server's words
 // show to everyone, Release only to those who manage the bot; one click posts the release and the button goes once the
 // status says the bot runs again; Health's stuck row for the stop carries the same Release. The run budget fields in the
-// bot's settings save with the bot's revision, and Follow team clears both. Fixtures only.
+// bot's settings are held until Save bot, then save with the bot's revision; Follow team clears both. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,6 +37,7 @@ async function open(browser, role, hash) {
     if (p === '/api/v2/health') return json({audience: manage ? 'owner' : 'human', attention: 1, checks: [], computers: [], waiting: [], slow: [], failures: [],
       checked: new Date().toISOString(), stuck: state.held ? [{bot: 'ops', name: 'Ops', reason: 'budget', queued: 1, oldest: new Date().toISOString(),
         computer: '', why: 'Tico stopped it for too many runs in a short time', fix: null}] : []});
+    if (p === '/api/v2/bots/ops/definition') { posts.push({path: p, body: req.postDataJSON()}); state.revision += 1; return json({name: 'ops', revision: state.revision}); }
     if (p === '/api/v2/bots/ops/release') { posts.push({path: p, body: req.postDataJSON()}); state.held = false; return json({run_hold: false, budget: true}); }
     if (p === '/api/v2/bots/ops/budget') {
       if (!manage) return json({error: {detail: 'Only those who manage the bot', code: 'forbidden'}}, 403);
@@ -91,20 +92,26 @@ async function open(browser, role, hash) {
       await page.close();
     }
     {
-      // The bot's settings: a number saves with the bot's revision; Follow team clears both with the next one.
+      // The bot's settings: a number is held until Save bot, then saves with the revision the definition made;
+      // Follow team clears both with the next Save bot.
       const {page, errors, posts} = await open(browser, 'owner', '#/bot/ops/settings');
       const hour = page.locator('[data-budget-key="turns_per_hour"]');
+      const budgetPosts = () => posts.filter(post => post.path.endsWith('/budget'));
       await hour.waitFor();
       assert.equal(await page.locator('[data-budget-team]').count(), 0, 'nothing of its own to drop');
       assert.equal(await page.locator('[data-bot-budget-row] + [data-bot-budget-sub] [data-bot-release]').count(), 1, 'held: Release under the fields');
       await hour.fill('50');
       await hour.press('Tab');
+      await page.locator('[data-bot-pending]:not([hidden])').waitFor();
+      assert.deepEqual(posts, [], 'nothing saves before Save bot');
+      await page.locator('#bot-editor button[type=submit]').click();
       await page.locator('[data-budget-team]').waitFor();
-      assert.deepEqual(posts[0], {path: '/api/v2/bots/ops/budget', body: {turns_per_hour: 50, expected_revision: 7}});
+      assert.deepEqual(budgetPosts()[0], {path: '/api/v2/bots/ops/budget', body: {turns_per_hour: 50, expected_revision: 8}});
       assert.equal(await page.locator('[data-budget-key="turns_per_hour"]').inputValue(), '50');
       await page.locator('[data-budget-team]').click();
+      await page.locator('#bot-editor button[type=submit]').click();
       await page.waitForFunction(() => document.querySelector('[data-budget-key="turns_per_hour"]')?.value === '' && !document.querySelector('[data-budget-team]'));
-      assert.deepEqual(posts[1].body, {turns_per_hour: null, turns_per_day: null, expected_revision: 8});
+      assert.deepEqual(budgetPosts()[1].body, {turns_per_hour: null, turns_per_day: null, expected_revision: 10});
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -1,7 +1,7 @@
 // A bot's profile picker in its settings (ui/app/bot-profile.js, backend/profiles.py). Guards: only someone who manages
-// the bot can change it; each save carries the bot's revision; Custom's own fields save as Custom; leaving Custom asks
-// first, naming how many rules go, and sends nothing when declined; a Lead's digest hour saves; at phone width the
-// row stays inside the screen. Fixtures only.
+// the bot can change it; a pick is held until Save bot, and each save carries the bot's revision; Custom's own fields
+// save as Custom; leaving Custom asks first, naming how many rules go, and sends nothing more when declined; a Lead's
+// digest hour saves; at phone width the row stays inside the screen. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -39,6 +39,7 @@ async function open(browser, role, viewport = {width: 1280, height: 900}) {
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops', state: 'idle'}]});
     if (p === '/api/v2/profiles') return json({profiles: CHOICES});
+    if (p === '/api/v2/bots/ops/definition') { state.revision += 1; return json({name: 'ops', revision: state.revision}); }
     if (p === '/api/v2/bots/ops/profile' && req.method() === 'GET') return json({bot: 'ops', profile: effective(state.name, state.own), rules: state.rules, revision: state.revision});
     if (p === '/api/v2/bots/ops/profile') {
       const body = req.postDataJSON();
@@ -55,7 +56,7 @@ async function open(browser, role, viewport = {width: 1280, height: 900}) {
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  page.on('dialog', dialog => { dialogs.push(dialog.message()); return dialogs.length === 1 ? dialog.dismiss() : dialog.accept(); });
+  page.on('dialog', dialog => { dialogs.push(dialog.message()); return dialog.dismiss(); });   // none expected
   await page.goto('https://tico-ui.test/#/bot/ops/settings');
   await page.locator(manage ? '[data-bot-profile]' : '#bot-editor:has-text("read-only")').waitFor();
   return {page, errors, posts, dialogs};
@@ -78,24 +79,41 @@ const picker = page => page.locator('[data-bot-profile]');
       await page.waitForFunction(() => document.querySelectorAll('[data-bot-profile] option').length === 6);
       assert.equal(await picker(page).inputValue(), 'custom');
       assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/settings/rules?bot=ops');
-      // Custom's own field saves as Custom, with the revision read.
+      const until = async (test, what) => { for (let i = 0; i < 100 && !test(); i++) await page.waitForTimeout(50); assert.ok(test(), what); };
+      const save = () => page.locator('#bot-editor button[type=submit]').click();
+      const ask = page.locator('dialog.settings-confirm');
+      // Custom's own field is held until Save bot, then saves as Custom with the revision the definition made.
       await page.locator('[data-profile-key="takes"]').selectOption('review');
-      await page.waitForFunction(() => document.querySelector('[data-profile-key="takes"]')?.value === 'review' && !document.querySelector('[data-profile-key="takes"]').disabled);
-      assert.deepEqual(posts[0], {profile: 'custom', takes: 'review', expected_revision: 5});
-      // Leaving Custom: declined, nothing more is sent and the picker shows Custom again.
+      await page.waitForTimeout(200);
+      assert.deepEqual(posts, [], 'nothing saves before Save bot');
+      await save();
+      await until(() => posts.length === 1, 'Save bot sends the profile');
+      assert.deepEqual(posts[0], {profile: 'custom', takes: 'review', expected_revision: 6});
+      // Leaving Custom: Save bot asks first, naming the rules; declined, nothing more is sent and the editor says so.
+      await page.waitForFunction(() => document.querySelector('[data-profile-key="takes"]')?.value === 'review');
       await picker(page).selectOption('doer');
-      await page.waitForFunction(() => document.querySelector('[data-bot-profile]')?.value === 'custom' && !document.querySelector('[data-bot-profile]').disabled);
+      await save();
+      await ask.waitFor();
+      assert.match(await ask.innerText(), /3 wake rules/);
+      await ask.locator('[data-confirm-cancel]').click();
+      await page.locator('#bot-editor [data-bot-status] .err').waitFor();
+      assert.match(await page.locator('#bot-editor [data-bot-status]').innerText(), /Profile not changed/);
       assert.equal(posts.length, 2, 'only the refused try');
-      assert.match(dialogs[0], /3 wake rules/);
       // Accepted: sent again with the confirm.
       await picker(page).selectOption('lead');
+      await save();
+      await ask.waitFor();
+      await ask.locator('[data-confirm-ok]').click();
       await page.locator('[data-profile-key="digest_hour"]').waitFor();
-      assert.deepEqual(posts.at(-1), {profile: 'lead', expected_revision: 6, confirm_drop_rules: true});
+      assert.deepEqual(posts.at(-1), {profile: 'lead', expected_revision: 9, confirm_drop_rules: true});
       assert.equal(await page.locator('[data-profile-custom]').count(), 0);
       // A Lead's digest hour.
       await page.locator('[data-profile-key="digest_hour"]').selectOption('7');
-      await page.waitForFunction(() => document.querySelector('[data-profile-key="digest_hour"]')?.value === '7' && !document.querySelector('[data-profile-key="digest_hour"]').disabled);
-      assert.deepEqual(posts.at(-1), {profile: 'lead', digest_hour: 7, expected_revision: 7});
+      await save();
+      await until(() => posts.at(-1).digest_hour === 7, 'the digest hour saves');
+      assert.deepEqual(posts.at(-1), {profile: 'lead', digest_hour: 7, expected_revision: 11});
+      await page.waitForFunction(() => document.querySelector('[data-profile-summary]')?.innerText === 'Runs as lead.');
+      assert.deepEqual(dialogs, [], 'no browser dialog');
       assert.equal(await page.locator('[data-profile-summary]').innerText(), 'Runs as lead.');
       assert.deepEqual(errors, []);
       await page.close();
