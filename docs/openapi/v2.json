@@ -16828,7 +16828,7 @@
         ]
       },
       "post": {
-        "summary": "Change a task; send the version you read (409 version_conflict otherwise)",
+        "summary": "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations",
         "operationId": "updateTask",
         "parameters": [
           {
@@ -29016,9 +29016,10 @@
             "enum": [
               "fresh",
               "stale",
-              "missing"
+              "missing",
+              "archived"
             ],
-            "description": "stale: one period missed; missing: never read or two missed. Never zero"
+            "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"
           },
           "spark": {
             "type": "array",
@@ -29033,9 +29034,10 @@
               "yellow",
               "red",
               "gray",
-              "none"
+              "none",
+              null
             ],
-            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target"
+            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target; null is an archived goal link with no colour"
           },
           "reason": {
             "type": "string"
@@ -36364,7 +36366,8 @@
                   "review",
                   "ready",
                   "done",
-                  "declined"
+                  "declined",
+                  "closed"
                 ]
               },
               {

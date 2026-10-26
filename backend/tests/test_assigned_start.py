@@ -105,7 +105,7 @@ def test_still_unstarted_health_and_manager_needs_you_show_task_and_actual_reaso
     assert not any(x['id'] == 'assigned_not_started' for x in get(api, 'health')['checks'])
 
 
-def test_private_assignment_does_not_grant_manager_access(api, clock):
+def test_private_assignment_reaches_the_bots_manager_and_no_one_else(api, clock):
     task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
@@ -114,8 +114,10 @@ def test_private_assignment_does_not_grant_manager_access(api, clock):
     advance(api, clock, 1)
     assert sweep(api) == [task['id']]
     advance(api, clock, 2)
-    assert task['id'] not in {i['id'] for i in get(api, 'needs-you', token='ben-test')['items']}
-    assert 'Private assigned work' not in str(get(api, 'health', token='ben-test'))
+    assert get(api, f"tasks/{task['id']}", token='ben-test')['task']['title'] == 'Private assigned work'
+    get(api, f"tasks/{task['id']}", token='cara-test', expected=404)
+    assert task['id'] not in {i['id'] for i in get(api, 'needs-you', token='cara-test')['items']}
+    assert 'Private assigned work' not in str(get(api, 'health', token='cara-test'))
 
 
 def test_reassignment_gets_its_own_hour_not_the_last_comment_time(api, clock):

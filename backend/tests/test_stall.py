@@ -203,6 +203,9 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
     # Work it held from before an upgrade, when "Set up" bots still took tasks; onboarding bots take none now.
     task = api.post("/api/v2/tasks", json={"owner": "finance", "title": "Reconcile the October invoices", "body": "Before the close."},
                     headers=headers()).json()["task"]
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with store.transaction() as c:
         secret = H.task_create(c, "human:cara", "Review the salary bands", "Only for Cara.", "bot:finance", private=True)
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")

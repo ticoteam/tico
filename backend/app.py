@@ -246,6 +246,9 @@ def create_app(settings=None):
                 # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
                 from . import move_retry
                 move_retry.tick(app.state.github_app)
+                # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
+                from . import task_blocked
+                task_blocked.fresh(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
@@ -1121,6 +1124,9 @@ def create_app(settings=None):
             value["milestone_waits"] = milestone_waits.waits(c, row["id"])
             value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
             value["pr_state"] = H.pr_state(value["links"])
+            from .qa_waivers import waivers as qa_waivers_of
+            # A person's QA waiver for an exact head: shown as a waiver, never as a QA verdict (backend/qa_waivers.py).
+            value["qa_waivers"] = qa_waivers_of(c, row, value["links"])
             if parts is None:
                 counts = c.execute("SELECT COUNT(*), SUM(status IN ('done','closed')) FROM tasks WHERE id IN ("
                                    + TR.CHILD_IDS + ") AND (" + visible_sql + ")", (row["id"],)).fetchone()
@@ -3683,13 +3689,40 @@ def create_app(settings=None):
                     raise Problem("forbidden", "This task involves a bot whose activity BotOps may not read", 403)
             else:
                 row = auth.task(c, who, task_id)
-                if who.role not in ("human", "owner") and who.actor != row["requester"]:
-                    raise Problem("forbidden", "Only a person, the task's requester or BotOps starts it early", 403)
+                if (who.role not in ("human", "owner")
+                        and not H.task_represents(c, who.actor, row["requester"])
+                        and not (who.actor != row["owner"] and H.task_represents(c, who.actor, row["owner"]))):
+                    raise Problem("forbidden", "Only a person, the task's requester, a party's manager or BotOps starts it early", 403)
                 # Running it wakes the bot: that is a request to it.
                 if str(row["owner"]).startswith("bot:") and who.actor != row["owner"]:
                     auth.require_write(c, who, H.actor_id(row["owner"]))
             after, queued = H.task_run_now(c, who.actor, task_id)
             return {"task": task_view(after, c, visible_sql=auth.task_sql(c, who), who=who), "queued": queued}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/qa-waiver")
+    def task_qa_waiver(request: Request, tid: str, body: M.TaskQaWaiver):
+        """Waive a Dev ticket's current In QA step for one exact pull request head, with a reason: the ticket's owner
+        or a manager, always a person (backend/qa_waivers.py). Recorded in task history as a waiver, never as a QA
+        verdict; hosted checks and both reviews on that head stay required."""
+        from . import qa_waivers, review_gate
+        who = request.state.identity
+        # BotOps or the Assistant acting for a person carries the person's actor; the waiver is still a bot's call.
+        person_only(who, "waives a Dev ticket's QA step")
+        with store.read() as c:
+            row = auth.task(c, who, auth.resolve_task(c, who, tid))
+            prs = review_gate.links(c, row) if review_gate.engineering(c, row) else []
+        # A fresh GitHub read outside the write lock, as a review move takes (review_preflight).
+        snapshots = review_gate.snapshot(app.state.github_app, prs) if prs else {}
+        def work(c):
+            task_id = auth.resolve_task(c, who, tid)
+            current = auth.task(c, who, task_id)
+            owner = current["owner"]
+            manager = mover(c, who) or who.role == "human" and auth.manages(
+                c, who, "bot" if H.is_bot(owner) else "person", H.actor_id(owner))
+            waiver = qa_waivers.waive(c, who.actor, task_id, body.head, body.reason, body.step, snapshots,
+                                      manager=bool(manager))
+            return {"waiver": waiver, "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/snooze")
@@ -3768,7 +3801,7 @@ def create_app(settings=None):
             if people and not wakes_bot:
                 ask, people = H.mention_ask(body.text, people[0]), people[1:]
             if ask:
-                wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
+                wake = who.role == "bot" or H.task_participant(c, who.actor, row) or moves
             else:
                 wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
                     who.role == "bot" and body.needs_action)
@@ -3818,7 +3851,7 @@ def create_app(settings=None):
             from .task_review import answer_task
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or mover(c, who)
+            wake = who.role == "bot" or H.task_participant(c, who.actor, row) or mover(c, who)
             return answer_task(c, auth, who, task_id, body, wake=wake)
         return mutate(request, body, work)
 
@@ -6267,7 +6300,7 @@ def create_app(settings=None):
     from .archive import install_archives
     install_archives(app, store)
     from .media import install_media
-    install_media(app, store, auth, mutate, send, task_create)
+    install_media(app, store, auth, mutate, send, task_create, review_preflight)
     from .downloads import install_downloads
     install_downloads(app, store)
     from .team_icon import install_team_icon

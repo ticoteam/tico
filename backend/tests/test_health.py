@@ -78,8 +78,10 @@ def silent_computer(api, seconds_ago):
         c.execute("UPDATE runners SET operator='riley' WHERE id=?", (runner,))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
-        c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('m1','human:ana','bot:helper','chat','hi',?)",
-                  (H.now(),))       # queues its job
+        # A chat message in a conversation, as the product writes them: the trigger queues its job, and Pipeline counts it.
+        c.execute("INSERT INTO conversations(id,kind,participants_json,created) VALUES('cv1','chat','[]',?)", (H.now(),))
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
+                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))       # queues its job
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
 
@@ -716,6 +718,52 @@ def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environme
     assert "resumes by itself" in why and "Refused write" not in why and "Private request" not in why
     [held] = health_of(api, reader)[0]["stuck"]
     assert held["why"] == why
+
+
+def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
+    from backend import execution, health
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "helper")
+    old = H.shift(H.now(), minutes=-30)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+                  (runner, H.now()))
+        claimable(c, runner, "helper")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Interrupted task", "", "bot:helper", private=False)
+        interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+        interrupted_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (interrupted["id"],)).fetchone()["id"]
+        c.execute("UPDATE jobs SET state='uncertain',created=? WHERE id=?", (old, interrupted_job))
+        H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+        c.execute("UPDATE jobs SET created=? WHERE bot='helper' AND state='queued'", (old,))
+
+        running_chat = H.open_conversation(c, owner, [owner, "bot:helper"], kind="chat")
+        H._write_message(c, owner, "bot:helper", "running turn", running_chat, "say", {}, None, None)
+        running_job = c.execute("SELECT id FROM jobs WHERE bot='helper' AND state='queued' ORDER BY created DESC LIMIT 1").fetchone()["id"]
+        c.execute("UPDATE jobs SET state='running' WHERE id=?", (running_job,))
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,started) "
+                  "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
+                  (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()))
+        online = {r["id"] for r in health._online_runners(c)}
+        monkeypatch.setattr(execution, "bot_claimable", lambda *args, **kwargs: ("lane_held", None, False))
+
+        [row] = health._waiting(c, online)[1]
+        assert row["bot"] == "helper" and row["queued"] == 0 and row["dead"] >= 1 and row["reason"] == "uncertain"
+
+        # Removing the fenced-only override reproduces the old, misleading busy reason.
+        original = health._fenced_queue_reason
+        monkeypatch.setattr(health, "_fenced_queue_reason", lambda row, refused, first, person: (refused, first, person))
+        [without_override] = health._waiting(c, online)[1]
+        assert without_override["reason"] == "busy"
+        monkeypatch.setattr(health, "_fenced_queue_reason", original)
+
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit.
+        c.execute("UPDATE runners SET capacity=1 WHERE id=?", (runner,))
+        [full] = health._waiting(c, online)[1]
+        assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
 
 
 def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(environment):

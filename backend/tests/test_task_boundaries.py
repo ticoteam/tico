@@ -37,7 +37,8 @@ def test_occurrences_filter_before_limit_and_revoke_after_reassignment(api):
         c.execute("UPDATE attempts SET started='2026-10-02T12:00:00Z',finished='2026-10-02T12:01:00Z',state='completed'")
 
     assert [r['task_id'] for r in get(api, f'routines/{sid}/occurrences?limit=1', 'ben-test')['occurrences']] == [public['id']]
-    assert get(api, f'routines/{sid}/occurrences?limit=1')['occurrences'][0]['task_id'] == hidden['id']
+    assert get(api, f'routines/{sid}/occurrences?limit=1')['occurrences'][0]['task_id'] == private_default['id']
+    # The bot's manager also reads a private routine-owned task; unrelated Ben still sees only public work.
     outsider = get(api, f'routines/{sid}/occurrences', 'ben-test')['occurrences'][0]
     assert all(outsider[k] is None for k in ('started', 'finished', 'duration_s', 'exit'))
     own = get(api, f'routines/{sid}/occurrences')['occurrences']

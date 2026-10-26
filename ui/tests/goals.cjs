@@ -30,7 +30,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
   try {
     const page = await browser.newPage({viewport: {width: 1440, height: 900}, serviceWorkers: 'block'});
     const errors = [], posted = [];
-    page.on('dialog', dialog => dialog.accept());
+    const confirms = [];
+    page.on('dialog', dialog => { confirms.push(dialog.message()); dialog.accept(); });
     let gmExtra = [];
     let gmLive = false;
     let gmQueued = false;   // the question waits on a missing AI provider
@@ -92,7 +93,7 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
       if (p === '/api/v2/kpis' && !post) return json({kpis: url.searchParams.get('include_archived') === 'true' && archivedKpi.archived_at ? [archivedKpi] : []});
       if (p === '/api/v2/kpis' && post) { other.push(kpi('k-new-' + other.length, body.name, {...body, freshness: 'missing', latest: null, status: 'gray'})); return json({kpi: other.at(-1)}); }
       if (p === '/api/v2/kpis/k-act' && !post) return json(detail);
-      if (p === '/api/v2/kpis/k-retired' && !post) return json({...detail, kpi: archivedKpi, links: [], may_edit: archivedMayEdit});
+      if (p === '/api/v2/kpis/k-retired' && !post) return json({...detail, kpi: archivedKpi, links: goals.filter(g => g.kpis.some(k => k.id === archivedKpi.id)).map(g => ({...activation.link, goal_id: g.id, goal_title: g.title})), may_edit: archivedMayEdit});
       if (p === '/api/v2/kpis/k-retired/restore' && post) { archivedKpi.archived_at = null; return json({kpi: archivedKpi}); }
       if (p === '/api/v2/kpis/k-retired/archive' && post) { archivedKpi.archived_at = new Date().toISOString();
         // The reply lands while the test has moved on (back, closed, a link to another goal): it must not reopen the KPI.
@@ -280,6 +281,11 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     await panel.locator('.gp-history-list [data-kpi="k-retired"]').waitFor();
     assert.match(requests.join('\n'), /^GET \/api\/v2\/kpis$/m);
     assert.match(await panel.locator('.gp-history-list').innerText(), /Archived KPIs[\s\S]*Retired conversion/i);
+    const historyRow = panel.locator('.gp-history-list [data-kpi="k-retired"]');
+    assert.equal(await historyRow.evaluate(li => li.classList.contains('kpi-archived-line')), false, 'the archive list is not a goal');
+    assert.match(await historyRow.locator('.kpi-val').innerText(), /52%/, 'an archived KPI keeps its last reading in the archive list');
+    assert.equal(await historyRow.locator('.kspark').count(), 1, 'and its sparkline');
+    assert.ok(await historyRow.locator('.kpi-owner').innerText(), 'and its owner');
     await panel.locator('.gp-history-list [data-kpi="k-retired"]').click();
     await panel.locator('[data-kpi-archive]').waitFor();
     assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Restore KPI');
@@ -299,8 +305,41 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Archive KPI', 'restore returns to the active state');
     await panel.locator('[data-kpi-archive]').click();
     await until(() => last()?.path === '/api/v2/kpis/k-retired/archive', 'KPI archived again');
+    assert.equal(confirms.at(-1), 'Archive “Retired conversion”? Its readings and definition history will stay available.', 'unlinked archive keeps its wording');
     await panel.locator('[data-kpi-back]').click();
     await panel.locator('[data-gp-close]').click();
+    // Archived links stay on goals as muted, keyboard-openable lines; show only three.
+    goals[1].kpis.push(archivedKpi);
+    goals[2].kpis.push(archivedKpi, ...[1, 2, 3].map(i => ({...archivedKpi, id: 'old-' + i, name: 'Old measure ' + i})));
+    await page.goto('http://tico-ui.test/#/goals/g-cmo2');
+    const archivedLines = panel.locator('[data-gp-goal="g-cmo2"] .kpi-line.kpi-archived-line');
+    await archivedLines.first().waitFor();
+    assert.equal(await archivedLines.count(), 3, 'at most three archived measures');
+    assert.match(await archivedLines.first().innerText(), /Archived .+, not counting/);
+    assert.equal(await archivedLines.locator('.gdot, .kspark, .kpi-target').count(), 0, 'archived lines carry no colour or old reading');
+    assert.match(await panel.locator('[data-gp-goal="g-cmo2"]').innerText(), /\+1 archived/);
+    assert.equal(await page.locator('[data-goal="g-cmo2"] [data-kpi-chip="k-retired"]').count(), 0, 'archived measures never colour tree chips');
+    await archivedLines.first().focus();
+    await page.keyboard.press('Enter');
+    await panel.locator('[data-kpi-archive]').waitFor();
+    assert.equal(await panel.locator('[data-kpi-archive]').innerText(), 'Restore KPI');
+    await panel.locator('[data-kpi-archive]').click();
+    await until(() => panel.locator('[data-kpi-archive]').innerText().then(t => t === 'Archive KPI'), 'linked restore completed');
+    await panel.locator('[data-kpi-archive]').click();
+    assert.match(confirms.at(-1), /It stops counting toward 2 goals:/);
+    assert.ok(confirms.at(-1).includes(goals[1].title));
+    assert.ok(confirms.at(-1).includes(goals[2].title));
+    await until(() => panel.locator('[data-kpi-archive]').innerText().then(t => t === 'Restore KPI'), 'linked archive completed');
+    await panel.locator('[data-kpi-back]').click();
+    if (screenshotDir) {
+      fs.mkdirSync(screenshotDir, {recursive: true});
+      await page.screenshot({path: path.join(screenshotDir, 'goals-archived-desktop.png')});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.screenshot({path: path.join(screenshotDir, 'goals-archived-phone.png')});
+      await page.setViewportSize({width: 1440, height: 900});
+    }
+    await panel.locator('[data-gp-close]').click();
+    await page.goto('http://tico-ui.test/#/goals');
     // A link to one goal opens its owner's panel on it.
     await page.goto('http://tico-ui.test/#/goals/g-cmo2');
     await page.locator('#goal-panel[open] [data-goal-form="g-cmo2"] input[name=title]').waitFor();
