@@ -88,13 +88,18 @@ async function botGoalsCardLoad(slug) {
   const all = goals.some(g => g.id === live[0]?.id) ? goals : [...goals, ...live];
   host.innerHTML = live.map(g => `<div class="bot-goal-row">${goalEditorHtml(g, all)}</div>`).join('')
     + '<div class="bot-goal-row" id="bot-goal-adding" hidden></div>'
-    + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>');
+    + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>')
+    + '<div id="bot-goals-finished"></div>';
   for (const el of host.querySelectorAll('[data-goal-ed]')) {
     const g = live.find(x => x.id === el.dataset.goalEd);
     bindGoalEditor(el, g, () => botGoalsCardLoad(slug));
   }
   for (const a of host.querySelectorAll('[data-goal-go]'))
     a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalGo); };
+  // Its done and dropped goals, under the live ones: "Finished (N)" (ui/app/goals.js).
+  const finished = await v2Get('/v2/goals?all=true&status=done,dropped&owner=' + encodeURIComponent('bot:' + slug));
+  if (!finished || BOT?.slug !== slug || !host.isConnected) return;
+  goalFinishedMount(host.querySelector('#bot-goals-finished'), 'bot:' + slug, [...all, ...(finished.goals || [])], () => goalsRefresh());
 }
 function botGoalAdd(slug) {
   const host = $('#bot-goal-adding');
@@ -336,8 +341,7 @@ async function pageBot(slug, tab) {
       <button type="button" class="ghost" id="bot-sidebar-cancel">Cancel</button><button type="button" class="primary" id="bot-sidebar-done">Done</button></div>` : ''}
     <div class="bot-rail-loading rail-empty"${keeper && !botSidebarLayout(slug) ? '' : ' hidden'}>Loading…</div>
     ${botWidgetsHTML(slug, {
-      tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2><span class="spacer"></span>${limited ? '' :
-        `<a class="rail-ico" id="bot-tasks-board" href="${esc(botTaskBoardHref(slug))}" aria-label="${esc(`Open ${empName(slug)}'s tasks on the board`)}" title="Board"><span class="nav-icon" aria-hidden="true">view_kanban</span></a>`}</header>
+      tasks: `<section class="rail-sec bot-tasks-sec" id="bot-tasks" aria-labelledby="bot-tasks-h"><header class="rail-head"><h2 class="rail-h" id="bot-tasks-h">Tasks</h2></header>
       <div class="tabs slim bot-task-tabs" role="tablist" aria-label="Task lists">${botTaskTabsBarHTML(slug)}</div>
       <div class="bot-task-panes">
       <div class="bot-needs" id="bot-needs" role="tabpanel" aria-labelledby="bot-tab-t-needs" hidden><div id="t-needs" class="tpane"><div class="rail-empty">Loading…</div></div></div>

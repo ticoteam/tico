@@ -791,6 +791,7 @@ function goalPanelHtml(state) {
   const goals = state.goals.filter(g => goalLive(g) && g.owner === actor).sort(goalRank);
   const may = goalMayEdit({owner: actor}, state.goals);
   const other = state.other.filter(k => k.owner === actor);
+  const finished = goalFinishedOf(state.goals, actor).length;
   const person = actor.startsWith('human:') ? (S.people || []).find(p => p.id === actor.slice(6)) : null;
   const standing = String(person?.goals || '').trim();
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc((String(info.name || 'C').trim()[0] || 'C').toUpperCase())}</span>` : info.avatar;
@@ -824,8 +825,8 @@ function goalPanelHtml(state) {
       <button class="ghost tmodal-x" type="button" data-gp-close aria-label="Close">✕</button></div>
     <div class="tmodal-body gp-body">
       ${goals.length || profile ? `<ul class="gp-goals">${goals.map(item).join('')}${profile}</ul>` : ''}
-      ${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}${history}
-      ${!goals.length && !profile && !other.length && !newGoal && !newKpi && !actions ? '<p class="muted">No goals.</p>' : ''}
+      ${finished ? '<div data-gp-finished></div>' : ''}${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}${history}
+      ${!goals.length && !profile && !finished && !other.length && !newGoal && !newKpi && !actions ? '<p class="muted">No goals.</p>' : ''}
     </div>`;
 }
 function goalPanelRender(state) {
@@ -834,7 +835,9 @@ function goalPanelRender(state) {
   dlg.setAttribute('aria-label', goalOwnerInfo(P.owner).name);
   dlg.dataset.owner = P.owner;
   const scroll = dlg.querySelector('.gp-body')?.scrollTop || 0;
+  const toasts = [...dlg.querySelectorAll(':scope > .toast')];   // a toast shown in the panel (Undo) outlives a redraw
   dlg.innerHTML = goalPanelHtml(state);
+  dlg.append(...toasts);
   const body = dlg.querySelector('.gp-body');
   body.scrollTop = scroll;
   const redraw = () => goalPanelRender(state), reload = () => goalsReload(state);
@@ -860,6 +863,7 @@ function goalPanelRender(state) {
     try { await post('/v2/goals/' + encodeURIComponent(b.dataset.goalAuto) + '/status/auto', {}); await reload(); }
     catch (e) { toast(e.message || 'Could not hand the colour back', true); b.disabled = false; }
   };
+  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner, state.goals, reload);
   bindKpiLines(body);
   bindProposals(body, reload);
   bindGoalWhy(state, body, reload);

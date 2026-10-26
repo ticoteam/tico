@@ -21,8 +21,8 @@ workflow runs, on pull requests to main, the tests a measured static dependency 
 RunsOn Linux VMs for an explicit immutable candidate SHA. It never runs on a schedule; the Release Manager starts each release. The default Python suite runs in parallel in about a minute and the whole
 default run (pytest plus core UI) in about 2 minutes; `python scripts/release_checks.py` runs both and records time and
 load. On a computer several bots share, start a full suite, the browser scripts or a cargo build through
-`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py` and `ui-tests.cjs` do it
-themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
+`scripts/heavy.sh` (`scripts/full-suite.sh` for the Python suite; `release_checks.py`, `ui-tests.cjs` and pytest in a
+bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once per box, at low priority, the rest waiting with
 "waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
 `heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code.

@@ -364,14 +364,16 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/goals")
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
-        """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal."""
+        """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
+        `owner` owns."""
         who = request.state.identity
         auth.domain(who)
         due = []
         with store.read() as c:
             if all:
                 statuses = tuple(status.split(",")) if status else None
-                rows = readable_goals(c, who, G.goals(c, status=statuses, live_only=not statuses))
+                whose = goal_owner(c, who, owner) if owner else None
+                rows = readable_goals(c, who, G.goals(c, owner=whose, status=statuses, live_only=not statuses))
                 return {"goals": rows}
             actor = goal_owner(c, who, owner)
             roster, entries, archived = org_shape(c)
@@ -512,6 +514,26 @@ def install(app, store, auth, mutate, settings):
                 raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
                               "it serves; that is the acceptance", 403)
             return {"goal": G.view(c, G.set_status(c, who.actor, gid, body.status, body.note))}
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/goals/{gid}/reopen")
+    def goal_reopen(request: Request, gid: str, body: M.GoalReopen):
+        """Reopen a done or dropped goal with a colour and one line why, or `auto` for the colour it had, worked out
+        again: whoever may set its colour. A proposed goal brought back with a colour is still accepted only by
+        whoever owns the goal it serves. `undo` alone puts a removed goal back as it was, from its history."""
+        who = request.state.identity
+        def work(c):
+            auth.domain(who)
+            row = goal_or_404(c, gid)
+            refuse_manager(c, who, "a colour with the automatic status pass, and never reopens a goal")
+            if not may_colour(c, who, row):
+                raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
+                              "above them reopens it", 403)
+            if not body.undo and body.status != "auto" and G.was_proposed(c, row) and not (
+                    who.actor == parent_owner(c, row) or stands_above(c, who, row["owner"])):
+                raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
+                              "it serves; that is the acceptance", 403)
+            return {"goal": G.view(c, G.reopen(c, who.actor, gid, body.status, body.note, body.undo))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/goals/{gid}/status/auto")

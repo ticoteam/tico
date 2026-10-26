@@ -7027,6 +7027,77 @@
         ]
       }
     },
+    "/api/v2/goals/{gid}/reopen": {
+      "post": {
+        "summary": "Bring a done or dropped goal back with a colour and one line why, or auto for the colour it had; whoever may set its colour",
+        "operationId": "reopenGoal",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalReopen"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
     "/api/v2/goals/{gid}/status": {
       "post": {
         "summary": "Set the colour by hand with one sentence (red, yellow, green) or end the goal (done, dropped). It sticks, with the setter's name, until a person hands it back",
@@ -26928,6 +26999,41 @@
         ],
         "additionalProperties": true
       },
+      "GoalReopen": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "red",
+                  "yellow",
+                  "green",
+                  "auto"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Note",
+            "default": ""
+          },
+          "undo": {
+            "type": "boolean",
+            "title": "Undo",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "GoalReopen"
+      },
       "GoalResult": {
         "type": "object",
         "properties": {
@@ -34696,6 +34802,10 @@
               "string",
               "null"
             ]
+          },
+          "step_since": {
+            "type": "string",
+            "description": "A Dev ticket at a working step (In Progress, a Fixes step): when it entered that step or came back to work; absent otherwise"
           },
           "relations": {
             "type": "object",

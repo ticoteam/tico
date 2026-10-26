@@ -27,6 +27,19 @@ def waiters(api, n=37, running=3):
     return computer
 
 
+def sent_by(api, message_id, actor):
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE messages SET from_actor=? WHERE id=?', (actor, message_id))
+
+
+def overload(api, computer, cpu=95, mem=.5):
+    """Six one-minute samples over 90%: performance.load_status calls the computer overloaded."""
+    import time
+    now = int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]},
+         computer['token'])
+
+
 def test_four_counts_separate_37_login_waiters(api):
     """Spec 1/2: the original 40-of-40 case leaves room for a different login."""
     computer = waiters(api)
@@ -111,15 +124,14 @@ def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem
     computer = fleet(api, attempts=1, trees=0)
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
-    post(api, 'chat/finance', {'text': 'New work'})
-    now = int(time.time()) // 60 * 60
-    post(api, 'runners/performance', {'samples': [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]}, computer['token'])
+    sent_by(api, post(api, 'chat/finance', {'text': 'New work'})['id'], 'bot:ops')
+    overload(api, computer, cpu=cpu, mem=mem)
     assert claim(api, computer, 'finance') is None
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer busy' for w in machine['turn_counts']['waits'])
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state,stop_requested FROM attempts WHERE id='attempt-0'").fetchone()[:] == ('running', None)
-    post(api, 'runners/performance', {'samples': [point(now + 1, cpu=20)]}, computer['token'])
+    post(api, 'runners/performance', {'samples': [point(int(time.time()) // 60 * 60 + 1, cpu=20)]}, computer['token'])
     assert claim(api, computer, 'finance') is not None
 
 
@@ -322,12 +334,57 @@ def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monk
 
 
 def test_overload_rechecks_even_a_previously_granted_start(api):
-    import time
     computer = waiters(api, n=1, running=0)
+    sent_by(api, 'message-0', H.KEEPER)
     grant = post(api, 'attempts/attempt-0/start-place', {}, computer['token'])
     assert grant['reserved']
-    now = int(time.time()) // 60 * 60
-    post(api, 'runners/performance', {'samples': [point(now - 300 + i * 60, cpu=95) for i in range(6)]}, computer['token'])
+    overload(api, computer)
     post(api, 'attempts/attempt-0/started', {'thread_id': 'braked'}, computer['token'], expected=409)
     assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
         'reserved': False, 'waiting': 'computer busy'}
+
+
+def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else_does(api):
+    """Bots' own load held every start, a person's chat to a bot included, behind a hundred bot turns. A person's
+    message still starts, ahead of the turns waiting there; a keeper notice (routine, sweep, rule wake) or a bot's
+    message still waits."""
+    computer = waiters(api, n=3, running=0)
+    sent_by(api, 'message-0', H.KEEPER)
+    sent_by(api, 'message-1', 'bot:finance')
+    overload(api, computer)
+    for i in (0, 1):
+        assert post(api, f'attempts/attempt-{i}/start-place', {}, computer['token']) == {
+            'reserved': False, 'waiting': 'computer busy'}
+    # attempt-2 answers a person and is claimed after the two now waiting "computer busy".
+    assert post(api, 'attempts/attempt-2/start-place', {}, computer['token'])['reserved']
+    assert post(api, 'attempts/attempt-2/started', {'thread_id': 'person'}, computer['token'])['started']
+
+
+def test_a_persons_message_on_an_overloaded_computer_still_needs_a_free_turn(api):
+    computer = waiters(api, n=1, running=1)
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+    overload(api, computer)
+    assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
+        'reserved': False, 'waiting': 'computer busy'}
+
+
+def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(api):
+    """The claim holds the queue on an overloaded computer, or one with turns waiting to start there, except for a
+    person's own message: before, a person's chat never reached a start place to be let through."""
+    computer = fleet(api, attempts=1, trees=0)
+    for bot in ('finance', 'cpo'):
+        assign(api, computer, bot)
+    ready(api, computer, ['ops', 'finance', 'cpo'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET capacity=5 WHERE id=?', (computer['runner_id'],))
+    sent_by(api, post(api, 'chat/cpo', {'text': 'Review the contract'})['id'], 'bot:ops')
+    post(api, 'chat/finance', {'text': 'Close the books'})
+    overload(api, computer)
+    attempt = claim(api, computer)
+    assert attempt is not None and attempt['bot'] == 'finance'
+    assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
+    assert claim(api, computer) is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                         "WHERE m.from_actor='bot:ops'").fetchone()[0] == 'queued'

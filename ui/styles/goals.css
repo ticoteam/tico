@@ -134,6 +134,19 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-actions{display:flex;gap:8px;margin:12px 0 4px}
 .gp-add{margin-top:8px}
 .gp-history{margin:14px 0 4px;padding-top:10px;border-top:1px solid var(--line)}
+.goal-fin{margin:12px 0 4px}
+.goal-fin-list{list-style:none;margin:6px 0 0;padding:0}
+.goal-fin-row{padding:4px 0;border-top:1px solid var(--line)}
+.goal-fin-head{display:flex;align-items:center;gap:8px}
+.goal-fin-line{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;background:none;border:0;padding:4px 0;text-align:left;color:inherit;font:inherit;cursor:pointer}
+.goal-fin-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.goal-fin-what{flex:none;font-size:12px;padding:0 6px;border:1px solid var(--line);border-radius:999px}
+.goal-fin-when{flex:none;font-size:12px}
+.goal-fin-detail{padding:4px 0 8px 8px}
+.goal-fin-kpis,.goal-fin-history{list-style:none;margin:2px 0 6px;padding:0}
+.goal-fin-kpis li{display:flex;align-items:center;gap:6px}
+.goal-fin-history li{font-size:12px}
+.goal-reopen{margin:4px 0 8px}
 .gp-history-list{margin-top:4px}
 .gp-history-list .kpi-lines{margin-left:0}
 .kpi-archived{padding:8px 10px;border-radius:6px;background:var(--surface2);color:var(--muted);font-size:var(--t-sm)}

@@ -726,8 +726,9 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
                                           or "a registered computer") + " to stay awake"
     elif settings and org_turns.snapshot(c, settings)['at_stop']:
         label = 'Saved — ' + org_turns.REASON
-    elif (location.get("machine") or {}).get("runner_id") and load_status(
+    elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
             c, location["machine"]["runner_id"])["overloaded"]:
+        # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
         label = "Saved — waiting: computer busy"
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
@@ -1620,7 +1621,9 @@ def needs_bots(items, me):
     counts = {}
     for it in items:
         actor = None
-        if it.get("kind") == "ask":
+        if it.get("kind") == "approval":
+            actor = it.get("requested_by") or it.get("requester")
+        elif it.get("kind") == "ask":
             actor = it.get("requester")
         elif it.get("kind") in ("task", "question", "waiting"):
             ask = it.get("ask") or {}
