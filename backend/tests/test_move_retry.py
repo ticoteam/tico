@@ -418,3 +418,53 @@ def test_a_retry_that_another_wait_keeps_on_blocked_claims_no_move_and_waits_for
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'human:ana', child['id'], status='done')
     assert tick(api) == [task['id']] and step(api, task) == 'Review 1' and claimed() == 1
+
+
+def general(api, task):
+    """The ticket moved back to the General board, so a review move is a move onto another board."""
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'human:ana', task['id'], type=H.GENERAL_TYPE, status='doing')
+    return get(api, 'tasks/' + task['id'])['task']
+
+
+def cross_move(api, task, review_step='Review 1'):
+    return api.post('/api/v2/tasks/' + task['id'], headers=headers(),
+                    json={'version': get(api, 'tasks/' + task['id'])['task']['version'], 'type': 'Dev tickets',
+                          'step': review_step})
+
+
+@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
+def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, review_step):
+    """Its step names exist only on the destination board: a retry that names the step alone is refused there."""
+    task = general(api, ticket(api))
+    assert cross_move(api, task, review_step).status_code == 422
+    held = get(api, 'tasks/' + task['id'])['task']
+    assert held['type_id'] == H.GENERAL_TYPE and held['blocked_since']
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+    assert tick(api) == [task['id']]
+    moved = get(api, 'tasks/' + task['id'])['task']
+    assert moved['type_id'] == task_type(api) and moved['step']['name'] == review_step
+    assert not moved.get('blocked_since')
+
+
+def task_type(api):
+    with api.app.state.store.read() as c:
+        return H.type_get(c, 'Dev tickets')['id']
+
+
+@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
+def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry_will(api, review_step):
+    """Only engineering tickets have reconciliation; on another board the retry is what clears a gate hold, so the
+    hourly sweep leaves it while Tico still retries and releases it after, or it would be held forever."""
+    from datetime import datetime, timedelta, timezone
+    task = general(api, ticket(api))
+    assert cross_move(api, task, review_step).status_code == 422
+    stamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+    with api.app.state.store.transaction() as c:
+        assert H.sweep_stranded(c, stamp) == []     # past the sweep's grace, inside the retry's
+        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
+    released = get(api, 'tasks/' + task['id'])['task']
+    assert released['status'] == 'open' and not released.get('blocked_since')

@@ -124,7 +124,9 @@ def hold(c, task_id, reason, kind='dependency'):
         return
     if row.get('blocked_since'):
         # Retain the first hold time and resume step when another gate also holds it.
-        if kind == 'gate' and row.get('blocked_kind') != 'manual':
+        if (kind == 'gate' and row.get('blocked_kind') != 'manual'
+                or kind == 'check' and row.get('blocked_kind') in ('dependency', 'stranded', 'check')
+                and (row.get('blocked_kind'), row.get('blocked_reason')) != (kind, reason)):
             c.execute('UPDATE tasks SET blocked_kind=?,blocked_reason=?,updated=? WHERE id=?', (kind, reason, H.now(), task_id))
             bump(c, row)
         return
@@ -287,7 +289,11 @@ def sweep(c, at, task_ids=None):
     for row in H._rows(c.execute("SELECT t.* FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
                                 "WHERE ty.role='engineering' AND t.status IN ('open','doing','review','ready')" + scope, args)):
         if detail := wait(c, row):
-            hold(c, row['id'], 'Waiting on ' + detail['why'])
+            if detail.get('check'):
+                from . import check_blocked
+                check_blocked.apply(c, row['id'])
+            else:
+                hold(c, row['id'], 'Waiting on ' + detail['why'])
     for row in H._rows(c.execute('SELECT t.* FROM tasks t WHERE blocked_since IS NOT NULL' + scope, args)):
         reconcile(c, row['id'])
         row = H.task(c, row['id'])

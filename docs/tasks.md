@@ -527,8 +527,16 @@ task's box. The bot that asked is told either way, as *<name> marked this done: 
 comment on the next line when there is one. When a bot needs a specific answer it asks a yes/no
 or choice question instead.
 
-Done stays Done, including tasks the owner requested for itself, old bot-requested tasks,
-and completed routine runs. Closing is a separate decision; it records `closed_at` and
+An owner can reopen a Done task with `hub task update <id> --status doing`, or put it back
+with `hub task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
+On Deck. A bot owner must include a note when returning work to open. Automatic starts wait
+60 minutes after an owner puts work back, unless the task gets a comment, a new link, or a
+blocker finishes. Ordinary note edits and automatic notices do not end that wait. A linked
+blocker still holds the task. If a blocker arrives after Tico automatically started it and
+no run has finished on it yet, Tico returns it to the queue as part of linking the blocker;
+the owner does not need to take a turn.
+
+Closing is a separate decision; it records `closed_at` and
 `closed_by`, preserving the completion time if the work was already Done. Earlier history
 is preserved, including tasks that older versions closed automatically. Use **Close task** in the
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
@@ -586,14 +594,15 @@ The digits alone are not read as a number, since a cut-short id can look the sam
 
 Numbers range from 1 to 999999999; an exhausted sequence refuses a new number without creating a task.
 
-A mover can also make a custom type **steps only**: its tasks are finished or brought back only by
+A mover can also make a custom type **steps only**: its tasks are finished or brought back by
 moving to a step. Closing, declining, reopening or finishing one directly (`close`, or a `status`
-without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`) for every
-person and bot, and the task window offers no Done, Close or Reopen on them. A task that should not
+without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`), except
+that an owner may reopen Done with doing or open (with a note for open). The task window offers
+no Done, Close or Reopen on them. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
 are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
-rather than marking them done or closed. Without it, a bare status lands the task in the first step
+rather than marking them done or closed. Without steps only, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
 
 Engineering boards include **Blocked** immediately before In Progress. Its status is `waiting`;
@@ -605,7 +614,19 @@ hub task update <task-id> --step "Blocked" --note "Waiting for a test machine"
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
 Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
-dependency on one of those checks holds it.
+dependency on one of those checks holds it. A Review or QA check that is itself Waiting, or blocked by
+an open task, holds its ticket Blocked with the check's reason ("QA blocked: GitHub refused the remote
+test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's room for that
+hold. When the check works again, the ticket returns to its step.
+
+A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
+for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
+status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
+the open ask, and the reply says so. Every task it blocks wakes when the ask is done. Unlinking it
+(`hub task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
+own ask. Endpoint case and slashes are significant; only surrounding whitespace is ignored. A different
+endpoint is a different blocker. Private tasks never join or are joined. When DevOps
+files the person ask for a blocker, its own open tasks for that blocker wait on it.
 The card and task show what it waits for and since when. When an automatic hold clears, the task
 returns to the step it left, without advancing through the refused gate. An owner-declared hold
 is cleared by moving back to a working step. The active Building clock pauses while blocked;
@@ -813,8 +834,8 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
 API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
-maker on the parent's finished runs (a fallback counts) and the provider its owner runs on; with no other provider it
-is refused, never run on an author's own. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
+maker on the parent's finished runs (a fallback counts) and the provider its owner runs on. Another provider is a
+preference: with none that can run, it runs on an author's own, and the subtask's history says so. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
 `hub_task_child_create` with the same fields.
 
 - The subtask is the filing bot's own, under a task it owns. Its turns run on the named runtime and model with no
@@ -850,8 +871,9 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
 - A reviewer bot set to `review_model: check` (`hub bot update <slug> --review-model check`, `hub_bot_update`, or the
   bot definition API) runs every subtask it is handed under another's task as a `review` on the company's check
   model, chosen against the parent's authors the same way, and its verdict comes back the same way. When the authors
-  are unknown (a person's task with no runs) or no other provider can run it, the subtask is filed as usual on the
-  reviewer's own model, and its history says why. Subtasks under its own tasks, and its top-level tasks, keep its
+  are unknown (a person's task with no runs) or no check model can run it, the subtask is filed as usual on the
+  reviewer's own model, and its history says why. With no other provider able to run it, it runs on the authors'
+  own provider rather than waiting: another provider is preferred, never required. Subtasks under its own tasks, and its top-level tasks, keep its
   own model.
 
 Every task a bot owns has its own room (a `kind: task` conversation), even one filed from a chat: its comments,

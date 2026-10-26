@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
-use super::{command_program, event, failed, hub_mcp_server, is_limit, tool_summary, Events, HostError, Settings};
+use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{iso, log, py_dumps, text_of};
 
@@ -553,6 +553,9 @@ impl CodexHost {
         if !done {
             fields["summary"] = json!(summary);
         }
+        if kind == "commandExecution" && item["command"].is_string() {
+            fields["outside_actions"] = json!(shell_outside_actions(item["command"].as_str().unwrap()));
+        }
         self.emit(event("tool", t, u, fields));
     }
 
@@ -765,7 +768,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_codex_fixture_gives_the_python_hosts_events() {
-        for (path, expected) in crate::hosts::fixtures::cases("codex") {
+        for (path, mut expected) in crate::hosts::fixtures::cases("codex") {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = CodexHost::on_home(Env::new(), tx, None);
             for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
@@ -775,7 +778,27 @@ mod tests {
             while let Ok(ev) = rx.try_recv() {
                 got.push(ev);
             }
+            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            for event in &mut expected {
+                if event["tool"] == "shell" {
+                    event["outside_actions"] = json!([]);
+                }
+            }
             assert_eq!(got, expected, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn recovery_shell_events_match_the_shared_api_fixture() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        for case in cases {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = CodexHost::on_home(Env::new(), tx, None);
+            host.on_item(false, &json!({"threadId": "th", "turnId": "tu", "item": {
+                "type": "commandExecution", "id": "tool-1", "command": case["command"]}}));
+            let got = rx.try_recv().unwrap();
+            assert_eq!(got, case["codex"], "{}", case["command"]);
+            assert!(!got.to_string().contains("synthetic-private-marker"));
         }
     }
 

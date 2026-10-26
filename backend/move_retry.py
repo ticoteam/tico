@@ -3,7 +3,7 @@
 The review gate (backend/review_gate.py) refuses a move to Review 1 or Review 2 while CI fails or cannot be read, or
 while no passing receipt names the current head. Each of those clears on its own: the checks finish, a receipt is
 posted, GitHub comes back. So the refusal is remembered on the ticket (task_events field `move_retry`, with the step it
-was going to and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
+was going to (and its board, for a move onto another) and a fingerprint of what the gate read), and this pass retries the same move as Tico when that
 fingerprint changes: a PR link's head or checks, the ticket's note, a new message on the ticket, or another wait
 beside a Blocked hold ending. An unreadable GitHub is retried on a timer instead, and if it is still unreadable it goes
 to DevOps (backend/blockers.py). Nobody has to ask for the retry, and Head of Engineering hears nothing about it.
@@ -94,7 +94,7 @@ def remember(c, actor, notice):
     step = notice.get("step")
     if not row or not step or row["status"] in ("done", "closed", "declined"):
         return
-    detail = {"step": step, "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
+    detail = {"step": step, "type": notice.get("type"), "kind": notice.get("kind"), "head": notice.get("head"), "by": str(notice.get("by") or actor),
               "outage": outage(notice.get("text")), "seen": fingerprint(c, row), "at": H.now(),
               "since": notice.get("since") or H.now(),
               "tries": int(notice.get("tries") or 0), "state": "waiting",
@@ -176,13 +176,14 @@ def retry(store, service, row, detail):
         try:
             # The install owner's receipts count as they do on a person's move (backend/app.py).
             settings = getattr(service, "settings", None)
-            H.task_update(c, H.KEEPER, row["id"], step=detail["step"], review_prs=snapshots,
+            H.task_update(c, H.KEEPER, row["id"], type=detail.get("type"), step=detail["step"], review_prs=snapshots,
                           review_reader=detail.get("by") or H.KEEPER,
                           receipt_owner=Access.load_owner(c, settings)["email"] if settings else None)
         except H.Refused as exc:
             c.execute("ROLLBACK TO move_retry")
             c.execute("RELEASE move_retry")
             notice = {**(getattr(exc, "review_gate", None) or {}), "task": row["id"], "step": detail["step"],
+                      "type": detail.get("type"),
                       "tries": int(detail.get("tries") or 0) + 1, "by": detail.get("by"),
                       "since": detail.get("since") or detail.get("at"), "asked": detail.get("asked")}
             notice.setdefault("kind", detail.get("kind"))

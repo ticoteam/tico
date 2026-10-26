@@ -150,11 +150,18 @@ async function hlMonitorToggle(box) {
   await hlRefresh();
 }
 
+// A bot's queue as Pipeline splits it (backend/health.py `_queue_words`): work that can start, work behind an interrupted
+// run nobody reviewed, and work held on purpose.
+function hlQueueWords(row) {
+  return [row.queued ? `${row.queued} queued` : '', row.dead ? `${row.dead} behind an interrupted run` : '',
+    row.held ? `${row.held} held on purpose` : ''].filter(Boolean);
+}
+
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
 // one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
   return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${row.queued ? ` · ${row.queued} queued` : ''}</span>
+    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
     ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
 };
 
@@ -187,7 +194,7 @@ function hlPageDraw() {
   const host = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${row.queued ? ', ' + row.queued + ' waiting' : ''}</span></li>`).join('');
+  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.js shows only the ones that do).
