@@ -169,9 +169,10 @@ def test_a_failed_head_read_refuses_and_a_ticket_without_a_pr_moves(api):
         link = H.task_links(c, row["id"])[0]["id"]
         with pytest.raises(Refused, match="cannot read the current head"):
             H.task_update(c, "bot:cpo", row["id"], step="In QA", review_prs={link: {"error": True, "why": "HTTP 502"}})
-        with pytest.raises(Refused, match="the PR link changed while GitHub was read"):
+        with pytest.raises(Refused, match="the PR link changed while GitHub was read") as moved:
             # The preflight read an older head than a webhook stored meanwhile: nobody compared the head it would judge.
             H.task_update(c, "bot:cpo", row["id"], step="In QA", review_prs={link: {"head_sha": B, "at": "2000-01-01"}})
+        assert moved.value.retryable  # a fresh preflight reads the stored head, so a plain retry settles it
         typ = row["type_id"]
         board = H.task_create(c, "human:ana", "Plan", "Plan.", "bot:cpo", type=typ, step="In Progress", lint=False)
         H.task_update(c, "bot:cpo", board["id"], step="Done")

@@ -227,7 +227,7 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
             why = detail.get("why") or "GitHub read failed" if detail.get("error") else "the PR link changed while GitHub was read"
             reject(c, actor, row, "reviews", "unknown", pr,
                    f"Move refused: cannot read the current head of {pr['url']} ({why}). "
-                   "Retry the move.", retryable=detail.get("retryable", False))
+                   "Retry the move.", retryable=bool(changed) or detail.get("retryable", False))
         heads[pr["id"]] = head if test_receipts.SHA.fullmatch(head) else ""
     read = (snapshots or {}).get(CHANGES) or {}
     missing = unapproved(c, row, heads, comparer(read))
