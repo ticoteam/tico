@@ -109,8 +109,8 @@ function route() {
   else if (S.route === '#/settings/routines') { SETTINGS_TAB = 'recurring'; location.replace(SETTINGS); return; }   // General > Team's moved switches
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
-  else if (/^#\/settings\/[a-z]+\/[a-z0-9-]+$/.test(S.route)) {   // one card: the settings catalogue's links (backend/settings_entries.py)
-    const [, tab, card] = S.route.slice(2).split('/'); SETTINGS_TAB = tab; SETTINGS_REVEAL = '#' + card; location.replace(SETTINGS); return;
+  else if (/^#\/settings\/[a-z]+(?:\/[a-z0-9-]+)?$/.test(S.route)) {   // a tab or card: the settings catalogue's links (backend/settings_entries.py)
+    const [, tab, card] = S.route.slice(2).split('/'); SETTINGS_TAB = tab; SETTINGS_REVEAL = card ? '#' + card : ''; location.replace(SETTINGS); return;
   }
   else if (S.route === CREDENTIALS) pageCredentials();
   else if (S.route === SQL_PAGE) pageSql();

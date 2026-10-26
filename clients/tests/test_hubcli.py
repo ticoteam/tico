@@ -720,6 +720,38 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
             assert _Recorder.calls[0][2]["default_visibility"] == words[-1]
 
 
+def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatch):
+    from clients import remotecli
+
+    calls = []
+
+    class Api:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = True
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body, delegate))
+            if method == "POST" and path == "settings/catalog/rules.routine/plan":
+                return {"run": {"method": "POST", "path": "routines/ops:qa-review",
+                                 "body": {"enabled": False}},
+                        "setting": {"name": "A bot's routine", "where": "Settings > Rules"},
+                        "value": {"enabled": False}}
+            if method == "GET" and path == "settings/catalog/rules.routine":
+                return {"setting": {}, "you_may": True}
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    args = hubcli.parser().parse_args(["settings", "set", "rules.routine", '{"enabled":false}',
+                                      "--id", "ops:qa-review"])
+    result = remotecli.run(args)
+    assert result["value"] == {"enabled": False}
+    assert calls[0][0:2] == ("POST", "settings/catalog/rules.routine/plan")
+    assert calls[0][2] == {"value": '{"enabled":false}', "id": "ops:qa-review"}
+    assert calls[0][3] is True
+    assert calls[1] == ("POST", "routines/ops:qa-review", {"enabled": False}, True)
+
+
 def test_a_plain_webhook_header_sends_no_secret_key():
     """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
     from clients import hubtools

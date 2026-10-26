@@ -13,7 +13,7 @@ import pytest
 from backend import botops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
 from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
-from backend.store import Problem
+from backend.store import H, Problem
 from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
 from backend.tests.test_mcp import call as mcp
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
@@ -224,3 +224,52 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
     assert not err and done["value"] == {"name": "Orders"}, done
     with api.app.state.store.read() as c:
         assert c.execute("SELECT created_by FROM triggers WHERE name='Orders'").fetchone()[0] == "human:cara"
+
+
+def test_catalogue_resolves_the_bot_for_id_addressed_routines_and_transitions(api, botops):
+    from backend.tests.test_api import as_member
+    from backend.tests.test_member_bots import register
+
+    ana = turn(api, botops, person="cara-test", text="Make me a bot")
+    made = register(api, ana, "routine-owner")
+    assert made.status_code == 200, made.text
+    finish(api, botops, ana)
+    routine = post(api, "bots/routine-owner/routines", {"title": "Daily check", "text": "Check the queue.",
+                  "cron": "0 9 * * *", "timezone": "UTC"}, token="cara-test")["routine"]
+
+    err, shown = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "cara-test")
+    assert not err and shown["you_may"] is True, shown
+    err, owner = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ana-test")
+    assert not err and owner["you_may"] is True, owner
+    err, paused = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
+                   "value": {"enabled": False}}, "cara-test")
+    assert not err and paused["value"] == {"enabled": False}, paused
+    err, edited = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
+                   "value": {"title": "Daily queue check"}}, "cara-test")
+    assert not err and edited["value"] == {"title": "Daily queue check"}, edited
+
+    # BotOps can get the owner's confirmation for deletion, still naming the routine by id only.
+    delegated = turn(api, botops, person="cara-test", text="Delete my routine")
+    err, card = mcp(api, "hub_settings_set", {"key": "rules.routine.delete", "id": routine["id"],
+                  "value": {}}, delegated["token"])
+    assert not err and card.get("needs_confirm") is True, card
+    assert botops_act.classify("POST", f"routines/{routine['id']}/delete") == "confirm"
+    finish(api, botops, delegated)
+
+    # The same id resolves the bot for transition controls, including the read-only permission answer.
+    now = H.now()
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,updated) "
+                  "VALUES('tr-owner','routine-owner','model','{}','human:cara',1,'prepared',?,?)", (now, now))
+    err, shown = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
+    assert not err and shown["you_may"] is True, shown
+
+    # An admin retains access; an unrelated ordinary member does not inherit the bot owner's rights.
+    err, admin = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ben-test")
+    assert not err and admin["you_may"] is True, admin
+    as_member(api, "ben@acme.example")
+    err, unrelated = mcp(api, "hub_settings_show", {"key": "rules.routine", "id": routine["id"]}, "ben-test")
+    assert not err and unrelated["you_may"] is False, unrelated
+    err, refused = mcp(api, "hub_settings_set", {"key": "rules.routine", "id": routine["id"],
+                   "value": {"enabled": False}}, "ben-test")
+    assert err and "bot's owners" in str(refused), refused

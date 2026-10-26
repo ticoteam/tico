@@ -194,7 +194,9 @@ def path_for(e, target, template=None):
     for name in TARGETS:
         if "{" + name + "}" in path:
             from urllib.parse import quote
-            path = path.replace("{" + name + "}", quote(str(target[name]), safe=""))
+            # Routine IDs use `<bot>:<routine-key>`; keep the colon in its path segment so Confirm cards can
+            # validate the same route string the Settings API accepts without permitting a slash escape.
+            path = path.replace("{" + name + "}", quote(str(target[name]), safe=":" if name == "id" else ""))
     return path
 
 
@@ -215,6 +217,24 @@ def kind_for(e, body):
     return e.kind
 
 
+def _bot_target(c, e, target):
+    """Resolve id-addressed bot settings to their owning bot before checking manager rights."""
+    target = target or {}
+    if target.get("bot"):
+        return target["bot"]
+    object_id = target.get("id")
+    if not object_id:
+        return ""
+    if e.route.startswith("routines/{id}"):
+        table = "schedules"
+    elif e.route.startswith("settings/transitions/{id}/"):
+        table = "bot_transitions"
+    else:
+        return ""
+    found = c.execute(f"SELECT bot FROM {table} WHERE id=?", (object_id,)).fetchone()
+    return found["bot"] if found else ""
+
+
 def may(c, auth, who, e, target=None):
     """Whether `who` passes the entry's own check (the route still makes its own)."""
     if who.role == "owner":
@@ -229,7 +249,7 @@ def may(c, auth, who, e, target=None):
         from . import hubdb as H
         return who.role == "human" and H.can_move(c, who.actor)
     if e.who == "bot":
-        return auth.bot_manager(c, who, (target or {}).get("bot") or "")
+        return auth.bot_manager(c, who, _bot_target(c, e, target))
     if e.who == "self":
         return who.role == "human" and (e.target != "person" or who.actor == "human:" + str((target or {}).get("person")))
     return False
