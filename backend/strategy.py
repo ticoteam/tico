@@ -309,6 +309,9 @@ def view(c, auth, who):
             "website": website(c),
             "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner", "status")} for g in rows[:GOALS_SHOWN]]
                              for bid, rows in linked.items()},
+            # goals_by_bet is a sample; a retire's "N goals serve it" needs every live goal the caller may read.
+            "live_by_bet": {bid: sum((g.get("status") or "") not in ("done", "dropped") for g in rows)
+                            for bid, rows in linked.items()},
             "health_by_bet": {b["id"]: health(c, linked.get(b["id"], [])) for b in listed}}
 
 

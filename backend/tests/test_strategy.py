@@ -110,6 +110,32 @@ def test_two_pending_strategy_proposals_apply_in_the_order_confirmed(api):
     assert draft(api)["summary"] == "First."
 
 
+def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):
+    # 20 closed goals sort first (owner ana before cara), so the sample of 20 holds none of the 21 live ones.
+    bet = ready(api)
+    closed = [post(api, "goals", {"title": f"Old {i}", "owner": "ana", "bet_id": bet["id"]})["goal"]["id"] for i in range(20)]
+    for i in range(21):
+        post(api, "goals", {"title": f"Live {i}", "owner": "cara", "bet_id": bet["id"]})
+    with api.app.state.store.transaction() as c:
+        c.execute(f"UPDATE goals SET status='done' WHERE id IN ({','.join('?' * len(closed))})", closed)
+    view = get(api, "strategy")
+    assert {g["status"] for g in view["goals_by_bet"][bet["id"]]} == {"done"}
+    assert view["live_by_bet"][bet["id"]] == 21
+
+
+def test_a_title_only_section_rename_from_a_proposal_renames_and_keeps_the_body(api):
+    ready(api)
+    write(api, sections={"extra": {"brand": {"title": "Brand", "body": "Plain."}}})
+    publish(api)
+    ceo = with_ceo_bot(api)
+    pid = post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {
+        "sections": {"extra": {"brand": {"title": "Positioning", "body": "Plain."}}}}}, token=ceo)["proposal"]["id"]
+    post(api, f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+    assert draft(api)["sections"]["extra"]["brand"] == {"title": "Positioning", "body": "Plain."}
+    current = get(api, "strategy")["current"]
+    assert current["n"] == 1 and current["sections"]["extra"]["brand"]["title"] == "Brand"
+
+
 def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are_gray(api):
     bet = ready(api)
     mine = post(api, "goals", {"title": "Sign 10 landlords", "owner": "ana", "bet_id": bet["id"]})["goal"]

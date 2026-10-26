@@ -73,6 +73,8 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     label: 'Bets', label_one: 'Bet', may_edit: role === 'owner',
     website: 'https://acme.example', goals_by_bet: {'b-price': [{id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', status: 'green'},
       {id: 'g-jobs', title: '400 jobs/week', owner: 'bot:cmo', status: 'yellow'}], 'b-offices': [{id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', status: 'red'}]},
+    // goals_by_bet is the first 20 a bet has; this counts all of its live ones.
+    live_by_bet: {'b-price': 21, 'b-offices': 1},
     health_by_bet: {'b-price': 'green', 'b-offices': 'red', 'b-weekly': 'gray'}});
   await page.route('**/*', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
@@ -394,7 +396,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
         `Summary Now ${v1.summary} Proposed Acme cleans homes in Austin at a fair price.`,
         `What we sell, and for how much Now ${sections.sell} Proposed Weekly at $99.`,
         `Brand Now ${sections.extra.brand.body} Proposed Fair, on time.`,
-        `Retire Bet 1 ${bets()[0].statement} 2 goals serve it. When you publish, you'll be asked what happens to them.`,
+        `Retire Bet 1 ${bets()[0].statement} 21 goals serve it. When you publish, you'll be asked what happens to them.`,
         'New bet Statement Price at the market and win on reliability. Rules out Discounts. Wrong if Churn above 5% a month · check by 1 Mar 2027 It starts as proposed; you make it active on the Strategy page.',
         `Change Bet 2 · Why Now ${bets()[1].why} Proposed Managers sign yearly.`]);
       assert.equal(await card.locator('.kpi-prop-line').innerText(), 'Yes adds this to your strategy draft. Bots keep reading v1 until you publish it on the Strategy page.');
@@ -419,8 +421,13 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
         status: 'pending', proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), reason: '', payload, ...extra}});
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [
         card('p-lens', {source: 'lens', lens: 'blue-ocean', sections: {serve: long}}, {lens_name: 'Blue Ocean'}),
-        card('p-same', {source: 'briefing', vision: v1.vision})]});
+        card('p-same', {source: 'briefing', vision: v1.vision}),
+        card('p-rename', {source: 'briefing', sections: {extra: {brand: {title: 'Positioning', body: sections.extra.brand.body}}}})]});
       const lens = page.locator('#goal-needs [data-proposal="p-lens"]'), same = page.locator('#goal-needs [data-proposal="p-same"]');
+      // A section renamed with its text unchanged is a change, not "already says this".
+      const rename = page.locator('#goal-needs [data-proposal="p-rename"]');
+      assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
+      assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
       await lens.waitFor();
       assert.match(await lens.locator('.kpi-prop-head').innerText(), /^CEO Bot suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');

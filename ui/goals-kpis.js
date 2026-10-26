@@ -239,7 +239,17 @@ function strategyDraftPropHtml(p) {
   if (pl.vision != null) text('Vision', d?.vision, pl.vision);
   const secs = pl.sections || {};
   for (const sec of STRAT_SECTIONS) if (sec.key in secs) text(sec.title, d?.sections?.[sec.key], secs[sec.key]);
-  for (const [key, x] of Object.entries(secs.extra || {})) text(x?.title || d?.sections?.extra?.[key]?.title || key, d?.sections?.extra?.[key]?.body, x?.body);
+  // An extra section can be renamed with its text unchanged: the title is a change of its own, as the server writes
+  // it (backend/strategy.py, a missing title keeps the draft's). An empty body removes the section, so no rename then.
+  for (const [key, x] of Object.entries(secs.extra || {})) {
+    const was = d?.sections?.extra?.[key], title = x?.title || was?.title || key;
+    const changed = [];
+    if (d && was && stratText(x?.body) && !same(was.title, title)) changed.push({label: 'Title', now: was.title, proposed: title});
+    if (!(d && same(was?.body, x?.body))) changed.push({label: 'Text', now: d ? was?.body : '', proposed: x?.body});
+    // A rename alone names itself, since the block shows a name only for two or more changes.
+    const only = changed.length === 1 && changed[0].label === 'Title' ? ' <span class="muted">· Title</span>' : '';
+    if (changed.length) rows.push(stratPropRow(esc(title) + only, propNowProposedHtml(changed)));
+  }
   const fields = [['statement', 'Statement'], ['why', 'Why'], ['rules_out', 'Rules out'], ['wrong_if', 'Wrong if'], ['cites', 'Cites']];
   const value = (k, v) => k === 'wrong_if' ? stratPropWrongText(v) : k === 'cites' ? (v || []).join(', ') : v;
   for (const b of pl.bets || []) {
@@ -250,7 +260,8 @@ function strategyDraftPropHtml(p) {
       rows.push(stratPropRow(`New ${esc(one.toLowerCase())}`, `<div class="prop-np">${lines}</div>${b.status === 'active' ? ''
         : `<p class="muted strat-prop-note">It starts as proposed; you make it active on the Strategy page.</p>`}`));
     } else if (b.status === 'retired') {
-      const serve = ((st?.goals_by_bet || {})[b.id] || []).filter(g => !['done', 'dropped'].includes(g.status)).length;
+      // Every live goal, not goals_by_bet: that list stops at 20 and may hold only closed goals.
+      const serve = (st?.live_by_bet || {})[b.id] || 0;
       rows.push(stratPropRow(`Retire ${esc(stratPropBetName(b.id))}`, `<span class="strat-prop-st">${esc(was?.statement || b.statement || '')}</span>${serve
         ? `<p class="muted strat-prop-note">${serve} goal${serve === 1 ? ' serves' : 's serve'} it. When you publish, you'll be asked what happens to ${serve === 1 ? 'it' : 'them'}.</p>` : ''}`));
     } else {
