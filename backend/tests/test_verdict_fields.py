@@ -148,6 +148,16 @@ def test_an_ordinary_child_can_finish_without_a_verdict(api):
         assert H.task(c, child["id"])["status"] == "done"
 
 
+@pytest.mark.parametrize("title", ["Review 1: import", "QA: import", "Security: confirm the vendor contract"])
+def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, title):
+    task_bot(api, lanes=True, others=("finance",))
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Implement the import", "Build it.", "bot:ops", lint=False)
+        child = H.task_create(c, "human:ana", title, "Confirm it.", "human:ana", parent_id=parent["id"], lint=False)
+        H.task_update(c, "human:ana", child["id"], status="done", note="Confirmed.")
+        assert H.task(c, child["id"])["status"] == "done"
+
+
 @pytest.mark.parametrize("verdict", ["approve", "pass", "changes", "fail"])
 def test_completed_runner_final_reply_records_inline_verdict_before_done(api, verdict):
     from backend.tests.test_subtask_results import start, finish
