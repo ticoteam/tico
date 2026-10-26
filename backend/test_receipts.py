@@ -13,38 +13,97 @@ FAIL = re.compile(r"\b(fail(?:s|ing|ed|ures?)?|error(?:s|ed)?|timed?\s*out|timeo
 ZERO = re.compile(r"\b(?:0|no)\s+(?:fail(?:s|ing|ed|ures?)?|error(?:s|ed)?)\b", re.I)
 PLAN = re.compile(r"\b(not run|pending|will|planned|0\s*pass(?:ed)?|(?:no|not|without)\s+(?:pass(?:ed)?|green|success))\b", re.I)
 REMOVED = ("deleted_at", "hidden_at", "superseded_at")
+# These describe a repair or history, not the outcome of the named run. Remove
+# only the phrase: a separate "2 failed" in the same receipt must still block.
+_FAILURE = r"(?:fail(?:s|ing|ed|ures?)?|errors?)"
+_FIX = r"(?:fix(?:ed|ing)|repair(?:ed|ing)|resolv(?:ed|ing)|correct(?:ed|ing))"
+# A historical subject can still describe a failure that is happening now.
+CURRENT_FAILURE = re.compile(
+    rf"\b{_FAILURE}\s+(?:tests?\s+)?"
+    rf"(?:(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}"
+    rf"{_FIX}\s*[;,]?\s*(?:but\s+)?(?:(?:they|it|this|that)\s+)?)?"
+    r"(?:(?:is|are|has|have|been|now|still|keeps)\s+){0,4}"
+    r"(?:recurring|recurs|recurred|reoccurred|returned|persisting|persists|persistent|present|happening|"
+    r"(?:is|are)\s+(?:still\s+)?back)\b", re.I)
+HISTORY = re.compile(
+    rf"\b(?:earlier|previous|historical|old)\s+(?:test\s+)?{_FAILURE}\b|"
+    rf"\b{_FIX}\s+(?:(?:the|a|an|earlier|previous|test|fixture|[0-9]+)\s+){{0,5}}{_FAILURE}\b|"
+    rf"\b{_FAILURE}\s+(?:tests?\s+)?"
+    rf"(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}{_FIX}\b", re.I)
 
 
-def recognise(line):
-    """None for unrelated prose; otherwise explicit status, head and original line."""
+CONTINUATION = re.compile(
+    rf"^\s*[0-9]+\s+(?:(?:earlier|previous|historical|old|test)\s+){{0,3}}"
+    rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b[0-9]+\s+(?:tests?\s+)?{_FAILURE}\b|"
+    rf"\b{_FAILURE}\s*[:=]\s*[1-9][0-9]*\b", re.I)
+
+
+def _recognise(line, test_context=False):
+    """Recognise one head's result clause, retaining failure precedence."""
     match = HEAD.search(line)
     shas = list(SHA.finditer(line))
-    anchor = match or (shas[0] if len(shas) == 1 else None)
-    # Notes and keeper notices wrap a receipt in other sentences: corrected
-    # historical failures and unrun suites do not describe this head's result.
-    start, end = 0, len(line)
-    if anchor:
-        for boundary in re.finditer(r"[.!?]\s+", line):
-            if boundary.end() <= anchor.start():
-                start = boundary.end()
-            elif boundary.start() >= anchor.end():
-                end = boundary.start()
-                break
-    clause = line[start:end]
-    if not TEST.search(clause):
+    if not test_context and not TEST.search(line):
         return None
     head = match[1].lower() if match else shas[0][0].lower() if len(shas) == 1 else None
-    result = ZERO.sub("", clause)
-    status = ("failed" if FAIL.search(result) else "unrecognised" if PLAN.search(result)
+    outcome = ZERO.sub("", line)
+    def history(match):
+        # "2 earlier failed" is still a counted outcome. Repair phrases such
+        # as "2 failures now fixed" describe a repair even when they have counts.
+        counted = re.search(r"\b[1-9][0-9]*\s+$", outcome[:match.start()])
+        historical = re.match(r"(?:earlier|previous|historical|old)\b", match[0], re.I)
+        return match[0] if counted and historical else ""
+    result = HISTORY.sub(history, outcome)
+    status = ("failed" if CURRENT_FAILURE.search(outcome) or FAIL.search(result) else "unrecognised" if PLAN.search(result)
               else "passed" if PASS.search(result) else "unrecognised")
     return {"head": head, "status": status, "text": line}
 
 
+def recognise_many(line):
+    """Bind separate result clauses to their own heads, including within one line.
+
+    A semicolon alone cannot clear a failure: an unheaded continuation stays
+    with its run. Only another explicit head starts a separate result.
+    """
+    found = []
+    sentences = []
+    for sentence in re.split(r"[.!?]\s+", line):
+        # An unheaded counted failure ("Re-run: 2 failed", "Re-run failed: 2")
+        # or a recurring failure belongs to the previous run.
+        # Other sentences (plans, repairs, commentary) retain their own scope.
+        if sentences and not SHA.search(sentence) and (CONTINUATION.search(sentence) or CURRENT_FAILURE.search(sentence)):
+            sentences[-1] += "; " + sentence
+        else:
+            sentences.append(sentence)
+    for sentence in sentences:
+        parts = re.split(r"[;,]\s*|\s+(?:and|but|after|while)\s+", sentence, flags=re.I)
+        clauses = []
+        for part in parts:
+            if clauses and (not SHA.search(part) or not SHA.search(clauses[-1])
+                            or re.search(r"\bbase\b", clauses[-1], re.I) and not HEAD.search(clauses[-1])):
+                clauses[-1] += "; " + part
+            else:
+                clauses.append(part)
+        for clause in clauses:
+            if receipt := _recognise(clause, test_context=bool(TEST.search(sentence))):
+                found.append({**receipt, "text": line})
+    return found
+
+
+def recognise(line):
+    """First head's result with failure precedence; collection uses every head."""
+    found = recognise_many(line)
+    if not found:
+        return None
+    return next((r for r in found if r["head"] == found[0]["head"] and r["status"] == "failed"), found[0])
+
+
 def sources(task):
-    """Only the task's own evidence, plus owner-authored evidence from review children.
+    """The task's own evidence and scoped evidence from review children.
 
     Collectors supply scoped messages. Keeper notices are accepted only when they
     describe ready-for-review evidence, never arbitrary keeper chatter.
+    `receipt_authors` is supplied by the review gate's permission-aware collector;
+    callers without one retain the owner-only rule.
     """
     out = []
     for item in [task, *task.get("children", [])]:
@@ -59,7 +118,8 @@ def sources(task):
             actor = message.get("from_actor")
             text = message.get("body", "")
             keeper = actor == "keeper" and re.search(r"ready[ -]for[ -]review|Review [12]", text, re.I)
-            if actor not in (item.get("owner"), task.get("owner")) and not keeper:
+            allowed = {item.get("owner"), task.get("owner"), *item.get("receipt_authors", [])}
+            if actor not in allowed and not keeper:
                 continue
             out.append({"task": item["id"], "message": message.get("id"), "actor": actor,
                         "created": message.get("created") or "", "source": "message", "text": text})
@@ -68,7 +128,7 @@ def sources(task):
 
 def receipts(task):
     return [{**source, **receipt} for source in sources(task) for line in source["text"].splitlines()
-            if (receipt := recognise(line)) is not None]
+            for receipt in recognise_many(line)]
 
 
 def at_head(task, head):

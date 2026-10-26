@@ -456,6 +456,10 @@ Workspace admin console and no Google Cloud project of their own. It works for a
 Tico supplies the Google app ("Tico") and the consent screen. Google itself enforces what Tico may do: the grant belongs to
 the account that signed in and cannot reach anyone else in the Workspace.
 
+![My Google account tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
+
+*Synthetic Acme example with Google not configured. Your personal Google connection is under My Google account.*
+
 1. In Tico, the person opens **Settings > My Google account** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
 2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. Nothing that writes or

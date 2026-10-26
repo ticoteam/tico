@@ -35,8 +35,8 @@ def picks(c, settings=None):
             continue
         used = {providers.bot_choice(c, settings, config)[1]}
         for key in ("fallback", "task_model"):
-            if isinstance(config.get(key), dict):
-                used.add(str(config[key].get("model") or ""))
+            if isinstance(config.get(key), dict) and config[key].get("model"):
+                used.add(str(config[key]["model"]))
         for model in used:
             counts[model] = counts.get(model, 0) + 1
     cat = gateway_tiers.catalog()

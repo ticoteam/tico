@@ -127,7 +127,7 @@ What stays on:
   last 30 days with your words; **Undo** puts one back to waiting for you, as long as nothing has acted on it yet (an
   approval already spent stays, `422 consumed`). The requesting bot is told it was undone.
 - **The team can turn it off.** The owner's rule **People may let their Assistant decide their approvals** (Settings >
-  Humans, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
+  People, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
   **Assistant acts without asking** off, approving is a card again too.
 
 With the setting off, an approve the Assistant tries is refused with `403 approve_setting_off`, and it tells you in one

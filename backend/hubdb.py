@@ -721,6 +721,18 @@ RUN_ROTATION_SCHEMA = """
 ALTER TABLE turns ADD COLUMN rotated TEXT;
 """
 
+# Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
+# `turns.session_why`; backend/run_triggers.py session), and the one-shot mark that makes a thread's next run compact
+# its session before it starts after a prompt too large to send (backend/run_backoff.py compact_first). Append to
+# preserve existing installations.
+RUN_SESSION_SCHEMA = """
+ALTER TABLE turns ADD COLUMN session_kind TEXT;
+ALTER TABLE turns ADD COLUMN session_why TEXT;
+CREATE TABLE IF NOT EXISTS compact_first(
+  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, marked TEXT NOT NULL, taken_by TEXT,
+  PRIMARY KEY(bot, conversation_id));
+"""
+
 # The CEO Bot's merged asks (backend/ceo_merge.py): each original item in a person's Needs you that one CEO Bot item
 # stands for, and what became of it; append to preserve existing installations.
 CEO_MERGES_SCHEMA = """
@@ -821,7 +833,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TRIGGERS_INCOMING_SCHEMA, HOOK_RELAY_SCHEMA,
               WEBHOOKS_SCHEMA, SLEEP_IDLE_SCHEMA,
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
-              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA]
+              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA]
 
 
 class Refused(Exception):
@@ -5163,7 +5175,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True):
+                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5197,7 +5209,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
     if parent and review_gate.REVIEW.match(str(title).strip()):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True)
+        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -5442,7 +5454,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, skip_step_wake=()):
+                verdict_head=None, skip_step_wake=(), receipt_owner=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5523,7 +5535,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
             from . import review_gate
-            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note)
+            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, receipt_owner=receipt_owner)
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
