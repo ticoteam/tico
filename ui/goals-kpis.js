@@ -707,7 +707,7 @@ function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
   if (!goal && !live.length && goalMayEdit({owner}, state.goals)) goal = 'new';
   if (!goal && owner === GOAL_COMPANY && live.length === 1) goal = live[0].id;
   state.panel = {owner, goal, kpiAdd: '', kpi: '', standing: false, tapped, history: false, historyKpis: null,
-    historyLoading: false, historyError: false, why: '', whyFrom: '', whyDraft: null};
+    historyLoading: false, historyError: false, why: '', whyFrom: '', whyDraft: null, update: '', updateDraft: null, updateError: '', updateFocus: false};
   history.replaceState(null, '', goal && goal !== 'new' ? GOALS + '/' + encodeURIComponent(goal) : GOALS);
   const dlg = goalPanelDialog(state);
   delete dlg.dataset.kpi;
@@ -716,6 +716,22 @@ function goalPanelOpen(state, owner, {goal = '', tapped = ''} = {}) {
 }
 function goalCheckinHtml(c) {
   return `<blockquote class="kpi-check">${esc(c.body)}<footer class="muted">${esc(goalActorName(c.source_actor))}${c.signal ? ' · ' + esc(c.signal.replace('_', ' ')) : ''} · ${esc(ago(c.ts))}</footer></blockquote>`;
+}
+// "Post update": the owner's own words on how a goal is going (POST /v2/goals/{id}/checkins), for whoever may colour it.
+// A KPI with a target and a colour of its own sets the goal's colour instead (backend/goals.py `score`), so the answer
+// is then kept only as words.
+const GOAL_SIGNALS = [['on_track', 'On track'], ['at_risk', 'At risk'], ['off_track', 'Off track'], ['', 'No answer']];
+const goalMeasured = g => (g.kpis || []).some(k => ['improve', 'maintain'].includes(k.link?.kind) && ['red', 'yellow', 'green'].includes(k.status));
+function goalUpdateHtml(g, P) {
+  const d = P.updateDraft || {body: '', signal: ''};
+  return `<form class="goal-form gp-update" data-gp-update-form="${esc(g.id)}" novalidate>
+      <label class="goal-f"><span>What is going on?</span><textarea name="body" rows="3" maxlength="4000" placeholder="In a sentence or two: what happened, and what comes next">${esc(d.body)}</textarea></label>
+      <fieldset class="gp-signal"><legend>How is it going?</legend><div class="gp-signal-row">${GOAL_SIGNALS.map(([v, label]) =>
+        `<label><input type="radio" name="signal" value="${v}"${v === d.signal ? ' checked' : ''}>${label}</label>`).join('')}</div></fieldset>
+      <p class="muted gp-update-note" data-gp-update-note${d.signal && goalMeasured(g) ? '' : ' hidden'}>Its measures set its colour; this update is kept as your words</p>
+      <p class="err" data-gp-update-err role="alert"${P.updateError ? '' : ' hidden'}>${esc(P.updateError)}</p>
+      <div class="goal-actions"><button class="primary" type="submit">Post</button><button class="ghost" type="button" data-gp-update-cancel>Cancel</button></div>
+    </form>`;
 }
 function goalPanelHtml(state) {
   const P = state.panel, actor = P.owner, info = goalOwnerInfo(actor);
@@ -735,6 +751,7 @@ function goalPanelHtml(state) {
     return `<li class="gp-goal" data-gp-goal="${esc(g.id)}">${head}${kpiLinesHtml(g.kpis, {goal: g.id})}
       ${props.length ? `<ul class="kpi-props">${props.map(p => proposalHtml(p)).join('')}</ul>` : ''}
       ${g.checkin ? `<div data-gp-checkins="${esc(g.id)}">${goalCheckinHtml(g.checkin)}</div><button class="linkish" type="button" data-gp-more="${esc(g.id)}">Check-ins</button>` : ''}
+      ${mayG ? (P.update === g.id ? goalUpdateHtml(g, P) : `<button class="linkish" type="button" data-gp-update="${esc(g.id)}">Post update</button>`) : ''}
       ${mayG ? (P.kpiAdd === g.id ? `<div class="kpi-add-host">${kpiAddHtml(g)}</div>` : `<button class="linkish" type="button" data-gp-kpi-add="${esc(g.id)}">Add KPI</button>`) : ''}</li>`;
   };
   const profile = standing && !goals.some(g => g.title.trim() === standing)
@@ -824,6 +841,43 @@ function goalPanelRender(state) {
     if (r && host) { host.innerHTML = (r.checkins || []).slice().sort((x, y) => String(y.ts).localeCompare(String(x.ts))).map(goalCheckinHtml).join(''); b.remove(); }
     else b.disabled = false;
   };
+  for (const b of body.querySelectorAll('[data-gp-update]')) b.onclick = () => {
+    P.update = b.dataset.gpUpdate; P.updateDraft = {body: '', signal: ''}; P.updateError = ''; P.updateFocus = true; redraw();
+  };
+  const uform = body.querySelector('[data-gp-update-form]');
+  if (uform) {
+    const id = uform.dataset.gpUpdateForm, text = uform.elements.body, submit = uform.querySelector('[type=submit]');
+    const note = uform.querySelector('[data-gp-update-note]'), err = uform.querySelector('[data-gp-update-err]');
+    const signal = () => uform.querySelector('input[name=signal]:checked')?.value || '';
+    const keep = () => { P.updateDraft = {body: text.value, signal: signal()}; };
+    const fail = msg => { P.updateError = msg; err.textContent = msg; err.hidden = false; };
+    const close = () => { P.update = ''; P.updateDraft = null; P.updateError = ''; redraw(); };
+    text.oninput = keep;
+    uform.onchange = () => { keep(); note.hidden = !(signal() && goalMeasured(state.goals.find(g => g.id === id) || {})); };
+    uform.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); close(); } };
+    uform.querySelector('[data-gp-update-cancel]').onclick = close;
+    if (P.updateFocus) { P.updateFocus = false; text.focus(); uform.scrollIntoView({block: 'nearest'}); }
+    uform.onsubmit = async ev => {
+      ev.preventDefault();
+      keep();
+      const words = text.value.trim(), said = signal();
+      if (!words) { fail('Say in a sentence what is going on'); text.focus(); return; }
+      submit.disabled = true;
+      err.hidden = true;
+      let r;
+      try { r = await post(`/v2/goals/${encodeURIComponent(id)}/checkins`, said ? {body: words, signal: said} : {body: words}); }
+      catch (e) {
+        if (state.panel === P && P.update === id) { fail(e.message || 'Could not post the update'); submit.disabled = false; }
+        return;
+      }
+      // At once the goal's latest, then the tree again for the colour it may have set.
+      const g = state.goals.find(x => x.id === id);
+      if (g && r?.checkin) g.checkin = r.checkin;
+      if (state.panel === P && P.update === id) { P.update = ''; P.updateDraft = null; P.updateError = ''; }
+      redraw();
+      await reload();
+    };
+  }
   const standingBtn = body.querySelector('[data-gp-standing]');
   if (standingBtn) standingBtn.onclick = () => { P.standing = true; redraw(); };
   const standing = body.querySelector('[data-standing-ed]');
