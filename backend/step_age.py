@@ -84,7 +84,7 @@ def sweep(c, at=None):
     rows = _working(c)
     since = since_map(c, rows)
     parked = H.parked_bots(c)
-    asked, late = [], []
+    asked, late, untold = [], [], []
     for row in rows:
         start = since.get(row["id"])
         if not start:
@@ -104,10 +104,14 @@ def sweep(c, at=None):
         if _hours(at, start) >= LATE_HOURS and not _done(c, LATE_EVENT, row, start):
             to = _manager(c, row)
             hours = int(_hours(at, start))
-            if to:
-                H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_id(owner)}). "
-                        "Unblock it, reroute it to another builder, or tell the owner what it waits on.",
-                        {"wake": "blocker", "step_late": True}, trigger="stall_check")
+            sent = (H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_id(owner)}). "
+                          "Unblock it, reroute it to another builder, or tell the owner what it waits on.",
+                          {"wake": "blocker", "step_late": True}, trigger="stall_check") if to else None)
+            if sent is None:
+                # Nobody was told: no manager, or one that cannot read this ticket. Record nothing, so a
+                # later sweep for the same stay can still send one notice once a manager is readable.
+                untold.append(row["id"])
+                continue
             H.event(c, H.KEEPER, LATE_EVENT, row["id"], {"owner": owner, "to": to, "since": start, "hours": hours})
             late.append(row["id"])
-    return {"asked": asked, "late": late}
+    return {"asked": asked, "late": late, "untold": untold}
