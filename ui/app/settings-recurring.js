@@ -34,9 +34,9 @@ function renderSettingsRecurring() {
       ${sel('bot', 'Bot', opt('', 'All bots', f.bot) + bots.map(b => opt(b, empName(b), f.bot)).join(''))}
       ${sel('computer', 'Computer', opt('', 'All computers', f.computer) + opt('mine', 'My computer', f.computer) + [...computers].sort((a, b) => a[1].localeCompare(b[1])).map(([k, v]) => opt(k, v, f.computer)).join(''))}
       ${sel('kind', 'Kind', [['all', 'Any kind'], ['cron', 'On a schedule'], ['event', 'On an event'], ['inbox', 'On a message']].map(([k, v]) => opt(k, v, f.kind)).join(''))}
-      ${sel('armed', 'State', [['all', 'Any state'], ['armed', 'Armed'], ['idle', 'Not armed']].map(([k, v]) => opt(k, v, f.armed)).join(''))}
+      ${sel('armed', 'State', [['all', 'Any state'], ['armed', 'On'], ['idle', 'Off']].map(([k, v]) => opt(k, v, f.armed)).join(''))}
       <span class="settings-bots-count" data-recurring-count>${rows.length === all.length ? `${all.length} routines` : `${rows.length} of ${all.length} routines`}</span></div>
-    ${rows.length ? `<div class="rlist">${rows.map(r => routineBlockHTML(r)).join('')}</div>` : `<div class="empty">${all.length ? 'No routines match these filters.' : 'No routines yet.'}</div>`}`;
+    ${rows.length ? `<div class="rlist">${rows.map(r => routineBlockHTML(r, {actions: true})).join('')}</div>` : `<div class="empty">${all.length ? 'No routines match these filters.' : 'No routines yet.'}</div>`}`;
   bindRoutineExpand(el);
   el.oninput = el.onchange = ev => {
     const input = ev.target.closest('[data-recurring-filter]'); if (!input) return;
@@ -137,7 +137,8 @@ async function systemRoutineWrite(key, send, status) {
   try {
     const out = await send();
     systemRoutineReplace(out.job);
-    note = out.running ? 'Running…' : 'Saved';
+    note = out.running ? 'Running…' : '';
+    if (!out.running) toast('Saved');
     again = !!out.running;
   } catch (e) { note = e.message || 'Try again'; failed = true; }
   finally { SYSTEM_ROUTINE_BUSY.delete(key); }

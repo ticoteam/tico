@@ -334,14 +334,14 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
           await page.evaluate(() => { location.hash = '#/updates'; });
           await page.waitForFunction(() => S.route === '#/updates');
           await page.evaluate(value => { location.hash = value; }, href);
-          await page.waitForFunction(expected => location.hash === '#/settings' && SETTINGS_TAB === expected, tab);
+          await page.waitForFunction(expected => location.hash === `#/settings/${expected}` && SETTINGS_TAB === expected, tab);
           assert.equal(await page.locator(`[data-settings-tab="${tab}"]`).getAttribute('aria-selected'), 'true', href);
           assert.deepEqual(errors, [], href);
         }
         await page.evaluate(() => { location.hash = '#/updates'; });
         await page.waitForFunction(() => S.route === '#/updates');
         await page.evaluate(() => { location.hash = '#/settings/webhooks/outgoing'; });
-        await page.waitForFunction(() => location.hash === '#/settings' && SETTINGS_TAB === 'webhooks' && WH.tab === 'outgoing');
+        await page.waitForFunction(() => location.hash === '#/settings/webhooks' && SETTINGS_TAB === 'webhooks' && WH.tab === 'outgoing');
         assert.deepEqual(errors, []);
         await page.close();
       }

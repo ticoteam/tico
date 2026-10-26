@@ -169,7 +169,7 @@ when the work belongs elsewhere. See [Meetings](meetings.md) for the resulting t
 
 ## Adding a human
 
-Choose **Team > + > Add human** for an email and optional name, or open **Settings > Humans > Add manually**. Adding sends no email; an invite goes out only when you choose **Send invite** in the person's menu.
+Choose **Team > + > Add human** for an email and optional name, or open **Settings > People > Add manually**. **Add and send invite** adds them and emails the invite in one step, where this Tico can send invites; plain **Add** sends no email, and **Send invite** in the person's menu sends one later.
 Owners and admins can add humans outside the team's domain;
 members with **Can add humans** can add coworkers in the domain. See [Humans](people.md) for sign-in and directory sync.
 

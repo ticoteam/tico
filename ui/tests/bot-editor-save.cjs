@@ -8,7 +8,10 @@
 //  - Model and Fallback both pending: Fallback, definition, then the transition; a refused transition keeps the editor
 //    open with the pick, and Save again sends the definition and the transition, not the Fallback;
 //  - a half-made pick (harness, no model) keeps the editor open and says so;
-//  - with nothing pending, Save posts the definition only, as before.
+//  - with nothing pending, Save posts the definition only, as before;
+//  - every other row waits for Save bot too (settings stage 1): a model, compact-at and keep-tasks change posts nothing
+//    until Save bot, which then saves all of them, each at the revision the write before it made;
+//  - Archive bot asks first, naming who gets its work, and Cancel archives nothing.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,7 +27,7 @@ const {unrouted} = require('./support/routes.cjs');
       efforts: ['low', 'high'], default_effort: 'high', harnesses: [harness]});
     const catalog = {
       models: [model('gpt-6-luna', 'codex', 'openai'), model('gpt-6-1-sol', 'codex', 'openai'), model('opus-5-5', 'claude', 'anthropic')],
-      harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
+      harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}}],
       default: {runtime: 'claude', model: 'opus-5-5'},
     };
     const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
@@ -55,6 +58,8 @@ const {unrouted} = require('./support/routes.cjs');
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
         }
+        if (what === 'compact-at' || what === 'keep-tasks-going') return json({bot: 'helper', revision: ++helper.revision});
+        if (what === 'archive') return json({bot: 'helper', archived: true});
         if (what === 'transitions' && refuseTransition) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
         if (what === 'transitions') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'preparing'});
       }
@@ -108,7 +113,7 @@ const {unrouted} = require('./support/routes.cjs');
     // 1. A Fallback picked but not Applied: Save sends it (same body as Apply) first, then the definition.
     await open();
     await pick('fallback', 'codex', 'gpt-6-1-sol');
-    assert.equal(await row('fallback').locator('[data-choice-apply]').isEnabled(), true, 'Apply is offered and left unpressed');
+    assert.equal(await row('fallback').locator('[data-choice-apply]').count(), 0, 'no row saves on its own: there is no Apply');
     await save();
     await closed();
     assert.deepEqual(calls.map(c => c.what), ['fallback', 'definition'], 'Save applies the pending fallback, then the definition');
@@ -151,7 +156,7 @@ const {unrouted} = require('./support/routes.cjs');
     await pick('fallback', 'claude');
     await save();
     await editor.locator('[data-bot-status] .err').waitFor();
-    assert.match(await statusText(), /Fallback change not applied: finish choosing it, or reset it/);
+    assert.match(await statusText(), /Nothing saved: finish choosing the fallback/);
     assert.deepEqual(calls, [], 'nothing is saved');
     await page.evaluate(() => settingsEditBot('helper', true));
 
@@ -165,7 +170,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls, [], 'nothing is saved before the model change is confirmed');
     await transition.locator('[data-confirm-cancel]').last().click();
     await editor.locator('[data-bot-status] .err').waitFor();
-    assert.match(await statusText(), /Model change not applied: press Apply next to Model, or reset it/);
+    assert.match(await statusText(), /Nothing saved: the model change was not confirmed/);
     assert.equal(await editor.isVisible(), true, 'no definition-only close');
     assert.deepEqual(calls, [], 'Cancel saves nothing');
     assert.equal(await row('model').locator('[data-choice-model]').inputValue(), 'gpt-6-1-sol', 'the pick is still there');
@@ -200,18 +205,40 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector('#transition-dialog').close(); });
 
-    // Apply itself is unchanged: it sends the same /fallback body and leaves the editor open.
+    // Model, compact-at and keep-tasks changed: nothing is posted until Save bot, then all of them save together.
     await open();
-    await pick('fallback', 'codex', 'gpt-6-luna');
-    await row('fallback').locator('[data-choice-apply]').click();
-    await page.waitForFunction(() => S.emps.find(e => e.name === 'helper')?.fallback?.model === 'gpt-6-luna');
-    assert.deepEqual(calls, [{what: 'fallback', body: {fallback: {harness: 'codex', model: 'gpt-6-luna', effort: 'high'}, expected_revision: 13}}]);
-    assert.equal(await editor.isVisible(), true);
-    calls = [];
+    await pick('model', 'codex', 'gpt-6-luna');
+    await editor.locator('[data-bot-compact]').selectOption('400000');
+    await editor.locator('[data-bot-keep-tasks]').fill('3');
+    await editor.locator('[data-bot-keep-tasks]').dispatchEvent('change');
+    await editor.locator('[data-bot-pending]:not([hidden])').waitFor();
+    await page.waitForTimeout(200);
+    assert.deepEqual(calls, [], 'nothing saves before Save bot');
     await save();
+    await transition.locator('[data-confirm-prepare]').click();
     await closed();
-    assert.deepEqual(calls.map(c => c.what), ['definition'], 'an Applied fallback is not sent again by Save');
-    assert.equal(calls[0].body.expected_revision, 14, 'Save uses the revision Apply made');
+    assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]), [['definition', 13], ['compact-at', 14], ['keep-tasks-going', 15], ['transitions', 16]],
+      'Save bot saves every held change, chaining the revision');
+    assert.equal(calls[1].body.compact_at, 400000);
+    assert.equal(calls[2].body.keep_tasks_going, 3);
+    await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
+    await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector('#transition-dialog').close(); });
+
+    // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.
+    await open();
+    await editor.locator('[data-bot-remove]').click();
+    const ask = page.locator('dialog.settings-confirm');
+    await ask.waitFor();
+    assert.match(await ask.innerText(), /Ana/, 'the confirm names who gets its work');
+    await ask.locator('[data-confirm-cancel]').click();
+    await ask.waitFor({state: 'detached'});
+    await page.waitForTimeout(200);
+    assert.deepEqual(calls, [], 'Cancel archives nothing');
+    assert.equal(await editor.isVisible(), true);
+    await editor.locator('[data-bot-remove]').click();
+    await ask.locator('[data-confirm-ok]').click();
+    for (let i = 0; i < 50 && !calls.length; i++) await page.waitForTimeout(100);
+    assert.deepEqual(calls.map(c => c.what), ['archive'], 'Archive bot archives once confirmed');
 
     assert.deepEqual(errors, []);
     console.log('ok');

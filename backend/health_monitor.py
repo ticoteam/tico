@@ -509,6 +509,11 @@ def _bot_checks(c, settings=None):
                             f"{name} is still in setup and holds {count} {what}(s), the oldest from {oldest[:16]} UTC.",
                             f"BotOps: finish {name}'s setup with the person it serves, or pause it so its work is not held."))
     online_ids = {r["id"] for r in health._online_runners(c)}
+    for row in health.refused_queues(c, settings):
+        out.append(_finding('queue_refused:' + row['bot'], 'queue_refused', SETUP,
+                            f"{row['name']}'s oldest queued job has been refused for over 12 hours",
+                            f"Queued since {row['oldest'][:16]} UTC; refusal reason: {row['reason']}.",
+                            'BotOps: inspect the refusal in Health and resolve its execution gate.'))
     for row in health._waiting(c, online_ids, settings)[2]:
         # Only work the claim has no reason to hold (execution.bot_refusal) is a Tico bug; a held bot's row on Health
         # names its reason instead.

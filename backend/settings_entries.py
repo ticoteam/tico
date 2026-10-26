@@ -320,6 +320,7 @@ ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + 
 # goes: the entry that covers it.
 ALIASES = {
     ("POST", "{x}/invite"): "people.add",
+    ("POST", "access/humans/{x}/invite"): "people.add",
     ("POST", "{x}/password"): "people.add",
     ("POST", "{x}/{x}"): "webhooks.outgoing",
     ("POST", "runners/{x}/inbox-only"): "computer.inbox_only",
