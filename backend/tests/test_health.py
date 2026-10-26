@@ -766,6 +766,53 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
         assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
 
 
+def fenced_task_jobs(c, bot, created):
+    """A task for `bot` with an interrupted run on it: the IDs of its jobs queued behind that run (Pipeline's `dead`)."""
+    before = {r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued'", (bot,))}
+    owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+    task = H.task_create(c, owner, "Interrupted task", "", "bot:" + bot, private=False)
+    interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+    c.execute("UPDATE jobs SET state='uncertain',created=? WHERE message_id=?", (created, interrupted["id"]))
+    H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+    jobs = [r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued'", (bot,)) if r["id"] not in before]
+    c.executemany("UPDATE jobs SET created=? WHERE id=?", [(created, job) for job in jobs])
+    return jobs
+
+
+def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment):
+    """Pipeline counts a held job behind an interrupted run as dead, but the claim never reads held work: a bot whose
+    only waiting work is held on purpose is neither stuck nor slow, however old it is."""
+    from backend import health
+
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "helper")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('helper',?,1,?,'t')",
+                  (runner, H.now()))
+        claimable(c, runner, "helper")
+        jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
+        online = {r["id"] for r in health._online_runners(c)}
+        # Unheld, the fenced work is stuck behind the interrupted run until someone reviews it.
+        [row] = health._waiting(c, online)[2]
+        assert (row["bot"], row["reason"], row["queued"], row["dead"]) == ("helper", "uncertain", 0, len(jobs))
+        c.executemany("UPDATE jobs SET held=1 WHERE id=?", [(job,) for job in jobs])
+        assert health._waiting(c, online)[1:] == ([], [])
+
+
+def test_a_silent_computer_splits_its_queue_as_pipeline_does(environment):
+    """Behind a computer that stopped checking in, work an interrupted run fences is not counted as queued."""
+    from backend import health
+
+    api = environment()
+    silent_computer(api, 1900)
+    with api.app.state.store.transaction() as c:
+        jobs = fenced_task_jobs(c, "helper", H.now())
+        [computer] = health.silent_computers(c)
+    assert jobs and (computer["queued"], computer["dead"]) == (1, len(jobs))
+
+
 def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(environment):
     """Someone is sitting there waiting for the reply: two minutes, not the fifteen other queued work gets."""
     from backend import health

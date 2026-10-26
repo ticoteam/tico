@@ -16,8 +16,10 @@ It shows the company count, warning and stop levels, and when the incident opene
 See [Company turn levels](computers.md#company-turn-levels) for what counts, defaults, recovery and how an admin changes the levels.
 This record does not provide the separate automatic fixer.
 
-Health's **Stuck bots** check and `hub health check` name the bot, queued job count, oldest queued age,
-why it cannot start, and a fix or a command to inspect its runs. **Tasks not progressing** names visible tasks
+Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
+that can start, jobs behind an interrupted run awaiting review, jobs held on purpose), the oldest age, why it cannot
+start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
+Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible tasks
 and links their recovery diagnosis. Settings > Health shows the same summaries.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
