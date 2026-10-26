@@ -24,6 +24,16 @@ const items = [card('t-idea', 'Dark mode for the roadmap', roadmap),
     // A card read before the server said so is still known by its type, once the types are loaded.
     assert.equal(await page.evaluate(() => { TASK_TYPES.push({id: 'product-roadmap', name: 'Product roadmap', steps_only: true, steps: []});
       return needsStepsOnly({type_id: 'product-roadmap'}); }), true);
+    // Yes or No on the person's own roadmap item goes as a comment, since the server refuses its bare status write;
+    // on their own plain task it still finishes or declines it.
+    const said = await page.evaluate(items => {
+      const me = myActor(), [idea, , plain] = items.map(it => ({type: 'task', it: {...it, owner: me}}));
+      return Object.fromEntries([['idea', idea], ['plain', plain]].flatMap(([k, c]) => [['yes', ''], ['no', 'not this quarter']]
+        .map(([what, note]) => [`${k}-${what}`, decideWriteBody(c, what, 0, note).writes.map(w => [w.path, w.body.text ?? w.body.status])])));
+    }, items);
+    assert.deepEqual(said, {
+      'idea-yes': [['/v2/tasks/t-idea/comments', 'Yes.']], 'idea-no': [['/v2/tasks/t-idea/comments', 'No. not this quarter']],
+      'plain-yes': [['/v2/tasks/t-plain', 'done']], 'plain-no': [['/v2/tasks/t-plain', 'declined']]});
 
     await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [items[0]]})}));
     await page.route('**/api/v2/tasks/*/comments', route => route.fulfill({contentType: 'application/json', body: '{"comments":[]}'}));
