@@ -208,7 +208,8 @@ def test_every_apt_package_exists_in_the_images_debian_release():
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
+# Only production pins are copied into the image's venv; CI can build its own test-only C extensions.
+@pytest.mark.parametrize('requirements', ['backend/requirements.txt'])
 def test_every_pin_has_a_wheel_for_the_images_python(requirements):
     """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there."""
     major, minor = re.match(r'python:(\d+)\.(\d+)', python_image()).groups()
