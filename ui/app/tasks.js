@@ -205,6 +205,21 @@ function taskSubProgress(t) {
   if (t?.parts?.total) return {done: Number(t.parts.done) || 0, total: Number(t.parts.total)};
   return null;
 }
+// Merged work has moved to release: show its remaining dependencies without calling it blocked.
+function taskPostMerge(t) {
+  return ['Pending Release', 'Post Release QA', 'Done', "Won't do"].includes(t?.step?.name) ||
+    (t?.links || []).some(l => l.kind === 'pr' && ['merged', 'shipped'].includes(l.state));
+}
+function taskPostMergeHint(t) {
+  if (!taskPostMerge(t)) return '';
+  const hints = [], children = Number(t?.children_summary?.direct_open) || 0;
+  if (children) hints.push(`${children} open subtask${children === 1 ? '' : 's'}`);
+  const blockers = taskBlockers(t).filter(b => !['done', 'closed', 'declined'].includes(String(b.status || '')));
+  if (blockers.length) hints.push(`blocked by ${blockers[0].title || '#' + String(blockers[0].id).slice(0, 8)}`);
+  if (t?.ask?.body) hints.push('question waiting for an answer');
+  if (!hints.length) return '';
+  return `<span class="tl-post-merge" title="Merged work stays in the release queue">${esc(hints.join(' · '))}</span>`;
+}
 function progressRing(done, total) {
   const c = 2 * Math.PI * 4.6, f = total ? Math.min(1, done / total) : 0;
   return `<svg class="ring" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false"><circle class="ring-bg" cx="7" cy="7" r="4.6"/>${f ? `<circle class="ring-fg" cx="7" cy="7" r="4.6" stroke-dasharray="${(f * c).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 7 7)"/>` : ''}</svg>`;
@@ -346,7 +361,7 @@ function taskCard(it) {
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
     ${t?.building_started_at ? `<div class="muted bcard-clock">Building ${esc(Math.floor(((t.building_seconds || 0) + Math.max(0, (Date.now() - Date.parse(t.building_started_at)) / 1000)) / 60))}m</div>` : ''}
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) + taskPostMergeHint(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}

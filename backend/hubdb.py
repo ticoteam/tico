@@ -4427,9 +4427,10 @@ def children_summaries(conn, task_ids, visible_sql="1"):
         "SELECT tree.root,count(*) total,sum(t.status IN ('done','closed','declined')) done,"
         "sum(tree.live AND t.status NOT IN ('done','closed','declined')) open,"
         "sum(tree.direct) direct_total,sum(tree.direct AND t.status IN ('done','closed','declined')) direct_done,"
+        "sum(tree.direct AND tree.live AND t.status NOT IN ('done','closed','declined')) direct_open,"
         "sum(coalesce(prs.total,0)) prs_total,sum(coalesce(prs.merged,0)) prs_merged "
         "FROM tree JOIN tasks t ON t.id=tree.id LEFT JOIN prs ON prs.task_id=t.id GROUP BY tree.root", task_ids)
-    keys = ("total", "open", "done", "prs_total", "prs_merged", "direct_total", "direct_done")
+    keys = ("total", "open", "done", "prs_total", "prs_merged", "direct_total", "direct_done", "direct_open")
     result = {tid: dict.fromkeys(keys, 0) for tid in task_ids}
     for row in rows:
         result[row["root"]] = {key: row[key] for key in keys}

@@ -109,8 +109,39 @@ def wait(c, row, include_manual=True):
     if not include_manual and row.get('blocked_kind') == 'manual':
         row = {**row, 'blocked_kind': None}
     detail = H.wait_detail(c, row)
+    if detail and detail.get('why') == 'an open blocker':
+        # A merged ticket is already in the release queue; its unfinished follow-up work does
+        # not hold another ticket behind it.
+        from . import task_relations as TR
+        for blocker in TR.live_blockers(c, row['id'], H.ACTIVE_STATUSES):
+            if blocker and not post_merge(c, blocker):
+                return detail
+        return None
     # An armed PR completion callback is a wake subscription, not a hold on building.
     return detail if detail and not detail['why'].startswith('GitHub on ') else None
+
+
+def merged_pr_urls(c, row):
+    from . import hubdb as H
+    return {link['url'] for link in H.task_links(c, row['id'])
+            if link.get('kind') == 'pr' and link.get('state') in ('merged', 'shipped')}
+
+
+def release_or_later(c, row, step_id=None):
+    """Whether this task is already in the release queue, including its saved step while held."""
+    from . import hubdb as H
+    step_id = step_id or row.get('step_id')
+    if row.get('blocked_since') and row.get('blocked_from_step'):
+        step_id = row['blocked_from_step']
+    release = H._one(c, "SELECT position FROM task_steps WHERE type_id=? AND name='Pending Release'",
+                     (row.get('type_id'),))
+    step = H._one(c, 'SELECT position FROM task_steps WHERE id=? AND type_id=?',
+                  (step_id, row.get('type_id')))
+    return bool(release and step and step['position'] >= release['position'])
+
+
+def post_merge(c, row):
+    return bool(merged_pr_urls(c, row) or release_or_later(c, row))
 
 
 def hold(c, task_id, reason, kind='dependency'):
@@ -120,6 +151,7 @@ def hold(c, task_id, reason, kind='dependency'):
     # A refused move into Engineering still holds a task on its original board.
     # Ordinary dependency holds stay scoped to Engineering's recovery rules.
     if (not row or row['status'] not in (*H.ACTIVE_STATUSES, 'review')
+            or post_merge(c, row)
             or kind != 'gate' and not review_gate.engineering(c, row)):
         return
     if row.get('blocked_since'):
@@ -140,8 +172,12 @@ def reconciliation(c, row, snapshots=None):
     the linked PRs (review_gate.snapshot): only from one do all-green hosted checks at the current head clear a gate
     hold without a receipt (fresh())."""
     from . import hubdb as H, review_gate
-    if (not row or not row.get('blocked_since') or row.get('blocked_kind') in ('manual', 'stranded')
+    if (not row or not row.get('blocked_since') or row.get('blocked_kind') == 'manual'
             or not review_gate.engineering(c, row)):
+        return None
+    if post_merge(c, row):
+        return 'merged'
+    if row.get('blocked_kind') == 'stranded':
         return None
     waiting = wait(c, row)
     if row.get('blocked_kind') == 'gate':
@@ -181,12 +217,13 @@ def reconcile(c, task_id, snapshots=None):
     if action == 'dependency':
         c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason='Waiting on a dependency',updated=? WHERE id=?", (H.now(), task_id))
         bump(c, row)
-    if action != 'resume':
+    if action not in ('resume', 'merged'):
         return
     previous = H._one(c, 'SELECT * FROM task_steps WHERE id=? AND type_id=?', (row.get('blocked_from_step'), row.get('type_id')))
     # Restoring the pre-hold step is not retrying the refused destination.
+    note = 'Hold cleared: merged' if action == 'merged' else 'Hold cleared'
     H._set_status(c, H.KEEPER, row, row.get('blocked_from_status') or 'open',
-                  step=previous['id'] if previous else None, note='Hold cleared')
+                  step=previous['id'] if previous else None, note=note)
     bump(c, row)
 
 

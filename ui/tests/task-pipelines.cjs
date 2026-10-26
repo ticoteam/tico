@@ -312,6 +312,20 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       assert.match(await page.locator('#task-peek .task-wait').innerText(), /Waiting for a test machine <script>.*since/);
       assert.equal(await page.locator('#task-peek .tstatus').innerText(), 'Blocked');
       await page.locator('#task-peek [data-modal-close]').click();
+      const merged = {...held, id: 'dev-merged', title: 'Merged work', step_id: 'dev-release',
+        step: {id: 'dev-release', name: 'Pending Release', status: 'review'}, status: 'review', blocked_since: null,
+        links: [{kind: 'pr', state: 'merged'}], children_summary: {direct_open: 2},
+        relations: {blocks: [{id: 'dev-549', title: 'Dev 549', status: 'doing', direction: 'in'}]}};
+      await page.evaluate(task => {
+        document.querySelector('#task-body').insertAdjacentHTML('beforeend', taskCard({key: 't' + task.id, task, title: task.title, actor: task.owner, updated: task.updated}));
+        const modal = document.createElement('div');
+        modal.dataset.testMergedDetail = '';
+        modal.innerHTML = hubModalHTML(task, taskItem(task));
+        document.body.append(modal);
+      }, merged);
+      assert.match(await page.locator('[data-task-key="tdev-merged"] .tl-post-merge').innerText(), /2 open subtasks · blocked by Dev 549/);
+      assert.match(await page.locator('[data-test-merged-detail] .tl-post-merge').innerText(), /2 open subtasks · blocked by Dev 549/);
+      await page.locator('[data-test-merged-detail]').evaluate(node => node.remove());
       // The phone peek closes its history entry asynchronously before the next board action.
       if (width === 375) await page.waitForFunction(() => !history.state?.taskPeek && !PEEK_BACK);
     }

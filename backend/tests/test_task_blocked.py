@@ -8,6 +8,32 @@ from backend.tests.test_review_gate import api, ticket, move, HEAD, get
 from backend.tests.test_github import post
 
 
+def put_in_release(c, task):
+    typ = H.type_get(c, task['type_id'])
+    position = max(s['position'] for s in typ['steps']) + 1
+    release = H.new_id()
+    qa = H.new_id()
+    c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,'Pending Release',?,'review')",
+              (release, task['type_id'], position))
+    c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES(?,?,'Post Release QA',?,'review')",
+              (qa, task['type_id'], position + 1))
+    c.execute("UPDATE tasks SET step_id=?,status='review' WHERE id=?", (release, task['id']))
+    return release
+
+
+def mark_merged(c, task):
+    c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (task['id'],))
+
+
+def assert_merged_clear_event(c, task_id):
+    assert any(event['field'] in ('step', 'status') and event['note'] == 'Hold cleared: merged'
+               for event in H.task_history(c, task_id))
+
+
+def add_open_child(c, task):
+    return H.task_create(c, 'human:ana', 'Follow-up', 'Finish the follow-up.', 'human:ana', parent_id=task['id'])
+
+
 def test_blocked_step_survives_restart_and_is_before_work(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:
@@ -407,3 +433,95 @@ def test_scheduler_does_not_write_check_an_unheld_engineering_task(api, monkeypa
     monkeypatch.setattr(task_blocked, 'sweep', record)
     Scheduler(api.app.state.store, api.app.state.execution).tick(datetime.now(timezone.utc))
     assert task['id'] not in called
+
+
+def test_merged_release_ticket_keeps_open_child_visible_without_blocking(api):
+    from backend import task_blocked
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        put_in_release(c, task)
+        mark_merged(c, task)
+        add_open_child(c, task)
+        task_blocked.sweep(c, H.now(), task_ids=[task['id']])
+        row = H.task(c, task['id'])
+        assert (row['status'], row['step_id']) == ('review', H._one(
+            c, "SELECT id FROM task_steps WHERE type_id=? AND name='Pending Release'", (task['type_id'],))['id'])
+        assert H.children_summary(c, task['id'])['direct_open'] == 1
+
+
+def test_merged_ticket_hold_reconciles_to_release_step_with_clear_note(api):
+    from backend import task_blocked
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        release = put_in_release(c, task)
+        task_blocked.ensure_steps(c)
+        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting on an open child task')
+        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_from_step=?,blocked_from_status='review' WHERE id=?",
+                  (release, task['id']))
+        mark_merged(c, task)
+        task_blocked.sweep(c, H.now(), task_ids=[task['id']])
+        row = H.task(c, task['id'])
+        assert (row['status'], row['step_id'], row['blocked_since']) == ('review', release, None)
+        assert_merged_clear_event(c, task['id'])
+
+
+def test_followup_pr_gate_refusal_does_not_reblock_merged_release_ticket(api):
+    from backend import review_gate
+    task = ticket(api)
+    followup = 'https://github.com/acme/widget/pull/999'
+    with api.app.state.store.transaction() as c:
+        release = put_in_release(c, task)
+        mark_merged(c, task)
+        H.task_link(c, task['owner'], task['id'], followup)
+        before = H.task(c, task['id'])
+        review_gate.notify(c, H.KEEPER, {'task': task['id'], 'kind': 'receipt', 'head': 'a' * 40,
+                                         'pr': followup, 'text': 'Review refused: stale receipt'})
+        after = H.task(c, task['id'])
+        assert (after['status'], after['step_id'], after['version']) == (
+            before['status'], release, before['version'])
+        assert any(m['to_actor'] == task['owner'] and 'stale receipt' in m['body']
+                   for m in H._rows(c.execute('SELECT * FROM messages WHERE conversation_id=?', (task['conversation_id'],))))
+
+
+def test_merged_pending_release_blocker_no_longer_holds_another_ticket(api):
+    from backend import task_blocked, task_relations as TR
+    blocked = ticket(api)
+    with api.app.state.store.transaction() as c:
+        blocker = H.task_create(c, H.KEEPER, 'Merged dependency', 'Its PR is merged.', blocked['owner'],
+                                type=blocked['type_id'])
+        put_in_release(c, blocker)
+        H.task_link(c, H.KEEPER, blocker['id'], 'https://github.com/acme/widget/pull/701')
+        c.execute("UPDATE task_links SET state='merged' WHERE task_id=? AND kind='pr'", (blocker['id'],))
+        TR.add_blocker(c, H.KEEPER, blocked['id'], blocker['id'])
+        task_blocked.sweep(c, H.now(), task_ids=[blocked['id']])
+        assert H.task(c, blocked['id'])['status'] == 'doing'
+
+
+def test_open_pr_child_hold_behavior_is_unchanged(api):
+    from backend import task_blocked
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        add_open_child(c, task)
+        task_blocked.sweep(c, H.now(), task_ids=[task['id']])
+        row = H.task(c, task['id'])
+        assert row['status'] == 'waiting' and row['blocked_kind'] == 'dependency'
+
+
+def test_stranded_hold_clears_after_pr_merge(api):
+    from backend import task_blocked
+    task = ticket(api)
+    with api.app.state.store.transaction() as c:
+        release = put_in_release(c, task)
+        task_blocked.ensure_steps(c)
+        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Legacy stranded wait')
+        c.execute("UPDATE tasks SET blocked_kind='stranded',blocked_from_step=?,blocked_from_status='review' WHERE id=?",
+                  (release, task['id']))
+        mark_merged(c, task)
+        held = H.task(c, task['id'])
+        assert held['blocked_kind'] == 'stranded' and task_blocked.post_merge(c, held)
+        assert task_blocked.reconciliation(c, held) == 'merged'
+        task_blocked.sweep(c, H.now(), task_ids=[task['id']])
+        row = H.task(c, task['id'])
+        assert (row['status'], row['step_id'], row['blocked_since'], row['note']) == (
+            'review', release, None, 'Legacy stranded wait')
+        assert_merged_clear_event(c, task['id'])
