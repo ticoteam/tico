@@ -1539,6 +1539,8 @@ class Store:
                 # is empty (backend/market.py). Idempotent, no migration number.
                 from . import market as Market
                 Market.mark_seeded_pages(c)
+                # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
+                H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups

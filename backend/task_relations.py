@@ -461,9 +461,10 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     conn.execute("UPDATE tasks SET updated=? WHERE id IN (?,?,?)",
                  (at, child_id, old or child_id, new or child_id))
     if made_private:
-        conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (child_id,))
-        H._task_event(conn, child_id, actor, "private", 0, 1, "")
-        H._private_followups(conn, child_id)
+        H._made_private(conn, actor, child_id)
+        for below in H.descendants(conn, child_id):     # and the tasks under it, as making a parent private does
+            if not H.task_private(conn, below):
+                H._made_private(conn, actor, below["id"])
     H.event(conn, actor, "task.relate", child_id, {"task": new or old, "kind": "parent", "removed": not new})
     if old and row["status"] not in ("done", "closed", "declined"):
         # The old parent may have nothing left open now.

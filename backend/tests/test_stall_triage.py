@@ -10,12 +10,12 @@ from backend.store import H
 from backend.tests.test_api import api  # noqa: F401
 
 
-def ready(api, title="Recheck the cash warning", messages=()):
+def ready(api, title="Recheck the cash warning", messages=(), private=None):
     """A quiet task `finance` owns that stands as at its last checkpoint, with the room's `messages` (actor, text)."""
     store = api.app.state.store
     with store.transaction() as c:
         team_rules.save(c, "human:ana", {"stall_triage": True})
-        task = H.task_create(c, H.human_actor("ana"), title, "Before the deadline.", "bot:finance")
+        task = H.task_create(c, H.human_actor("ana"), title, "Before the deadline.", "bot:finance", private=private)
         for actor, text in messages:
             H.task_comment(c, actor, task["id"], text, wake=False)
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
@@ -66,6 +66,16 @@ def test_a_held_quiet_task_decide_calls_stuck_gets_one_wake_and_none_after(api):
     assert sweep(api, tid)["woke"] == [] and found(api, tid) == [], "not asked again, not woken again, at this stand"
     with api.app.state.store.read() as c:
         assert ST.verdict_of(c, tid)["woke_at"]
+
+
+def test_decide_never_reads_a_private_stalled_task_it_would_read_were_it_company_visible(api):
+    shared = ready(api, title="Recheck the cash warning")
+    private = ready(api, title="Recheck the salary review", private=True)
+    with api.app.state.store.read() as c:
+        assert H.task_private(c, H.task(c, private)) and not H.task_private(c, H.task(c, shared))
+        assert private in [r["id"] for r in H.stalled_tasks(c, at=H.shift(H.now(), hours=3))], "private ones stall too"
+    assert [i["id"] for i in found(api, shared)] == [shared]
+    assert found(api, private) == []
 
 
 def test_a_task_waiting_on_a_person_or_a_task_is_parked_with_no_run_and_finished_work_is_closed_crediting_the_speaker(api):
