@@ -2783,7 +2783,7 @@ for line in sys.stdin:
         let host = Host::Codex(crate::hosts::codex::CodexHost::on_home(env, tx, None));
         host.start().await.unwrap();
         let turn = host.start_turn("th1", "Work on the task", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let now = Instant::now();
