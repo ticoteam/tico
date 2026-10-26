@@ -203,6 +203,7 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     busy(api, machine, 0, 6)
     slugs = [f"busy-{n}" for n in range(6)]
     store = api.app.state.store
+    finished = finish_private(store, "busy-1")
 
     def read():
         steps = [0]
@@ -221,7 +222,9 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
         return got, steps[0]
 
     before, steps = read()
-    assert any(t[4] for rows in before.values() for t in rows)          # private tasks are among them
+    # Finished private tasks still come back, one the bot owns and one it asked for: they decide whose eyes its focus
+    # is kept from, and only the private part of the read finds them.
+    assert {t[0] for t in before["busy-1"] if t[4] and t[3] not in H.ACTIVE_STATUSES} == finished
     with store.transaction() as c:
         for n in range(40):
             task = H.task_create(c, "bot:" + slugs[n % 6], f"Old {n}", "Done long ago. " * 200,
@@ -229,3 +232,33 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
             c.execute("UPDATE tasks SET status=? WHERE id=?", ("done" if n % 2 else "closed", task["id"]))
     after, more = read()
     assert after == before and more == steps
+
+
+def finish_private(store, slug):
+    """Closes the private task `slug` owns and the private one it asked a person for; returns their ids."""
+    with store.transaction() as c:
+        ids = {row[0] for row in c.execute(
+            "SELECT id FROM tasks WHERE private=1 AND ? IN (owner,requester)", ("bot:" + slug,))}
+        assert {row[0] for row in c.execute(f"SELECT owner='bot:{slug}' FROM tasks WHERE id IN ({','.join('?' * len(ids))})",
+                                            tuple(ids))} == {0, 1}
+        c.execute(f"UPDATE tasks SET status=CASE WHEN owner=? THEN 'done' ELSE 'closed' END "
+                  f"WHERE id IN ({','.join('?' * len(ids))})", ("bot:" + slug, *ids))
+    return ids
+
+
+def test_a_finished_private_task_still_keeps_its_bots_focus_from_who_cannot_read_it(api, monkeypatch):
+    # A status line with no task id hides its focus when any private task of the bot is unreadable to the viewer:
+    # once that task is finished only the private part of the status task read finds it.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 2)
+    store = api.app.state.store
+    finish_private(store, "busy-1")
+    with store.transaction() as c:
+        c.execute("UPDATE bot_status SET task_id=NULL, focus='Drafting the offer letter' WHERE bot='busy-1'")
+    for token, focus in (("ana-test", "Drafting the offer letter"), ("ben-test", "")):
+        who = store.settings.test_identities[token]
+        with store.read_transaction() as c:
+            row = c.execute("SELECT * FROM bot_status WHERE bot='busy-1'").fetchone()
+            batched = privacy.status(c, who, row, **privacy.status_inputs(c, ["busy-1"])["busy-1"])
+            alone = privacy.status(c, who, row)
+        assert batched["focus"] == alone["focus"] == focus
