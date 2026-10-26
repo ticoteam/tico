@@ -73,6 +73,15 @@ class LeavingClosed(Case):
             self.assertEqual((row["status"], row["done_at"], row["closed_at"], row["closed_by"]),
                              ("declined", None, None, None))
 
+    def test_closing_a_done_task_keeps_when_it_was_done(self):
+        t = self.make(ANA, "Draft the hiring post", CMO)
+        H.task_update(self.conn, CMO, t["id"], status="done")
+        done_at = H.task(self.conn, t["id"])["done_at"]
+        H.task_close(self.conn, ANA, t["id"])
+        row = H.task(self.conn, t["id"])
+        self.assertEqual((row["status"], row["done_at"], row["closed_by"]), ("closed", done_at, ANA))
+        self.assertIsNotNone(done_at)
+
     def test_start_clears_close_times_left_on_finished_tasks_once(self):
         stuck = self.make(ANA, "Draft the hiring post", CMO)
         kept = self.make(ANA, "Draft the events post", CMO)
