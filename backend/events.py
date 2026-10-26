@@ -607,7 +607,8 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = "SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') ORDER BY created DESC LIMIT 1"
+LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') "
+            "ORDER BY created DESC,rowid DESC LIMIT 1")
 
 
 def prime_status_lines(c, slugs):
@@ -615,7 +616,7 @@ def prime_status_lines(c, slugs):
     of status lines makes a few dozen statements instead of seven or more per bot. Every statement holds the GIL for
     its turn, and on a busy server each costs milliseconds of waiting; outside a snapshot nothing is kept."""
     from .read_cache import cache, prime, prime_rows
-    from .execution import LAST_STOP
+    from .execution import HELD_ATTEMPT_SQL, HELD_RUN_SQL, HELD_SQL, LAST_STOP, STOP_ATTEMPT_SQL, STOP_JOB_SQL
     from . import run_backoff, turn_budgets, usage_limits
     if cache(c) is None:
         return
@@ -630,7 +631,7 @@ def prime_status_lines(c, slugs):
             prime(c, statement, {(s,): found.get(s) for s in part})
         live = {}
         for row in c.execute(f"SELECT bot,id,created FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
-                             "ORDER BY created", part):
+                             "ORDER BY created,rowid", part):
             live[row["bot"]] = row        # the newest run, as LIMIT 1 picks it
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
@@ -638,6 +639,36 @@ def prime_status_lines(c, slugs):
             f"SELECT value_json,key FROM registry_metadata WHERE key IN ({marks})", keys)}     # metadata reads row[0]
         prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
                    {(k,): [found[k]] if k in found else [] for k in keys})
+        # The run each mark names, its job, and a crashed bot's newest held job and run (execution.last_stop).
+        stops = {}
+        for slug in part:
+            mark = H._json(found[LAST_STOP + slug]["value_json"], {}) if LAST_STOP + slug in found else {}
+            if isinstance(mark, dict) and isinstance(mark.get("attempt_id"), str) and mark["attempt_id"]:
+                stops[slug] = mark["attempt_id"]
+        runs = _rows_by_id(c, STOP_ATTEMPT_SQL, set(stops.values()))
+        prime(c, STOP_ATTEMPT_SQL, {(aid,): runs.get(aid) for aid in stops.values()})
+        job_ids = {row["job_id"] for row in runs.values() if row["job_id"]}
+        jobs = _rows_by_id(c, STOP_JOB_SQL.replace("SELECT state", "SELECT state,id"), job_ids)
+        prime(c, STOP_JOB_SQL, {(jid,): jobs.get(jid) for jid in job_ids})
+        newest, newest_of = {}, {}
+        for row in c.execute(f"SELECT id,attempt_id,bot FROM jobs WHERE state='uncertain' AND bot IN ({marks}) "
+                             "ORDER BY created,rowid", part):
+            newest[row["bot"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
+            newest_of[(row["bot"], row["attempt_id"])] = row
+        prime(c, HELD_SQL, {(s,): newest.get(s) for s in part})
+        prime(c, HELD_RUN_SQL, {(s, aid): newest_of.get((s, aid)) for s, aid in stops.items()})
+        held = {row["attempt_id"] for row in (*newest.values(), *newest_of.values()) if row["attempt_id"]}
+        found_runs = _rows_by_id(c, HELD_ATTEMPT_SQL.replace("SELECT state", "SELECT state,id"), held)
+        prime(c, HELD_ATTEMPT_SQL, {(aid,): found_runs.get(aid) for aid in held})
+
+
+def _rows_by_id(c, statement, ids):
+    """{id: row} for a one-row `... WHERE id=?` statement, read for all of `ids` together."""
+    ids, out = sorted(ids), {}
+    for part in H.chunks(ids):
+        query = statement.replace("WHERE id=?", "WHERE id IN (" + ",".join("?" * len(part)) + ")")
+        out.update((row["id"], row) for row in c.execute(query, part))
+    return out
 
 
 def status_line(c, who, slug, default=None, inputs=None, auth=None):

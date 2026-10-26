@@ -47,6 +47,11 @@ export function connect(config, filters) {
   return {
     identify(id) { try { analytics?.identify(id); } catch (_) {} try { if (errors) Sentry.setUser({id}); } catch (_) {} },
     capture(name, properties) { try { analytics?.capture(name, properties); } catch (_) {} },
+    chatSend(properties) {
+      try {
+        if (active && errors) errorClient.captureEvent({tags: {source: 'chat_send'}, extra: properties});
+      } catch (_) {}
+    },
     reset() {
       active = false;
       // Discard, never unload/flush: unload uses sendBeacon for queued events.
