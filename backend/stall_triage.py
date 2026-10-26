@@ -120,6 +120,8 @@ def inputs(c, at, rows):
     for row in rows:
         if row["id"] in seen or row.get("held") or row.get("own_blockers") or H.actor_id(row["owner"]) in parked:
             continue
+        if H.task_private(c, row):
+            continue                # its messages stay with its parties: Decide never reads them
         seen.add(row["id"])
         if not wake_rules.at_checkpoint(c, row, row["owner"]) or not _wake_open(c, row, at):
             continue

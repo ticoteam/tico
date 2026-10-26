@@ -7,6 +7,20 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-10-25
+
+### Fixed
+- **Setup recovers from interrupted research.** After a server restart, the strategy step shows a form instead of waiting for research that can no longer finish ([Setup](docs/strategy.md#setup)).
+- **Late research leaves your strategy draft alone.** Research that runs past 10 minutes shows as failed. A late answer no longer fills the draft after the form has returned ([Setup](docs/strategy.md#setup)).
+- **Clearing setup inputs cancels the old research.** Clearing both the website and description stops the running research and returns the strategy step to a form ([Setup](docs/strategy.md#setup)).
+- **Setup recovers when a research start goes unconfirmed.** Going back and clicking **Next** again checks for matching research already started before creating another run ([Setup](docs/strategy.md#setup)).
+- **Setup refuses non-public websites when you save.** An internal or private address is rejected before it can reach the Librarian's market task ([Setup](docs/strategy.md#setup)).
+- **Goals keep links to hidden bets.** Saving a goal no longer clears its link to a retired or unpublished bet the editor cannot see. The selector shows **Retired or unpublished** instead of **None** ([Goals](docs/goals-and-kpis.md#the-goals-page)).
+- **Summary autosaves no longer disrupt other strategy edits.** Saving a bet or publishing uses the latest draft revision after the summary saves, avoiding a false conflict ([Strategy](docs/strategy.md#the-page)).
+- **Publish recognizes citation and guide changes.** The button becomes available when only a bet's citations or the strategy guide changed ([Publishing](docs/strategy.md#publishing)).
+- **Moving bets detects conflicting strategy edits.** Each position change checks the draft revision. If a move fails partway through, the page reloads the saved order ([Strategy](docs/strategy.md#the-page)).
+- **SQL reads show the team's current vision.** The company profile follows the vision visible to the team, including after upgrades and the first strategy publication ([Strategy](docs/strategy.md#what-bots-see)).
+
 ## [0.4.8] - 2026-10-25
 
 ### Added
@@ -4400,7 +4414,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/ticoteam/tico/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/ticoteam/tico/compare/v0.4.6...v0.4.7
 [0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
