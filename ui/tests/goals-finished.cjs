@@ -53,7 +53,8 @@ const goals = [
       if (g && !post && !one[2]) return json({goal: {...g, kpis: [{id: 'k1', name: 'Beta signups', status: 'gray'}],
         checkins: [{id: 'c1', body: 'Paused for the redesign.', source_actor: 'human:ben', ts: at(23)}],
         events: [{field: 'status', actor: 'human:ana', old: 'green', new: 'dropped', note: '', ts: at(24)}]}});
-      if (g && post && one[2] === '/status') { Object.assign(g, {status: body.status, status_note: body.note, rank: null}); return json({goal: g}); }
+      if (g && post && one[2] === '/status') { g.before = {status: g.status, status_note: g.status_note}; Object.assign(g, {status: body.status, status_note: body.note, rank: null}); return json({goal: g}); }
+      if (g && post && one[2] === '/reopen' && body.undo) { Object.assign(g, g.before, {rank: 9}); return json({goal: g}); }
       if (g && post && one[2] === '/reopen') {
         Object.assign(g, {status: body.status === 'auto' ? 'gray' : body.status, status_source: body.status === 'auto' ? 'auto' : 'person',
           status_note: body.status === 'auto' ? '' : body.note, status_by: 'human:ben', rank: 9});
@@ -107,19 +108,19 @@ const goals = [
     await form.locator('input[name=note]').fill('The beta is back on');
     await form.locator('button[type=submit]').click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-b2/reopen'), 'reopen sent');
-    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-b2/reopen').body, {status: 'green', note: 'The beta is back on', undo: false});
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-b2/reopen').body, {status: 'green', note: 'The beta is back on'});
     await panel.locator('[data-gp-goal="g-b2"]').waitFor();
     await until(async () => await panel.locator('[data-fin-toggle]').innerText() === 'Finished (2)', 'two left');
     assert.equal(await page.locator('#goal-tree [data-goal="g-b2"]').count(), 1, 'back in the tree');
 
-    // 6. Remove: the toast offers Undo, which puts back the colour and note it had.
+    // 6. Remove: the toast offers Undo, and the server puts back the colour and note it had.
     await panel.locator('[data-gp-edit="g-ben"]').click();
     await panel.locator('[data-goal-remove]').click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-ben/status' && r.body.status === 'dropped'), 'dropped');
     const toast = page.locator('.toast', {hasText: 'Goal removed'});
     await toast.locator('button', {hasText: 'Undo'}).click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-ben/reopen'), 'undo sent');
-    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-ben/reopen').body, {status: 'yellow', note: 'Backend is late', undo: true});
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-ben/reopen').body, {undo: true}, 'the server reads what it had');
     await panel.locator('[data-gp-goal="g-ben"]').waitFor();
 
     // 5. Ben may not set the colour of Sales's goals: no Reopen. 3. An owner with no finished goal has no "Finished" line.

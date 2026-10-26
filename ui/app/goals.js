@@ -172,16 +172,15 @@ function goalBetHtml(g, may) {
 }
 // A done or dropped goal comes back (backend/goals.py `reopen`): with a colour that sticks, or `auto`, the colour it had,
 // worked out again by the CEO Bot. The server checks who may, as it does for a colour.
-const goalReopenPost = (id, status, note, undo = false) => post('/v2/goals/' + encodeURIComponent(id) + '/reopen', {status, note, undo});
+const goalReopenPost = (id, status, note) => post('/v2/goals/' + encodeURIComponent(id) + '/reopen', {status, note});
 // After a removal: the redraw the page needs (the Goals page's tree and panel, else the bot page's cards).
 const goalsAfterChange = () => GOALS_ST && $('#goal-body') ? goalsReload(GOALS_ST) : goalsRefresh();
-// "Goal removed" offers Undo: the goal comes back with the colour it had, as it was set (by hand with its note, else
-// automatic). The goals that moved up when it was dropped stay where they are.
+// "Goal removed" offers Undo: the server puts back the colour it had from its history (by hand with its note and
+// setter, else automatic). The goals that moved up when it was dropped stay where they are.
 function goalRemovedToast(g) {
-  const byHand = g.status_source === 'person' && ['red', 'yellow', 'green'].includes(g.status);
   const panel = document.getElementById('goal-panel'), host = panel?.open ? panel : null;
   toast('Goal removed', false, {label: 'Undo', run: async () => {
-    await goalReopenPost(g.id, byHand ? g.status : 'auto', byHand && g.status_note ? g.status_note : 'Removed by mistake', true);
+    await post('/v2/goals/' + encodeURIComponent(g.id) + '/reopen', {undo: true});
     toast('Goal restored', false, null, {host});
     await goalsAfterChange();
   }}, {host});

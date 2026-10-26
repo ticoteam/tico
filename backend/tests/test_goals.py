@@ -1,7 +1,7 @@
 """Goals: every node on the org chart says what it is for; colours, not percentages; KPIs anyone
 may log."""
 
-from backend.tests.test_api import api, post  # noqa: F401
+from backend.tests.test_api import api, get, post  # noqa: F401
 
 
 def company_goal(api, title="Grow revenue 30% this year"):
@@ -59,13 +59,15 @@ def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts
     # Cara may not set its colour, so she may not reopen it; a reason is required.
     post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Mine now"}, token="cara-test", expected=403)
     post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": ""}, token="ben-test", expected=422)
-    # Undo passes the colour and the note it had: both come back, and the history says it was undone.
-    back = post(api, f"goals/{mine['id']}/reopen", {"status": "yellow", "note": "Backend is late.", "undo": True},
-                token="ben-test")["goal"]
+    set_at = [e for e in get(api, f"goals/{mine['id']}")["goal"]["events"] if e["new"] == "yellow"][-1]["ts"]
+    # Undo puts back what the history says it had, whatever the page sends: Ben's colour, note and time, though
+    # Ana pressed it, and the history says who undid it.
+    back = post(api, f"goals/{mine['id']}/reopen", {"status": "green", "note": "Fine", "undo": True})["goal"]
     assert (back["status"], back["status_note"], back["status_source"]) == ("yellow", "Backend is late.", "person")
+    assert (back["status_by"], back["status_at"]) == ("human:ben", set_at)
     assert back["rank"] is not None
     last = [e for e in back["events"] if e["field"] == "status"][-1]
-    assert (last["old"], last["new"], last["note"]) == ("dropped", "yellow", "Undo remove: Backend is late.")
+    assert (last["actor"], last["old"], last["new"], last["note"]) == ("human:ana", "dropped", "yellow", "Undo remove")
     # Done, then reopened with a new colour and one line why.
     post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
     again = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"},
@@ -73,6 +75,9 @@ def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts
     assert (again["status"], again["status_by"], again["status_note"]) == ("red", "human:ben", "The launch slipped")
     last = [e for e in again["events"] if e["field"] == "status"][-1]
     assert (last["old"], last["new"], last["note"]) == ("done", "red", "Reopened: The launch slipped")
+    # Undo is for a removed goal only; a done one is reopened with a reason.
+    post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
+    post(api, f"goals/{mine['id']}/reopen", {"undo": True}, token="ben-test", expected=422)
 
 
 def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_one(api):
@@ -83,8 +88,9 @@ def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_on
     # Dropping and reopening is not a way round the acceptance: Ben's own colour is refused, Ana's is the acceptance.
     post(api, f"goals/{proposed['id']}/reopen", {"status": "green", "note": "Accept it"}, token="ben-test",
          expected=403)
-    back = post(api, f"goals/{proposed['id']}/reopen", {"status": "auto", "note": "Removed by mistake",
-                                                         "undo": True}, token="ben-test")["goal"]
+    # Undo gives a proposal no colour, whatever the page sends: it is still a proposal.
+    back = post(api, f"goals/{proposed['id']}/reopen", {"status": "green", "note": "Accept it", "undo": True},
+                token="ben-test")["goal"]
     assert back["status"] is None and back["status_source"] == "auto"
     # A goal the CEO Bot coloured gets that colour back when the arithmetic has nothing new to say.
     post(api, f"goals/{proposed['id']}/status", {"status": "green", "note": "Accepted."})
@@ -93,3 +99,7 @@ def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_on
     auto = post(api, f"goals/{proposed['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
                 token="ben-test")["goal"]
     assert auto["status_source"] == "auto" and auto["status"] is not None and auto["status"] != "dropped"
+    # A colour handed back to the CEO Bot before the removal comes back automatic, not as the hand-set one.
+    post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+    undone = post(api, f"goals/{proposed['id']}/reopen", {"undo": True}, token="ben-test")["goal"]
+    assert (undone["status"], undone["status_source"]) == (auto["status"], "auto")

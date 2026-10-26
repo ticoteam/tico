@@ -505,7 +505,7 @@ def install(app, store, auth, mutate, settings):
     def goal_reopen(request: Request, gid: str, body: M.GoalReopen):
         """Reopen a done or dropped goal with a colour and one line why, or `auto` for the colour it had, worked out
         again: whoever may set its colour. A proposed goal brought back with a colour is still accepted only by
-        whoever owns the goal it serves."""
+        whoever owns the goal it serves. `undo` alone puts a removed goal back as it was, from its history."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
@@ -514,7 +514,7 @@ def install(app, store, auth, mutate, settings):
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
                               "above them reopens it", 403)
-            if body.status != "auto" and G.was_proposed(c, row) and not (
+            if not body.undo and body.status != "auto" and G.was_proposed(c, row) and not (
                     who.actor == parent_owner(c, row) or stands_above(c, who, row["owner"])):
                 raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
                               "it serves; that is the acceptance", 403)

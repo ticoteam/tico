@@ -26988,20 +26988,27 @@
       "GoalReopen": {
         "properties": {
           "status": {
-            "type": "string",
-            "enum": [
-              "red",
-              "yellow",
-              "green",
-              "auto"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "red",
+                  "yellow",
+                  "green",
+                  "auto"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
             "title": "Status"
           },
           "note": {
             "type": "string",
             "maxLength": 300,
-            "minLength": 1,
-            "title": "Note"
+            "title": "Note",
+            "default": ""
           },
           "undo": {
             "type": "boolean",
@@ -27011,10 +27018,6 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "status",
-          "note"
-        ],
         "title": "GoalReopen"
       },
       "GoalResult": {
