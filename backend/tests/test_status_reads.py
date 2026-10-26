@@ -206,11 +206,15 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     finished = finish_private(store, "busy-1")
 
     def read():
-        steps = [0]
+        # Only the status task read's own work is counted: the page's other reads (open questions, approvals,
+        # cached rows) vary with what earlier reads left behind. Each step goes to the statement last started.
+        ours, steps, prefix = [False], [0], f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks"
         with store.read_transaction() as c:
-            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
+            c.set_trace_callback(lambda sql: ours.__setitem__(0, sql.startswith(prefix)))
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + ours[0]), 1)
             inputs = privacy.status_inputs(c, slugs)
             c.set_progress_handler(None, 1)
+            c.set_trace_callback(None)
             actors = ["bot:" + slug for slug in slugs]
             marks = " IN (" + ",".join("?" * len(actors)) + ")"
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
@@ -231,7 +235,7 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
                                  "bot:" + slugs[(n + 1) % 6], private=False)
             c.execute("UPDATE tasks SET status=? WHERE id=?", ("done" if n % 2 else "closed", task["id"]))
     after, more = read()
-    assert after == before and more == steps
+    assert after == before and more == steps and steps
 
 
 def finish_private(store, slug):
