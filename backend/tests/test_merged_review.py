@@ -16,8 +16,8 @@ def merged(api, receipt=None, state="merged"):
     return get(api, "tasks/" + task["id"])["task"]
 
 
-def github(api, monkeypatch, runs):
-    """A synthetic GitHub whose PR stays at HEAD with these check runs."""
+def github(api, monkeypatch, runs, status=200):
+    """A synthetic GitHub whose PR stays at HEAD with these check runs, or that answers every read with `status`."""
     service = api.app.state.github_app
     monkeypatch.setattr(service, "row", lambda c: {"org": "ticoteam"})
     monkeypatch.setattr(service, "mint", lambda *a: ("synthetic", "later"))
@@ -27,7 +27,7 @@ def github(api, monkeypatch, runs):
         data = ({"head": {"sha": HEAD}} if "/pulls/" in path else
                 {"check_runs": [{"id": i, "name": n, "conclusion": v} for i, (n, v) in enumerate(runs.items())]}
                 if path.endswith("check-runs") else [])
-        return SimpleNamespace(status_code=200, json=lambda: data)
+        return SimpleNamespace(status_code=status, json=lambda: data)
     monkeypatch.setattr(service, "_call", fetch)
     return calls
 
@@ -73,6 +73,15 @@ def test_a_merged_head_with_unfinished_or_failed_evidence_is_refused(api, monkey
     assert r.status_code == 422, r.text
     assert says in r.text and "is merged" in r.text and HEAD in r.text, r.text
     assert "no linked PR" not in r.text
+    assert "retries this move" not in r.text, "only a refused step move is retried, never a review request"
+    assert not woke(api)
+
+
+def test_a_merged_head_github_cannot_read_is_refused_as_merged(api, monkeypatch):
+    task = merged(api, f"Tests: head {HEAD}: 9 passed, 0 failed")
+    github(api, monkeypatch, {"python": "success"}, status=502)
+    r = review(api, task)
+    assert r.status_code == 422 and "is merged" in r.text and "Cannot verify that head" in r.text, r.text
     assert not woke(api)
 
 
@@ -91,6 +100,7 @@ def test_a_pr_closed_without_merging_still_refuses_a_review(api, monkeypatch):
     github(api, monkeypatch, {"python": "success"})
     r = review(api, task)
     assert r.status_code == 422 and "closed without merging" in r.text, r.text
+    assert "retries this move" not in r.text
     assert not woke(api)
 
 

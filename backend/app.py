@@ -3584,9 +3584,9 @@ def create_app(settings=None):
                     return {}
             if not review_gate.engineering(c, row):
                 return {}
-            # A Review or QA request on a ticket whose PR merged reads that PR at its merged head (Dev 569).
-            asked = child_title is not None and review_gate.ONE_OPEN.match(child_title.strip())
-            prs = review_gate.review_links(c, row) if asked else review_gate.links(c, row)
+            # A Review request on a ticket whose PR merged reads that PR at its merged head (Dev 569); only a Review
+            # child title gets this far.
+            prs = review_gate.review_links(c, row) if child_title is not None else review_gate.links(c, row)
         return review_gate.snapshot(app.state.github_app, prs) if prs else {}
 
     @app.post("/api/v2/tasks")

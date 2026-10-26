@@ -96,7 +96,7 @@ def review_links(c, row):
 def merged_refusal(c, actor, row, kind, head, pr, problem, action, retryable=False):
     """Refuse a review of a merged PR: say it is merged, which head the review judges, and what to do."""
     reject(c, actor, row, kind, head, pr, f"Review refused: {pr['url']} is merged, so this review judges its merged "
-                                          f"head {head}. {problem} {action}", retryable=retryable)
+                                          f"head {head}. {problem} {action}", retryable=retryable, move=False)
 
 
 def engineering(c, row):
@@ -294,10 +294,10 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
                 reject(c, actor, row, "receipt", "unknown", closed[-1],
                        f"Review refused: {closed[-1]['url']} was closed without merging, so it has no change to review. "
                        "Link the PR that carries the change (reopen this one or open a new one) before asking a "
-                       "reviewer. The owner or a person who may edit this ticket can link it.")
+                       "reviewer. The owner or a person who may edit this ticket can link it.", move=False)
             reject(c, actor, row, "receipt", "unknown", {"url": "no linked PR"},
                    "Review refused: no linked PR. Link the current PR before asking a reviewer. "
-                   "The owner or a person who may edit this ticket can link it.")
+                   "The owner or a person who may edit this ticket can link it.", move=False)
         return  # A board-only step move has no software reviewer to wake.
     # Tico's retry of a refused move (backend/move_retry.py) reads as whoever made the move: the keeper is on no private
     # task, and evidence that mover cannot read must not pass the move for them.
@@ -320,7 +320,7 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
             reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
                                                   "Retry the review move. Anyone allowed to move this ticket can retry.",
-                   retryable=detail.get("retryable", False))
+                   retryable=detail.get("retryable", False), move=not require_pr)
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
@@ -330,7 +330,8 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
                                "review on that PR.")
             reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
-                   "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
+                   "Have the owner or another contributor fix the failure and push a new head, then retry the review move.",
+                   move=not require_pr)
     for pr in prs:
         detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
         head = detail["head_sha"]
@@ -371,13 +372,17 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             else:
                 action = ("Post a passing test receipt naming the current head on this ticket, then retry the review move. "
                           + writers + " can post it.")
-            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}")
+            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}",
+                   move=not require_pr)
 
 
-def reject(c, actor, row, kind, head, pr, text, retryable=False):
+def reject(c, actor, row, kind, head, pr, text, retryable=False, move=True):
     from . import hubdb as H
     from . import move_retry
-    text += move_retry.hint(kind, text)
+    # Only a refused step move is retried (backend/move_retry.py); a refused review request is not, so it never
+    # promises a retry.
+    if move:
+        text += move_retry.hint(kind, text)
     try:
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
