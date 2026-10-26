@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Tasks can have their own effort and context length.** A bot's task settings can set a task effort and a task context length without a task model, each **Same as bot** by default. Chat keeps the bot's own. A task that falls back to the bot's model keeps the task context length and any task effort that model takes ([Task models](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+
 ## [0.4.9] - 2026-10-25
 
 ### Fixed

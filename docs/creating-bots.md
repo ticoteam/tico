@@ -621,12 +621,14 @@ Levers set in **Settings → Bots**, not in the repository:
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
 - **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
   editor and press **Save bot**, or click **Tasks** beside the model in the bots list.
-  Chat keeps the bot's own model. See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
+  Chat keeps the bot's own model. A task effort and a task context length work without a task model, and chat keeps the bot's own.
+  See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
-  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
+  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session. A bot's tasks can use another length
+  (**Task model**, **Task context length**).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and

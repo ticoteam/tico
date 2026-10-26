@@ -2179,8 +2179,8 @@ def create_app(settings=None):
                         "shared_from": str(declared.get("shared_from") or ""),
                         "temp": bool(declared.get("temp")),
                         "compact_at": compact_at_of(declared),
-                        # What its tasks run on; null is the same as the bot (backend/task_models.py).
-                        "task_model": task_models.of(declared),
+                        # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
+                        "task_model": task_models.stored(declared),
                         "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
                         # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                         "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,

@@ -222,7 +222,8 @@ and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot e
 **Save bot**. To clear the choice, pick **Same as bot** and apply it. Changing the bot's own model leaves its task model set.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back
-to the bot's own model and effort; the task history records why. A review or check subtask keeps its check model.
+to the bot's own model, with the task context length and any task effort that model takes; the task history records why.
+A review or check subtask keeps its check model.
 
 #### A warning about a cheaper task model
 
