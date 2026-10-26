@@ -807,6 +807,10 @@ def status_inputs(c, bots):
             out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
         for m in c.execute(ASKS_SQL.format(marks), actors):
             out[H.actor_id(m["from_actor"])]["asks"].append(m)
+    # Each open ask and approval is checked as read here, its tasks, parents and rooms read together: not a few
+    # queries per message, which on a busy team were most of a status page's statements.
+    if read_cache.cache(c) is not None:
+        prime_messages(c, [m for kinds in out.values() for m in (*kinds["approvals"], *kinds["asks"])])
     return out
 
 
@@ -840,13 +844,14 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
                  if (t["requester"] == bot and H.is_human(t["owner"]))
                  or (t["owner"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
         if len(waits) < len(live):
+            # Both are the message rows (`m.*`) as stored, read in this snapshot.
             for m in asks if asks is not None else c.execute(ASKS_SQL.format("=?"), (bot,)):
-                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m):
+                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m, current=True):
                     waits.add(m["about"])
         approvals = approvals if approvals is not None else c.execute(APPROVALS_SQL.format(by="", match="=?"), ("bot:" + row["bot"],))
         # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
         row["needs_human"] = len(waits) + sum(
-            message_readable(c, actor(who), m) and not (dict(m).get("approval_task") in waits)
+            message_readable(c, actor(who), m, current=True) and not (dict(m).get("approval_task") in waits)
             for m in approvals)
     return row
 
@@ -878,6 +883,55 @@ def job_counts(c, who, bots, states=("queued",)):
     return out
 
 
+BLOB_PARENTS_SQL = "SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=?"
+BLOB_TASKS_SQL = "SELECT task_id FROM task_assets WHERE blob_id=?"
+BLOB_FILES_SQL = ("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
+                  "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? "
+                  "OR v.poster_blob_id=? OR v.thumb_blob_id=?")
+BLOB_MESSAGES_SQL = "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"
+BLOB_TRASHED_SQL = "SELECT 1 FROM task_trash_assets WHERE blob_id=?"
+
+
+def prime_blobs(c, bids):
+    """Read what blob_readable checks for each of `bids` together, a few queries per 500, into this snapshot's
+    read_cache. A bot's Files page checks every file version it has; one blob at a time was six queries each, over
+    seven thousand for one page. The decision is blob_readable's own, made from the same rows."""
+    snapshot(c)
+    if read_cache.cache(c) is None:
+        return
+    for part in H.chunks(sorted({bid for bid in bids if bid})):
+        marks = ",".join("?" * len(part))
+        wanted = set(part)
+        parents, tasks, files, messages = ({bid: [] for bid in part} for _ in range(4))
+        for row in c.execute("SELECT blob_id,poster_blob_id,thumb_blob_id FROM blob_media "
+                             f"WHERE poster_blob_id IN ({marks}) OR thumb_blob_id IN ({marks})", part * 2):
+            for bid in {row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
+                parents[bid].append(row)
+        for row in c.execute(f"SELECT task_id,blob_id FROM task_assets WHERE blob_id IN ({marks})", part):
+            tasks[row["blob_id"]].append(row)
+        for row in c.execute("SELECT f.task_id,f.scope,v.attempt_id,v.blob_id,v.poster_blob_id,v.thumb_blob_id "
+                             "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+                             f"WHERE v.blob_id IN ({marks}) OR v.poster_blob_id IN ({marks}) "
+                             f"OR v.thumb_blob_id IN ({marks})", part * 3):
+            for bid in {row["blob_id"], row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
+                files[bid].append(row)
+        assets = c.execute(f"SELECT blob_id,message_id FROM message_assets WHERE blob_id IN ({marks})", part).fetchall()
+        found = {}
+        for chunk in H.chunks(sorted({row["message_id"] for row in assets})):
+            found.update((row["id"], row) for row in c.execute(
+                "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        for row in assets:
+            if row["message_id"] in found:
+                messages[row["blob_id"]].append(found[row["message_id"]])
+        trashed = {row[0] for row in c.execute(
+            f"SELECT DISTINCT blob_id FROM task_trash_assets WHERE blob_id IN ({marks})", part)}
+        read_cache.prime_rows(c, BLOB_PARENTS_SQL, {(bid, bid): parents[bid] for bid in part})
+        read_cache.prime_rows(c, BLOB_TASKS_SQL, {(bid,): tasks[bid] for bid in part})
+        read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
+        read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
+        read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+
+
 def blob_readable(c, actor, bid, seen=None, memo=None):
     """A task attachment cannot regain access through uploader ownership or another link.
     `memo` is attempt_tasks' cache for one read transaction."""
@@ -888,13 +942,11 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     if len(seen) >= 100:
         return False
     seen.add(bid)
-    for parent in c.execute("SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=?", (bid, bid)):
+    for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid)):
         if not blob_readable(c, actor, parent[0], seen, memo):
             return False
-    ids = {r[0] for r in c.execute("SELECT task_id FROM task_assets WHERE blob_id=?", (bid,))}
-    for row in c.execute("SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
-                         "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? "
-                         "OR v.poster_blob_id=? OR v.thumb_blob_id=?", (bid, bid, bid)):
+    ids = {r[0] for r in read_cache.rows(c, BLOB_TASKS_SQL, (bid,))}
+    for row in read_cache.rows(c, BLOB_FILES_SQL, (bid, bid, bid)):
         if row["task_id"]:
             ids.add(row["task_id"])
         if row["scope"].startswith("task:"):
@@ -904,13 +956,12 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
                 return False
             ids.update(attempt_tasks(c, row["attempt_id"], memo))
     linked = bool(ids)
-    for row in c.execute("SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id "
-                         "WHERE a.blob_id=?", (bid,)):
+    for row in read_cache.rows(c, BLOB_MESSAGES_SQL, (bid,)):
         linked = True
         if not message_readable(c, actor, row):
             return False
     # Attached to a task that was deleted, and to nothing else: its uploader may not open it either.
-    if not linked and c.execute("SELECT 1 FROM task_trash_assets WHERE blob_id=?", (bid,)).fetchone():
+    if not linked and read_cache.one(c, BLOB_TRASHED_SQL, (bid,)):
         return False
     return readable(c, actor, ids)
 

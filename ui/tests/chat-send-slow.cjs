@@ -232,7 +232,7 @@ async function check(engine) {
     assert.equal(await page.evaluate(() => !!BOT_PILL.unconfirmed?.refused), false, 'the pending send is not a confirmed refusal');
     assert.equal(await page.evaluate(() => SESSION.out), true, '401 activates sign-in recovery');
     assert.ok(await page.locator('#signed-out').isVisible(), 'the sign-in banner offers recovery');
-    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*Invalid credential.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
+    assert.match(await page.locator('.toast.err').innerText(), /may already have sent.*signed out.*Check the chat before resending/, 'uncertain delivery stays visible alongside sign-in');
     assert.ok(!(await page.locator('.toast.err').allInnerTexts()).some(t => /Not sent:/.test(t)), 'the UI does not claim the original was unsent');
     assert.equal(await box.inputValue(), uncertainText);
     await readsSettled();

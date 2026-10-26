@@ -243,10 +243,14 @@ function decideActionsHTML(c) {
   if (rec) return rec + decideActionsPlain(c, k).replace(/ class="primary"/g, '');
   return decideActionsPlain(c, k);
 }
+// A Product roadmap item finishes or comes back only by a step move (the task window hides Done for it too): its card
+// offers no Done, and a yes or no on the person's own one goes as a comment, not a status.
+const decideStepsOnly = c => c.type === 'task' && (!!c.it.steps_only || pipelineStepsOnly(c.it));
 function decideActionsPlain(c, k) {
   if (c.type === 'pick' && (c.q.multi || decideTwo(c))) return qcardActionsHTML(c.it, c.q, {attr: 'dc', ticked: decideTicked(DEC, c), keys: true});
   if (c.type === 'pick') return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" disabled>Pick one</button>`;
   if (c.type === 'approve' || c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
+  if (decideStepsOnly(c)) return `<button type="button" data-dc="skip">Skip${k('S')}</button><a class="button primary" href="#/task/${encodeURIComponent(c.it.id)}" title="Move it to its next step in the task">Open to move it</a>`;
   return `<button type="button" data-dc="skip">Skip${k('S')}</button><button type="button" class="primary" data-dc="done">Done${k('D')}</button>`;
 }
 // An option's picture, large: the image itself when small enough, else its thumb.
@@ -377,7 +381,7 @@ function decideWriteBody(c, what, i, note) {
     // its note, as Done does; on a bot's task waiting on them the answer goes back as a comment, which wakes the bot.
     const said = (what === 'yes' ? 'Yes.' : 'No.') + (note ? ' ' + note : '');
     const label = `Said ${what} · sent to ${to}`;
-    if (c.it.owner === myActor())
+    if (c.it.owner === myActor() && !decideStepsOnly(c))
       return {writes: [{path: `/v2/tasks/${id}`, body: {status: what === 'yes' ? 'done' : 'declined', version: shown || c.it.version || 1, note: said}}], label};
     return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: said}}], label};
   }
@@ -385,7 +389,7 @@ function decideWriteBody(c, what, i, note) {
     return {writes: [{path: `/v2/approvals/${id}`, body: {decision: what === 'yes' ? 'approved' : 'declined', ...(note ? {note} : {})}}],
       label: `${what === 'yes' ? 'Approved' : 'Declined'} · sent to ${to}`};
   // Done goes with the version the card showed: a task that changed meanwhile is refused, not finished unseen.
-  if (what === 'done') return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
+  if (what === 'done' && !decideStepsOnly(c)) return {writes: [{path: `/v2/tasks/${id}`, body: {status: 'done', version: shown || c.it.version || 1, ...(note ? {note} : {})}}], label: 'Done'};
   return {writes: [{path: `/v2/tasks/${id}/comments`, body: {text: note}}], label: `Sent to ${to}`};
 }
 function decideAct(st, what, i, shown = st.shown) {
@@ -566,7 +570,7 @@ function decideKey(st, ev) {
   else if (k === 'r' && c.type === 'task' && c.it.recommend?.ask) what = 'recommend';
   else if ((c.type === 'approve' || c.yn) && (k === 'y' || k === 'n')) what = k === 'y' ? 'yes' : 'no';
   else if (decideYesNo(c) && (k === 'y' || k === 'n')) { what = 'pick'; i = k === 'y' ? 0 : 1; }
-  else if (c.type === 'task' && !c.yn && k === 'd') what = 'done';
+  else if (c.type === 'task' && !c.yn && k === 'd' && !decideStepsOnly(c)) what = 'done';
   else if (c.type === 'pick' && /^[1-6]$/.test(k) && Number(k) <= c.q.options.length) { what = 'pick'; i = Number(k) - 1; }
   if (!what) return;
   ev.preventDefault();
