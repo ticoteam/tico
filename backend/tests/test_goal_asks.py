@@ -102,7 +102,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
                     token="ben-test")["proposal"]
     [task] = [a for a in asks(api) if a["kind"] == "proposal"]
     assert (task["ref"], task["owner"]) == (proposal["id"], "human:ben")
-    assert task["title"] == "Confirm or reject a new Activation target on Raise activation"
+    assert task["title"] == "Use a new Activation target on Raise activation?"
     [item] = [i for i in get(api, "goals/needs-you", "ben-test")["items"] if i["kind"] == "proposal"]
     assert item["task"]["id"] == task["id"] and item["proposal"]["id"] == proposal["id"]
     # The environment owner may decide it too: it stays on their Goals page, without the task, which is Ben's.

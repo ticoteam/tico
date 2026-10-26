@@ -134,8 +134,12 @@ def wanted(conn, owner_id, at=None):
         org = org or _org(conn)
         who = _person(conn, decides, owner_id, org)
         if who:
-            items.append({"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
-                          "goal_title": goal and goal["title"], "kpi_name": record and record["name"]})
+            item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
+                    "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
+            used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None
+            if used:
+                item["measure_name"] = used["name"]     # an Add a KPI that reuses a measure names it
+            items.append(item)
     for who, goals in whys.items():
         items.append({"kind": "why", "ref": WHY_REF, "owner": who, "goals": list(goals.values())})
     # A goal with a recovery waiting is one item for its owner: the recovery, not also "check why it is off track".
@@ -161,8 +165,8 @@ def _change(p, kpi_name):
     if p["kind"] == "kpi_target":
         return "target " + (K.target_label({"unit": ""}, payload) or payload.get("kind") or "none")
     if p["kind"] == "goal_kpi":
-        name = (payload.get("kpi") or {}).get("name") or kpi_name or "an existing KPI"
-        return f"measure it by {name}"
+        target = K.target_label({"unit": (payload.get("kpi") or {}).get("unit") or ""}, payload.get("target"))
+        return f"measure it by {kpi_name}" + (f", target {target}" if target else ", no target yet")
     if p["kind"] == "flag":
         return f"flagged as {payload.get('issue')}"
     if p["kind"] == "strategy_draft":
@@ -220,12 +224,9 @@ def _ask(item, manager=ceo_bot.NAME):
                 f"different target on the Goals page. {closes}{name} is back on track.")
         return title, body
     p = item["proposal"]
-    title = {"goal_wording": f"Confirm or reject new wording for {goal}",
-             "goal_kpi": f"Confirm or reject a new KPI for {goal}",
-             "kpi_definition": f"Confirm or reject a change to how {name} is defined",
-             "kpi_target": f"Confirm or reject a new {name} target on {goal}",
-             "flag": f"Confirm or reject a flag on {goal}",
-             "strategy_draft": "Confirm or reject a change to the strategy"}.get(p["kind"], "Confirm or reject a goal proposal")
+    if p["kind"] in GOAL_KINDS:
+        return _goal_ask(item, manager)
+    title = {"strategy_draft": "Confirm or reject a change to the strategy"}.get(p["kind"], "Confirm or reject a goal proposal")
     if p["kind"] == S.REALIGN:
         payload = p.get("payload") or {}
         lines = "\n".join(f"- {g['title']} (its bet was {g['change']}: \"{g['statement']}\")" for g in payload["goals"])
@@ -248,6 +249,38 @@ def _ask(item, manager=ceo_bot.NAME):
     body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "
             f"under Needs you on the Goals page. {closes}it is decided.")
     return title, body
+
+
+# The goal suggestions whose asks use their card's words (ui/goals-kpis.js goalPropHtml), never "Confirm or reject".
+GOAL_KINDS = ("goal_kpi", "kpi_target", "kpi_definition", "goal_wording", "flag")
+OLD_WORDS = "Confirm or reject "
+
+
+def _goal_ask(item, manager):
+    p, payload = item["proposal"], item["proposal"].get("payload") or {}
+    name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
+    measure = (payload.get("kpi") or {}).get("name") or item.get("measure_name") or "a measure"
+    title = {"goal_kpi": f"Add the measure {measure} to {goal}?",
+             "kpi_target": f"Use a new {name} target on {goal}?",
+             "kpi_definition": f"Use a new definition for {name}?",
+             "goal_wording": f"Use new wording for {goal}?",
+             "flag": f"The {manager} noticed something on {goal}"}[p["kind"]]
+    said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
+    body = (f"{title.rstrip('?')}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, measure)}. "
+            f"Decide it under Needs you on the Goals page.")
+    return title, body
+
+
+def _reword(conn, task, item):
+    """An ask filed in the old words ("Confirm or reject ...") takes its card's words, once: afterwards its title no
+    longer starts with them."""
+    if not str(task["title"]).startswith(OLD_WORDS):
+        return
+    title, body = _ask(item, ceo_bot.name(conn))
+    if H.TITLE_LINT == "refuse" and H.lint_title(title):
+        return
+    with isolated(conn, "goal_ask_reword", task["id"]):
+        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body, quiet=True)
 
 
 def _relist(conn, task, item):
@@ -325,6 +358,9 @@ def sync(conn, owner_id, at=None):
         if key in want and not again:
             if key[0] == "why" and task and task["status"] in H.LIVE_STATUSES:
                 _relist(conn, task, want[key])
+            elif (key[0] == "proposal" and task and task["status"] in H.LIVE_STATUSES
+                  and want[key]["proposal"]["kind"] in GOAL_KINDS):
+                _reword(conn, task, want[key])
             continue
         if again and not has_room(key[2]):
             continue        # asked again on a day with room; until then it stays as the person left it
