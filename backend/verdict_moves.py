@@ -198,14 +198,9 @@ def after_capture(c, check_id, head, attempt_id):
     name = CHECK_STEP[kind]
     eligible = assess_independence(c, ticket, H.actor_id(check.get("owner") or ""), head=head,
                                    check_id=check["id"], attempt_id=attempt_id)
-    if not eligible["eligible"]:
-        target = CHECK_STEP[kind]
-        out = {"moved": None, "handoff": None, "quiet": True, "eligibility": eligible,
-               "say": (f"{name} recorded {verdict} at head {head}, but Tico is holding movement because "
-                       f"{eligible['reason']}. The verdict remains on the check for audit; the check pool must "
-                       "reroute it or leave it waiting for an independent checker.")}
-        # Part A consumes the returned final eligibility after task status settles and reroutes this same check.
-    elif verdict not in GOOD:
+    # Model company is a routing preference, never a verdict gate. Keep actual builder/checker families
+    # alongside the verdict for audit, including fallback runs and unknown provenance.
+    if verdict not in GOOD:
         target = FIXES[kind]
         moved = move(c, ticket, target, f"{name} gave {verdict} at {head[:12]}")
         out = {"moved": target if moved else None, "handoff": "verdict", "quiet": False,
@@ -225,6 +220,7 @@ def after_capture(c, check_id, head, attempt_id):
                    f"{name} gave {verdict} at head {head}. Tico wakes you to merge once CI is green on it."}
             if ready:
                 _merge_woken(c, ticket, ready[1])
+    out["eligibility"] = eligible  # Historical field name; this is provenance, not a gate.
     out["consumed"] = True
     out["attempt_id"] = attempt_id
     H._task_event(c, check["id"], H.KEEPER, "verdict_move", None,

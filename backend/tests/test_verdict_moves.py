@@ -120,7 +120,7 @@ def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
     assert len(step_events(api, task)) == len(before) + 1
 
 
-def test_configured_independent_checker_falling_back_to_builder_family_cannot_move(api):
+def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
@@ -132,7 +132,7 @@ def test_configured_independent_checker_falling_back_to_builder_family_cannot_mo
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
     verdict(api, review, "approve")
-    assert step(api, task) == "Review 1"
+    assert step(api, task) == "Review 2"
     with api.app.state.store.read() as c:
         check_row = H.task(c, review["id"])
         assert check_row["verdict"] == "approve" and check_row["verdict_head"] == HEAD
@@ -144,7 +144,7 @@ def test_configured_independent_checker_falling_back_to_builder_family_cannot_mo
                          (task["id"],)).fetchone()[0] == 1
 
 
-def test_unknown_executed_checker_family_is_not_proof_of_independence(api):
+def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
@@ -154,7 +154,7 @@ def test_unknown_executed_checker_family_is_not_proof_of_independence(api):
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
     verdict(api, review, "approve")
-    assert step(api, task) == "Review 1"
+    assert step(api, task) == "Review 2"
     with api.app.state.store.read() as c:
         row = H.task(c, review["id"])
         assert row["verdict"] == "approve"
@@ -287,7 +287,7 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
     verdict(api, check(api, task), "changes")
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "Review 1 Fixes", "no receipt at the new head: the gate keeps it"
+    assert step(api, task) == "Blocked", "no receipt at the new head keeps the ticket blocked"
     with api.app.state.store.read() as c:
         told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()

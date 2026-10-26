@@ -1,8 +1,8 @@
-"""Shared model-family eligibility for check routing and accepted verdicts.
+"""Model-family provenance for check routing preferences and verdict records.
 
 The configured model is useful when choosing a candidate, but it is not proof of what a completed check ran on.
 Verdicts use immutable run usage segments for both the builder's ticket and the checker task. Unknown or mixed
-families are deliberately not independent.
+families inform routing only; they never invalidate a verdict.
 """
 import json
 
@@ -12,14 +12,32 @@ from . import usage_records
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS check_head_provenance(
   check_id TEXT NOT NULL, ticket_id TEXT NOT NULL, head TEXT NOT NULL, turn_id TEXT NOT NULL,
-  builder_families TEXT NOT NULL, checker_families TEXT NOT NULL, known INTEGER NOT NULL,
+  builder_families TEXT NOT NULL, configured_families TEXT NOT NULL DEFAULT '[]',
+  checker_families TEXT NOT NULL, known INTEGER NOT NULL,
   created TEXT NOT NULL, PRIMARY KEY(check_id,head,turn_id));
 CREATE INDEX IF NOT EXISTS check_head_provenance_head ON check_head_provenance(ticket_id,head);
 """
 
 
 def ensure(c):
-    c.executescript(SCHEMA)
+    # executescript() commits any open transaction, which would drop the request's outer savepoint when
+    # a check finishes inside a runner completion write.
+    for statement in SCHEMA.split(";"):
+        if statement.strip():
+            c.execute(statement)
+    H.add_column(c, "check_head_provenance", "configured_families", "TEXT NOT NULL DEFAULT '[]'")
+
+
+def configured(c, check_id, owner):
+    """Configured provider for this check task, distinct from its captured execution family."""
+    from . import providers
+    selected = H.check_model(c, check_id, H.actor_id(owner)) if owner and H.is_bot(owner) else None
+    if selected:
+        family = providers.author_provider(selected["model"])
+    else:
+        from .check_pools import maker
+        family = maker(c, H.actor_id(owner)) if owner and H.is_bot(owner) else ""
+    return [family] if family else []
 
 
 def _executed(c, task_id):
@@ -51,10 +69,12 @@ def capture_attempt(c, ticket_id, check_id, head, turn_id):
     checker = {s["family"] for s in segments if s.get("family")}
     checker_known = bool(segments) and all(s.get("family") for s in segments) and bool(checker)
     known = builder_known and checker_known
+    check = H.task(c, check_id)
+    configured_families = configured(c, check_id, check.get("owner") if check else None)
     c.execute("INSERT OR REPLACE INTO check_head_provenance(check_id,ticket_id,head,turn_id,builder_families,"
-              "checker_families,known,created) VALUES(?,?,?,?,?,?,?,?)",
+              "configured_families,checker_families,known,created) VALUES(?,?,?,?,?,?,?,?,?)",
               (check_id, ticket_id, str(head or "").lower(), turn_id, json.dumps(sorted(builder)),
-               json.dumps(sorted(checker)), int(known), H.now()))
+               json.dumps(configured_families), json.dumps(sorted(checker)), int(known), H.now()))
     return {"eligible": known and bool(builder) and bool(checker) and not builder.intersection(checker),
             "known": known, "head": str(head or "").lower(), "evidence": "executed",
             "builder_families": sorted(builder), "checker_families": sorted(checker),
@@ -71,22 +91,24 @@ def assess(c, ticket, checker, *, head=None, check_id=None, attempt_id=None):
     ticket = H.task(c, ticket["id"] if isinstance(ticket, dict) else ticket)
     if check_id:
         ensure(c)
-        row = c.execute("SELECT builder_families,checker_families,known FROM check_head_provenance "
+        row = c.execute("SELECT builder_families,configured_families,checker_families,known FROM check_head_provenance "
                         "WHERE ticket_id=? AND check_id=? AND head=? "
                         "AND (? IS NULL OR turn_id=?) ORDER BY created DESC,turn_id DESC LIMIT 1",
                         (ticket["id"], check_id, str(head or "").lower(), attempt_id, attempt_id)).fetchone()
         if row:
             builder = set(H._json(row["builder_families"], []) or [])
+            configured_families = set(H._json(row["configured_families"], []) or [])
             checker_families = set(H._json(row["checker_families"], []) or [])
             builder_known = checker_known = bool(row["known"])
         else:
-            builder, checker_families = set(), set()
+            builder, configured_families, checker_families = set(), set(), set()
             builder_known = checker_known = False
         evidence = "captured attempt"
     else:
         builder, builder_known = _executed(c, ticket["id"])
-        from .check_pools import makers
+        from .check_pools import maker, makers
         checker_families = makers(c, checker)
+        configured_families = {maker(c, checker)} - {""}
         checker_known = bool(checker_families)
         evidence = "configured/runtime"
     overlap = builder & checker_families
@@ -101,4 +123,5 @@ def assess(c, ticket, checker, *, head=None, check_id=None, attempt_id=None):
     else:
         reason = "independent model-family provenance confirmed"
     return {"eligible": eligible, "known": known, "head": str(head or ""), "evidence": evidence,
-            "builder_families": sorted(builder), "checker_families": sorted(checker_families), "reason": reason}
+            "builder_families": sorted(builder), "configured_families": sorted(configured_families),
+            "checker_families": sorted(checker_families), "reason": reason}

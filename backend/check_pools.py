@@ -3,14 +3,14 @@ Settings > Tasks, and how Tico gives a ticket's check to one of them (Dev 534 A)
 
 When a ticket enters a step with a pool and has no open check there for its pull request head, Tico files the check
 (`Review 1: PR #n`, the head recorded as any check's is: review_gate.remember_heads) and gives it to the least busy
-eligible member: fewest open checks, then longest idle. Eligible means active and online, not paused or held, under the
-step's limit of open checks, a different model company from the builder, and on Review 2 not Review 1's bot. The
+eligible member: other model company first, then fewest open checks, then longest idle. Eligible means active and
+online, not paused or held, under the step's limit of open checks, and on Review 2 not Review 1's bot. Model company
+is a preference, never a requirement. The
 check is filed as the ticket's owner would file it, so the gate, the one-check-per-head rule, the reviewer's wake and
 the verdict's way back to the builder are the ones a builder's own request gets.
 
-With no eligible member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the
-first pool member to finish a check takes it (`freed`). An empty pool, or one with only the builder's model company,
-waits the same way: Tico never files a same-company check. A wait ends when its check is filed, or the ticket leaves
+With no pool member free, the check waits on the ticket ("Waiting for a reviewer": a `check_waits` row) and the
+first pool member to finish a check takes it (`freed`). An empty pool waits the same way. A wait ends when its check is filed, or the ticket leaves
 the step or finishes. A pool member only ever takes checks this way, never other work.
 """
 import json
@@ -52,7 +52,10 @@ CREATE INDEX IF NOT EXISTS check_waits_ticket ON check_waits(ticket_id, state);
 
 def ensure(c):
     """Unversioned and idempotent: the step's pool and limit, and the waits table."""
-    c.executescript(SCHEMA)
+    # executescript() commits the outer request savepoint when a runner completion routes a check.
+    for statement in SCHEMA.split(";"):
+        if statement.strip():
+            c.execute(statement)
     H.add_column(c, "task_steps", "check_pool", "TEXT")
     H.add_column(c, "task_steps", "check_limit", "INTEGER")
     H.add_column(c, "check_waits", "attempt_id", "TEXT")
@@ -83,9 +86,6 @@ def capture_attempt(c, turn_id):
     if verdict and decided and started and decided["ts"] >= started["started"]:
         from . import verdict_moves
         consumed = verdict_moves.after_capture(c, check["id"], head, turn_id)
-        eligibility = consumed.get("eligibility") if consumed and consumed.get("consumed") else None
-        if eligibility and not eligibility.get("eligible"):
-            reroute_existing(c, H.task(c, ticket_id), check, head, turn_id, eligibility["reason"])
     current = H.task(c, check["id"])
     if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner") == finished_owner:
         return result
@@ -289,9 +289,6 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         if slug in excluded or "bot:" + slug == ticket["owner"]:
             continue
         decision = assess(c, ticket, slug)
-        if not decision["eligible"]:
-            why.add("company")
-            continue
         if not online(c, slug):
             why.add("offline")
             continue
@@ -300,16 +297,17 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
             why.add("busy")
             continue
         idle = (c.execute("SELECT last_turn_at FROM bots WHERE slug=?", (slug,)).fetchone() or [None])[0] or ""
-        free.append((held, idle, slug))
+        # Model company is a preference only; workload and idle time break ties within each family group.
+        free.append((0 if decision["eligible"] else 1, held, idle, slug))
     free.sort()
     if free:
-        return [slug for _, _, slug in free], ""
+        return [slug for _, _, _, slug in free], ""
     if "busy" in why:
         reason = "every reviewer in the pool is at its limit of open checks"
     elif "offline" in why:
         reason = "no reviewer in the pool is online"
     elif slugs:
-        reason = "no reviewer in the pool runs on a different model company from the builder"
+        reason = "no reviewer in the pool is eligible for this check"
     else:
         reason = "the step's pool has no reviewers"
     return [], reason
@@ -473,71 +471,6 @@ def _wait(c, ticket, step, title, heads, reason, attempt_id=None):
               "VALUES(:id,:ticket_id,:step_id,:title,:heads,:reason,:state,:created,:updated,:attempt_id)", row)
     H._task_event(c, ticket["id"], H.KEEPER, "check_waiting", None, row["id"], f"{title}: waiting, {reason}")
     return row
-
-
-def reroute_existing(c, ticket, check, head, attempt_id, reason):
-    """Keep an ineligible verdict for audit and send the same check to another eligible pool member, or wait unowned."""
-    ticket = H.task(c, ticket["id"] if isinstance(ticket, dict) else ticket)
-    check = H.task(c, check["id"] if isinstance(check, dict) else check)
-    found = pool(c, ticket.get("step_id")) if ticket else None
-    head = str(head or "").lower()
-    if not found:
-        return None
-    step, slugs, limit = found
-    if (not ticket or not check or not found or not head or str(check.get("verdict_head") or "").lower() != head
-            or check.get("status") != "done" or TR_parent(c, check["id"]) != ticket["id"]):
-        return None
-    if head not in _heads(_prs(c, ticket, step), None):
-        return None
-    provenance = c.execute("SELECT 1 FROM check_head_provenance WHERE check_id=? AND head=? AND turn_id=?",
-                           (check["id"], head, attempt_id)).fetchone()
-    if not provenance:
-        return None
-    event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
-                      "ORDER BY ts DESC,rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
-    held = H._json(event[0], {}) if event else {}
-    if (held.get("check_id"), str(held.get("head") or "").lower(),
-            held.get("attempt_id") or held.get("turn_id")) != (check["id"], head, attempt_id):
-        return None
-    previous = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='check_rerouted' "
-                         "ORDER BY ts DESC,rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
-    prior_event = H._json(previous[0], {}) if previous else {}
-    if prior_event.get("attempt_id") == attempt_id:
-        return prior_event
-    title = str(check.get("title") or "")
-    prior = H.actor_id(check.get("owner") or "")
-    free, why = ranked(c, ticket, step, slugs, limit, exclude=(prior,))
-    note = f"The previous verdict was kept for audit but is not independent ({reason}). Recheck {head} using your own model."
-    for slug in free:
-        c.execute("SAVEPOINT reroute_same_check")
-        body = str(check.get("body") or "").rstrip() + f"\n\n{note}"
-        try:
-            previous_verdict = str(check.get("verdict") or "")
-            previous_head = str(check.get("verdict_head") or "")
-            H._task_event(c, check["id"], H.KEEPER, "verdict_rerouted", previous_verdict,
-                          json.dumps({"head": previous_head, "attempt_id": attempt_id}, sort_keys=True), reason)
-            moved = H.task_update(c, ticket["owner"], check["id"], owner="bot:" + slug, status="open",
-                                  body=body, note="Tico routed this same check to a different model family.")
-        except H.Refused:
-            c.execute("ROLLBACK TO reroute_same_check")
-            c.execute("RELEASE reroute_same_check")
-            continue
-        c.execute("RELEASE reroute_same_check")
-        outcome = {"check_id": check["id"], "head": head, "attempt_id": attempt_id,
-                   "owner": slug, "waiting": False}
-        H._task_event(c, ticket["id"], H.KEEPER, "check_rerouted", prior, json.dumps(outcome, sort_keys=True),
-                      f"{title} at {head}: {reason}")
-        return {**outcome, "check": moved}
-    existing = next((r for r in waiting(c, ticket["id"]) if r["step_id"] == step["id"]
-                     and head in r["heads"].split(",")), None)
-    wait = existing or _wait(c, ticket, step, title, [head], why or reason, attempt_id=attempt_id)
-    if not wait.get("child_id"):
-        c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (check["id"], wait["id"]))
-    outcome = {"check_id": check["id"], "head": head, "attempt_id": attempt_id,
-               "owner": None, "waiting": True, "wait_id": wait["id"]}
-    H._task_event(c, ticket["id"], H.KEEPER, "check_rerouted", prior, json.dumps(outcome, sort_keys=True),
-                  f"{title} at {head}: waiting for an independent checker ({reason})")
-    return {**outcome, "check": check, "wait": wait}
 
 
 def TR_parent(c, task_id):

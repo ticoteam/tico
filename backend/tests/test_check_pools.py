@@ -137,6 +137,7 @@ def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(a
                              (check["id"], HEAD)).fetchone()
     assert evidence and evidence["known"] == 1
     assert json.loads(evidence["builder_families"]) == ["anthropic"]
+    assert json.loads(evidence["configured_families"]) == ["openai"]
     assert json.loads(evidence["checker_families"]) == ["openai"]
 
 
@@ -168,8 +169,8 @@ def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
     assert moved_step == "Review 2"
 
 
-def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_checker(api):
-    """A GPT-configured reviewer that runs Claude cannot advance an Anthropic-built PR."""
+def test_same_family_fallback_verdict_counts_and_advances_the_ticket(api):
+    """A fallback run's verdict counts; model family affects routing preference only."""
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
@@ -186,9 +187,14 @@ def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_
         rerouted = H.task(c, check["id"])
         active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
         active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
-    assert rerouted["id"] == check["id"] and rerouted["owner"] == "bot:rev-b"
-    assert rerouted["status"] == "open" and rerouted["verdict"] == "approve" and rerouted["verdict_head"] == HEAD
-    assert [child["id"] for child in active] == [check["id"]], "rerouting keeps exactly one active check for the head"
+    assert rerouted["owner"] == "bot:rev-a" and rerouted["status"] == "done"
+    assert rerouted["verdict"] == "approve" and rerouted["verdict_head"] == HEAD
+    assert not active
+    with api.app.state.store.read() as c:
+        receipt = c.execute("SELECT builder_families,configured_families,checker_families FROM check_head_provenance "
+                            "WHERE check_id=? AND turn_id='review-turn'", (check["id"],)).fetchone()
+    assert [json.loads(receipt[key]) for key in ("builder_families", "configured_families", "checker_families")] == [
+        ["anthropic"], ["openai"], ["anthropic"]]
 
 
 def _finish(c, turn, bot, check, model, provider, runtime):
@@ -207,8 +213,7 @@ def _step(c, task):
                      (task["id"],)).fetchone()[0]
 
 
-def test_rerouted_check_given_the_same_verdict_at_the_same_head_by_an_independent_checker_moves_once(api):
-    """The rerouted check keeps the earlier verdict for audit; the next checker's identical verdict is its own."""
+def test_same_family_verdict_is_consumed_once_without_a_second_checker(api):
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
@@ -216,21 +221,19 @@ def test_rerouted_check_given_the_same_verdict_at_the_same_head_by_an_independen
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
-        assert H.task(c, check["id"])["owner"] == "bot:rev-b" and _step(c, task) == "Review 1"
-        actual = _finish(c, "review-2", "rev-b", check, "gpt-6-sol", "openai", "codex")
+        assert H.task(c, check["id"])["status"] == "done" and _step(c, task) == "Review 2"
         moves = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY rowid",
                           (check["id"],)).fetchall()
-        assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1", "review-2"]
-        assert _step(c, task) == "Review 2"
-        H.turn_finish(c, H.KEEPER, "review-2", usage={**actual, "segments": [actual]})
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
-                         (check["id"],)).fetchone()[0] == 2, "a duplicate finish moves nothing again"
-        audit = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='verdict_rerouted'",
-                          (check["id"],)).fetchone()
-    assert audit["old"] == "approve" and json.loads(audit["new"]) == {"head": HEAD, "attempt_id": "review-1"}
+        assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1"]
+        evidence = c.execute("SELECT builder_families,configured_families,checker_families "
+                             "FROM check_head_provenance WHERE check_id=? AND turn_id='review-1'",
+                             (check["id"],)).fetchone()
+        assert [json.loads(evidence[key]) for key in ("builder_families", "configured_families", "checker_families")] == [
+            ["anthropic"], ["openai"], ["anthropic"]]
+    assert _step(c, task) == "Review 2"
 
 
-def test_rerouted_check_given_the_same_verdict_by_another_same_family_run_waits_with_the_same_child(api):
+def test_unknown_or_same_family_provenance_does_not_create_a_verdict_wait(api):
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
@@ -238,28 +241,22 @@ def test_rerouted_check_given_the_same_verdict_by_another_same_family_run_waits_
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
         _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
-        _finish(c, "review-2", "rev-b", check, "claude-opus-5-5", "anthropic", "claude")
         waits = c.execute("SELECT child_id,attempt_id FROM check_waits WHERE ticket_id=? AND state='waiting'",
                           (task["id"],)).fetchall()
-        rerouted = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='check_rerouted' ORDER BY rowid",
-                             (task["id"],)).fetchall()
-        assert _step(c, task) == "Review 1"
-    assert [dict(w) for w in waits] == [{"child_id": check["id"], "attempt_id": "review-2"}]
-    assert [json.loads(r[0])["attempt_id"] for r in rerouted] == ["review-1", "review-2"]
+        assert _step(c, task) == "Review 2"
+    assert waits == []
 
 
-def test_unknown_builder_runtime_waits_instead_of_claiming_independence(api):
+def test_unknown_builder_runtime_still_gets_a_free_pool_checker(api):
     team(api)
     task = base_ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a"])
     assert move(api, task).status_code == 200
-    assert checks(api, task) == []
-    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
-    assert wait["label"] == "Waiting for a reviewer"
-    assert "different model company" in wait["reason"]
+    [check] = checks(api, task)
+    assert check["owner"] == "bot:rev-a"
 
 
-def test_ineligible_verdict_waits_unowned_then_reuses_the_same_check(api):
+def test_same_family_verdict_does_not_become_an_unowned_wait(api):
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-a"])
@@ -273,16 +270,9 @@ def test_ineligible_verdict_waits_unowned_then_reuses_the_same_check(api):
                   "harness": "claude", "effort": "high", "profile": "engineering"}
         H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
         waiting = c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)).fetchone()
-    assert waiting and waiting["child_id"] == check["id"]
-    held = busy(api, "rev-b")
-    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:rev-b", held["id"], status="done", note="VERDICT: approve")
-        rerouted = H.task(c, check["id"])
-        active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
-        active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
-    assert rerouted["owner"] == "bot:rev-b" and rerouted["status"] == "open"
-    assert rerouted["verdict"] == "approve" and [child["id"] for child in active] == [check["id"]]
+    assert waiting is None
+    assert get(api, "tasks/" + task["id"])["task"]["step"]["name"] == "Review 2"
+    assert H.task(c, check["id"])["verdict"] == "approve"
 
 
 def test_with_every_reviewer_at_its_limit_the_check_waits_and_the_first_to_finish_takes_it(api):
@@ -331,27 +321,24 @@ def test_a_checker_that_finishes_ordinary_work_takes_no_check_and_a_checker_take
     assert [k["owner"] for k in checks(api, task)] == ["bot:rev-a"]
 
 
-def test_no_same_company_check_and_an_offline_reviewer_is_passed_over(api):
+def test_same_company_is_a_fallback_and_an_offline_reviewer_is_passed_over(api):
     team(api)
     task = ticket(api, RECEIPT)
     set_pool(api, task, "Review 1", ["rev-c"])
     assert move(api, task).status_code == 200
-    assert checks(api, task) == [], "rev-c runs on the builder's model company: never a same-company review"
-    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
-    assert "different model company" in wait["reason"]
-    # Back to In Progress ends the wait; a pool with an offline reviewer gives the check to the online one.
-    task = get(api, "tasks/" + task["id"])["task"]
-    assert move(api, task, "In Progress").status_code == 200
-    assert get(api, "tasks/" + task["id"])["task"]["check_waits"] == []
-    set_pool(api, task, "Review 1", ["rev-a", "rev-b", "rev-c"])
+    [first] = checks(api, task)
+    assert first["owner"] == "bot:rev-c", "same-family reviewers remain eligible when they are the only free option"
+    set_pool(api, task, "Review 2", ["rev-a", "rev-b", "rev-c"])
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-c", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r2','old','ana','h2',?,?)",
                   (H.now(), H.shift(H.now(), hours=-2)))
         c.execute("UPDATE assignments SET runner_id='r2' WHERE bot='rev-a'")
     task = get(api, "tasks/" + task["id"])["task"]
-    assert move(api, task).status_code == 200
-    assert [k["owner"] for k in checks(api, task)] == ["bot:rev-b"]
+    assert move(api, task, "Review 2").status_code == 200
+    [second] = checks(api, task)
+    assert second["owner"] == "bot:rev-b", "the online same-family checker is preferred over an offline reviewer"
 
 
 def test_review_2_goes_to_a_bot_other_than_reviewer_1(api):

@@ -10,7 +10,7 @@ the roles, drop the ones you don't need, and change the steps in Settings → Ta
 | # | Role | Starter template | What it does |
 |---|---|---|---|
 | 1 | Builder | `pr-reviewer` (Senior Software Engineer), set to build | Builds the change, does every fix step, merges under the Head of Engineering's rules |
-| 2 | Reviewer 1 | `pr-reviewer`, on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
+| 2 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Technical review: bugs and correctness, as comments on the ticket |
 | 3 | Reviewer 2 | `pr-reviewer`, on a third model if you have one | A second review of the updated change, only for larger or risky changes |
 | 4 | QA | `issue-triage` (QA Engineer) | Runs the acceptance tests before release, and again live after release |
 | 5 | Release Manager | `release-notes` (Release Manager) | Cuts the release, rolls back if needed |
@@ -50,9 +50,9 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 1. **Product decides what, engineering decides how.** Feature ideas go to Head of Product first. Bugs and small
    changes go straight to Head of Engineering as a Dev ticket.
-2. **Different models check each other.** Reviewers and QA run on a different model company from the Builder,
-   so one model's blind spots don't pass their own review. Set this per bot (its model), or use a check model on a
-   subtask (see [Tasks](tasks.md)).
+2. **Prefer different models for checks.** Reviewers and QA prefer a different model company from the Builder;
+   when none is free or healthy, a same-family checker takes the work. Tico records the configured and executed
+   families on the check. Set this per bot (its model), or use a check model on a subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the ticket. There is no second round of the same review after fixes.
 4. **QA runs tests it didn't write.** Head of Product writes the acceptance tests in Given/When/Then form. Each is
@@ -96,8 +96,8 @@ ticket stays at its step with a Waiting tag.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
   for the same check on the same head is refused with the open one's id.
 - **Tico files the check.** Each check step has a pool of bots, set on the step in Settings → Tasks. Entering the step
-  files its check to the least busy eligible bot in the pool, from another model company than the Builder, or leaves it
-  "Waiting for a reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
+  files its check to a free pool bot, preferring another model company than the Builder, or leaves it "Waiting for a
+  reviewer" until the first one finishes a check ([Tasks](tasks.md#check-pools-who-takes-a-tickets-check)).
 - **Moving a step wakes nobody unless a rule says so.** A Dev tickets type comes with three editable rules: **QA Fixes**
   wakes the Builder, **In QA** wakes QA only, and **Pending Release** is a note to the Release Manager. Change them in the
   Rules page (`hub rule list --scope-kind type --scope-id <type>`).
