@@ -70,6 +70,50 @@ def test_a_backlog_in_rooms_the_turn_was_not_handed_is_not_walked(api, monkeypat
     assert walked == [msg["id"]], len(walked)        # before: every one of the 301 messages
 
 
+def test_readable_messages_split_by_hidden_pages_are_found_across_them(api, monkeypatch):
+    """Newest first, the turn's readable messages sit 1 before, 99 between and 1 after two INBOX_PAGE pages of notices
+    in rooms it was never handed. The newest INBOX_LIMIT come through and `more_messages` is set by the one on the
+    third page; once those are read, that one arrives alone. Only readable messages get the privacy walk."""
+    from backend.app import INBOX_LIMIT, INBOX_PAGE
+    store = api.app.state.store
+    _, msg, attempt = setup_attempt(api)
+    hidden = 2 * INBOX_PAGE - INBOX_LIMIT                # with INBOX_LIMIT readable ones, fills the first two pages
+    order = ["readable"] + ["hidden"] * (INBOX_PAGE - 1) + ["readable"] * (INBOX_LIMIT - 1) \
+        + ["hidden"] * (hidden - INBOX_PAGE + 1)         # then `msg` itself, the oldest, opens the third page
+    with store.transaction() as c:
+        conv = dict(c.execute("SELECT * FROM conversations WHERE id=?", (msg["conversation_id"],)).fetchone())
+        rooms = [uuid.uuid4().hex for _ in range(40)]
+        clone(c, "conversations", conv, 40, id=lambda i: rooms[i], room_key=lambda i: "room-" + rooms[i])
+        first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
+        newer = lambda p: H.shift(first["created"], seconds=len(order) - p)   # noqa: E731
+        spots = [p for p, kind in enumerate(order) if kind == "readable"]
+        clone(c, "messages", {**first, "read_at": None}, len(spots), created=lambda i: newer(spots[i]),
+              body=lambda i: f"readable {i}")
+        holes = [p for p, kind in enumerate(order) if kind == "hidden"]
+        clone(c, "messages", {**first, "from_actor": "keeper", "to_actor": "bot:ops", "kind": "notice",
+                              "delivered_at": H.now(), "read_at": None}, len(holes),
+              created=lambda i: newer(holes[i]), conversation_id=lambda i: rooms[i % 40], body=lambda i: f"notice {i}")
+        c.execute("UPDATE messages SET read_at=NULL WHERE id=?", (msg["id"],))
+        readable = [r["id"] for r in c.execute(
+            "SELECT id FROM messages WHERE conversation_id=? AND to_actor='bot:ops' AND read_at IS NULL "
+            "ORDER BY created DESC, rowid DESC", (msg["conversation_id"],))]
+    assert len(readable) == INBOX_LIMIT + 1 and readable[-1] == msg["id"]
+    walked = []
+    message_readable = task_privacy.message_readable
+
+    def counting(c, actor, message, current=False):
+        walked.append(message["id"])
+        return message_readable(c, actor, message, current)
+    monkeypatch.setattr(task_privacy, "message_readable", counting)
+    inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
+    assert [m["id"] for m in inbox["messages"]] == readable[:INBOX_LIMIT][::-1] and inbox["more_messages"] is True
+    assert walked == readable, len(walked)
+    with store.transaction() as c:
+        c.executemany("UPDATE messages SET read_at=? WHERE id=?", [(H.now(), mid) for mid in readable[:INBOX_LIMIT]])
+    inbox = api.get("/api/v2/messages?unread=1", headers=headers(attempt["token"])).json()
+    assert [m["id"] for m in inbox["messages"]] == [msg["id"]] and inbox["more_messages"] is False
+
+
 def test_the_newest_hundred_readable_arrive_oldest_first_with_their_answers(api):
     """What the inbox sends is unchanged: the newest INBOX_LIMIT readable messages, oldest first, `more_messages` when
     one more readable message waits, and an answered ask says when it was answered."""
