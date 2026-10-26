@@ -66,10 +66,13 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
+        # Check summaries enter support reports; private refusal context stays on the bot's display row.
+        why = ("Quarantined: queued work waits for the quarantine to clear."
+               if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"],
                       "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
                       "text": f"{row['name'][:120]} ({row['bot']}): {_plural(row['queued'], 'job')} queued, "
-                              f"oldest {minutes} min; {row['why']}", "fixes": fixes,
+                              f"oldest {minutes} min; {why}", "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
 

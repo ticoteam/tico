@@ -674,7 +674,10 @@ def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(envir
     assert "Refused write (identity): " + words in held["why"]
     assert "BotOps must review" not in held["why"]
     assert "a person who manages it can clear it sooner" in held["why"]
-    assert held["why"] in checks["queue"]["items"][0]["text"]
+    # Both the summary report and its diagnostic items must exclude manager-only refused words.
+    assert "Quarantined" in checks["queue"]["summary"]
+    assert words not in json.dumps(checks["queue"])
+    assert "Refused write" not in json.dumps(checks["queue"])
 
 
 def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explanation(environment):
@@ -691,9 +694,11 @@ def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explan
     with api.app.state.store.transaction() as c:
         H.status_set(c, "human:morgan", "helper", state="active", reason="Checked")
         H.status_set(c, "human:morgan", "helper", state="paused", reason="Waiting")
-    [paused] = health_of(api)[0]["stuck"]
+    body, checks = health_of(api)
+    [paused] = body["stuck"]
     assert paused["reason"] == "paused"
     assert paused["why"] == "Paused: its owner or BotOps must resume it"
+    assert paused["why"] in checks["queue"]["items"][0]["text"]
 
 
 def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environment):
