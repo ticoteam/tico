@@ -132,9 +132,18 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
     assert "only the bot's owner or operator" in reviews[0]['body']
     assert 'BotOps has made no recovery decision' in reviews[0]['body']
     assert botops_reviews == 0
+    assert 'Bot: ops.' in reviews[0]['body']
     with api.app.state.store.transaction() as c:
         H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
         assert H.task(c, existing['id'])['status'] == 'open'
+        # Renamed after the review was filed, with another bot now under its old name: the title no longer leads to
+        # ops, and the review still stays open while its run is held.
+        c.execute("UPDATE bots SET display_name='Ops (renamed)' WHERE slug='ops'")
+        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('decoy', ?, 'active')", (display_name,))
+        H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
+        assert H.task(c, existing['id'])['status'] == 'open'
+        c.execute("DELETE FROM bots WHERE slug='decoy'")
+        c.execute("UPDATE bots SET display_name=? WHERE slug='ops'", (display_name,))
     # A safe decision ends the held run, so the same stall check can close the review as usual.
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The operator checked the request and it should not be repeated.',

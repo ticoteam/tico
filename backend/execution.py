@@ -4002,7 +4002,7 @@ class Execution:
                         if can_review:
                             self._hand_to_maintainer(c, row, msg, task, acted, again=bool(held))
                         else:
-                            self._hand_to_operator(c, row, msg, acted, again=bool(held))
+                            self._hand_to_operator(c, row, msg, again=bool(held))
                     continue
                 if (row['attempt_state'] == 'expired' and row['started'] and row['finished']
                         and row['finished'] > H.shift(H.now(), seconds=-RESULT_GRACE)):
@@ -4080,7 +4080,7 @@ class Execution:
         except H.Refused:
             pass
 
-    def _hand_to_operator(self, c, row, msg, acted, again=False):
+    def _hand_to_operator(self, c, row, msg, again=False):
         """BotOps cannot read every held request. Keep an open review task with its authorized operator when the
         request or attempt is private to them; an access failure is not a recovery decision (Dev 543)."""
         bot = H.bot(c, row['bot']) or {}
@@ -4096,10 +4096,12 @@ class Execution:
         boundary = ("Tico cannot show BotOps this interrupted run because only the bot's owner or operator can inspect "
                     "interrupted-run details. BotOps has made no recovery decision. Review the run through the bot's "
                     "interrupted-run review and choose only after checking what already happened.")
+        named = H.HELD_OPERATOR_REVIEW_BOT.format(slug=row['bot'])
         if tasks:
             existing = tasks[0]
-            if boundary not in str(existing['body'] or ''):
-                body = (str(existing['body'] or '').rstrip() + "\n\n" + boundary).strip()
+            missing = [part for part in (boundary, named) if part not in str(existing['body'] or '')]
+            if missing:
+                body = "\n\n".join([str(existing['body'] or '').rstrip(), *missing]).strip()
                 try:
                     H.task_update(c, H.KEEPER, existing['id'], body=body, quiet=True)
                 except H.Refused:
@@ -4109,7 +4111,7 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(c, H.KEEPER, title, boundary + job_line, owner, private=True)
+            H.task_create(c, H.KEEPER, title, boundary + job_line + "\n\n" + named, owner, private=True)
         except H.Refused:
             pass
 

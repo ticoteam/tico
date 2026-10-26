@@ -6969,6 +6969,9 @@ def _no_diagnosis(conn, row, count):
 # BotOps's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
 HELD_REVIEW_TITLE = "Review {bot}'s stopped runs held for a check"
 HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted runs"
+# The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
+# bot's slug too and the stall guard reads that first.
+HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
 
 
 def held_review_bot(conn, row):
@@ -6984,9 +6987,14 @@ def held_review_bot(conn, row):
         owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
         if not title.startswith(owner_prefix) or not title.endswith(owner_suffix):
             return None
-        display_name = title[len(owner_prefix):-len(owner_suffix)]
-        bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
-        slug = bot["slug"] if bot else None
+        body = conn.execute("SELECT body FROM tasks WHERE id=?", (row["id"],)).fetchone()
+        named = re.search(r"^Bot: (\S+)\.$", str(body["body"] or "") if body else "", re.M)
+        if named:
+            slug = named.group(1)
+        else:
+            display_name = title[len(owner_prefix):-len(owner_suffix)]
+            bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
+            slug = bot["slug"] if bot else None
         if not slug:
             return None
     held = conn.execute("SELECT 1 FROM jobs j WHERE j.bot=? AND j.state='uncertain' AND NOT EXISTS("
