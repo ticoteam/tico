@@ -78,9 +78,11 @@ def test_urgent_news_overrides_batch_rows_for_every_batching_profile(api, profil
         mine = H.task_create(c, 'bot:ops', 'Own this work', 'x', 'bot:cpo')
         other = H.task_create(c, 'bot:ops', 'Other work', 'x', 'bot:ops')
         c.execute('DELETE FROM jobs')
+        # A lead's own profile already wakes review requests under its own rule name, which urgency preserves.
+        review_rule = 'profile_lead_request' if profile == 'lead' else 'direct_review_request'
         for task, refs, rule in [(incident, {}, 'incident_news'),
                                  (mine, {'news': 'task_blocked'}, 'task_blocker'),
-                                 (mine, {'wake': 'review_request'}, 'direct_review_request'),
+                                 (mine, {'wake': 'review_request'}, review_rule),
                                  (mine, {'needs_action': True, 'wake': 'stalled'}, 'needs_action')]:
             msg, job = sent_job(c, task, 'bot:cpo', 'New urgent news ' + rule, refs)
             assert msg['refs']['rule'] == rule and job['held'] == 0
@@ -120,6 +122,20 @@ def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
     second = report(api, r, dict(raw, op='comment', ref='new', text='Recurred'))
     with api.app.state.store.read() as c:
         assert 'incident' in H.task_labels(H.task(c, second['tasks']['error:outage']))
+
+
+def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable(api):
+    with api.app.state.store.transaction() as c:
+        put(c, 'cpo', 'lead')
+        plain = H.task_create(c, 'bot:ops', 'Plain work', 'x', 'bot:cpo')
+        incident = H.task_create(c, 'bot:ops', 'Incident: Outage', 'x', 'bot:cpo')
+        c.execute('DELETE FROM jobs')
+        msg, job = sent_job(c, plain, 'bot:cpo', 'A blocker needs it', {'wake': 'blocker'})
+        assert msg['refs']['rule'] == 'profile_lead_blocker' and job['held'] == 0
+        said = H.task_comment(c, H.KEEPER, incident['id'], 'A note on the outage')
+        kept = H.message(c, said['id'])
+        assert kept['refs']['rule'] == 'incident_news' and H.is_comment(kept)
+        H.task_comment_edit(c, H.KEEPER, incident['id'], said['id'], 'Clearer words')
 
 
 def test_incident_type_and_plain_rule_words_are_listed(api):

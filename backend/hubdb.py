@@ -4960,7 +4960,7 @@ def is_comment(msg):
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
-            and not (set(refs) - {"task", "comment", "quiet", "via", "rule"}))
+            and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate"}))
 
 
 

@@ -91,6 +91,8 @@ FLOOR_EVENTS = {
     "task_blocker": "a blocker or refused move on a task it owns or asked for needs action now",
     "direct_review_request": "a review or sign-off asked of this bot needs action now",
 }
+# Structured task news that wakes at once when no row already wakes it or keeps it quiet.
+URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
           "gate": "verdict"}
@@ -306,7 +308,7 @@ def _builtins():
         add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     add("ask", "ask", WAKE, FLOOR_EVENTS["ask"], "always", True)
     add("answer", "answer", WAKE, FLOOR_EVENTS["answer"], "always", True)
-    for event in ("incident_news", "task_action", "task_blocker", "direct_review_request"):
+    for event in URGENT_EVENTS:
         add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     for key, (event, words) in AWAITED_EVENTS.items():
         add("awaited_" + key, event, WAKE, words, "awaited")
@@ -564,7 +566,8 @@ def incident_task(conn, task):
 
 
 def urgent_rule(conn, actor, target, refs, conv, event):
-    """Structured task news that must bypass any batching profile or row. Own writes stay quiet."""
+    """Structured task news that wakes at once when no row already wakes it or keeps it quiet. A row that
+    wakes keeps its own rule name; an explicit ignore or quiet marker keeps the silence. Own writes stay quiet."""
     from . import wake_rules
     if wake_rules.CAUSE.get() == target or actor == target:
         return None
@@ -616,14 +619,15 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     if floor:
         return Decision(WAKE, floor_rule(floor, kind))
     event = event_of(actor, kind, refs, body)
-    urgent = urgent_rule(conn, actor, target, refs, conv, event)
-    if urgent:
-        return Decision(WAKE, urgent)
     row = _table_decision(conn, event, actor, target, refs, conv)
-    if row:
-        return row
-    row = _pr_decision(conn, event, target, refs, conv)
-    if row:
+    if row is None:
+        row = _pr_decision(conn, event, target, refs, conv)
+    if row is not None:
+        if row.outcome in (WAKE, IGNORE):
+            return row
+        urgent = urgent_rule(conn, actor, target, refs, conv, event)
+        if urgent:
+            return Decision(WAKE, urgent)
         return row
     key = wake_rules.awaited(refs)
     if key:
@@ -639,6 +643,11 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     if held:
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
+    if outcome == WAKE:
+        return Decision(outcome, rule)
+    urgent = urgent_rule(conn, actor, target, refs, conv, event)
+    if urgent:
+        return Decision(WAKE, urgent)
     return Decision(outcome, rule, HOLD_ROW if outcome == NOTE else None)
 
 
@@ -669,7 +678,8 @@ def stamp(refs, decision):
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
     out.pop("wake_immediate", None)
-    if decision.outcome == WAKE and decision.rule in FLOOR_EVENTS:
+    if decision.outcome == WAKE and decision.rule in (*URGENT_EVENTS, "needs_action", "ask"):
+        # Urgent news and a question or flagged action for the bot skip every hold; the trigger reads this.
         out.pop("wake_batch", None)
         out["wake_immediate"] = True
     if decision.outcome == BATCH and not out.get("wake_batch"):
