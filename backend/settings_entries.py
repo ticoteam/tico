@@ -1,8 +1,10 @@
 """The settings catalogue's entries (backend/settings_catalog.py): one per control in Settings that writes.
 
-Classes: `confirm` for roles, publishing and spending increases (BotOps acting for a person puts them to the person as
-a Confirm card); `person` for ownership, BotOps' own powers, the CEO bot, privacy and the team icon (only the person, in
-Settings); `direct` for the rest. backend/tests/test_settings_catalog.py reads every write the files in
+Classes follow the settings owner's table (Appendix A of the BotOps-changes-settings spec): `direct` for what is
+reversible, inside the team and spends nothing new; `confirm` for spending more, people and access, sending or
+publishing outside, anything destructive, team rules and ownership (BotOps acting for a person puts them to the person
+as a Confirm card, which only their own tap runs); `person` for a sign-in, a secret value, an upload, or the person's
+own approvals and sending (only the person, in Settings). backend/tests/test_settings_catalog.py reads every write the files in
 SETTINGS_FILES make and fails when no entry, ALIASES row or NOT_SETTINGS row covers it.
 """
 from dataclasses import replace
@@ -27,20 +29,16 @@ RULES, HOOKS, TASKS, REPOS = "Settings > Rules", "Settings > Webhooks", "Setting
 INBOUND, CEO = "Settings > Email & Phone", "Settings > CEO bot"
 
 _RULE_NAMES = {
-    "assistant_direct": ("Assistant acts without asking", "person", "BotOps' and the Assistant's own powers are the "
-                         "owner's to give, in Settings"),
+    "assistant_direct": ("Assistant acts without asking", "confirm", ""),
     "assistant_approvals": ("People may let their Assistant decide their approvals", "confirm", ""),
-    "botops_direct": ("BotOps changes providers and limits without asking", "person", "BotOps doesn't change its own "
-                      "powers: the owner does, in Settings"),
-    "botops_manages_bots": ("BotOps manages every bot", "person", "BotOps doesn't change its own powers: the owner "
-                            "does, in Settings"),
+    "botops_direct": ("BotOps changes providers and limits without asking", "confirm", ""),
+    "botops_manages_bots": ("BotOps manages every bot", "confirm", ""),
     "admin_credentials": ("Admins store credentials", "confirm", ""),
     "members_store_credentials": ("Members store credentials for their bots", "confirm", ""),
     "admin_sql": ("Admins see SQL", "confirm", ""),
     "member_tokens": ("Members make personal tokens", "confirm", ""),
     "bots_go_ahead": ("Bots go ahead on their recommendation when nobody answers", "confirm", ""),
-    "support_access": ("Owners and admins may let Tico support in", "person", "Letting Tico support in is a privacy "
-                       "choice the owner makes in Settings"),
+    "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
     "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
@@ -58,33 +56,31 @@ TEAM_RULES = [
       card=_RULE_WHERE.get(key, ("", _card("people")))[1], read="access#rules." + key, words="team rule", why=why)
     for key, (name, kind, why) in _RULE_NAMES.items()
 ] + [S("team.rules.go_ahead_days", "Days a bot waits before it goes ahead", PEOPLE + " > Team rules", "owner",
-       "direct", "PUT", "access/rules", "go_ahead_days", "int", _card("people"), "access#rules.go_ahead_days",
+       "confirm", "PUT", "access/rules", "go_ahead_days", "int", _card("people"), "access#rules.go_ahead_days",
        words="wait days go ahead")]
 
 _USD = "hourly_usd, daily_usd, weekly_usd, monthly_usd"
+# A wake rule that sends a webhook or forwards the call sends outside: confirm, like an outgoing webhook.
+_SENDS_OUT = (("params.action", ("send_webhook", "forward")),)
 
 ENTRIES = TEAM_RULES + [
     # General
-    S("team.icon", "Team icon", GENERAL + " > Team", "owner", "person", "POST", "team/icon", value="text",
+    S("team.icon", "Team icon", GENERAL + " > Team", "owner", "person", "POST", "team/icon", value="upload",
       card=_card("general", "settings-team"), why="The team icon is an upload the owner makes in Settings"),
     S("me.assistant.decides_approvals", "My Assistant decides my approvals", GENERAL + " > Assistant", "self",
       "person", "POST", "assistant/settings", "decides_approvals", card=_card("general", "settings-assistant-pane"),
       why="Who decides your approvals is yours to choose, in Settings"),
-    S("assistant.on", "Turn the Assistant on", GENERAL + " > Assistant", "owner", "person", "POST",
-      "assistant/turn-on", value="json", card=_card("general", "settings-assistant-pane"),
-      why="The Assistant's own powers are the owner's to give, in Settings"),
-    S("privacy.usage_count", "Count usage", GENERAL + " > Privacy", "owner", "person", "PUT", "system/usage-count",
-      "enabled", card=_card("general", "settings-privacy"), read="system/usage-count#enabled",
-      why="Privacy choices are the owner's to make, in Settings"),
-    S("privacy.usage_count.reset", "Reset the usage count", GENERAL + " > Privacy", "owner", "person", "POST",
-      "system/usage-count/reset", value="json", card=_card("general", "settings-privacy"),
-      why="Privacy choices are the owner's to make, in Settings"),
+    S("assistant.on", "Turn the Assistant on", GENERAL + " > Assistant", "owner", "confirm", "POST",
+      "assistant/turn-on", value="json", card=_card("general", "settings-assistant-pane")),
+    S("privacy.usage_count", "Count usage", GENERAL + " > Privacy", "owner", "direct", "PUT", "system/usage-count",
+      "enabled", card=_card("general", "settings-privacy"), read="system/usage-count#enabled"),
+    S("privacy.usage_count.reset", "Reset the usage count", GENERAL + " > Privacy", "owner", "confirm", "POST",
+      "system/usage-count/reset", value="json", card=_card("general", "settings-privacy")),
     S("company.server_connection", "Connect to the Tico company server", GENERAL + " > Tico company", "admin",
       "person", "POST", "company/server-connection", value="json", card=_card("general", "settings-company"),
       why="Only a person signed in themselves connects the company server"),
     S("company.server_connection.remove", "Disconnect the Tico company server", GENERAL + " > Tico company", "admin",
-      "person", "DELETE", "company/server-connection", value="json", card=_card("general", "settings-company"),
-      why="Only a person signed in themselves disconnects the company server"),
+      "confirm", "DELETE", "company/server-connection", value="json", card=_card("general", "settings-company")),
     S("storage.s3", "Company storage (S3)", GENERAL + " > Storage", "owner", "person", "PUT", "system/storage",
       value="json", card=_card("general", "settings-storage"), words="bucket s3",
       why="Storage keys are typed in Settings, never passed through a bot"),
@@ -101,15 +97,15 @@ ENTRIES = TEAM_RULES + [
       "directory/scim-token", value="json", card=_card("people"), why="A new token is shown once, to the owner"),
     S("people.add", "Add a human", PEOPLE + " > Add a human", "anyone", "confirm", "POST", "access/humans",
       value="json", card=_card("people"), words="invite person"),
-    S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "direct", "PUT",
+    S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
     S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),
-    S("people.person.create_bots", "A person may create bots", PEOPLE, "admin", "direct", "POST",
+    S("people.person.create_bots", "A person may create bots", PEOPLE, "admin", "confirm", "POST",
       "access/humans/{person}", "create_bots", card=_card("people")),
-    S("people.person.add_people", "A person may add people", PEOPLE, "admin", "direct", "POST",
+    S("people.person.add_people", "A person may add people", PEOPLE, "admin", "confirm", "POST",
       "access/humans/{person}", "add_people", card=_card("people")),
     S("people.person.left", "A person has left", PEOPLE, "owner", "confirm", "POST", "humans/{person}", "left",
       card=_card("people")),
@@ -117,8 +113,8 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people")),
     S("owner.email", "Owner email", PEOPLE + " > Owner", "owner", "person", "POST", "access/owner/email",
       value="json", card=_card("people"), why="The owner's sign-in is changed only by the owner, in Settings"),
-    S("owner.transfer", "Transfer ownership", PEOPLE + " > Owner", "owner", "person", "POST", "access/owner",
-      value="json", card=_card("people"), why="Ownership moves only by the owner's own hand, in Settings"),
+    S("owner.transfer", "Transfer ownership", PEOPLE + " > Owner", "owner", "confirm", "POST", "access/owner",
+      value="json", card=_card("people")),
     # Computers
     S("team.turn_levels", "Company turn levels", COMPUTERS + " > Company turn levels", "admin", "confirm", "POST",
       "settings/turn-levels", value="json", card=_card("devices"), words="warning stop per person"),
@@ -126,13 +122,13 @@ ENTRIES = TEAM_RULES + [
       "bots/{bot}/agent-credential", value="json", card=_card("devices"),
       why="A new agent credential is shown once, to the person, in Settings"),
     S("bot.agent_credential.revoke", "Revoke the agent credential", COMPUTERS + " > Connect an agent", "bot",
-      "direct", "POST", "bots/{bot}/agent-credential/revoke", value="json", card=_card("devices")),
+      "confirm", "POST", "bots/{bot}/agent-credential/revoke", value="json", card=_card("devices")),
     S("agents.pairing.approve", "Approve an agent pairing", COMPUTERS + " > Connect an agent", "bot", "person",
       "POST", "agents/pairings/approve", value="json", card=_card("devices"),
       why="The pairing code is on the person's screen: they approve it in Settings"),
     S("me.tokens", "API tokens", COMPUTERS + " > API tokens", "self", "person", "POST", "me/tokens", value="json",
       card=_card("devices", "settings-tokens"), why="A personal token is shown once, to the person, in Settings"),
-    S("me.tokens.revoke", "Revoke an API token", COMPUTERS + " > API tokens", "self", "direct", "POST",
+    S("me.tokens.revoke", "Revoke an API token", COMPUTERS + " > API tokens", "self", "confirm", "POST",
       "me/tokens/{id}/revoke", value="json", card=_card("devices", "settings-tokens")),
     S("computers.add", "Add a computer", COMPUTERS + " > Add a computer", "self", "person", "POST", "enrollments",
       value="json", card=_card("devices"), why="Enrolling a computer happens on it, from Settings"),
@@ -182,11 +178,11 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="name description reports to status repo shared"),
     S("bot.archive", "Archive a bot", BOTS + " > Bot editor", "bot", "confirm", "POST", "bots/{bot}/archive",
       value="json", card=_card("bots")),
-    S("bot.owners", "Bot owners", BOTS + " > Bot editor", "bot", "person", "POST", "bots/{bot}/owners", "owners",
-      "list", _card("bots"), why="Who owns a bot is changed by a person, in Settings"),
-    S("bot.co_owners", "Bot co-owners", BOTS + " > Bot editor", "bot", "person", "POST", "bots/{bot}/co-owners",
-      value="json", card=_card("bots"), why="Who owns a bot is changed by a person, in Settings"),
-    S("bot.change.apply", "Apply a pending change without a checkpoint", BOTS + " > Bot editor", "bot", "direct",
+    S("bot.owners", "Bot owners", BOTS + " > Bot editor", "bot", "confirm", "POST", "bots/{bot}/owners", "owners",
+      "list", _card("bots")),
+    S("bot.co_owners", "Bot co-owners", BOTS + " > Bot editor", "bot", "confirm", "POST", "bots/{bot}/co-owners",
+      value="json", card=_card("bots")),
+    S("bot.change.apply", "Apply a pending change without a checkpoint", BOTS + " > Bot editor", "bot", "confirm",
       "POST", "settings/transitions/{id}/apply-without-checkpoint", value="json", card=_card("bots"),
       extra={"change_without_checkpoint": True}),
     S("bot.change.cancel", "Cancel a pending change", BOTS + " > Bot editor", "bot", "direct", "POST",
@@ -199,13 +195,13 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    S("bot.repositories", "Bot repositories", REPOS, "admin", "confirm", "PUT", "bots/{bot}/repositories",
+    S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
       value="json", card=_card("repos", "set-repos")),
     # CEO bot
-    S("ceo.checks", "CEO bot regular checks", CEO, "owner", "person", "POST", "ceo-bot/checks", "on",
-      card=_card("ceo"), why="The CEO bot answers to the owner, who sets it in Settings"),
-    S("ceo.level", "How much the CEO bot does", CEO, "owner", "person", "POST", "ceo-bot/level", "level", "int",
-      _card("ceo"), why="The CEO bot answers to the owner, who sets it in Settings"),
+    S("ceo.checks", "CEO bot regular checks", CEO, "owner", "confirm", "POST", "ceo-bot/checks", "on",
+      card=_card("ceo")),
+    S("ceo.level", "How much the CEO bot does", CEO, "owner", "confirm", "POST", "ceo-bot/level", "level", "int",
+      _card("ceo")),
     # Repositories
     S("repo.enabled", "Repository on", REPOS, "admin", "direct", "PUT", "repositories/{id}", "enabled",
       card=_card("repos", "set-repos")),
@@ -223,9 +219,9 @@ ENTRIES = TEAM_RULES + [
     S("rules.task_rule.create", "New task rule", RULES + " > What Tico runs on its own", "anyone", "direct", "POST",
       "task-rules", value="json", card=_card("recurring", "set-system-card")),
     S("rules.wake", "What wakes a bot", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules/{id}",
-      value="json", card=_card("recurring", "set-rules-card"), words="rule event trigger"),
+      value="json", card=_card("recurring", "set-rules-card"), words="rule event trigger", confirm_when=_SENDS_OUT),
     S("rules.wake.create", "New wake rule", RULES + " > What wakes a bot", "anyone", "direct", "POST", "rules",
-      value="json", card=_card("recurring", "set-rules-card")),
+      value="json", card=_card("recurring", "set-rules-card"), confirm_when=_SENDS_OUT),
     S("release.on", "Daily release", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule", "on",
       card=_card("recurring", "set-release-card"), read="release-schedule#on"),
     S("release.times", "Release times", RULES + " > Releases", "admin", "direct", "PATCH", "release-schedule",
@@ -242,9 +238,11 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("recurring"), words="cron schedule"),
     S("rules.routine.create", "New bot routine", RULES + " > Bots routines", "bot", "direct", "POST",
       "bots/{bot}/routines", value="json", card=_card("recurring")),
-    S("rules.routine.delete", "Delete a bot routine", RULES + " > Bots routines", "bot", "direct", "POST",
+    S("rules.routine.delete", "Delete a bot routine", RULES + " > Bots routines", "bot", "confirm", "POST",
       "routines/{id}/delete", value="json", card=_card("recurring")),
-    # Webhooks
+    # Webhooks: `incoming`, `outgoing` and `gateway` are the Webhooks tab's own parts, which ui/app/router.js opens from
+    # `#/settings/webhooks/<part>` before the catalogue's generic `#/settings/<tab>/<card>` branch: rename them
+    # together.
     S("webhooks.incoming.create", "New incoming trigger", HOOKS + " > Incoming", "anyone", "direct", "POST", "triggers",
       value="json", card=_card("webhooks", "incoming"), words="webhook incoming"),
     S("webhooks.incoming", "Incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST", "triggers/{id}",
@@ -252,29 +250,30 @@ ENTRIES = TEAM_RULES + [
     S("webhooks.incoming.signing", "Incoming trigger signing", HOOKS + " > Incoming", "creator", "person", "POST",
       "triggers/{id}/signing", value="json", card=_card("webhooks", "incoming"),
       why="A signing secret is typed in Settings, never passed through a bot"),
-    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "direct", "POST",
+    S("webhooks.incoming.rotate", "Rotate an incoming trigger's address", HOOKS + " > Incoming", "creator", "confirm",
+      "POST",
       "triggers/{id}/rotate", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "direct", "POST",
+    S("webhooks.incoming.delete", "Delete an incoming trigger", HOOKS + " > Incoming", "creator", "confirm", "POST",
       "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
-    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "direct", "POST",
+    S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
       "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "direct", "PUT", "hooks/wake-url", "url",
+    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "confirm", "PUT", "hooks/wake-url", "url",
       "text", _card("webhooks", "gateway")),
     S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "confirm", "POST", "webhooks",
       value="json", card=_card("webhooks", "outgoing")),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
-    S("listening.destination", "Listening destination", "Settings > Listening", "owner", "direct", "PUT",
+    S("listening.destination", "Listening destination", "Settings > Listening", "owner", "confirm", "PUT",
       "listening/destinations/{id}", value="json", card=_card("listening")),
-    S("listening.destination.remove", "Remove a listening destination", "Settings > Listening", "owner", "direct",
+    S("listening.destination.remove", "Remove a listening destination", "Settings > Listening", "owner", "confirm",
       "POST", "listening/destinations/{id}/remove", value="json", card=_card("listening")),
     # Tasks
     S("tasks.type", "Task type", TASKS + " > Task types", "mover", "direct", "POST", "task-types/{id}", value="json",
       card=_card("tasks", "settings-types"), words="steps pipeline"),
     S("tasks.type.create", "New task type", TASKS + " > Task types", "mover", "direct", "POST", "task-types",
       value="json", card=_card("tasks", "settings-types")),
-    S("tasks.type.delete", "Delete a task type", TASKS + " > Task types", "mover", "direct", "POST",
+    S("tasks.type.delete", "Delete a task type", TASKS + " > Task types", "mover", "confirm", "POST",
       "task-types/{id}/delete", value="json", card=_card("tasks", "settings-types")),
     S("roadmap.public", "Public roadmap", TASKS + " > Public roadmap", "admin", "confirm", "POST", "roadmaps/settings",
       value="json", card=_card("tasks", "settings-roadmaps"), words="publish public"),
@@ -307,12 +306,15 @@ ENTRIES = TEAM_RULES + [
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
 # changes them in Settings until it can, rather than BotOps changing them at once.
-NO_CARD_YET = ("storage.s3.remove", "storage.move", "people.person.delete", "team.turn_levels",
-               "models.gateway.automatic", "models.gateway.remove", "team.budget", "bot.budget", "repos.product.create",
-               "webhooks.outgoing.create", "webhooks.outgoing", "roadmap.public", "inbound.inbox.release", "inbound.phone_request",
-               "inbound.phone_request.accept", "pool.limit.usd")
-ENTRIES = [replace(e, kind="person", why=e.name + " needs a person's yes, and BotOps can't ask for it on a Confirm "
-                   "card yet") if e.key in NO_CARD_YET else e for e in ENTRIES]
+NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
+               "storage.move", "people.person.delete", "owner.transfer", "me.tokens.revoke", "team.turn_levels",
+               "models.gateway.automatic", "models.gateway.remove", "bot.budget", "ceo.checks", "ceo.level",
+               "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
+               "webhooks.outgoing", "listening.destination", "listening.destination.remove", "roadmap.public",
+               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
+_NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
+ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
+            replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]
 
 # A write whose path the page builds in code, so the test reads it with a placeholder where a whole segment or more
 # goes: the entry that covers it.

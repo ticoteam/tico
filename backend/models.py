@@ -2278,7 +2278,6 @@ class SettingsPlan(Contract):
     computer: str | None = Field(default=None, max_length=200)
     person: str | None = Field(default=None, max_length=200)
     id: str | None = Field(default=None, max_length=200)
-    on_behalf_of: str | None = Field(default=None, max_length=200)
 
 
 class ReleaseNow(Contract):

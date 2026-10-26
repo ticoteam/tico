@@ -495,11 +495,14 @@ who may change it, its class, the route and body it writes, and a link that open
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
 what `set` does when BotOps asks for a person:
 
-- **direct**: it changes at once, as that person, and the answer names the new value.
-- **confirm** (roles, publishing, spending increases): BotOps gets a Confirm card for the person to tap; nothing
-  changes until they do. The person's own `hub settings set` runs at once. A confirm entry whose route BotOps can't yet
-  put on a card is person-only until it can (`NO_CARD_YET`).
-- **person** (ownership, BotOps' and the Assistant's own powers, the CEO bot, privacy, the team icon, secrets): BotOps
+- **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
+  the privacy count): it changes at once, as that person, and the answer names the new value.
+- **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
+  ownership, the CEO bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
+  confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
+  `hub settings set` runs at once. A confirm entry whose route BotOps can't yet put on a card is person-only until it
+  can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
   answers with a one-line reason and the card's link.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").

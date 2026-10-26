@@ -5,10 +5,14 @@ Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
 import re
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from backend import botops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
-from backend.settings_entries import ALIASES, ENTRIES, NOT_SETTINGS, SETTINGS_FILES
+from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
+from backend.store import Problem
 from backend.tests.test_api import api, get  # noqa: F401  (fixture)
 from backend.tests.test_mcp import call as mcp
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
@@ -83,6 +87,50 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
             path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
+
+
+def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
+    for e in ENTRIES:
+        card = valid_operation(e.method, "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route), None, "botops")
+        if e.key in NO_CARD_YET:
+            assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
+            assert e.kind == "person" or e.when_held == "person", e.key
+        elif e.confirm_when:
+            assert card and e.when_held == "confirm", e.key
+
+
+def _owner(via="botops"):
+    return SimpleNamespace(role="owner", via=via, actor="human:ana-test")
+
+
+def test_botops_never_runs_a_confirm_setting_when_no_card_can_be_made():
+    e = ENTRY("team.rules.admin_sql")
+    with pytest.raises(Problem) as refused:
+        settings_catalog.plan(None, None, _owner(), e, "off", propose=None)
+    assert refused.value.code == "unavailable" and e.card in refused.value.detail
+    assert "run" in settings_catalog.plan(None, None, _owner(via=""), e, "off", propose=None)
+
+
+def test_a_wake_rule_that_sends_outside_is_not_direct():
+    e, card = ENTRY("rules.wake.create"), lambda *a: {"needs_confirm": True}
+    quiet = {"scope_kind": "team", "event": "task.created", "then": "wake"}
+    assert "run" in settings_catalog.plan(None, None, _owner(), e, quiet, propose=card)
+    for action in ("send_webhook", "forward"):
+        with pytest.raises(Problem) as refused:
+            settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
+                                  propose=card)
+        assert refused.value.code == "person_only", action
+
+
+def test_nothing_is_not_a_value_and_the_team_icon_is_an_upload():
+    for key in ("release.times", "bot.definition", "release.bot"):
+        with pytest.raises(Problem) as refused:
+            settings_catalog.parse(ENTRY(key), None)
+        assert refused.value.status == 422, key
+    e = ENTRY("team.icon")
+    with pytest.raises(Problem) as refused:
+        settings_catalog.plan(None, None, _owner(via=""), e, "icon.png")
+    assert refused.value.status == 422 and e.card in refused.value.detail
 
 
 def test_find_lists_admins_see_sql_with_its_place_and_class(api):

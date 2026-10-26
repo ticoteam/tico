@@ -48,12 +48,14 @@ class Setting:
     method: str
     route: str                  # a v2 route, `{bot}`, `{computer}` or `{person}` for the target
     field: str = ""             # where the value goes in the body (dots nest); "" sends the value as the body
-    value: str = "bool"         # bool, int, number, text, list, json, or choice:a|b|c
+    value: str = "bool"         # bool, int, number, text, list, json, choice:a|b|c, or upload (a file, in Settings)
     card: str = "#/settings"    # the card's link in the app
     read: str = ""              # GET route whose answer holds the current value, then `#` and its pointer (dots)
     extra: dict = _field(default_factory=dict)      # fixed keys the route needs beside the value
     words: str = ""             # other words people use for it
     why: str = ""               # person-only: the one-line reason
+    confirm_when: tuple = ()    # ((dotted body place, values), ...): a direct entry whose body holds one is `when_held`
+    when_held: str = "confirm"
 
     @property
     def target(self):
@@ -118,7 +120,9 @@ def public(e, base=""):
     return {"key": e.key, "name": e.name, "where": e.where, "class": e.kind, "who": e.who, "who_may": who_text(e),
             "value": e.value, "target": e.target, "method": e.method, "route": "/api/v2/" + e.route,
             "body": body_shape(e), "card": (base.rstrip("/") + "/" + e.card) if base else e.card,
-            **({"why": e.why} if e.why else {})}
+            **({"why": e.why} if e.why else {}),
+            **({"class_when": {"class": e.when_held, "body": {place: list(values) for place, values in e.confirm_when}}}
+               if e.confirm_when else {})}
 
 
 def _put(body, dotted, value):
@@ -133,6 +137,8 @@ def parse(e, value):
     kind = e.value
     text = value.strip() if isinstance(value, str) else value
     try:
+        if text is None:
+            raise ValueError
         if kind == "bool":
             if isinstance(text, bool):
                 return text
@@ -157,7 +163,10 @@ def parse(e, value):
                 return [str(v) for v in json.loads(text)]
             return [v.strip() for v in str(text).split(",") if v.strip()]
         if kind == "json":
-            return json.loads(text) if isinstance(text, str) else text
+            parsed = json.loads(text) if isinstance(text, str) else text
+            if parsed is None:
+                raise ValueError
+            return parsed
         if kind.startswith("choice:"):
             choices = kind[len("choice:"):].split("|")
             if str(text) not in choices:
@@ -174,7 +183,7 @@ def _kind_words(kind):
     if kind.startswith("choice:"):
         return "one of " + ", ".join(kind[len("choice:"):].split("|"))
     return {"bool": "on or off", "int": "a whole number", "number": "a number", "list": "a comma-separated list",
-            "json": "JSON", "text": "text"}.get(kind, kind)
+            "json": "JSON", "text": "text", "upload": "a file"}.get(kind, kind)
 
 
 def path_for(e, target, template=None):
@@ -187,6 +196,22 @@ def path_for(e, target, template=None):
             from urllib.parse import quote
             path = path.replace("{" + name + "}", quote(str(target[name]), safe=""))
     return path
+
+
+def _held(body, dotted):
+    for part in dotted.split("."):
+        if not isinstance(body, dict):
+            return None
+        body = body.get(part)
+    return body
+
+
+def kind_for(e, body):
+    """The entry's class for this body: a direct entry is `when_held` when the body holds one of its `confirm_when`
+    values."""
+    if e.kind == "direct" and any(_held(body, place) in values for place, values in e.confirm_when):
+        return e.when_held
+    return e.kind
 
 
 def may(c, auth, who, e, target=None):
@@ -221,11 +246,17 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None):
     person-only entry's reason and link."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via == "botops"
+
+    def person_only():
+        why = e.why or f"{e.name} is changed only by the person themselves"
+        return Problem("person_only", why + ": open " + link, 403, extra={"link": link})
     if e.kind == "person" and (acting_for or who.role not in ("owner", "human")):
-        raise Problem("person_only", (e.why or f"{e.name} is changed only by the person themselves") + ": open " + link,
-                      403, extra={"link": link})
+        raise person_only()
     if not may(c, auth, who, e, target):
         raise refusal(e, base)
+    if e.value == "upload":
+        raise Problem("validation", f"{e.name} is a file you upload in Settings: open {link}", 422,
+                      extra={"link": link})
     parsed = parse(e, value)
     body = dict(e.extra)
     if e.field:
@@ -235,9 +266,15 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None):
     else:
         raise Problem("validation", f"{e.name} takes a JSON object", 422)
     request = {"method": e.method, "path": path_for(e, target), "body": body}
+    kind = kind_for(e, body)
+    if kind == "person" and (acting_for or who.role not in ("owner", "human")):
+        raise person_only()
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
-    # the card here.
-    if e.kind == "confirm" and acting_for and propose is not None:
+    # the card here, and with no way to make one it gets nothing it could run.
+    if kind == "confirm" and acting_for:
+        if propose is None:
+            raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
+                          + link, 503, extra={"link": link})
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
                        f"Change {e.name} ({e.where}) to {json.dumps(parsed)}")
     return {"run": request, "setting": public(e, base), "value": parsed}
