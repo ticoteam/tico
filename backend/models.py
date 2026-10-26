@@ -2278,6 +2278,16 @@ class ReleaseScheduleUpdate(Contract):
     writer: str | None = Field(default=None, max_length=100)
 
 
+class SettingsPlan(Contract):
+    """Set one settings catalogue entry (backend/settings_catalog.py): the value, and the bot, computer or person it is
+    for when the setting is set per one."""
+    value: Any = None
+    bot: str | None = Field(default=None, max_length=200)
+    computer: str | None = Field(default=None, max_length=200)
+    person: str | None = Field(default=None, max_length=200)
+    id: str | None = Field(default=None, max_length=200)
+
+
 class ReleaseNow(Contract):
     """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
     note: str | None = Field(default=None, max_length=1000)

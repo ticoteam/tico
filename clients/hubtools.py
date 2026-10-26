@@ -3077,6 +3077,72 @@ def api_call(api, args):
     return _as_person(api, args.get("on_behalf_of")).call(str(args["method"]).upper(), _api_path(args["path"]), args.get("body"), _key(args), args.get("query"))
 
 
+SETTING_TARGET = {"bot": _s("The bot's slug, for a setting set per bot"),
+                  "computer": _s("The computer's id or label, for a setting set per computer"),
+                  "person": _s("The person's id, for a setting set per person"),
+                  "id": _s("The id of the one thing it sets (a trigger, webhook, rule, routine, repository...)")}
+
+
+def _setting_query(args):
+    return {k: args[k] for k in ("bot", "computer", "person", "id") if args.get(k)}
+
+
+def _pointer(data, pointer):
+    for part in [p for p in str(pointer or "").split(".") if p]:
+        if isinstance(data, list) and part.isdigit() and int(part) < len(data):
+            data = data[int(part)]
+        elif isinstance(data, dict):
+            data = data.get(part)
+        else:
+            return None
+    return data
+
+
+@tool("hub_settings_find", "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
+      "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
+      "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
+      "person), the route and body it writes, and the `card` link. Then `hub_settings_show` or `hub_settings_set` with its key.",
+      {"words": _s("What the setting is about, e.g. sql, budget, release time")}, required=("words",))
+def settings_find(api, args):
+    return _as_person(api).get("settings/catalog", q=args["words"])["settings"]
+
+
+@tool("hub_settings_show", "One setting from `hub_settings_find`: its current `value` (read with your rights, or the "
+      "requester's for BotOps), who may change it, whether you may (`you_may`), its class and the card link.",
+      {"key": _s("The setting's key, e.g. team.rules.admin_sql"), **SETTING_TARGET}, required=("key",))
+def settings_show(api, args):
+    who = _as_person(api)
+    shown = who.get("settings/catalog/" + quote(args["key"], safe=""), **_setting_query(args))
+    read = shown.pop("read", None)
+    if read:
+        try:
+            shown["value"] = _pointer(who.get(read["path"]), read["pointer"])
+        except APIError as exc:
+            shown["value_error"] = str(exc)
+    return shown
+
+
+@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps) or yourself. "
+      "direct: it changes and the answer has the new `value`; confirm, from BotOps: a Confirm card in the person's chat "
+      "with BotOps (`needs_confirm`), nothing changed yet; person: refused with the one-line reason and the card's "
+      "`link`. A refusal names who may change it.",
+      {"key": _s("The setting's key"), "value": {"description": "The new value: on/off, a number, text, a list or JSON, "
+       "as `hub_settings_show` says"}, **SETTING_TARGET}, required=("key", "value"), writes=True)
+def settings_set(api, args):
+    who = _as_person(api)
+    key = quote(args["key"], safe="")
+    planned = who.post("settings/catalog/" + key + "/plan", {"value": args["value"], **_setting_query(args)},
+                       key=_key(args, ":plan"))
+    if "run" not in planned:
+        return planned                      # the Confirm card
+    run = planned["run"]
+    who.call(run["method"], run["path"], run["body"], _key(args))
+    # The value read back after the change, where Settings shows one; else the value sent.
+    shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
+    return {"key": args["key"], "name": planned["setting"]["name"], "where": planned["setting"]["where"],
+            "value": shown["value"] if "value" in shown else planned["value"]}
+
+
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
       "takes it (the only computer, else the least busy that accepts it). Safe to repeat. A computer that does not take "
       "members' bots is a Confirm card for an admin.",
