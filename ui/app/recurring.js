@@ -19,7 +19,7 @@ function routineItems(state) {
 }
 function routineNextHTML(r) {
   return r.held_by_bot ? '<span class="pill">paused with the bot</span>'
-    : !r.active ? '<span class="pill">not armed</span>'
+    : !r.active ? '<span class="pill">off</span>'
     : r.on ? '<span class="pill">on event</span>'
     : `<strong>${esc(until(r.next))}</strong><span class="muted">${esc(fmt(r.next))}</span>`;
 }
@@ -33,16 +33,24 @@ function routineLastHTML(r) {
   if (r.last_fired) return `<span class="tnum">${esc(ago(r.last_fired))}</span>`;
   return '<span class="muted">never run</span>';
 }
+// `opts.actions` (Settings > Rules > Bot routines): the routine's on/off switch and Edit sit on its row, no expanding.
+function routineActsHTML(r, id) {
+  if (!r.id || !routineMayEdit(r)) return '';
+  const on = !(r.enabled === false || r.enabled === 0);
+  return `<div class="rrow-acts"><label class="rrow-switch">${peopleSwitch(`data-routine-on="${esc(id)}"`, on, false, `${r.title}: on`)}<span>${on ? 'On' : 'Off'}</span></label>
+    <button class="ghost" type="button" data-edit-routine="${esc(id)}" aria-label="Edit ${esc(r.title)}">Edit</button></div>`;
+}
 function routineBlockHTML(r, opts = {}) {
   const id = r.id || ((r.employee || r.bot) + ':' + (r.routine_key || r.title));
-  return `<div class="rblock">
+  const acts = opts.actions ? routineActsHTML(r, id) : '';
+  return `<div class="rblock${acts ? ' has-acts' : ''}">
     <button class="rrow" type="button" data-expand-routine="${esc(id)}" aria-expanded="false" title="Show recent runs">
       <span class="chev" aria-hidden="true">▸</span>
       <span class="trow-who">${avatar(r.employee || r.bot, 18, stateOf(r.employee || r.bot))}</span>
       <span><span class="ttl">${esc(r.title)}${routinePaused(r)}</span>${routineHowHTML(r, opts.hideBot)}</span>
       <span class="last">${routineLastHTML(r)}</span>
       <span class="next tnum">${routineNextHTML(r)}</span>
-    </button>
+    </button>${acts}
     <div class="rocc" hidden></div>
   </div>`;
 }
@@ -57,7 +65,7 @@ function botRoutinesHTML(e, slug) {
 }
 function recurringFiltersHTML(state) {
   const kinds = [['all', 'All'], ['cron', 'Cron'], ['event', 'Event'], ['inbox', 'Message']];
-  const armed = [['all', 'All'], ['armed', 'Armed'], ['idle', 'Not armed']];
+  const armed = [['all', 'All'], ['armed', 'On'], ['idle', 'Off']];
   const chips = (key, items) => items.map(([k, label]) =>
     `<button type="button" class="rchip${state[key] === k ? ' on' : ''}" data-rfilter="${key}" data-val="${k}">${label}</button>`).join('');
   const add = (S.me?.role === 'owner' || (S.emps || []).some(e => e.operator === S.me?.id))
@@ -139,6 +147,19 @@ function cronOf(pick) {
   return {daily: `${m} ${h} * * *`, weekdays: `${m} ${h} * * 1-5`, weekly: `${m} ${h} * * ${pick.day || '1'}`,
     monthly: `${m} ${h} ${pick.date || '1'} * *`}[pick.repeat] || String(pick.cron || '').trim();
 }
+// The team's timezone for a new routine: the team's setting when the server sends one, else the zone most of the team's
+// routines already use, else the scheduler's own default (backend/routines.py).
+function routineTeamZone() {
+  if (S.config?.timezone) return S.config.timezone;
+  const count = new Map();
+  (S.status?.schedules || []).forEach(s => { if (s.timezone && !s.on) count.set(s.timezone, (count.get(s.timezone) || 0) + 1); });
+  return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] || 'America/Los_Angeles';
+}
+function routineZones(current) {
+  let zones = [];
+  try { zones = Intl.supportedValuesOf('timeZone'); } catch { /* an older browser: the current zone and UTC only */ }
+  return [...new Set([...zones, 'UTC', current].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
 function routineEditorOpen(r = null, bot = '') {
   let dialog = $('#routine-editor');
   if (!dialog) {
@@ -164,7 +185,7 @@ function routineEditorOpen(r = null, bot = '') {
         <label data-routine-pick="monthly">Day of the month<input name="date" type="number" min="1" max="31" value="${esc(pick.date || '1')}" ${off}></label>
         <label data-routine-pick="daily weekdays weekly monthly">At<input name="time" type="time" value="${esc(pick.time || '09:00')}" ${off}></label>
         <label data-routine-pick="custom">Cron<input name="cron" type="text" autocomplete="off" spellcheck="false" value="${esc(r?.cron || '0 9 * * 1-5')}" placeholder="0 9 * * 1-5" maxlength="100" ${off}></label>
-        <label data-routine-cron>Timezone<input name="timezone" type="text" autocomplete="off" spellcheck="false" value="${esc(r?.timezone || 'America/Los_Angeles')}" maxlength="100" ${off}></label>
+        <label data-routine-cron>Timezone<select name="timezone" ${off}>${routineZones(r?.timezone || routineTeamZone()).map(z => opt(z, z.replace(/_/g, ' '), r?.timezone || routineTeamZone())).join('')}</select></label>
         <label data-routine-event>Event<select name="on" ${off}></select></label>
         <p class="settings-cell-note bot-editor-wide" data-routine-event>Webhooks are added in <a href="#/settings/webhooks" data-routine-close>Settings › Webhooks</a>.</p>
         <label class="bot-editor-wide">Instruction<textarea name="text" maxlength="100000" placeholder="Go through the messages and…" ${off}>${esc(r?.text || '')}</textarea></label>
@@ -203,16 +224,16 @@ function routineEditorOpen(r = null, bot = '') {
   show();
   dialog.querySelectorAll('[data-routine-do]').forEach(b => b.onclick = async () => {
     const what = b.dataset.routineDo;
-    if (what === 'delete' && !window.confirm(`Delete "${r.title}"? Its history stays; it will not run again.`)) return;
-    status.textContent = what === 'run' ? 'Starting…' : 'Saving…';
+    if (what === 'delete' && !await settingsConfirm({title: `Delete "${r.title}"?`, ok: 'Delete', text: 'Its history stays; it will not run again.'})) return;
+    status.classList.remove('err'); status.textContent = what === 'run' ? 'Starting…' : 'Saving…';
     try {
       if (what === 'run') await post(`/v2/routines/${encodeURIComponent(r.id)}/run`, {});
       if (what === 'toggle') await post(`/v2/routines/${encodeURIComponent(r.id)}`, {enabled: paused});
       if (what === 'delete') await post(`/v2/routines/${encodeURIComponent(r.id)}/delete`, {});
       dialog.close();
-      if (what === 'run') toast('Routine started');
+      toast(what === 'run' ? 'Routine started' : what === 'delete' ? 'Deleted' : 'Saved');
       routineChanged();
-    } catch (e) { status.textContent = e.message; }
+    } catch (e) { status.classList.add('err'); status.textContent = e.message; }
   });
   form.onsubmit = async ev => {
     ev.preventDefault();
@@ -220,14 +241,15 @@ function routineEditorOpen(r = null, bot = '') {
     const isCron = form.elements.kind.value === 'cron';
     const body = {title: form.elements.title.value.trim(), text: form.elements.text.value,
                   cron: isCron ? cronOf(pickOf()) : '', on: isCron ? '' : form.elements.on.value,
-                  timezone: isCron ? form.elements.timezone.value.trim() : ''};
-    status.textContent = 'Saving…';
+                  timezone: isCron ? form.elements.timezone.value : ''};
+    status.classList.remove('err'); status.textContent = 'Saving…';
     try {
       if (editing) await post(`/v2/routines/${encodeURIComponent(r.id)}`, body);
       else await post(`/v2/bots/${encodeURIComponent(form.elements.bot.value)}/routines`, body);
       dialog.close();
+      toast(editing ? 'Saved' : 'Routine added');
       routineChanged();
-    } catch (e) { status.textContent = e.message; }
+    } catch (e) { status.classList.add('err'); status.textContent = e.message; }
   };
   if (editing && r.text == null) {
     // The list carries no text; fetch the bot's full rows before the person edits blind.
@@ -242,12 +264,29 @@ async function routineAction(kind, id) {
   const r = routineById(id);
   if (!r) return;
   if (kind === 'edit') return routineEditorOpen(r);
-  if (kind === 'toggle') await post(`/v2/routines/${encodeURIComponent(id)}`, {enabled: r.enabled === false || r.enabled === 0});
+  if (kind === 'toggle') { await post(`/v2/routines/${encodeURIComponent(id)}`, {enabled: r.enabled === false || r.enabled === 0}); toast('Saved'); }
   if (kind === 'delete') {
-    if (!window.confirm(`Delete "${r.title}"? Its history stays; it will not run again.`)) return;
+    if (!await settingsConfirm({title: `Delete "${r.title}"?`, ok: 'Delete', text: 'Its history stays; it will not run again.'})) return;
     await post(`/v2/routines/${encodeURIComponent(id)}/delete`, {});
+    toast('Deleted');
   }
   routineChanged();
+}
+// The row's on/off switch: saves at once, says Saved, and on a refusal goes back with the reason under the row.
+async function routineSetEnabled(input) {
+  const id = input.dataset.routineOn, block = input.closest('.rblock'), word = input.closest('label')?.querySelector('span');
+  settingsFieldClear(block);
+  input.disabled = true;
+  try {
+    await post(`/v2/routines/${encodeURIComponent(id)}`, {enabled: input.checked});
+    toast('Saved');
+    if (word) word.textContent = input.checked ? 'On' : 'Off';
+    input.disabled = false;
+    void routineChanged();
+  } catch (e) {
+    input.checked = !input.checked; input.disabled = false;
+    settingsFieldError(block, e.message);
+  }
 }
 async function routineChanged() {
   if (TASKS_ST && TASKS_ST.view === 'recurring' && $('#task-body')) return tasksLoad(TASKS_ST);
@@ -268,8 +307,12 @@ function bindRoutineActions(root) {
     if (add) { ev.preventDefault(); routineEditorOpen(null, add.dataset.newRoutine || ''); return; }
     for (const [attr, kind] of [['editRoutine', 'edit'], ['toggleRoutine', 'toggle'], ['deleteRoutine', 'delete']]) {
       const b = ev.target.closest(`[data-${kind}-routine]`);
-      if (b) { ev.preventDefault(); routineAction(kind, b.dataset[attr]).catch(e => alert(e.message)); return; }
+      if (b) { ev.preventDefault(); routineAction(kind, b.dataset[attr]).catch(e => settingsFieldError(b.closest('.rblock') || b, e.message)); return; }
     }
+  });
+  root.addEventListener('change', ev => {
+    const on = ev.target.closest('[data-routine-on]');
+    if (on) void routineSetEnabled(on);
   });
 }
 function bindRoutineExpand(root) {

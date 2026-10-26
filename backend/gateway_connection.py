@@ -38,6 +38,7 @@ import time
 
 from clients import gateway as G
 
+from . import read_cache
 from .store import H, Problem
 
 KEY = "gateway-connection"
@@ -94,7 +95,7 @@ def env_url(settings=None):
 
 
 def _row(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = read_cache.metadata(c, KEY)
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:

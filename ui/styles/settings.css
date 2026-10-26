@@ -863,3 +863,14 @@ a.primary.btn{display:inline-block;text-decoration:none;background:var(--accent)
 #set-sleep .settings-cell-note{margin:6px 0 0}
 .wh-since{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
 .wh-since input{width:auto}
+/* Settings stage 1: one red line under a control that failed, the "admins only" line, the bot editor's waiting changes,
+   and a routine's switch and Edit on its row. */
+.field-err{grid-column:1/-1;flex-basis:100%;margin:4px 0 0;font-size:var(--t-sm);overflow-wrap:anywhere}
+.settings-denied{margin:0 0 12px;padding:8px 12px;border-radius:6px;background:var(--surface2);color:var(--ink)}
+.bot-editor-pending{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
+.settings-confirm{max-width:min(440px,calc(100vw - 32px))}
+.rblock.has-acts{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;column-gap:8px}
+.rblock.has-acts>.rocc,.rblock.has-acts>.field-err{grid-column:1/-1}
+.rrow-acts{display:flex;align-items:center;gap:8px;padding-right:4px}
+.rrow-switch{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+@media (max-width:720px){.rblock.has-acts{grid-template-columns:minmax(0,1fr)}.rrow-acts{padding:0 4px 8px 54px}}

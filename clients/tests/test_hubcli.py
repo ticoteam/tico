@@ -23,7 +23,7 @@ from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "strategy", "lens", "market", "listening", "tool", "routine", "event-types", "trigger", "relay", "sleep", "notice", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+               "proposal", "strategy", "lens", "market", "listening", "tool", "routine", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "rule", "service-key"]
 
@@ -718,6 +718,38 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
         assert _Recorder.calls and all(delegated for *_, delegated in _Recorder.calls), (words, _Recorder.calls)
         if "--default-visibility" in words:
             assert _Recorder.calls[0][2]["default_visibility"] == words[-1]
+
+
+def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatch):
+    from clients import remotecli
+
+    calls = []
+
+    class Api:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = True
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            calls.append((method, path, body, delegate))
+            if method == "POST" and path == "settings/catalog/rules.routine/plan":
+                return {"run": {"method": "POST", "path": "routines/ops:qa-review",
+                                 "body": {"enabled": False}},
+                        "setting": {"name": "A bot's routine", "where": "Settings > Rules"},
+                        "value": {"enabled": False}}
+            if method == "GET" and path == "settings/catalog/rules.routine":
+                return {"setting": {}, "you_may": True}
+            return {}
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    args = hubcli.parser().parse_args(["settings", "set", "rules.routine", '{"enabled":false}',
+                                      "--id", "ops:qa-review"])
+    result = remotecli.run(args)
+    assert result["value"] == {"enabled": False}
+    assert calls[0][0:2] == ("POST", "settings/catalog/rules.routine/plan")
+    assert calls[0][2] == {"value": '{"enabled":false}', "id": "ops:qa-review"}
+    assert calls[0][3] is True
+    assert calls[1] == ("POST", "routines/ops:qa-review", {"enabled": False}, True)
 
 
 def test_a_plain_webhook_header_sends_no_secret_key():

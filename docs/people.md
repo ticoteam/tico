@@ -1,7 +1,11 @@
-# Humans and access
+# People and access
 
 Who is on the team, who may sign in and who owns the environment are settings in the app, not
-files on the server. The owner manages them in **Settings > Humans**; nothing needs a restart.
+files on the server. The owner manages them in **Settings > People**; nothing needs a restart.
+
+![People tab with Add and send invite and Add buttons](images/settings-stage1/settings-people-add-and-send-invite.png)
+
+*Synthetic Acme example. Invite sending is simulated to show the button; no email was sent.*
 
 ## Roles
 
@@ -9,9 +13,12 @@ Every human on the team is an **Owner**, an **Admin** or a **Member**. Members c
 create and manage their own bots; Admins manage humans, computers and every bot but the built-in ones; the Owner does
 everything. The full rules, including per-bot See, Read and Write, are in [permissions](permissions.md).
 
-## Settings > Humans
+## Settings > People
 
 The page answers three things: how humans get here, who is here, and what each human may do.
+
+Turning off **Can sign in** or removing an allowed domain asks you to confirm first.
+Cancel keeps the current access. Sign-in switches show **Saved** on success; a refused change shows its reason under the control.
 
 - **How humans join.** Pick **Add manually** or **Sync with directory**. There is no separate mode setting: a saved directory
   source means Sync, none means manual. Going back to manual turns the sync off; the humans it added stay.
@@ -70,7 +77,7 @@ For the same reason, don't add the new address on this page or to the allow list
 with the new address, first give that person another email nobody uses: ask BotOps (you confirm its card), or call
 `POST /api/v2/access/humans/<their id>` with `{"email": ...}`. Then mark them as left and make the change below.
 
-**Then change it.** Signed in with your current address, open **Settings > Humans**, open the ⋯ menu on your own row
+**Then change it.** Signed in with your current address, open **Settings > People**, open the ⋯ menu on your own row
 and pick **Change my sign-in email**. Type the new address twice and confirm. Only the owner sees this, signed in as
 themselves: not through an API token, BotOps or the Assistant. Behind Cloudflare Access you are signed out at once;
 sign in again with the new address.
@@ -133,7 +140,7 @@ editing `api.env` or the file changes nothing. `private_owners` and `routing_per
 
 ## Add a human behind Cloudflare Access
 
-To add a human teammate and let them sign in, open **Settings > Humans > Add manually**, enter their
+To add a human teammate and let them sign in, open **Settings > People > Add manually**, enter their
 email and save. Also allow that email in your Cloudflare Access policy.
 
 ### The identity proxy must agree
@@ -141,12 +148,14 @@ email and save. Also allow that email in your Cloudflare Access policy.
 With `TICO_AUTH_PROXY=cloudflare` (Cloudflare Access) or `aws-alb` (Cognito) the proxy authenticates
 humans before Tico sees them. Adding a human or an allowed domain here does not change that
 policy: also allow the same addresses in the Access policy or the Cognito user pool, or the human is
-stopped before they reach the app. Tico does not change that policy itself; after an add, Settings > Humans shows one line saying
+stopped before they reach the app. Tico does not change that policy itself; after an add, Settings > People shows one line saying
 so when either proxy is on.
 
 ## Invites
 
-Adding someone sends no email. **Send invite** (owners and admins, in a human's ⋯ menu; **Send invite again** once sent) and
+Plain **Add** sends no email. **Add and send invite** (in Settings > People, where this Tico can send invites) adds the
+person and sends the invite in one click; if the invite can't go, the person stays added and their row says why.
+**Send invite** (owners and admins, in a human's ⋯ menu; **Send invite again** once sent) and
 **Invite** under **From your setup** (the owner, for the people a [company file](onboarding.md) names) do: the person gets
 "You're invited to Tico" from Tico's own sign-in mail, the same sender as sign-in codes (login@tico.dev), with the address
 to sign in at. Never the company's connected mailbox, and nothing the sender typed goes in it.
@@ -172,7 +181,7 @@ the invite then does not go, they stay added and **Invite** sends again.
 Owners and admins can create a Tico account for someone who has no account yet.
 **Create password** appears only when your Tico account sign-in service supports it, and never in a rehearsal.
 
-1. Open **Settings > Humans**.
+1. Open **Settings > People**.
 2. Find the teammate's row, such as Casey at `casey@example.invalid`. They need an email address and **Can sign in** enabled.
 3. Open their ⋯ menu and choose **Create password**.
 4. In **Account created**, press **Copy** to copy the email and password, then share them privately with Casey.
@@ -209,7 +218,7 @@ uses `POST /api/v2/humans/{id}` with `left: true` (owner only); removing a left 
 ## Directory sync
 
 Instead of adding humans one by one, the owner can sync them from the team's directory:
-**Settings > Humans > Sync with directory**. Pick one source: Google Workspace or Microsoft Entra ID
+**Settings > People > Sync with directory**. Pick one source: Google Workspace or Microsoft Entra ID
 (Tico reads the directory on a schedule) or SCIM (your identity provider pushes changes).
 
 Everyone a sync adds joins the roster and **can sign in**, so scope it (group, organizational unit,

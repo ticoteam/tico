@@ -263,10 +263,14 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 
-Settings > More > Email & Phone opens Inbox's shared company message table (`#/settings/company-inbox`; existing
+**Settings > More > Email & Phone** opens the shared company message table (`#/settings/company-inbox`; existing
 `#/settings/email-phone` links still work). All current people, native
 bot runs and registered external agents can read it. Runner/service credentials and support
 sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
+
+![Email & Phone tab and card heading, with the shared inbox controls](images/settings-stage1/settings-email-and-phone.png)
+
+*Synthetic Acme example, unconnected. The card heading is Email & Phone; the Connect Inbox label remains unchanged.*
 
 `GET /api/v2/inbound/inboxes` lists inboxes and sync status (pages of `limit` ≤ 100; follow `next` with `after`); `POST` with `{kind:"email",name}`
 creates a free inbound address under the company quota, with an `Idempotency-Key`.

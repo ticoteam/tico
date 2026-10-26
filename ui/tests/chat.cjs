@@ -700,7 +700,7 @@ async function settingsLinks(browser) {
     await page.goto('https://tico-ui.test/#/bot/ops/chat');
     await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();
     await page.locator(`#settings-tabs [data-settings-tab=${tab}][aria-selected=true]`).waitFor();
-    assert.equal(new URL(page.url()).hash,'#/settings');
+    assert.equal(new URL(page.url()).hash,'#/settings/'+tab);
     assert.equal(await page.locator('#settings-'+tab).isVisible(),true,name+' opens Settings on its tab');
   }
   assert.deepEqual(errors,[]);

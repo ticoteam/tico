@@ -8,7 +8,7 @@ The words Tico uses, and what each replaces.
 - **Team**: everyone, humans and bots. The sidebar section is **Team** and the chart is the team chart.
 - **Group**: part of the team. A group can hold groups.
 - **Teammate**: a human or a bot on the team.
-- **Human**: a human teammate. The **Humans** page lists them.
+- **Human**: a human teammate. The **People** tab in Settings lists them.
 - **Bot**: an AI teammate.
 - **Task Manager**: a built-in helper bot that tidies tasks once an hour on weekdays: it closes what is plainly done, fixes obvious status and step drift, and leaves one Needs-you line per department for anything it is unsure of. It sits outside the org chart and never touches bots, credentials, sends or spending ([Task Manager](task-manager.md)).
 - **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, CEO Bot. The Task Manager and the Health Monitor are built-in helpers too, outside the chart. These four appear as **Built-in** in Settings > Bots. Assistant and BotOps have main rail entries; the CEO Bot is on Goals and Strategy, and the Librarian is on Docs and Strategy's Market tab. The Assistant, BotOps and the Librarian stay out of the team chart and goal owner list; the CEO Bot is at the top of the chart.
@@ -82,7 +82,7 @@ Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), 
 | employees | bots |
 | coworker | teammate |
 | coworkers | teammates |
-| people page | Humans |
+| Humans page | People |
 | onboarding | setup |
 | standing instructions | Instructions |
 | machine | Computer |

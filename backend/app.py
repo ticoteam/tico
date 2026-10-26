@@ -29,6 +29,7 @@ from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifec
 from . import outcome_stats
 from . import ceo_bot, invites, owner_link
 from . import login_holds
+from . import step_age
 from . import bot_stops, turn_budgets
 from . import auto_tasks, check_models, profiles, run_triggers, task_models, team_rules, update_feeds, topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits
 from . import task_privacy as privacy
@@ -1116,6 +1117,8 @@ def create_app(settings=None):
                                    + TR.CHILD_IDS + ") AND (" + visible_sql + ")", (row["id"],)).fetchone()
                 parts = {"total": counts[0] or 0, "done": counts[1] or 0}
             value["parts"] = parts
+            if since := step_age.since_map(c, [row]).get(row["id"]):
+                value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
         return value
 
     def task_views(rows, c, who, visible_sql="1"):
@@ -1204,6 +1207,7 @@ def create_app(settings=None):
         # decided one at a time by the same code below.
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
+        step_since = step_age.since_map(c, rows)
         result = []
         for row in rows:
             value = task_view(row, pipelines=pipelines)
@@ -1222,6 +1226,8 @@ def create_app(settings=None):
                 value["next_run_waiting"] = H.next_run_waiting(c, row)
                 if quiet := quiet_work.view(c, row, history=False):
                     value["quiet"] = quiet
+            if row["id"] in step_since:
+                value["step_since"] = step_since[row["id"]]
             if row["id"] in routines_by_task:
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
@@ -3493,6 +3499,7 @@ def create_app(settings=None):
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
                             number=body.number, mover=mover(c, who) or None,
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
+                            receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
@@ -3636,7 +3643,8 @@ def create_app(settings=None):
                 privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
-                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots).get("warnings")
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
+                                         receipt_owner=Access.load_owner(c, settings)["email"]).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
             return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
                     **({"warnings": warnings} if warnings else {})}
@@ -6325,6 +6333,8 @@ def create_app(settings=None):
     install_groups(app, store, auth, mutate, settings)
     from .report_order import install as install_report_order
     install_report_order(app, store, auth, mutate)
+    from .settings_catalog import install as install_settings_catalog
+    install_settings_catalog(app, store, auth, settings)
     from .support import install as install_support
     install_support(app, store, settings, census)
     from .inbound import install as install_inbound

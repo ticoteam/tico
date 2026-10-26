@@ -124,7 +124,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     };
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.getByRole('tab', {name: 'Humans'}).click();
+    await page.getByRole('tab', {name: 'People'}).click();
     await row('ben').waitFor();
     // Add manually is the mode with no directory; no title/team column and no Edit button; the bot limit reads 25.
     assert.equal(await page.locator('[data-people-mode=manual]').getAttribute('aria-pressed'), 'true');
@@ -149,8 +149,17 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
       assert.deepEqual(await next(), ['edit', 'ben', {role: 'admin'}]);
     });
     await page.waitForFunction(() => document.querySelector('.people-row[data-person=ben] [data-person-role]')?.value === 'admin');
+    // Turning off Can sign in asks first; Cancel leaves it on and sends nothing.
+    const ask = page.locator('dialog.settings-confirm');
+    await row('cy').locator('[data-person-signin]').click();
+    await ask.waitFor();
+    await ask.locator('[data-confirm-cancel]').click();
+    await ask.waitFor({state: 'detached'});
+    assert.equal(await row('cy').locator('[data-person-signin]').isChecked(), true, 'Cancel keeps sign-in on');
+    assert.equal(calls.length, 0, 'Cancel sends nothing');
     await repainted(async () => {
-      await row('cy').locator('[data-person-signin]').uncheck();
+      await row('cy').locator('[data-person-signin]').click();
+      await ask.locator('[data-confirm-ok]').click();
       assert.deepEqual(await next(), ['edit', 'cy', {sign_in: false}]);
     });
     await page.waitForFunction(() => document.querySelector('.people-row[data-person=cy] [data-person-signin]')?.checked === false);
@@ -191,10 +200,12 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
       allowed_domains: ['acme.example'], expected_revision: 3}]);
     await page.waitForFunction(() => document.querySelector('#people-domain')?.checked === true);
-    await page.locator('#people-domain').uncheck();
+    await page.locator('#people-domain').click();
+    await ask.locator('[data-confirm-ok]').click();
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
       allowed_domains: [], expected_revision: 4}]);
     await page.locator('[data-allow-remove="old@partner.example"]').click();
+    await ask.locator('[data-confirm-ok]').click();
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'cy@acme.example'], allowed_domains: [], expected_revision: 5}]);
     await page.waitForFunction(() => !document.querySelector('[data-allow="old@partner.example"]'));
 
@@ -249,7 +260,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     const own = await context.newPage();
     own.on('pageerror', e => errors.push(e.message));
     await own.goto('https://tico-ui.test/#/settings');
-    await own.getByRole('tab', {name: 'Humans'}).click();
+    await own.getByRole('tab', {name: 'People'}).click();
     const ownRow = id => own.locator(`.people-row[data-person=${id}]`);
     await ownRow('ben').waitFor();
     assert.equal(await own.locator('[data-person-act=email]').count(), 1, 'only on the owner\'s own row');
@@ -291,7 +302,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     const admin = await context.newPage();
     admin.on('pageerror', e => errors.push(e.message));
     await admin.goto('https://tico-ui.test/#/settings');
-    await admin.getByRole('tab', {name: 'Humans'}).click();
+    await admin.getByRole('tab', {name: 'People'}).click();
     await admin.locator('.people-row[data-person=cy]').waitFor();
     assert.equal(await admin.locator('[data-people-mode], [data-person-role]').count(), 0);
     assert.equal(await admin.locator('.people-row[data-person=cy] [data-person-signin]').isDisabled(), true);

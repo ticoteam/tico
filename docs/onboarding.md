@@ -55,7 +55,7 @@ named on the setup record (`company_import.strategy.skipped`). A format 0.2 file
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:
 they are kept on the setup record to invite, and a role under them reports to the owner until they are invited
-(Settings > Humans > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
+(Settings > People > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
 the seats waiting on them under them and sends the invite, see [People](people.md#invites)). Other coworkers, existing
 external agents and custom rules are refused with an explanation. The file's goals are imported onto
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
@@ -570,7 +570,7 @@ offer, and the bots screen says so. On a hosted server that means the release di
 **A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's chat message: a task
 message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its chat, and answer its
 questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a member's bot at their limit answers
-`bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > Humans. An owner or a bot's manager can
+`bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > People. An owner or a bot's manager can
 also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.

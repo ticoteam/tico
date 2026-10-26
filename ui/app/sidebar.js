@@ -512,9 +512,9 @@ function treeLimitMark(slug) {
   const word = esc(overLimitWord(limit));
   return `<span class="tree-limit" role="img" aria-label="${word}" title="${word}">!</span>`;
 }
-function treeBadge(n, st) {
+function treeBadge(n, st, slug) {
   const working = st === 'running';
-  if (n) return `<span class="cnt needs${working ? ' working' : ''}" role="img" aria-label="${n} need${n === 1 ? 's' : ''} you${working ? ', working' : ''}">${n}</span>`;
+  if (n) return `<span class="cnt needs${working ? ' working' : ''}" role="img" aria-label="${n} things ${esc(empName(slug))} needs from you" title="${n} things ${esc(empName(slug))} needs from you">${n}</span>`;
   if (st === 'needs') return `<span class="tree-alert${working ? ' working' : ''}" role="img" aria-label="Needs you">!</span>`;
   return working ? '<span class="tree-spin" role="img" aria-label="Working"></span>' : '';
 }
@@ -745,7 +745,7 @@ function renderTree() {
         ${avatar(e.name, depth ? 16 : 20, st)}${orgNodeName(e, leads)}${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${treeLimitMark(e.name)}${treeBadge(n, st)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
+        ${treeLimitMark(e.name)}${treeBadge(n, st, e.name)}</a>${moveMenu(key, e.display_name || e.name, at)}</div>
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.name)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };

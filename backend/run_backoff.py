@@ -200,8 +200,7 @@ def probe(c, bot):
 
 
 def _since_failure(c, bot):
-    row = c.execute("SELECT last_failed FROM run_backoff WHERE bot=?", (bot,)).fetchone()
-    return (row and row["last_failed"]) or ""
+    return get(c, bot).get("last_failed") or ""
 
 
 def person_waiting(c, bot):

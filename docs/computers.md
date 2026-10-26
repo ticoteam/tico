@@ -40,7 +40,9 @@ started, Tico reports a pre-start failure instead of retrying forever. Check the
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. This brake does not change your account, model or computer size.
+the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
+not change your account, model or computer size.
 
 During an update, server and runner negotiate the start rules through heartbeat and claim. Older runners retain
 their existing delivery leases, including preparation already underway, until they update. Those starts have no new

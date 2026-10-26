@@ -101,11 +101,13 @@ const row = (page, key) => page.locator(`[data-listen-dest="${key}"]`);
       await page.locator('[data-listen-cancel]').click();
       await page.locator('[data-listen-form]').waitFor({state: 'detached'});
       // Remove asks first, then goes.
-      page.once('dialog', d => d.dismiss());
+      const ask = page.locator('dialog.settings-confirm');
       await row(page, 'content').locator('[data-listen-remove]').click();
+      await ask.locator('[data-confirm-cancel]').click();
+      await ask.waitFor({state: 'detached'});
       assert.equal(await row(page, 'content').count(), 1);
-      page.once('dialog', d => d.accept());
       await row(page, 'content').locator('[data-listen-remove]').click();
+      await ask.locator('[data-confirm-ok]').click();
       await row(page, 'content').waitFor({state: 'detached'});
       assert.equal(writes.at(-1).remove, true);
       // A phone: nothing spills sideways, in light and dark.

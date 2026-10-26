@@ -80,11 +80,8 @@ def test_team_to_private_retains_explicit_people_not_joiners_or_open_stream(live
     async def connected(_request):
         return False
 
-    async def no_sleep(_seconds):
-        pass
-
     monkeypatch.setattr(Request, "is_disconnected", connected)
-    monkeypatch.setattr(meetings.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(meetings, "EVENT_POLL_SECONDS", 0)
 
     async def transition():
         response = await route.endpoint(request, mid)
@@ -446,12 +443,9 @@ def test_delegated_meeting_access_requires_human_and_source_bot_membership(live,
                 f"/api/v2/live-meetings/{mid}/bots/botops", json={}, headers=headers()))
         return False
 
-    async def no_sleep(_seconds):
-        pass
-
     with monkeypatch.context() as stream_patch:
         stream_patch.setattr(Request, "is_disconnected", revoke_after_first_poll)
-        stream_patch.setattr(meetings.asyncio, "sleep", no_sleep)
+        stream_patch.setattr(meetings, "EVENT_POLL_SECONDS", 0)
         stream = act(live, attempt, "GET", f"live-meetings/{mid}/events")
     assert removed[0].status_code == 200
     assert "event: expired\ndata: {}" in stream.text

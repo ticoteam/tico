@@ -85,7 +85,8 @@ before, with no ID and no flags.
 4. **The command line:** `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite off`.
 
 Other controls: **Reset install ID** in Settings > General (or `... usage-count /data/hub.sqlite reset-id`) makes a new
-random ID, so the old one no longer connects to your install; do it when you clone a server. `TICO_UPDATE_CHECK=off`
+random ID, so the old one no longer connects to your install; do it when you clone a server.
+In the app, **Reset install ID** asks you to confirm first. **Cancel** keeps the current ID. `TICO_UPDATE_CHECK=off`
 stops the update check altogether, and with it the count. `TICO_HQ_URL` points the check at your own HQ.
 
 At each start of a release image, the server also asks GitHub which commit that release's tag names

@@ -74,7 +74,7 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     const loaded = revision => page.waitForFunction(r => S.emps.find(e => e.name === 'helper')?.revision === r, revision);
-    await page.goto('https://tico-ui.test/#/settings');
+    await page.goto('https://tico-ui.test/#/settings/devices');
     await page.waitForFunction(() => typeof S !== 'undefined' && S.emps?.some(e => e.name === 'helper') && SETTINGS_DATA.models?.length);
 
     // 1. The bot editor: a Task model row, "Same as bot" by default; Save applies a pick before the definition.
@@ -159,7 +159,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.ok(width <= 390, `the row fits the phone (${width}px)`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
 
-    // Active-work caps save on change at both widths, including off and the unlimited default.
+    // Active-work caps save with Save bot at both widths, including off and the unlimited default.
     for (const width of [1440, 390]) {
       await page.setViewportSize({width, height: 900});
       await toBots();
@@ -171,9 +171,14 @@ const {unrouted} = require('./support/routes.cjs');
         calls = [];
         await keep.fill(value);
         await keep.dispatchEvent('change');
-        await loaded(before + 1);
-        assert.deepEqual(calls, [{what: 'keep-tasks-going', body: {keep_tasks_going: stored, expected_revision: before}}]);
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], 'held until Save bot');
+        await editor.locator('button[type=submit]').click();
+        await loaded(before + 2);
+        assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
+        assert.deepEqual(calls[1].body, {keep_tasks_going: stored, expected_revision: before + 1});
         assert.equal(helper.keep_tasks_going, stored);
+        await openEditor();
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.evaluate(() => settingsEditBot('helper', true));

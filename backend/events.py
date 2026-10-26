@@ -611,12 +611,11 @@ LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased',
             "ORDER BY created DESC,rowid DESC LIMIT 1")
 
 
-def prime_status_lines(c, slugs):
-    """Read what status_line reads for each of these bots one table at a time (one query per 500 bots each), so a page
-    of status lines makes a few dozen statements instead of seven or more per bot. Every statement holds the GIL for
-    its turn, and on a busy server each costs milliseconds of waiting; outside a snapshot nothing is kept."""
-    from .read_cache import cache, prime, prime_rows
-    from .execution import HELD_ATTEMPT_SQL, HELD_RUN_SQL, HELD_SQL, LAST_STOP, STOP_ATTEMPT_SQL, STOP_JOB_SQL
+def prime_bot_rows(c, slugs):
+    """Each of these bots' own row in the five tables a claim check reads (status, bot, limit, back-off, budget),
+    one query per table (per 500 bots), so a loop over bots reads none of them again. Outside a snapshot nothing is
+    kept."""
+    from .read_cache import cache, prime
     from . import run_backoff, turn_budgets, usage_limits
     if cache(c) is None:
         return
@@ -629,6 +628,19 @@ def prime_status_lines(c, slugs):
                                          ("bot_budget", "bot", turn_budgets.GET_SQL)):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
+
+
+def prime_status_lines(c, slugs):
+    """Read what status_line reads for each of these bots one table at a time (one query per 500 bots each), so a page
+    of status lines makes a few dozen statements instead of seven or more per bot. Every statement holds the GIL for
+    its turn, and on a busy server each costs milliseconds of waiting; outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime, prime_rows
+    from .execution import HELD_ATTEMPT_SQL, HELD_RUN_SQL, HELD_SQL, LAST_STOP, STOP_ATTEMPT_SQL, STOP_JOB_SQL
+    if cache(c) is None:
+        return
+    prime_bot_rows(c, slugs)
+    for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
+        marks = ",".join("?" * len(part))
         live = {}
         for row in c.execute(f"SELECT bot,id,created FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
                              "ORDER BY created,rowid", part):

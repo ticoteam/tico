@@ -851,7 +851,12 @@ def person_wrote_since(c, bot, since):
 def cooling_off(c, bot):
     """Whether a usage limit, or the wait after the Tico AI Gateway was unavailable, still holds the bot: its status is
     `limited` and the cooldown has not passed (or the Gateway's wait has not), and no person has written to it since
-    (a person's message is worth one try)."""
+    (a person's message is worth one try). Asked once a bot in a snapshot: Health asks for a limited bot's twice."""
+    from .read_cache import value
+    return value(c, ("cooling_off", bot), lambda: _cooling_off(c, bot))
+
+
+def _cooling_off(c, bot):
     from .repositories import metadata
     status = H.status(c, bot) or {}
     wait = metadata(c, GATEWAY_WAIT + bot)
@@ -1301,34 +1306,81 @@ def bot_refusal(c, settings, runner_id, bot):
     return bot_claimable(c, settings, runner_id, bot)[0]
 
 
-def bot_claimable(c, settings, runner_id, bot):
+RUNNER_SQL = "SELECT * FROM runners WHERE id=?"
+CLAIM_CONFIG_SQL = (f"SELECT bc.config_json,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+                    "FROM bot_config bc WHERE bc.bot=?")
+
+
+def queued_jobs_sql(bots=None):
+    """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
+    scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
+    return (f"SELECT j.*,m.from_actor,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.bot{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
+            "AND j.state='queued' AND j.held=0 "
+            "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id")
+
+
+def prime_claimables(c, bots, first=3):
+    """What bot_claimable reads for each of these bots with queued work, one table at a time: the computer's row, the
+    bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. Outside a
+    snapshot nothing is kept."""
+    from . import readiness
+    from .read_cache import cache, prime, prime_rows
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        marks = ",".join("?" * len(part))
+        found = {r["bot"]: r for r in c.execute(
+            f"SELECT bc.bot,bc.config_json,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc "
+            f"WHERE bc.bot IN ({marks})", part)}
+        prime(c, CLAIM_CONFIG_SQL, {(s,): found.get(s) for s in part})
+        prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
+        jobs = {s: [] for s in part}
+        for row in c.execute(queued_jobs_sql(part), part):
+            jobs[row["bot"]].append(row)
+        prime_rows(c, queued_jobs_sql(), {(s,): queue for s, queue in jobs.items()})
+        privacy.snapshot(c)
+        waiting = [job["message_id"] for queue in jobs.values() for job in queue[:first]]
+        privacy.prime_queued(c, H.prime_messages(c, waiting).values())
+
+
+def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_job=False):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
     the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
-    neither held nor slow, and neither is an old free job behind a young chat the claim takes first."""
+    neither held nor slow, and neither is an old free job behind a young chat the claim takes first.
+    `oldest` diagnoses the oldest job outside a held lane; `with_job` also returns its ID for
+    observation aging and message-level authorization."""
+    def result(reason, first=None, person=None, job=None):
+        values = (reason, first, person, job)
+        return values if with_job else values[:3]
+
+    # Diagnostics skip a held lane to explain the oldest job that could use another lane.
+    from .read_cache import one, rows
     from .shared_bots import follow
-    runner = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
-    row = c.execute(f"SELECT bc.config_json,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining FROM bot_config bc "
-                    "WHERE bc.bot=?", (bot,)).fetchone()
+    runner = one(c, RUNNER_SQL, (runner_id,))
+    row = one(c, CLAIM_CONFIG_SQL, (bot,))
     if not runner:
-        return None, None, None
+        return result(None)
     if not row:
-        return "config", None, None            # the claim reads only bots with a configuration
+        return result("config")            # the claim reads only bots with a configuration
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness_json"])
-    why, config = claim_refusal(c, settings, runner, bot, row["config_json"], row["draining"], ready, held_bots)
+    why, config = claim_refusal(c, settings, runner, bot, row["config_json"], row["draining"], ready, held_bots,
+                                default=default)
     if why:
-        return why, None, None
+        if oldest:
+            first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created"], j["id"]), default=None)
+            return result(why, first["created"] if first else None, job=first["id"] if first else None)
+        return result(why)
     lanes, roots = lanes_on(runner), roots_on(runner)
-    busy = {(r["bot"], r["lane"]) for r in c.execute(
-        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")} | held_lanes
+    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    busy |= held_lanes
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
-    for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
-                         "JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
-                         "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id",
-                         (bot,)).fetchall():
+    queue = rows(c, queued_jobs_sql(), (bot,))
+    for job in sorted(queue, key=lambda j: (j["created"], j["id"])) if oldest else queue:
         person = str(job["from_actor"]).startswith("human:")
         if not job["in_scope"]:
             why = "scoped"
@@ -1337,11 +1389,11 @@ def bot_claimable(c, settings, runner_id, bot):
         else:
             why = job_refusal(c, job, followed, ready, busy, lanes, roots) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
-        if why is None:
-            return None, job["created"], person
+        if why is None or (oldest and why != "lane_held"):
+            return result(why, job["created"], person, job["id"])
         if refused is None or job["created"] < refused[0]:
-            refused = (job["created"], why)
-    return (refused[1] if refused else None), None, None
+            refused = (job["created"], why, person, job["id"])
+    return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
 
 
 class Execution:
@@ -1898,8 +1950,9 @@ class Execution:
                           (json.dumps(runtimes), H.now(), runner_id, profile))
         c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(ready), runner_id))
 
-    def candidate(self, c, who, body, runner, *, job_id=None):
-        """The queued job this runner would be given next, or None. Reads only."""
+    def candidate(self, c, who, body, runner, *, job_id=None, people_only=False):
+        """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
+        message (start_places.from_person), on a computer that holds every other start."""
         lanes, roots = lanes_on(runner), roots_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
@@ -1951,6 +2004,7 @@ class Execution:
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + " "
             "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
             f"AND {unfenced_sql()} AND {scoped_sql()} " + ("AND j.id=? " if job_id is not None else "") +
+            ("AND m.from_actor LIKE 'human:%' " if people_only else "") +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then task rank, then the longest waiting.
@@ -1970,6 +2024,22 @@ class Execution:
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
                 return row
         return None
+
+    @staticmethod
+    def held_answer(c, runner_id):
+        from .performance import load_status
+        if load_status(c, runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        return {"attempt": None}
+
+    def held_starts(self, c, runner_id):
+        """(people_only, answer) for a computer that holds new starts: overloaded, or with turns already waiting
+        to start there. Only a person's own message is handed out then (start_places.from_person); with none queued,
+        `answer` is the claim's answer at once. Capacity still applies to that message."""
+        from .performance import load_status
+        if not load_status(c, runner_id)["overloaded"] and not start_places.ready_waiting(c, runner_id):
+            return False, None
+        return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))
 
     def company_waiter(self, c, who, body, runner):
         """Oldest eligible stop-level waiter across computers; unavailable lanes do not block others.
@@ -2044,15 +2114,15 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        from .performance import load_status
-        if load_status(c, who.runner_id)["overloaded"]:
-            return {"attempt": None, "waiting": "computer busy"}
-        if start_places.ready_waiting(c, who.runner_id):
-            return {"attempt": None}
+        people_only, held = self.held_starts(c, who.runner_id)
+        if held:
+            return held
         count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
-        row = self.candidate(c, who, body, runner)
+        row = self.candidate(c, who, body, runner, people_only=people_only)
+        if row is None and people_only:
+            return self.held_answer(c, who.runner_id)
         if row is None and auto_tasks.missing(c, self.store.settings, runner, body):
             return None
         if row is not None and selected is not None:
@@ -2131,11 +2201,11 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        from .performance import load_status
-        if load_status(c, who.runner_id)["overloaded"]:
-            return {"attempt": None, "waiting": "computer busy"}
-        if start_places.ready_waiting(c, who.runner_id):
-            return {"attempt": None}
+        people_only, held = self.held_starts(c, who.runner_id)
+        if held:
+            return held
+        if people_only:
+            selected, prepared = None, False     # chosen before the hold, perhaps not a person's
         count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"]:
             return {"attempt": None}
@@ -2152,7 +2222,9 @@ class Execution:
         if prepared:
             row = self.candidate(c, who, body, runner, job_id=selected["id"]) if selected is not None else None
         else:
-            row = selected if selected is not None else self.candidate(c, who, body, runner)
+            row = selected if selected is not None else self.candidate(c, who, body, runner, people_only=people_only)
+        if row is None and people_only:
+            return self.held_answer(c, who.runner_id)
         # Backfill a free turn after queued conversations and awaited results keep their place.
         if row is None and selected is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
             auto_tasks.enqueue(c, pending)

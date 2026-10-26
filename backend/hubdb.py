@@ -2353,7 +2353,7 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
 def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
-    not take (backend/profiles.py): none for a Responder, only review and QA subtasks for a Reviewer, only its
+    not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
     watcher's for a Monitor. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
@@ -2366,8 +2366,8 @@ def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
                "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
     if row:
         from . import profiles
-        found = profiles.refusal(row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
-                                 actor, title, parent, routine)
+        found = profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
+                                 actor, title, parent, routine, owner=target)
         if found:
             refuse(conn, actor, *found)
 
@@ -5151,7 +5151,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True):
+                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5185,7 +5185,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
     if parent and review_gate.REVIEW.match(str(title).strip()):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True)
+        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -5366,11 +5366,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
     # rather than start a turn that finds nothing left to do (Dev 359).
     filed_in = RUN.get() if is_bot(target) and target == actor else ""
-    # A review, QA or Security child is a request to a reviewer: its own event, so a rule can wake reviewers apart
+    # A review, QA or Security request has its own event, so a rule can wake reviewers apart
     # from other assignments.
-    # Any other is an assignment, named so that rewording the notice never turns it into a note (`news` keeps it
-    # holdable: a task a bot files for itself still waits for the filing turn).
-    gate_child = {"wake": "review_request"} if parent and review_gate.GATE_CHILD.match(str(title).strip()) \
+    # Any other is an assignment, named so that rewording the notice never turns it into a note.
+    # Both events retain filed_in above: execution.filer_live holds a self-filed task independently of news/wake.
+    from . import profiles
+    gate_child = {"wake": "review_request"} if profiles.is_review_task(conn, task(conn, row["id"])) \
         else {"news": "assignment"}
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
           {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
@@ -5429,7 +5430,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None):
+                verdict_head=None, receipt_owner=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5510,7 +5511,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
             from . import review_gate
-            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note)
+            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, receipt_owner=receipt_owner)
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
