@@ -39,18 +39,24 @@ def actionable_notice(row, message):
                      or refs.get('trigger') == 'pr_checks' and refs.get('wake') != 'pr_review'))
 
 
+def carrier_held(c, row):
+    """A carried task cannot be released around its live, queued or interrupted run."""
+    if not row.get('carried_by'):
+        return False
+    carrier = c.execute("SELECT a.state,j.state job_state FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                        "WHERE a.id=?", (row['carried_by'],)).fetchone()
+    return bool(carrier and (carrier['state'] in ('leased', 'running') or
+                            carrier['job_state'] in ('queued', 'leased', 'running', 'uncertain')))
+
+
 def notice_releases(c, row, message):
     """An actionable notice starts its own work only after the previous carrier has let go."""
     if not row.get('next_run') or row['status'] != 'open' or row.get('resume_json'):
         return False
     if not actionable_notice(row, message):
         return False
-    if row.get('carried_by'):
-        carrier = c.execute("SELECT a.state,j.state job_state FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
-                            "WHERE a.id=?", (row['carried_by'],)).fetchone()
-        if carrier and (carrier['state'] in ('leased', 'running') or
-                        carrier['job_state'] in ('queued', 'leased', 'running', 'uncertain')):
-            return False
+    if carrier_held(c, row):
+        return False
     # A task may have moved lanes or have a run of its own without a carried_by marker.
     if c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id LEFT JOIN jobs j ON j.id=a.job_id "
                  "WHERE a.bot=? AND t.task_id=? AND (a.state IN ('leased','running') OR j.state='uncertain') "
@@ -67,7 +73,7 @@ def next_run_held(c, row, *, message=None):
     """
     if not row.get('next_run'):
         return False
-    if row.get('resume_json') or row['status'] != 'open':
+    if row.get('resume_json') or row['status'] != 'open' or carrier_held(c, row):
         return True
     if actionable_notice(row, message):
         return not notice_releases(c, row, message)
