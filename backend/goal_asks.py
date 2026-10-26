@@ -225,14 +225,17 @@ def _ask(item, manager=ceo_bot.NAME):
              "kpi_definition": f"Confirm or reject a change to how {name} is defined",
              "kpi_target": f"Confirm or reject a new {name} target on {goal}",
              "flag": f"Confirm or reject a flag on {goal}",
-             "strategy_draft": "Confirm or reject a change to the strategy"}.get(p["kind"], "Confirm or reject a goal proposal")
+             "strategy_draft": "Decide a suggested change to your strategy"}.get(p["kind"], "Confirm or reject a goal proposal")
     if p["kind"] == S.REALIGN:
         payload = p.get("payload") or {}
-        lines = "\n".join(f"- {g['title']} (its bet was {g['change']}: \"{g['statement']}\")" for g in payload["goals"])
-        title = f"Realign {len(payload['goals'])} goal{'s' if len(payload['goals']) != 1 else ''} with strategy v{payload['n']}"
-        body = (f"{title}. Publishing v{payload['n']} retired or rewrote the bets these goals serve:\n{lines}\n"
-                f"For each one choose retire goal, move to another bet, or keep, under Needs you on the Goals page. "
-                f"{closes}it is decided.")
+        said = {"retired": "retired", "rewritten": "reworded"}
+        lines = "\n".join(f"- {g['title']} (its bet was {said.get(g['change'], g['change'])}: \"{g['statement']}\")"
+                          for g in payload["goals"])
+        count = len(payload["goals"])
+        title = f"Choose what happens to {count} goal{'s' if count != 1 else ''} after strategy v{payload['n']}"
+        body = (f"{title}. Publishing v{payload['n']} retired or reworded the bets these goals serve:\n{lines}\n"
+                f"For each one choose Keep as it is, Retire goal, or Move to a bet, then press the one button under "
+                f"Needs you on the Goals page. Nothing changes until you press it. {closes}it is decided.")
         return title, body
     if p["kind"] == "strategy_draft":
         lens = _lens_name(p)
@@ -241,8 +244,9 @@ def _ask(item, manager=ceo_bot.NAME):
         body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it"
                 + (" from this week's market briefing" if (p.get("payload") or {}).get("source") == "briefing" else "")
                 + (f" because {p['reason'].rstrip('.')}" if p.get("reason") and not lens else "")
-                + f": {_change(p, name)}. Confirming writes it to the draft; publishing stays your click on the "
-                  f"Strategy page (#/strategy). {closes}it is decided.")
+                + f": {_change(p, name)}. Add to draft writes it to your draft; publishing stays your click on the "
+                  f"Strategy page (#/strategy). No, leave it changes nothing. Decide it under Needs you on the Goals "
+                  f"page. {closes}it is decided.")
         return title, body
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
     body = (f"{title}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, name)}. Confirm or reject it "

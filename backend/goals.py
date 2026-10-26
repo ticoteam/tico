@@ -124,14 +124,17 @@ def proposals(conn, status="pending", goal_id=None, kpi_id=None):
     if kpi_id:
         where.append("kpi_id=?")
         args.append(kpi_id)
-    return [_proposal_view(r) for r in H._rows(conn.execute(
+    return [_proposal_view(r, conn) for r in H._rows(conn.execute(
         "SELECT * FROM goal_proposals" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY proposed_at", args))]
 
 
-def _proposal_view(row):
+def _proposal_view(row, conn=None):
     if row:
         row["payload"] = H._json(row.pop("payload_json"), {}) or {}
         row["result"] = H._json(row.pop("result_json"), None)
+        if conn is not None and row["kind"] in ("strategy_draft", "strategy_realign"):
+            from . import strategy
+            strategy.card_view(conn, row)
     return row
 
 
@@ -760,7 +763,7 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
 
 
 def proposal(conn, proposal_id):
-    return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)))
+    return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)), conn)
 
 
 def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None):
@@ -843,8 +846,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
     H.event(conn, actor, "goal.decide", proposal_id, {"decision": decision, "kind": row["kind"]})
     if row["kind"] == "strategy_realign":
         from . import strategy
+        # Confirmed with every goal kept (or closed since) changes nothing: it reads as the goals staying.
+        changed = decision == "confirm" and any(v in ("retired", "moved") for v in (result or {}).get("goals", {}).values())
         strategy.settle_card(conn, actor, proposal_id, "Resolved: the goals were realigned with the strategy."
-                             if decision == "confirm" else "Resolved: the goals stay as they are.")
+                             if changed else "Resolved: the goals stay as they are.")
     return proposal(conn, proposal_id)
 
 
