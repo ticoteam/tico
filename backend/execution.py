@@ -488,9 +488,10 @@ def owner_name(c, actor):
 
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
-    under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read is left out."""
+    under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
+    task None and readable False, so it is counted without its title."""
     fence = auth.task_sql(c, who)
-    for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+    for row in c.execute("SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
         if not (privacy.message_readable(c, privacy.actor(who), row)
                 and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
@@ -517,6 +518,68 @@ def held_runs(c, who, auth, bot, limit=3):
         if len(held) >= limit:
             break
     return held
+
+
+# Why a held run stopped, in the words of one Needs you row (stopped_rows). Only a person's Stop and a plain stop are
+# not `routine`: an interruption (a restart, update or drain), a usage limit, a busy AI service or a computer that
+# stopped answering is the computer's or the provider's, so the person is told it is not a bug (Chris, Oct 26).
+STOP_WHY = {"interrupted": "Interrupted on its computer", "quota": "Usage limit", "capacity": "AI service busy",
+            "timeout": "Computer stopped answering", "stopped": "Stopped by a person", "partway": "Stopped partway"}
+ROUTINE_STOPS = frozenset({"interrupted", "quota", "capacity", "timeout"})
+
+
+def stop_cause(attempt):
+    """One STOP_WHY key for a held run's attempt, from what the run recorded, never from the bot's own text: a Billing
+    task's answer that says "quota" is not a usage limit."""
+    if not attempt:
+        return "partway"
+    if attempt["stop_requested"]:
+        return "stopped"
+    try:
+        result = json.loads(attempt["result_json"] or "{}")
+    except (TypeError, ValueError):
+        result = {}
+    result = result if isinstance(result, dict) else {}
+    source = result.get("limit_source") if isinstance(result.get("limit_source"), dict) else {}
+    if source.get("kind") == "capacity":
+        return "capacity"
+    # `primary_limited` alone means the run fell back to another model and carried on, so its state says why it stopped.
+    if source or result.get("limited"):
+        return "quota"
+    # A runner reports `interrupted` when its computer restarts or drains under a run, or the harness ends the turn
+    # early, so the row says interrupted, not restarted; a lapsed lease is a computer that stopped reporting (asleep,
+    # offline or too busy).
+    return {"interrupted": "interrupted", "expired": "timeout"}.get(attempt["state"], "partway")
+
+
+def stopped_rows(c, who, auth, bot, limit=5):
+    """The bot's stopped runs that `who` may read, one row per run (a message folded into a run rides on its row),
+    oldest first, for Needs you: (rows, runs). A row has the task title ("A chat request" outside a task, None for
+    a task `who` may not read), why it stopped, whether that is `routine`, whether Try again is the safe pick
+    (`retry`, by the same rule as the review card, retry_facts), when it stopped, and the jobs a decision settles.
+    `runs` counts every readable run; rows stop at `limit`."""
+    rows, by_run = [], {}
+    for row, task, seen in _readable_held(c, who, auth, bot):
+        key = row["attempt_id"] or row["id"]
+        job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        if key in by_run:
+            if by_run[key] is not None:
+                by_run[key]["jobs"].append({"id": job["id"], "attempt_id": job["attempt_id"]})
+            continue
+        if len(rows) >= limit:
+            by_run[key] = None
+            continue
+        attempt = c.execute("SELECT state,result_json,stop_requested,started,finished FROM attempts WHERE id=?",
+                            (row["attempt_id"],)).fetchone() if row["attempt_id"] else None
+        cause = stop_cause(attempt)
+        facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
+        by_run[key] = {"title": task["title"] if task else "A chat request" if seen else None,
+                       "cause": cause, "why": STOP_WHY[cause], "routine": cause in ROUTINE_STOPS,
+                       "retry": bool(facts["safe"] and facts["starts"] <= 1),
+                       "at": attempt["finished"] if attempt else None,
+                       "jobs": [{"id": job["id"], "attempt_id": job["attempt_id"]}]}
+        rows.append(by_run[key])
+    return rows, len(by_run)
 
 
 def isolation_refused(c, who, auth, bot):
@@ -2297,6 +2360,10 @@ class Execution:
         config = app_delivery.job_config(config)
         if held:
             config = {**config, "primary_held": held.get("until") or H.now()}
+        # The thread's last run failed on a prompt too large to send: this one compacts its session before it runs, once
+        # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
+        if run_backoff.take_compact(c, row["bot"], conv["id"], aid):
+            config = {**config, "compact_first": True}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `hub conversation show` when it wants to. The
@@ -2638,6 +2705,7 @@ class Execution:
         stamp_attempt(c, row["id"], row["runner_id"], "end", body.load_snapshot)
         run_triggers.pushed(c, row["id"], row["runner_id"], body.pushes)
         run_triggers.rotation(c, row["id"], body.rotated)
+        run_triggers.session(c, row["id"], body.session)
         H.turn_finish(c, H.KEEPER, row["id"], exit_code=body.outcome, summary=body.text[:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
         H.event(c, H.KEEPER, "attempt.late-result", row["id"],
@@ -3367,6 +3435,7 @@ class Execution:
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)
         run_triggers.rotation(c, aid, body.rotated)
+        run_triggers.session(c, aid, body.session)
         # The runner's notices (a file left out of the commit) are shown beside the reply, not as the turn's summary.
         H.turn_finish(c, H.KEEPER, aid, exit_code=body.outcome, summary=split_runner_notices(body.text)[0][:2000],
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
@@ -3609,15 +3678,19 @@ class Execution:
     def account_failure(self, c, row, body, aid, conv, failure, counts):
         """What a finished run means for the bot's next ones (backend/run_backoff.py): a run that completed starts the
         count over; a failure within a minute of starting makes the bot wait, and holds it after five in a row; a
-        prompt too large to send starts the next run in a fresh session. A Stop, a usage limit, a busy model, a
+        prompt too large to send makes the next run compact its session first, and only a second one in a row starts a fresh
+        session. A Stop, a usage limit, a busy model, a
         yield and a Gateway outage (`counts` False) are none of that."""
+        too_long = body.outcome == "failed" and counts and failure == run_backoff.PROMPT_TOO_LONG
+        if not too_long:
+            run_backoff.compact_settle(c, aid, body.outcome == "completed")
         if body.outcome == "completed":
             run_backoff.reset(c, row["bot"])
             return
         if body.outcome != "failed" or not counts:
             return
-        if failure == run_backoff.PROMPT_TOO_LONG:
-            run_backoff.fresh_session(c, self.store.settings, row["bot"], conv["id"], aid)
+        if too_long:
+            run_backoff.too_long(c, self.store.settings, row, conv["id"], aid)
         run_backoff.failed(c, self.store.settings, row, body, aid)
 
     def retry(self, c, who, job_id, body):

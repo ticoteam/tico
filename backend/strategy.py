@@ -309,6 +309,9 @@ def view(c, auth, who):
             "website": website(c),
             "goals_by_bet": {bid: [{k: g[k] for k in ("id", "title", "owner", "status")} for g in rows[:GOALS_SHOWN]]
                              for bid, rows in linked.items()},
+            # goals_by_bet is a sample; a retire's "N goals serve it" needs every live goal the caller may read.
+            "live_by_bet": {bid: sum((g.get("status") or "") not in ("done", "dropped") for g in rows)
+                            for bid, rows in linked.items()},
             "health_by_bet": {b["id"]: health(c, linked.get(b["id"], [])) for b in listed}}
 
 
@@ -748,22 +751,26 @@ def publish(c, actor, note="", revision=None):
 
 def _realign_goals(c, before, after):
     """The live goals of every bet `before` had that `after` retired or rewrote: [{goal_id, title, owner, bet_id,
-    change, statement}]."""
+    change, statement, was?}]; `was` is a rewritten bet's wording before (a card filed before it has none)."""
     now = {b["id"]: b for b in after["bets"]}
     moved = {}
     for old in before["bets"]:
         new = now.get(old["id"])
         if not new or new["status"] == "retired":
-            moved[old["id"]] = ("retired", old["statement"])
+            moved[old["id"]] = ("retired", old["statement"], None)
         elif new["statement"] != old["statement"]:
-            moved[old["id"]] = ("rewritten", new["statement"])
+            moved[old["id"]] = ("rewritten", new["statement"], old["statement"])
     if not moved:
         return []
     marks = ",".join("?" * len(moved))
     rows = c.execute(f"SELECT id, title, owner, bet_id FROM goals WHERE bet_id IN ({marks}) AND "
                      "coalesce(status,'') NOT IN ('done','dropped') ORDER BY owner, rank, created", tuple(moved))
-    return [{"goal_id": r["id"], "title": r["title"], "owner": r["owner"], "bet_id": r["bet_id"],
-             "change": moved[r["bet_id"]][0], "statement": moved[r["bet_id"]][1]} for r in rows]
+    out = []
+    for r in rows:
+        change, statement, was = moved[r["bet_id"]]
+        out.append({"goal_id": r["id"], "title": r["title"], "owner": r["owner"], "bet_id": r["bet_id"],
+                    "change": change, "statement": statement, **({"was": was} if was else {})})
+    return out
 
 
 def realign(c, owner, before, after):
@@ -810,6 +817,22 @@ def settle_card(c, actor, proposal_id, note):
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
 
 
+def card_view(c, proposal):
+    """What a strategy card shows beyond its payload: a lens proposal's lens by name (`lens_name`), and a realign
+    card's goals finished, dropped or deleted since it was filed (`closed_goals`), which it lists with no choice."""
+    payload = proposal.get("payload") or {}
+    if proposal.get("kind") == "strategy_draft" and payload.get("source") == LENS and payload.get("lens"):
+        from . import lenses
+        found = lenses.lens(payload["lens"])
+        proposal["lens_name"] = found["name"] if found else None
+    elif proposal.get("kind") == REALIGN:
+        ids = [g.get("goal_id") for g in payload.get("goals") or [] if isinstance(g, dict) and g.get("goal_id")]
+        live = {r[0] for r in c.execute(f"SELECT id FROM goals WHERE id IN ({','.join('?' * len(ids))}) AND "
+                                        "coalesce(status,'') NOT IN ('done','dropped')", ids)} if ids else set()
+        proposal["closed_goals"] = [i for i in ids if i not in live]
+    return proposal
+
+
 def realign_error(c, payload):
     if not isinstance(payload, dict) or not isinstance(payload.get("goals"), list) or not payload["goals"]:
         return "a realignment lists the goals to decide"
@@ -818,7 +841,7 @@ def realign_error(c, payload):
 
 def apply_realign(c, actor, payload, moves):
     """The owner's choice per goal: `keep` (the default for a goal not named), `retire` (the goal is dropped) or a
-    bet id (the goal moves to it)."""
+    bet id (the goal moves to it). A goal finished or dropped since the card was filed is left as it is (`closed`)."""
     from . import goals as G
     listed = {g["goal_id"] for g in payload["goals"]}
     moves = dict(moves or {})
@@ -828,8 +851,11 @@ def apply_realign(c, actor, payload, moves):
     done = {}
     for goal_id in listed:
         choice = moves.get(goal_id) or "keep"
-        if not G.goal(c, goal_id):
+        row = G.goal(c, goal_id)
+        if not row:
             done[goal_id] = "gone"
+        elif row.get("status") in ("done", "dropped"):
+            done[goal_id] = "closed"
         elif choice == "keep":
             done[goal_id] = "kept"
         elif choice == "retire":

@@ -3499,6 +3499,7 @@ def create_app(settings=None):
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
                             number=body.number, mover=mover(c, who) or None,
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
+                            receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
                             qa_not_checkable_live=body.qa_not_checkable_live)
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
@@ -3642,7 +3643,8 @@ def create_app(settings=None):
                 privacy.require_wait(c, caller, row, body.waiting_on)
                 if "size" in body.model_fields_set and body.size is None:
                     fields["clear_size"] = True
-                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots).get("warnings")
+                warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
+                                         receipt_owner=Access.load_owner(c, settings)["email"]).get("warnings")
             c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
             return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
                     **({"warnings": warnings} if warnings else {})}
@@ -4996,13 +4998,15 @@ def create_app(settings=None):
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
+        # `run_session`: a run's result may say whether it resumed its session or started a new one, and why (an older
+        # one refuses the field). The claim's config may carry `compact_first` for a runner that sends it.
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
-                                                          "run_pushes": True, "run_rotation": True,
+                                                          "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
                                                           "attempt_thread": True, "runner_drain": True}}
 

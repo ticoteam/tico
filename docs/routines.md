@@ -15,8 +15,8 @@ a compaction is the bot's runtime's business.
 Three doors, one table (`schedules`, `backend/routines.py`):
 
 - **The site.** Settings > Rules → *New routine*, or the Routines card on a bot's More tab.
-  Expand a routine's row for *Edit*, *Pause*/*Resume* and *Delete*. A routine in the Routines list on a
-  bot's page opens the same editor: its instruction, its schedule (every day, weekdays, a day of the
+  In **Settings > Rules > Bot routines**, each editable row shows its **On**/**Off** switch and **Edit** without expanding.
+  Expand a row for recent runs. A routine in the Routines list on a bot's page opens the same editor: its instruction, its schedule (every day, weekdays, a day of the
   week or of the month at a time, or a cron), *Run now*, *Pause* and *Delete*. Someone who may not edit
   it sees the same fields read-only.
 - **The `hub` CLI, from a bot's run.** A bot sets up its own; an owner's bot may not touch
@@ -44,6 +44,20 @@ Who may write a bot's routines: the environment owner, the bot's owner, the bot 
 BotOps. Who may read them, with their text and occurrences: the people who may read the bot, the bot
 itself, and a bot above it in the `reports_to` chain, in its own run (a manager bot reviewing the
 bots that report to it).
+
+The editor's **Timezone** picker starts on the zone most of the team's timed routines use.
+With no timed routine to copy, it starts on **America/Los_Angeles**.
+For example, if most routines use **Europe/Berlin**, a new timed routine starts there.
+The API and CLI still default to **America/Los_Angeles** when you omit a timezone.
+
+The row's switch saves at once and shows **Saved**. If the change fails, the switch returns to its previous state.
+A red line under the row explains why.
+
+![Bot routines rows with visible On or Off switches and Edit buttons](images/settings-stage1/settings-bot-routines-on-off-edit.png)
+
+![New routine dialog with a Timezone picker set to America/Los Angeles](images/settings-stage1/settings-new-routine-timezone.png)
+
+*Synthetic Acme example. Row controls do not need expanding. The new timed routine copies the zone most timed routines use.*
 
 A routine's text says which step waits when something is missing, not that the whole run stops: a
 missing setup answer, credential or access blocks only the step that needs it (publishing, sending,

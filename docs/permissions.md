@@ -484,7 +484,7 @@ and never on a closed one. With none that takes it the bot stays as it is and th
 ## The settings catalogue
 
 Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
-key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > Humans > Team rules),
+key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > People > Team rules),
 who may change it, its class, the route and body it writes, and a link that opens that card
 (`#/settings/<tab>/<card>`). A person, or BotOps for them, finds and changes a setting without knowing the route:
 
