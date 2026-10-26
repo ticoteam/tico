@@ -53,6 +53,12 @@ The API and CLI still default to **America/Los_Angeles** when you omit a timezon
 The row's switch saves at once and shows **Saved**. If the change fails, the switch returns to its previous state.
 A red line under the row explains why.
 
+![Bot routines rows with visible On or Off switches and Edit buttons](images/settings-stage1/settings-bot-routines-on-off-edit.png)
+
+![New routine dialog with a Timezone picker set to America/Los Angeles](images/settings-stage1/settings-new-routine-timezone.png)
+
+*Synthetic Acme example. Row controls do not need expanding. The new timed routine copies the zone most timed routines use.*
+
 A routine's text says which step waits when something is missing, not that the whole run stops: a
 missing setup answer, credential or access blocks only the step that needs it (publishing, sending,
 a rollout), and the run does everything else and asks for the missing piece by name. A routine that

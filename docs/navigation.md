@@ -48,6 +48,10 @@ An older app may show Instructions under the bot's Docs tab; the action is still
 Removing a Computer revokes its registration and leaves its local files and bots in place.
 See [Using Tico](using-tico.md), [Credentials](credential-vault.md) and [Updates](updates.md).
 
+![General selected in Settings, with Team, Tico company, Assistant and Privacy cards](images/settings-stage1/settings-general.png)
+
+*Synthetic Acme example. Settings opens on General.*
+
 ## Tags
 
 **Settings > Tasks** (under **Task tags**) lists templates and task tags and creates new ones. Task chips show the

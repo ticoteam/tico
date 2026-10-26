@@ -268,6 +268,10 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 bot runs and registered external agents can read it. Runner/service credentials and support
 sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
 
+![Email & Phone tab and card heading, with the shared inbox controls](images/settings-stage1/settings-email-and-phone.png)
+
+*Synthetic Acme example, unconnected. The card heading is Email & Phone; the Connect Inbox label remains unchanged.*
+
 `GET /api/v2/inbound/inboxes` lists inboxes and sync status (pages of `limit` ≤ 100; follow `next` with `after`); `POST` with `{kind:"email",name}`
 creates a free inbound address under the company quota, with an `Idempotency-Key`.
 `PATCH inboxes/{id}` saves `{name,used_for}`: the name is shared with the company's customer portal;

@@ -3,6 +3,10 @@
 Who is on the team, who may sign in and who owns the environment are settings in the app, not
 files on the server. The owner manages them in **Settings > People**; nothing needs a restart.
 
+![People tab with Add and send invite and Add buttons](images/settings-stage1/settings-people-add-and-send-invite.png)
+
+*Synthetic Acme example. Invite sending is simulated to show the button; no email was sent.*
+
 ## Roles
 
 Every human on the team is an **Owner**, an **Admin** or a **Member**. Members can add teammates at the team's email domain and

@@ -51,6 +51,12 @@ The confirmation names that person or bot and explains that the archived bot lea
 Click **Archive bot** to confirm, or **Cancel** to keep it unchanged. You can restore it later from **Archived bots**.
 Built-in bots cannot be archived.
 
+![Bot editor footer with Save bot, a successor picker and Archive bot](images/settings-stage1/settings-bot-editor-archive-bot.png)
+
+![Archive confirmation naming Account Executive as the recipient of the bot’s open tasks](images/settings-stage1/settings-archive-bot-confirm.png)
+
+*Synthetic Acme example. The confirmation names who gets the work; Cancel leaves the bot unchanged.*
+
 ## Edit Instructions
 
 Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
