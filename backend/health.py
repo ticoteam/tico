@@ -12,8 +12,8 @@ import os
 import shlex
 from datetime import datetime, timezone
 
-from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login, providers,
-               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
+               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -66,12 +66,26 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
-        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"],
-                      "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_plural(row['queued'], 'job')} queued, "
-                              f"oldest {minutes} min; {row['why']}", "fixes": fixes,
+        items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
+                      "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
+                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {row['why']}",
+                      "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
+
+
+def _queue_words(row, minutes):
+    """A bot's queue in one phrase, split as Pipeline splits it: jobs that can start, jobs an interrupted run fences,
+    and jobs held on purpose. The age is the oldest job named first."""
+    words = []
+    if row["queued"]:
+        words.append(f"{_plural(row['queued'], 'job')} queued, oldest {minutes} min")
+    if row.get("dead"):
+        age = "" if row["queued"] else f", oldest {minutes} min"
+        words.append(f"{_plural(row['dead'], 'job')} behind an interrupted run awaiting review{age}")
+    if row.get("held"):
+        words.append(f"{row['held']} held on purpose")
+    return "; ".join(words) or "nothing queued"
 
 
 def _plural(n, one, many=None):
@@ -464,6 +478,13 @@ def quiet_minutes(last_seen):
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
 
 
+def _fenced_queue_reason(row, refused, first, person):
+    """Name the interrupted-run fence when it is the only reason this queue cannot start."""
+    if not row["queued"] and row["dead"] and refused in (None, 'lane_held'):
+        return "uncertain", None, False
+    return refused, first, person
+
+
 def _waiting(c, online_ids, settings=None, limits=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
@@ -474,9 +495,12 @@ def _waiting(c, online_ids, settings=None, limits=None):
     from .execution import bot_claimable, prime_claimables
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
-    # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
-    queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
-        "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
+    # Each bot's queue is Pipeline's split (pipeline_stats.queue_counts), so the counts shown here match `hub pipeline`:
+    # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
+    # (backend/wake_presets.py). Gating keeps the old reach: a bot with either waiting kind is looked at.
+    split = pipeline_stats.queue_counts(c, [r["slug"] for r in c.execute("SELECT slug FROM bots")])
+    queued = {b: (s["queued"] + s["dead"], min(filter(None, (s["oldest_queued_at"], s["oldest_dead_at"])), default=None))
+              for b, s in split.items() if s["queued"] or s["dead"]}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
         "SELECT j.bot, min(j.created) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
         "WHERE j.state='queued' AND m.from_actor LIKE 'human:%' GROUP BY j.bot")}
@@ -530,7 +554,10 @@ def _waiting(c, online_ids, settings=None, limits=None):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
-        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": count, "oldest": oldest,
+        shown = split.get(slug, {})
+        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": shown.get("queued", 0),
+               "dead": shown.get("dead", 0), "held": shown.get("held", 0),
+               "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
                "computer": where[1] if where else ""}
         if bot["state"] != "active":
             if count:
@@ -566,6 +593,8 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 diagnostic = bot_claimable(c, settings, where[0], slug, limits, oldest=True)
                 if diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
+            # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
+            refused, first, person = _fenced_queue_reason(row, refused, first, person)
             # A running turn only explains this queue when it holds the queued lane. Free task
             # lanes still get the claim's actual refusal, even while another lane runs.
             idle = where[0] not in full and not (refused == 'lane_held' and slug in busy)
@@ -774,7 +803,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
-                   | {"why": text[:320], "fix": fix if full else None,
+                   | {"dead": row.get("dead", 0), "held": row.get("held", 0),
+                      "why": text[:320], "fix": fix if full else None,
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 

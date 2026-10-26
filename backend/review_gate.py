@@ -93,10 +93,10 @@ def review_links(c, row):
     return links(c, row) or [p for p in H.task_links(c, row["id"]) if p["kind"] == "pr" and p.get("state") in MERGED]
 
 
-def merged_notice(kind, head, pr, problem, action, retryable=False):
+def merged_notice(kind, head, pr, problem, action, retryable=False, auth=False, local=False):
     """A review of a merged PR is refused saying it is merged, which head the review judges, and what to do."""
     return (kind, head, pr, f"Review refused: {pr['url']} is merged, so this review judges its merged head {head}. "
-                            f"{problem} {action}", retryable, False)
+                            f"{problem} {action}", retryable, auth, local, False)
 
 
 def engineering(c, row):
@@ -147,7 +147,23 @@ def mint_failure(exc, repo):
     if not cause:
         cause.append(type(exc).__name__)
     action = "the GitHub App could not sign in" if auth else "GitHub token request failed"
-    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable)}
+    # `auth` travels with the refusal so a refused move remembers whether access help is needed
+    # (backend/move_retry.py); the prose `why` already names it, so this adds no new exposure.
+    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable),
+            "auth": bool(auth)}
+
+
+def answered_cause(why):
+    """Cause flags for GitHub's answer to a content read (backend/move_retry.py): a 401 or 403 needs access help;
+    a 408, 429 or 5xx is temporary. Any other failure carries no cause. `why` is this module's own fixed-format
+    string, never a remote body."""
+    match = re.fullmatch(r"GitHub answered (\d+)", why or "")
+    status = int(match[1]) if match else None
+    if status in (401, 403):
+        return {"retryable": False, "auth": True}
+    if status == 408 or status == 429 or isinstance(status, int) and 500 <= status < 600:
+        return {"retryable": True, "auth": False}
+    return {"retryable": False, "auth": False}
 
 
 def snapshot(service, prs):
@@ -162,6 +178,7 @@ def snapshot(service, prs):
             return None
     out = {}
     for pr in prs:
+        repo = None
         try:
             repo = pr.get("repo")
             if not repo or not pr.get("number"):
@@ -210,10 +227,15 @@ def snapshot(service, prs):
                 raise ValueError("head changed during collection")
             out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now()}
         except ValueError as exc:
-            out[pr["id"]] = {"error": True, "why": str(exc)}
+            # An unresolved link is Tico's own record, not GitHub's answer: relinking clears it, not access help.
+            out[pr["id"]] = {"error": True, "why": str(exc), **answered_cause(str(exc)),
+                             **({"local": True} if str(exc) == "unresolved PR" else {})}
         except Exception as exc:
-            # Only the exception's type: a transport error's text can carry request details.
-            out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__}
+            # Only the exception's type: a transport error's text can carry request details. Its cause flags
+            # still travel, classified the same way as a token failure, so a refused move remembers them.
+            cause = mint_failure(exc, repo)
+            out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
+                             "retryable": cause["retryable"], "auth": cause["auth"]}
     return out
 
 
@@ -296,10 +318,10 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
                 return ("receipt", "unknown", closed[-1],
                         f"Review refused: {closed[-1]['url']} was closed without merging, so it has no change to review. "
                         "Link the PR that carries the change (reopen this one or open a new one) before asking a "
-                        "reviewer. The owner or a person who may edit this ticket can link it.", False, False)
+                        "reviewer. The owner or a person who may edit this ticket can link it.", False, False, False, False)
             return ("receipt", "unknown", {"url": "no linked PR"},
                     "Review refused: no linked PR. Link the current PR before asking a reviewer. "
-                    "The owner or a person who may edit this ticket can link it.", False, False)
+                    "The owner or a person who may edit this ticket can link it.", False, False, False, False)
         return  # A board-only step move has no software reviewer to wake.
     move = not require_pr
     # Tico's retry of a refused move (backend/move_retry.py) reads as whoever made the move: the keeper is on no private
@@ -317,13 +339,17 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
+            # Every move reads GitHub afresh, so a transient failure clears on a plain retry. The cause flags
+            # travel with the refusal so the remembered move routes like the read reported (backend/move_retry.py).
+            # A changed link or a missing recorded head is Tico's own record, not a GitHub failure.
+            local = detail.get("local", False) if detail.get("error") else True
             if pr.get("state") in MERGED:
                 return merged_notice("ci", head, pr, f"Cannot verify that head and its CI ({why}).",
-                                     "Retry the review request.", detail.get("retryable", False))
-            # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
+                                     "Retry the review request.", detail.get("retryable", False),
+                                     detail.get("auth", False), local)
             return ("ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
                                   "Retry the review move. Anyone allowed to move this ticket can retry.",
-                    detail.get("retryable", False), move)
+                    detail.get("retryable", False), detail.get("auth", False), local, move)
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
@@ -334,7 +360,7 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
             return ("ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.",
-                   False, move)
+                   False, False, False, move)
     for pr in prs:
         detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
         head = detail["head_sha"]
@@ -376,10 +402,10 @@ def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_
                 action = ("Post a passing test receipt naming the current head on this ticket, then retry the review move. "
                           + writers + " can post it.")
             return ("receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}",
-                    False, move)
+                    False, False, False, move)
 
 
-def reject(c, actor, row, kind, head, pr, text, retryable=False, move=True):
+def reject(c, actor, row, kind, head, pr, text, retryable=False, auth=False, local=False, move=True):
     from . import hubdb as H
     from . import move_retry
     # Only a refused step move is retried (backend/move_retry.py); a refused review request is not, so it never
@@ -390,7 +416,11 @@ def reject(c, actor, row, kind, head, pr, text, retryable=False, move=True):
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
         exc.retryable = retryable
-        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text}
+        # The read's verdict on the failure, in the notice's own vocabulary: a retryable read is temporary and
+        # never routes; an access failure routes on the first refusal; a local one (Tico's own link record) never
+        # routes. `remember` keeps these (backend/move_retry.py).
+        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text,
+                           "temporary": bool(retryable), "devops": bool(auth), "local": bool(local)}
         raise
 
 

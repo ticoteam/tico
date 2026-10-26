@@ -3,6 +3,7 @@ ones included unless asked, closed ones never; and a queued job that can never b
 
 import uuid
 
+from backend import health
 from backend import hubdb as H
 from backend import pipeline_stats
 from backend.pipeline_stats import cause_of
@@ -111,6 +112,31 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     assert stats(api, query="bot=ops")["queues"]["ops"]["dead"] == 1
 
 
+def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
+    board(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
+    attempt = claim(api, r)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+                  (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
+        c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
+    post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
+    post(api, "chat/ops", {"text": "Separate question"})     # the one job that can start
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), hours=-2),))
+    pipe = stats(api, query="bot=ops")["queues"]["ops"]
+    assert pipe["queued"] == 1 and pipe["dead"] == 1
+
+    # Health's row for the bot carries Pipeline's split, not the sum of both: 1 queued, 1 behind the interrupted run.
+    with api.app.state.store.read() as c:
+        _, slow, stuck = health._waiting(c, {r["runner_id"]})
+    rows = [row for row in slow + stuck if row["bot"] == "ops"]
+    assert rows and all((row["queued"], row["dead"]) == (pipe["queued"], pipe["dead"]) for row in rows)
+
+
 def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypatch):
     board(api)
     r = runner(api)
@@ -146,3 +172,73 @@ def test_failure_causes():
     assert cause_of(row("expired")) == "timeout"
     assert cause_of(row(reason="Process exited (exit code 1)")) == "crash"
     assert cause_of(row(reason="Process exited (exit code 1)", stop="human:ana")) == "stopped"
+
+
+def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
+    """The Dev 563 shape on Pipeline: a run held for review, then dismissed by BotOps with a note; the row reads the
+    decision record, names who and when, and a later decision replaces it. No decision, no row."""
+    from backend.tests.test_api import expire
+    from backend.tests.test_run_view import DEV_563_NOTE, botops_decides, task_attempt
+    typ, _ = board(api)
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    _, attempt = task_attempt(api, machine, "Build the QA waiver")
+    expire(api, attempt["id"])
+    assert claim(api, machine) is None
+    assert stats(api)["queues"]["ops"]["decisions"] == []          # held, but nobody has decided yet
+
+    botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
+    [row] = stats(api)["queues"]["ops"]["decisions"]
+    assert (row["job"], row["attempt"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
+            row["note"]) == (attempt["job_id"], attempt["id"], True, "cancelled", "dismiss", "bot:botops", "botops",
+                             DEV_563_NOTE)
+    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note='Run it again after all, please.' "
+                  "WHERE job_id=?", (attempt["job_id"],))
+    [row] = stats(api)["queues"]["ops"]["decisions"]
+    assert (row["decision"], row["by"], row["by_kind"]) == ("resume", "human:ana", "person")
+    assert ": resumed by " in row["label"] and row["label"].endswith(", Run it again after all, please.")
+
+    # The resume runs a new try that stops undecided: the job is held again, but the row is the earlier decision's
+    # history, never "held" beside it, and it says only what was decided.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='queued' WHERE id=?", (attempt["job_id"],))
+    ready(api, machine, ["ops"])
+    again = claim(api, machine)
+    assert again["job_id"] == attempt["job_id"]
+    post(api, f"attempts/{again['id']}/started", {"thread_id": "again"}, machine["token"])
+    expire(api, again["id"])
+    assert claim(api, machine) is None
+    [row] = stats(api)["queues"]["ops"]["decisions"]
+    assert (row["attempt"], row["current"], row["state"]) == (attempt["id"], False, None)
+    assert row["label"].startswith("Resumed by ") and row["label"].endswith(", Run it again after all, please.")
+
+    # Outside the window it is no longer listed; a reader who cannot read the bot never sees it.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (H.shift(H.now(), days=-2), attempt["job_id"]))
+    assert stats(api)["queues"].get("ops", {}).get("decisions", []) == []
+
+
+def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conversation(api):
+    """A person's direct message to the bot is theirs: another reader of the bot counts the held job and sees the
+    decision, who and when, but never the decider's note, which may tell what the run was for."""
+    from backend.tests.test_api import expire
+    from backend.tests.test_run_view import DEV_563_NOTE, botops_decides
+    board(api)
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "chat/ops", {"text": "Run the payroll export."})
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "dm"}, machine["token"])
+    expire(api, attempt["id"])
+    assert claim(api, machine) is None
+    botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
+    [row] = stats(api)["queues"]["ops"]["decisions"]
+    assert row["note"] == DEV_563_NOTE and row["label"].endswith(DEV_563_NOTE)
+    [row] = stats(api, token="cara-test")["queues"]["ops"]["decisions"]
+    assert (row["job"], row["decision"], row["by_kind"], row["note"]) == (attempt["job_id"], "dismiss", "botops", None)
+    assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z")
