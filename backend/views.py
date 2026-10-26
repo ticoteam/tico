@@ -513,15 +513,10 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper
+            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
-            # Needs you says only what stopped and what it holds up; the review card says what to do (Chris, Oct 22).
-            # Names stop at three and skip runs this reader may not read, so the rest are counted.
-            more = uncertain - len(runs)
-            what = (named + (f" and {more} more" if more > 0 else "") if named
-                    else "A run" if uncertain == 1 else f"{uncertain} runs")
             waiting, waiting_on = held_back(c, who, auth, slug)
             left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
@@ -534,13 +529,35 @@ def operation_issues(c, who, auth):
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
-                wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
-                on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
-                behind = (f" {wakes}{on} until you decide." if waiting else
-                          " Tico can't safely decide it on its own.")
-                add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
-                    f"{what} stopped partway.{behind} Choose Try again or Don't retry.",
-                    bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
+                # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
+                # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
+                rows, run_count = stopped_rows(c, who, auth, slug)
+                count = run_count or uncertain
+                can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
+                if not can_review:
+                    # Only the operator or BotOps may decide (reconcile_job): nobody else is handed the handles.
+                    rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
+                noun = "run" if count == 1 else "runs"
+                behind = (f"{waiting} queued request{' waits' if waiting == 1 else 's wait'} until you decide."
+                          if waiting else "Tico can't safely decide it on its own.")
+                causes = {row["cause"] for row in rows}
+                why = ""
+                # Only when every run is listed: a run past the first few may have stopped for another reason.
+                if rows and len(rows) == count and len(causes) == 1 and rows[0]["routine"]:
+                    cause, these = causes.pop(), "this run" if count == 1 else "these runs"
+                    stamps = sorted(H.parse_ts(row["at"]) for row in rows if row["at"])
+                    # One restart names its time; stops spread over a while (a busy evening) do not share one.
+                    at = (stamps[0].strftime("%H:%M") if stamps and len(stamps) == len(rows)
+                          and (stamps[-1] - stamps[0]).total_seconds() <= 600 else None)
+                    when = f" at {at} UTC" if at else ""
+                    why = {"interrupted": f"Its computer interrupted {these}{when}, usually for a restart or update",
+                           "quota": f"{these.capitalize()} stopped at a usage limit",
+                           "capacity": f"{these.capitalize()} stopped because the AI service was busy",
+                           "timeout": f"Its computer stopped answering during {these}"}[cause]
+                    why += ", not a bug. "
+                add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
+                    why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
+                    runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
