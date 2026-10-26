@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Bots and tasks keep one session.** A large session is no longer replaced to save tokens; the harness compacts it at `compact_at` and the next turn resumes it. A new session starts only when the saved one is not on this computer or the host refuses it twice, and the run says why. A turn on a fallback model runs in a side session and leaves the saved session for the next turn. Codex sessions are kept after an interrupt ([Checkpoints and resume](docs/sessions.md#checkpoints-and-resume)).
+
 ## [0.4.9] - 2026-10-25
 
 ### Fixed
