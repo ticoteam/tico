@@ -140,6 +140,34 @@ def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(a
     assert json.loads(evidence["checker_families"]) == ["openai"]
 
 
+def test_turn_finish_consumes_pending_eligible_verdict_once_after_capture(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
+        from backend import verdict_moves
+        assert verdict_moves.after_capture(c, check["id"], HEAD, "review-turn") is None
+        assert c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
+                         (task["id"],)).fetchone()[0] == "Review 1"
+        actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "gpt-6-sol",
+                  "provider": "openai", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "codex",
+                  "harness": "codex", "effort": "high", "profile": "engineering"}
+        H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
+        events = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+                           (check["id"],)).fetchone()[0]
+        assert events == 1
+        moved_step = c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
+                               (task["id"],)).fetchone()[0]
+        H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
+        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+                         (check["id"],)).fetchone()[0] == 1
+    assert moved_step == "Review 2"
+
+
 def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_checker(api):
     """A GPT-configured reviewer that runs Claude cannot advance an Anthropic-built PR."""
     team(api)

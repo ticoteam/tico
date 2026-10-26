@@ -190,6 +190,7 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
         turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
         H.task_update(c, review["owner"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
+        assert V.after_capture(c, review["id"], "b" * 40, turn) is None
         assert V.after_capture(c, review["id"], HEAD, "obsolete-attempt") is None
         assert V.step_of(c, H.task(c, task["id"])) == "Review 1"
         # A new attempt supersedes the old callback even if it has the same owner and head.
