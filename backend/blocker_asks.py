@@ -104,7 +104,7 @@ def record(c, actor, row, blocker_key, ask=None, owner=None):
         H.event(c, actor, "blocker.joined", row["id"], {"ask": ask["id"], "owner": owner})
         return text
     devops = _devops(c)
-    if not (H.is_human(row["owner"]) and devops and actor == devops):
+    if row.get("private") or not (H.is_human(row["owner"]) and devops and actor == devops):
         return None
     # DevOps's own tasks for this blocker wait on the one person ask, rather than going back to their checkers.
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))

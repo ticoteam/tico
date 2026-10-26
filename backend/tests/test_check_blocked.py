@@ -214,6 +214,20 @@ def test_devops_person_ask_holds_its_own_task_and_later_asks_join_it(api):
         assert H.task(c, devops_task["id"])["owner"] == "bot:devops-engineer"
 
 
+def test_private_devops_person_ask_does_not_hold_public_devops_work(api):
+    devops_task = create(api, "qa", {"owner": "bot:devops-engineer", "title": "Remote run refused", "body": "403.",
+                                     "blocker": REFUSAL})["task"]
+    person = create(api, "devops-engineer", {"owner": "human:ana", "title": "Private permission ask",
+                                            "body": "Only you can.", "blocker": REFUSAL, "private": True})
+    assert "joined" not in person and person["task"]["private"]
+    with api.app.state.store.transaction() as c:
+        assert H.task(c, person["task"]["id"])["owner"] == "human:ana"
+        assert not H.TR.blocker_ids(c, devops_task["id"])
+        assert not H.TR.blocker_ids(c, person["task"]["id"])
+        assert not c.execute("SELECT 1 FROM events WHERE action='blocker.escalated' AND target=?",
+                             (person["task"]["id"],)).fetchone()
+
+
 def test_a_person_filing_is_never_joined_and_bad_blockers_are_refused(api):
     create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403.", "blocker": REFUSAL})
     r = api.post("/api/v2/tasks", headers={"Authorization": "Bearer ana-test", "Idempotency-Key": str(uuid.uuid4())},
