@@ -61,7 +61,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on PERSON]          with --status waiting: the person it waits on (their Needs you);
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
-    hub task close <id> [--note "..."]
+    hub task close <id> [--note "..."] [--children close|detach]
+                                           its open subtasks close with it, or leave as standalone tasks
     hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
                                            wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
@@ -462,6 +463,8 @@ TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed"
 TASK_UPDATE_STATUSES = tuple(status for status in TASK_STATUSES if status != "closed")
 APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support")
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # set by hand; gray is only ever automatic
+CHILDREN = ("close", "detach")       # what finishing a task does with its open subtasks
+CHILDREN_HELP = "on finishing it: close its open subtasks with it (the default) or detach them as standalone tasks"
 # The Assistant, acting on a task the person asked it to in their own Assistant chat (backend/assistant.py `instruction`).
 ASKED = ("Assistant: the person asked for exactly this in their own Assistant chat: `turn` (their message that started "
          "this run) or that message's id. Leave it out when they did not clearly ask, and propose instead")
@@ -1058,6 +1061,7 @@ def parser():
     s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"],
                    help="a review or QA subtask's verdict; the task that asked for it is woken with it")
     s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
+    s.add_argument("--children", choices=CHILDREN, help=CHILDREN_HELP)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
     s = task.add_parser("done", help="finish a task you own with its result; a review or QA subtask adds its --verdict "
@@ -1067,6 +1071,7 @@ def parser():
     s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"])
     s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
+    s.add_argument("--children", choices=CHILDREN, help=CHILDREN_HELP)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task done")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
@@ -1183,6 +1188,7 @@ def parser():
     s = task.add_parser("close")
     s.add_argument("id")
     s.add_argument("--note")
+    s.add_argument("--children", choices=CHILDREN, help=CHILDREN_HELP)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task close")
     s = task.add_parser("attach", help="attach a file to a task; prints the link for your note")

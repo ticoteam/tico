@@ -3674,7 +3674,8 @@ def create_app(settings=None):
                     # BotOps' own report on its own task: they read as BotOps, like its other progress notes.
                     H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                     note = ""
-                H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
+                H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None,
+                             children=body.children)
                 warnings = None
             else:
                 fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})

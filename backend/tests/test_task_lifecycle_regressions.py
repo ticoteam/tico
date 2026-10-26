@@ -123,12 +123,14 @@ def test_worktree_wait_is_visible_and_survives_stranded_sweep(c, state):
 def test_finishing_bot_task_retires_only_its_generated_person_ask_cards(c, status):
     parent = create(c, "Prepare export")
     card = H._ask_in_subtask(c, "bot:cmo", parent, "human:ana", "Which format should the export use?")
-    ordinary = create(c, "Independently check export", owner="human:ana", parent_id=parent["id"])
+    ordinary = H.task_create(c, "bot:cmo", "Independently check export", "Synthetic regression fixture", "human:ana",
+                             parent_id=parent["id"], lint=False)
     assert card["id"] in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
+    # Kept as standalone work, the ordinary subtask shows that only the generated card is retired as an ask.
     if status == "closed":
-        H.task_close(c, "human:ana", parent["id"])
+        H.task_close(c, "human:ana", parent["id"], children="detach")
     else:
-        H.task_update(c, "bot:cmo", parent["id"], status=status)
+        H.task_update(c, "bot:cmo", parent["id"], status=status, children="detach")
     assert H.task(c, card["id"])["status"] == "closed"
     assert card["id"] not in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
     assert H.task(c, ordinary["id"])["status"] == "open"
@@ -142,7 +144,8 @@ def test_shared_person_card_stays_until_every_dependent_task_finishes(c):
     card = H._ask_in_subtask(c, "bot:cmo", first, "human:ana", "Which format should we use?")
     assert H._ask_in_subtask(c, "bot:cmo", second, "human:ana", "Confirm the report format?")["id"] == card["id"]
     H.task_update(c, "bot:cmo", first["id"], status="done")
-    assert H.task(c, card["id"])["status"] == "open"
+    # Still asked for the report, the card outlives the export it was filed under, as a standalone task.
+    assert H.task(c, card["id"])["status"] == "open" and TR.parent_of(c, card["id"]) is None
     H.task_update(c, "bot:cmo", second["id"], status="done")
     assert H.task(c, card["id"])["status"] == "closed"
 

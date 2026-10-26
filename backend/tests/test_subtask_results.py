@@ -129,6 +129,7 @@ def test_private_child_results_stay_off_a_wider_parent_and_closed_parents_do_not
         closed = H.task_create(c, "bot:ops", "Another review", "Review it.", "bot:finance",
                                parent_id=parent["id"], lint=False)
         H.task_close(c, "human:ana", parent["id"])
+        H.task_update(c, "human:ana", closed["id"], status="open")          # reopened by hand under the closed parent
         since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
         H.task_update(c, "bot:finance", closed["id"], status="done", note="Late result.")
         assert not c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "

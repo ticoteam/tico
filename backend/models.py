@@ -240,6 +240,9 @@ class TaskUpdate(Contract):
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)   # "" takes the goal off
     close: bool = False
+    # What closing or finishing it does with its open subtasks: close them with it (the default), or detach them
+    # as standalone tasks. No open subtask stays under a finished task (hubdb._finish_children).
+    children: Literal["close", "detach"] | None = None
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
     waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears

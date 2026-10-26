@@ -774,9 +774,20 @@ Only the task's owner, requester, their managers or a human mover can re-parent 
 request or manage the new parent. Moving or detaching a subtask also requires its current
 parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
-A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
-subtasks stay open, and the parent's history and its Finished or Closed notice end with
-"Still open:" and their titles. Finishing or moving away the last open subtask wakes the
+No open subtask stays under a Done or closed task. Closing a task, or finishing it (status `done`,
+or a step whose status is done or closed), closes every open task below it, each with the note
+"Closed with its parent task"; the parent's history and its Finished or Closed notice end with
+"Closed with it:" and their titles. With `children: detach` (`hub task close|done|update
+--children detach`, the `children` field on `POST /api/v2/tasks/{id}` and the `hub_task_close`,
+`hub_task_done` and `hub_task_update` tools) each open subtask instead leaves the tree as a
+standalone task, keeping its own subtasks, and the record says "Made standalone:". The task window
+asks which when the task has open subtasks. Each is the actor's own close or detach of that subtask,
+under the usual rules: a bot closes only subtasks it asked for, and one it may neither close nor
+detach refuses the whole finish, naming it, with nothing changed. A private subtask the actor
+cannot read is made standalone either way, and named only "a private subtask"; so is a person's
+question card another open task still waits on. Reopening the parent does not
+reopen them; its history says which are "Still closed from when it closed", to reopen by hand.
+Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
 that owner made the change (a bot finishing a subtask it filed
 for itself, which runs in its own session, still wakes the parent).

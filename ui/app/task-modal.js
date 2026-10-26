@@ -353,6 +353,32 @@ function taskRelHTML(t) {
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
 // list reloads behind it. A refused save shows its reason (under the properties) until that property next saves.
+// A finished task keeps no open subtask under it: with some open, the person picks whether they close with it or go on
+// as standalone tasks. Resolves 'close', 'detach', or null when they back out (nothing is saved).
+function taskChildrenChoice(t, outcome) {
+  const n = Number(t.children_summary?.open) || 0;
+  if (!n) return Promise.resolve('close');
+  const them = n === 1 ? 'it' : 'them';
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal task-children-choice';
+    dialog.setAttribute('aria-labelledby', 'task-children-h');
+    dialog.innerHTML = `<header><h2 id="task-children-h">${n} open subtask${n === 1 ? '' : 's'}</h2></header>
+      <p>A ${outcome === 'closed' ? 'closed' : 'finished'} task keeps no open subtasks. Close ${them} with this task, or keep ${them} going as standalone tasks?</p>
+      <div class="row"><button type="button" class="primary" data-children-pick="close">Close ${them} too</button>
+        <button type="button" class="ghost" data-children-pick="detach">Keep as standalone</button>
+        <button type="button" class="ghost" data-children-pick="">Cancel</button></div>`;
+    let picked = null;
+    dialog.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-children-pick]');
+      if (b) { picked = b.dataset.childrenPick || null; dialog.close(); }
+    });
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(picked); }, {once: true});
+    document.body.append(dialog);
+    dialog.showModal();
+    $('[data-children-pick="close"]', dialog)?.focus();
+  });
+}
 function taskSaveQueued(d, id, body, then, field) {
   field = field || d.focusProp || (typeof body === 'function' ? 'task' : Object.keys(body).find(k => k !== 'note')) || 'task';
   d.saving = (d.saving || 0) + 1;
@@ -370,6 +396,11 @@ async function taskSave(d, id, body, then, field) {
   let note = '';
   try {
     const outcome = body.close ? 'closed' : pipelineActionStatus(cur, body);
+    if ((outcome === 'done' || outcome === 'closed') && outcome !== cur.status && !body.children) {
+      const children = await taskChildrenChoice(cur, outcome);
+      if (!children) return false;
+      if (children === 'detach') body = {...body, children};
+    }
     if ((outcome === 'done' || outcome === 'closed') && outcome !== cur.status) {
       note = taskOutcomeNote(cur, outcome === 'closed' ? {close: true} : body, TASK_DRAFTS.get(String(id)));
       if (note) body = {...body, note};
@@ -464,6 +495,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   if (x.kind === 'event') {
     if (x.field === 'status' && x.old == null) return '';           // created: the header says so
     if (x.field === 'comment' && x.new) return '';                  // an edit: the comment itself says edited
+    if (x.field === 'closed_with') return '';                       // its close's note already says so
     // A step move already names where the task went; its status change would say it twice.
     if (x.field === 'status' && all?.some(y => y.kind === 'event' && y.field === 'step' && y.new && y.ts === x.ts)) return '';
     // A note saved with a status change or a comment is already shown there; a note on its own says what it is.

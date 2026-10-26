@@ -754,17 +754,6 @@ class WaitingWithDependency(HubCase):
         H.task_update(self.conn, CMO, sub['id'], status='waiting', note='Waiting on the snapshot')
         self.assertEqual(H.sweep_stranded(self.conn, at=later), [])
 
-    def test_a_bot_marks_its_task_done_with_subtasks_still_open(self):
-        parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
-        child = H.task_create(self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA,
-                              parent_id=parent['id'])
-        done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
-        self.assertEqual(done['status'], 'done')
-        self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
-        said = [e['new'] for e in H._rows(self.conn.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
-        self.assertEqual(said, ['Still open: Approve the final copy'])
-
     def test_invalid_dependency_is_refused(self):
         task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
         for blocker in ('missing-task', task['id']):
