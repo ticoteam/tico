@@ -155,11 +155,13 @@ def test_manager_reparent_preserves_ancestor_blocker_guard(api, manager, descend
         assert TR.parent_of(c, child['id']) == parent['id']
 
 
-def test_requester_manager_closes_reopens_owner_manager_bot_cannot_close(api, manager):
+def test_requester_manager_closes_reopens_owner_manager_cannot_close(api, manager):
     token, actor = manager
     owned = make(api)
-    if actor.startswith('bot:'):
-        post(api, 'tasks/' + owned['id'], {'version': owned['version'], 'close': True}, token=token, expected=403)
+    # The owner bot cannot close what a person asked for, so neither can its manager, bot or non-mover person.
+    post(api, 'tasks/' + owned['id'], {'version': owned['version'], 'close': True}, token=token, expected=403)
+    closed = change(api, owned, 'ana-test', close=True)
+    post(api, 'tasks/' + owned['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
     requested = make(api, requester='bot:ops', owner='bot:cmo')
     closed = change(api, requested, token, close=True)
     assert closed['status'] == 'closed' and closed['closed_by'] == actor

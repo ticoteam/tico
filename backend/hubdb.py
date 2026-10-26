@@ -5544,6 +5544,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         refuse(conn, actor, "close",
                f"{actor_id(closer)} closed this task, so it stays closed unless they reopen it; "
                "add anything new as a comment (hub task comment)")
+    if (row["status"] == "closed" and is_human(actor) and status is not None and status != "closed" and not mover
+            and not _task_close_party(conn, actor, row)):
+        refuse(conn, actor, "close", f"Only someone who may close this task reopens it: its requester "
+                                     f"({actor_id(row['requester'])}), a person who owns it, their managers, "
+                                     "or a person who moves tasks")
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
@@ -6090,13 +6095,34 @@ def _task_party(conn, actor, row):
     return task_ancestor_party(conn, actor, row)
 
 
+def _task_close_party(conn, actor, row):
+    """_task_party for closing and reopening. A bot that owns a task does not close what another asked for, so its
+    managers inherit no close from it: they close through the requester, or a person who is a party here or above."""
+    def closes(party, requester):
+        return task_represents(conn, actor, party) and (requester or is_human(party))
+    if closes(row["requester"], True) or closes(row["owner"], False):
+        return True
+    if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
+            (row["id"], actor, now())):
+        return True
+    if not task_private_readable(conn, actor, row):
+        return False
+    for parent_id in TR.ancestors(conn, row["id"]):
+        parent = task(conn, parent_id)
+        if not parent:
+            break
+        if closes(parent["owner"], False) or closes(parent["requester"], False):
+            return True
+    return False
+
+
 def _task_close_allowed(conn, actor, row, note, mover=None):
     _task_private_writer(conn, actor, row)
-    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. The person it
-    # waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
+    # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
+    # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
     # someone refused its status and note must not be able to end it.
     mover = task_mover(conn, actor, row, mover)
-    if is_human(actor) and not _task_party(conn, actor, row) and row.get("waiting_on") != actor:
+    if is_human(actor) and not _task_close_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
             refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
                                          f"({actor_id(row['requester'])}), its owner, the person it waits on, "

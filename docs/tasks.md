@@ -69,8 +69,8 @@ links, comment, ask questions, snooze and manage the owner's worktrees. A manage
 comment or question wakes the owner bot as a requester's does. History and comment
 authorship name the manager who acted.
 
-The two sides keep their distinct rights: an owner bot's manager can complete work;
-a requester bot's manager can close and reopen it. The existing rule protecting a
+The two sides keep their distinct rights: an owner bot's manager, bot or person, can
+complete work but not close or reopen it; a requester's manager can close and reopen it. The existing rule protecting a
 person's closure still applies. Managers gain no rights on unrelated private tasks;
 person-only private tasks stay with their parties and guest. Managers gain
 no right to edit or delete someone else's comments or decide a named approval, and
