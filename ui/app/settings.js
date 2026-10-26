@@ -504,6 +504,19 @@ const STOPPED_PICK = {
   unknown: {retry: false, what: () => 'before answering',
     say: () => 'Don’t retry unless you know it did nothing. Tico has no record of what it did.'},
 };
+// A decision on one stopped request, from the review card or a Needs you row (heartbeat.js): the same note to the bot
+// either way, and the same receipt line.
+const STOPPED_NOTE = {
+  resume: 'The human chose to retry this request. Check existing work and external effects before repeating any step.',
+  dismiss: 'The human chose not to retry this delivery. Inspect the task separately.',
+};
+const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
+  attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
+  acknowledge_uncertain_effects: true
+});
+const stoppedOutcome = (decision, deferred) => deferred
+  ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
+  : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
 // `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
@@ -538,14 +551,11 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
         <p data-result role="status" aria-live="polite"></p>
       </div>
     </form>`; }).join('') : '<p>No stopped runs remain.</p>';
-    const outcome = (decision, deferred) => deferred
-      ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
-      : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
     host.querySelectorAll('form').forEach(form => {
       const job = jobs.find(row => row.id === form.dataset.job);
       const result = form.querySelector('[data-result]'), buttons = form.querySelectorAll('button');
       if (job.pending_decision) {
-        result.textContent = outcome(job.pending_decision.decision, true);
+        result.textContent = stoppedOutcome(job.pending_decision.decision, true);
         buttons.forEach(button => button.disabled = true);
       }
       form.onsubmit = async event => {
@@ -556,17 +566,10 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
         result.classList.remove('err'); result.textContent = 'Saving choice…';
         result.scrollIntoView({block: 'nearest'});
         try {
-          const detail = form.elements.note.value.trim();
-          const note = decision === 'resume'
-            ? 'The human chose to retry this request. Check existing work and external effects before repeating any step.'
-            : 'The human chose not to retry this delivery. Inspect the task separately.';
-          const done = await post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
-            attempt_id: job.attempt_id, decision, note: detail ? `${note} Details: ${detail}` : note,
-            acknowledge_uncertain_effects: true
-          });
+          const done = await reconcileStopped(job, decision, form.elements.note.value.trim());
           form.dataset.resolved = 'true';
           form.querySelector('[data-details]').open = false;
-          result.textContent = outcome(decision, done.deferred);
+          result.textContent = stoppedOutcome(decision, done.deferred);
         } catch(error) {
           result.classList.add('err'); result.textContent = error.message;
           buttons.forEach(button => button.disabled = false);

@@ -483,7 +483,7 @@ def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
     under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read is left out."""
     fence = auth.task_sql(c, who)
-    for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+    for row in c.execute("SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
         if not (privacy.message_readable(c, privacy.actor(who), row)
                 and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
@@ -510,6 +510,65 @@ def held_runs(c, who, auth, bot, limit=3):
         if len(held) >= limit:
             break
     return held
+
+
+# Why a held run stopped, in the words of one Needs you row (stopped_rows). Only a person's Stop and a plain stop are
+# not `routine`: a restart, a usage limit, a busy AI service or a computer that stopped answering is the computer's or
+# the provider's, so the person is told it is not a bug (Chris, Oct 26).
+STOP_WHY = {"restart": "Computer restarted", "quota": "Usage limit", "capacity": "AI service busy",
+            "timeout": "Computer stopped answering", "stopped": "Stopped by a person", "partway": "Stopped partway"}
+ROUTINE_STOPS = frozenset({"restart", "quota", "capacity", "timeout"})
+
+
+def stop_cause(attempt):
+    """One STOP_WHY key for a held run's attempt, from what the run recorded, never from the bot's own text: a Billing
+    task's answer that says "quota" is not a usage limit."""
+    if not attempt:
+        return "partway"
+    if attempt["stop_requested"]:
+        return "stopped"
+    try:
+        result = json.loads(attempt["result_json"] or "{}")
+    except (TypeError, ValueError):
+        result = {}
+    result = result if isinstance(result, dict) else {}
+    source = result.get("limit_source") if isinstance(result.get("limit_source"), dict) else {}
+    if source.get("kind") == "capacity":
+        return "capacity"
+    if source or result.get("limited") or result.get("primary_limited"):
+        return "quota"
+    # A runner reports `interrupted` when its computer restarts or drains under a run; a lapsed lease is a computer
+    # that stopped reporting (asleep, offline or too busy).
+    return {"interrupted": "restart", "expired": "timeout"}.get(attempt["state"], "partway")
+
+
+def stopped_rows(c, who, auth, bot, limit=5):
+    """The bot's stopped runs that `who` may read, one row per run (a message folded into a run rides on its row),
+    oldest first, for Needs you: (rows, runs). A row has the task title (None for a chat or a task `who` may not
+    read), why it stopped, whether that is `routine`, whether Try again is the safe pick (`retry`, by the same rule as
+    the review card, retry_facts), when it stopped, and the jobs a decision settles. `runs` counts every readable run;
+    rows stop at `limit`."""
+    rows, by_run = [], {}
+    for row, task, _ in _readable_held(c, who, auth, bot):
+        key = row["attempt_id"] or row["id"]
+        job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        if key in by_run:
+            if by_run[key] is not None:
+                by_run[key]["jobs"].append({"id": job["id"], "attempt_id": job["attempt_id"]})
+            continue
+        if len(rows) >= limit:
+            by_run[key] = None
+            continue
+        attempt = c.execute("SELECT state,result_json,stop_requested,started,finished FROM attempts WHERE id=?",
+                            (row["attempt_id"],)).fetchone() if row["attempt_id"] else None
+        cause = stop_cause(attempt)
+        facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
+        by_run[key] = {"title": task["title"] if task else None, "cause": cause, "why": STOP_WHY[cause],
+                       "routine": cause in ROUTINE_STOPS, "retry": bool(facts["safe"] and facts["starts"] <= 1),
+                       "at": attempt["finished"] if attempt else None,
+                       "jobs": [{"id": job["id"], "attempt_id": job["attempt_id"]}]}
+        rows.append(by_run[key])
+    return rows, len(by_run)
 
 
 def isolation_refused(c, who, auth, bot):
