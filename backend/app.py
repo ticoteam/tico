@@ -84,17 +84,12 @@ STABLE_PATH = re.compile("|".join(re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(sp
 
 # The inbox sends at most this many messages and this many tasks; the rest wait for a later read.
 INBOX_LIMIT = 100
-
-
-def _newest_visible(items, visible):
-    """The newest `INBOX_LIMIT` of `items` (oldest first) that pass `visible`, checked newest first so a readable
-    backlog costs nothing, and whether one more item passes the same check: a hidden item never sets the flag."""
-    kept, more = _first_visible(items[::-1], visible)
-    return kept[::-1], more
+INBOX_PAGE = 500            # unread messages read per query while looking for the newest INBOX_LIMIT readable ones
 
 
 def _first_visible(items, visible):
-    """The first `INBOX_LIMIT` of `items` that pass `visible`, and whether one more item passes it too."""
+    """The first `INBOX_LIMIT` of `items` that pass `visible`, and whether one more item passes it too: a hidden item
+    never sets the flag. `items` may be a generator, read only as far as that."""
     kept = []
     for item in items:
         if visible(item):
@@ -4836,37 +4831,42 @@ def create_app(settings=None):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            result = H.inbox(c, who.actor)
-            # A bot's unread backlog is checked on every inbox read, newest first: a hundred messages are read together
-            # at a time rather than a few reads each. Each is still checked on its own, and each room once per request.
-            newest = result["messages"][::-1]
-            position = {m["id"]: i for i, m in enumerate(newest)}
+            privacy.snapshot(c)
             rooms = {}
 
-            def message_visible(message):
-                at = position.get(message["id"], 1)
-                if at % INBOX_LIMIT == 0:
-                    privacy.snapshot(c)
-                    privacy.prime_queued(c, H.prime_messages(c, [m["id"] for m in newest[at:at + INBOX_LIMIT]]).values())
-                if not privacy.message_readable(c, privacy.actor(who), message):
-                    return False
-                if who.role == "bot":
-                    if message["conversation_id"] not in rooms:
-                        try:
-                            auth.conversation(c, who, message["conversation_id"])
-                            rooms[message["conversation_id"]] = True
-                        except Problem:
-                            rooms[message["conversation_id"]] = False
-                    return rooms[message["conversation_id"]]
-                return True
+            def room_open(message):
+                """A bot reads a message only in a conversation it may read: checked once per room, before the message's
+                own privacy, so a backlog in rooms this turn was never handed costs a lookup each, not a provenance walk."""
+                if who.role != "bot":
+                    return True
+                if message["conversation_id"] not in rooms:
+                    try:
+                        auth.conversation(c, who, message["conversation_id"])
+                        rooms[message["conversation_id"]] = True
+                    except Problem:
+                        rooms[message["conversation_id"]] = False
+                return rooms[message["conversation_id"]]
+
+            def newest():
+                """The unread backlog newest first, a page at a time: each page's rooms read together, then its messages
+                in open rooms read together INBOX_LIMIT at a time, only as far as they are checked one by one."""
+                for page in H.inbox_pages(c, who.actor, size=INBOX_PAGE):
+                    if who.role == "bot":
+                        H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
+                    candidates = [m for m in page if room_open(m)]
+                    for at in range(0, len(candidates), INBOX_LIMIT):
+                        part = candidates[at:at + INBOX_LIMIT]
+                        privacy.prime_queued(c, H.prime_messages(c, [m["id"] for m in part]).values())
+                        yield from part
 
             # A bot that never marks messages read can hold thousands: the newest INBOX_LIMIT readable ones are
-            # checked and sent, oldest first as before, and `more_messages` says older ones are waiting.
-            result["messages"], result["more_messages"] = _newest_visible(result["messages"], message_visible)
-            result["tasks"], result["more_tasks"] = _first_visible(result.get("tasks", []),
+            # checked and sent, oldest first as before, and `more_messages` says older ones are waiting. Paging stops
+            # there, so the rest of the backlog is never read.
+            kept, more = _first_visible(newest(), lambda m: privacy.message_readable(c, privacy.actor(who), m))
+            result = {"actor": who.actor, "messages": H.mark_answered(c, kept[::-1]), "more_messages": more}
+            result["tasks"], result["more_tasks"] = _first_visible(H.tasks(c, owner=who.actor, status=H.ACTIVE_STATUSES),
                                                                    lambda t: privacy.task_readable(c, who, t))
-            result["approvals"] = [a for a in result.get("approvals", [])
-                                   if privacy.message_readable(c, privacy.actor(who), H.message(c, a["message_id"]))]
+            result["approvals"] = []
             result["notices"] = [m for m in result["messages"] if m["kind"] == "notice"]
             return result
 
