@@ -580,7 +580,18 @@ hub task update <task-id> --step "Blocked" --note "Waiting for a test machine"
 
 A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
 Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
-dependency on one of those checks holds it.
+dependency on one of those checks holds it. A Review or QA check that is itself Waiting, or blocked by
+an open task, holds its ticket Blocked with the check's reason ("QA blocked: GitHub refused the remote
+test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's room for that
+hold. When the check works again, the ticket returns to its step.
+
+A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
+for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
+status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
+the open ask, and the reply says so. Every task it blocks wakes when the ask is done. Unlinking it
+(`hub task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
+own ask. A different endpoint is a different blocker. Private tasks never join or are joined. When DevOps
+files the person ask for a blocker, its own open tasks for that blocker wait on it.
 The card and task show what it waits for and since when. When an automatic hold clears, the task
 returns to the step it left, without advancing through the refused gate. An owner-declared hold
 is cleared by moving back to a working step. The active Building clock pauses while blocked;

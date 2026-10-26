@@ -948,6 +948,9 @@ def parser():
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
     s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
     s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
+    s.add_argument("--blocker", nargs=3, metavar=("REPO", "STATUS", "ENDPOINT"),
+                   help="what refused, for a task to DevOps or a person: e.g. ticoteam/tico 403 workflow_dispatch. "
+                        "An open ask about the same three joins this task instead of a second ask")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")

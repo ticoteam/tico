@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -175,6 +175,13 @@ class TaskRelationRef(Contract):
     kind: RelationKind = "related"
 
 
+class TaskBlocker(Contract):
+    """What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."""
+    repo: str = Field(min_length=3, max_length=200)
+    status: StrictInt = Field(ge=100, le=599)
+    endpoint: str = Field(min_length=1, max_length=200)
+
+
 class TaskCreate(Contract):
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
@@ -193,6 +200,7 @@ class TaskCreate(Contract):
     change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
     qa: StrictBool | None = None
     qa_not_checkable_live: StrictBool = False
+    blocker: TaskBlocker | None = None
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).
