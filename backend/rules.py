@@ -86,6 +86,10 @@ FLOOR_EVENTS = {
     "needs_action": "a message its sender flagged needs-action",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
     "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
+    "incident_news": "news about a task marked as an incident wakes the bot at once",
+    "task_action": "a stale-check suggestion on a task it owns needs its action now",
+    "task_blocker": "a blocker or refused move on a task it owns or asked for needs action now",
+    "direct_review_request": "a review or sign-off asked of this bot needs action now",
 }
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
@@ -302,6 +306,8 @@ def _builtins():
         add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     add("ask", "ask", WAKE, FLOOR_EVENTS["ask"], "always", True)
     add("answer", "answer", WAKE, FLOOR_EVENTS["answer"], "always", True)
+    for event in ("incident_news", "task_action", "task_blocker", "direct_review_request"):
+        add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     for key, (event, words) in AWAITED_EVENTS.items():
         add("awaited_" + key, event, WAKE, words, "awaited")
     add("own_write", "status_or_relation", IGNORE, "the bot's own write caused it", "filter")
@@ -547,6 +553,36 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
     return None
 
 
+def incident_task(conn, task):
+    """The persisted marker, never a title match when judging news."""
+    if not task:
+        return False
+    if "incident" in H.task_labels(task):
+        return True
+    task_type = conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
+    return bool(task_type and task_type[0].strip().lower() in ("incident", "incidents"))
+
+
+def urgent_rule(conn, actor, target, refs, conv, event):
+    """Structured task news that must bypass any batching profile or row. Own writes stay quiet."""
+    from . import wake_rules
+    if wake_rules.CAUSE.get() == target or actor == target:
+        return None
+    ctx = _Context(conn, actor, target, refs, conv, None)
+    task = ctx.task
+    if task:
+        if incident_task(conn, task):
+            return "incident_news"
+        party = target in (task.get("owner"), task.get("requester"))
+        if refs.get("stale_check") and target == task.get("owner"):
+            return "task_action"
+        if party and (event in ("blocker", "task_blocked") or refs.get("review_gate")):
+            return "task_blocker"
+    if event in ("review_request", "review_handback"):
+        return "direct_review_request"
+    return None
+
+
 # ----------------------------------------------------------------------------- the decision
 def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
     """The decision for a message about to be written to `target`, or None when `target` is not a bot. Fail open.
@@ -580,6 +616,9 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     if floor:
         return Decision(WAKE, floor_rule(floor, kind))
     event = event_of(actor, kind, refs, body)
+    urgent = urgent_rule(conn, actor, target, refs, conv, event)
+    if urgent:
+        return Decision(WAKE, urgent)
     row = _table_decision(conn, event, actor, target, refs, conv)
     if row:
         return row
@@ -629,6 +668,10 @@ def stamp(refs, decision):
     """The message's refs with the rule that decided it. A row's `batch` stamps the hold the jobs trigger reads
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
+    out.pop("wake_immediate", None)
+    if decision.outcome == WAKE and decision.rule in FLOOR_EVENTS:
+        out.pop("wake_batch", None)
+        out["wake_immediate"] = True
     if decision.outcome == BATCH and not out.get("wake_batch"):
         out["wake_batch"] = "rule"
     if decision.outcome != BATCH and decision.rule not in BUILTIN_IDS and out.get("wake_batch") in BATCH_EVENTS:
@@ -1142,11 +1185,12 @@ def seed_dev(conn):
 
 def step_entered(conn, actor, row, *, skip=()):
     """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
-    else hears nothing. Only rows that name `step_entered` start this, so a team without them writes no message on a
-    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
+    else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
+    Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
     Callers can skip recipients already notified by the event that moved the task."""
     try:
-        if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
+        incident = incident_task(conn, row)
+        if not incident and not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
             return
         step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
         flow = _release_flow()
@@ -1156,7 +1200,8 @@ def step_entered(conn, actor, row, *, skip=()):
         conv = H.conversation(conn, row.get("conversation_id"))
         for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
-            if _table_decision(conn, "step_entered", actor, target, refs, conv, row):
+            if (incident and target in (row.get("owner"), row.get("requester"))) or \
+                    _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
                         {"news": "step_entered"})
     except Exception:  # noqa: BLE001 - a step move never fails for the news about it

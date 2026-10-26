@@ -5238,6 +5238,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
+        labels.insert(0, "incident")
     if qa is False:
         labels = [key for key in labels if key != "qa"]
     author_qa = qa if qa is not None else True if "qa" in labels else None
