@@ -251,7 +251,7 @@ class TaskUpdate(Contract):
 
 
 class TaskStepInput(Contract):
-    public_name: str | None = Field(default=None, min_length=1, max_length=200)
+    public_name: str | None = Field(default=None, max_length=200)      # "" keeps the step off public pages
     id: ID | None = None
     name: ID
     position: int | None = None

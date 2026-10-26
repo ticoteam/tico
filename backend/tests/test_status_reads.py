@@ -46,3 +46,151 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     # One read a table for every bot: idle bots added to the page add no statements, where each added several.
     fewer = [s for s in slugs if s not in ("inbox", "product-design")]
     assert lines(api, fewer, primed=True)[1] == primed < lines(api, fewer, primed=False)[1] < plain
+
+
+def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch):
+    # A crashed bot offers its newest held run for review; with a stop on record, only that run's own held job.
+    # The clock is fixed, so jobs share a created time: the last one written is the newest, read one by one or together.
+    # coo and finance repeat ops's and cpo's shapes, so the page's held runs add no statements per bot.
+    from backend.store import encode
+    machine = setup(api, monkeypatch, tasks=9)
+    first = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        jobs = [row[0] for row in c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY rowid")]
+        for job, bot, created, run, state, started in (
+                (jobs[0], "ops", "2026-10-24T11:00:00.000000Z", "old", "failed", True),
+                (jobs[1], "ops", H.now(), "tie-first", "failed", True),
+                (jobs[2], "ops", H.now(), "tie-last", "expired", False),
+                (jobs[3], "cpo", "2026-10-24T11:00:00.000000Z", "marked", "expired", True),
+                (jobs[4], "cpo", H.now(), "newer", "failed", True),
+                (jobs[5], "coo", "2026-10-24T11:00:00.000000Z", "coo-old", "failed", True),
+                (jobs[6], "coo", H.now(), "coo-new", "expired", False),
+                (jobs[7], "finance", "2026-10-24T11:00:00.000000Z", "finance-marked", "expired", True),
+                (jobs[8], "finance", H.now(), "finance-newer", "failed", True)):
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
+                      "started,finished) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
+                      (run, job, bot, "hash-" + run, state, created, created if started else None, H.now(), first["id"]))
+            c.execute("UPDATE jobs SET bot=?,state='uncertain',created=?,attempt_id=? WHERE id=?", (bot, created, run, job))
+        c.execute("UPDATE attempts SET state='expired' WHERE id=?", (first["id"],))
+        c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
+        for slug, run in (("cpo", "marked"), ("finance", "finance-marked")):
+            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+                      ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})))
+        for slug in ("ops", "cpo", "coo", "finance"):
+            H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
+    each = lines(api, ["coo", "cpo", "finance", "ops"], primed=False)[0]
+    together, primed = lines(api, ["coo", "cpo", "finance", "ops"], primed=True)
+    assert together == each and lines(api, ["cpo", "ops"], primed=True)[1] == primed
+    assert (each["coo"]["last_stop"]["attempt_id"], each["finance"]["last_stop"]["attempt_id"]) == (
+        "coo-new", "finance-marked")
+    ops, cpo = each["ops"]["last_stop"], each["cpo"]["last_stop"]
+    assert (ops["attempt_id"], ops["kind"], ops["action"]) == ("tie-last", "never_started", "review")
+    assert ops["reason"].startswith("Its computer refused the run before it started.")
+    assert (cpo["attempt_id"], cpo["kind"], cpo["action"]) == ("marked", "stopped", "review")
+    assert "lease ran out" in cpo["reason"]
+
+
+def busy(api, machine, first, count, live=1):
+    """`count` more active bots on the test computer, each with open tasks, two questions to a person, a task for a
+    person, private tasks and a stopped run on record; the first `live` of them running, every third one crashed."""
+    from backend.store import encode
+    from backend.tests.test_api import assign
+    store = api.app.state.store
+    slugs = [f"busy-{n}" for n in range(first, first + count)]
+    with store.transaction() as c:
+        bots = {row["slug"]: {"name": row["slug"], "runtime": "fake", "status": row["state"]}
+                for row in c.execute("SELECT slug,state FROM bots")}
+        H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
+                        {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
+        for slug in slugs:
+            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)",
+                      (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
+    for slug in slugs:
+        assign(api, machine, slug)
+    with store.transaction() as c:
+        for n, slug in enumerate(slugs):
+            first_task = None
+            for k in range(4):
+                task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
+                first_task = first_task or task["id"]
+                if k in (1, 2):
+                    H.task_ask(c, "bot:" + slug, task["id"], "Which one?")
+            H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
+            H.status_set(c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working",
+                         task_id=first_task)
+    ready(api, machine, ["ops", "doc-updater", *slugs])
+    with store.transaction() as c:
+        c.execute("UPDATE runners SET capacity=100")
+    for slug in slugs[:live]:
+        attempt = claim(api, machine, slug)
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + slug}, machine["token"])
+    with store.transaction() as c:
+        runs = [row[0] for row in c.execute("SELECT id FROM attempts ORDER BY created")]
+        for n, slug in enumerate(slugs[live:]):
+            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+                      ("last-stop:" + slug, encode({"attempt_id": runs[n % len(runs)], "at": H.now()})))
+
+
+def page(api, monkeypatch, path, token="ana-test"):
+    """One status page as `token` sees it, without its clock fields, and the statements it took."""
+    import contextlib
+    from backend.tests.test_api import headers
+    store, seen = api.app.state.store, []
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(seen.append)
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+                return borrowed()
+            patched.setattr(store, name, traced)
+        response = api.get(path, headers=headers(token))
+    assert response.status_code == 200, response.text
+    body = {k: v for k, v in response.json().items() if k not in ("server_time", "tick_age_s", "last_tick")}
+    return body, len(seen)
+
+
+def unprimed(monkeypatch):
+    """The pages as they read before priming: every bot's rows and every question's message one at a time."""
+    from backend import events, views
+    for module, name in ((views, "prime_machines"), (privacy, "prime_messages"), (events, "prime_status_lines")):
+        monkeypatch.setattr(module, name, lambda *args: None)
+
+
+PAGES = ("/api/status", "/api/v2/status")
+
+
+def test_both_status_pages_read_a_fixed_number_of_statements_however_many_bots_and_jobs(api, monkeypatch):
+    # Dev 509: on a team of about sixty bots these pages took 353 and 700 statements, 3.5-4 s each.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 6)
+    small = {path: page(api, monkeypatch, path)[1] for path in PAGES}
+    busy(api, machine, 6, 6)
+    big = {path: page(api, monkeypatch, path) for path in PAGES}
+    assert {path: count for path, (_, count) in big.items()} == small
+    assert len(big["/api/v2/status"][0]["bots"]) >= 12 and len(big["/api/status"][0]["queued"]) >= 48
+    # Control: without the priming each added bot adds statements again, so the counts above do measure it.
+    unprimed(monkeypatch)
+    plain = {path: page(api, monkeypatch, path)[1] for path in PAGES}
+    assert all(plain[path] > small[path] + 12 for path in PAGES)
+
+
+def test_primed_status_pages_show_each_person_exactly_what_they_showed_before(api, monkeypatch):
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 6, live=2)
+    # Ana owns the company; Ben is not on the private tasks, the bots' asks to Ana, or the Inbox bot.
+    for token in ("ana-test", "ben-test"):
+        primed = {path: page(api, monkeypatch, path, token)[0] for path in PAGES}
+        with monkeypatch.context() as patched:
+            unprimed(patched)
+            plain = {path: page(api, monkeypatch, path, token)[0] for path in PAGES}
+        assert primed == plain
+        lines = {line["bot"]: line for line in primed["/api/v2/status"]["bots"]}
+        assert lines["busy-0"]["state"] == "running" and lines["busy-2"]["last_stop"]
+        assert any(line["needs_human"] for line in lines.values())
+    assert "inbox" not in {line["bot"] for line in page(api, monkeypatch, "/api/v2/status", "ben-test")[0]["bots"]}

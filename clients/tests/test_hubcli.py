@@ -666,3 +666,62 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert hubcli.rename_argv(["notice", "--help"]) == (["notice", "--help"], None)
     argv, said = hubcli.rename_argv(["notice", "Deploy done"])
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
+
+
+class _Recorder:
+    """A client for `remotecli.run` that records each write and whether it asked to act as the requester."""
+    calls = []
+
+    def __init__(self, *args, **kw):
+        self.__dict__["_tico_is_botops"] = True
+
+    def get(self, path, **query):
+        return {"actor": "bot:botops", "kind": "botops", "jobs": [{"key": "stall_triage", "on": True}]}
+
+    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+        if method != "GET":
+            _Recorder.calls.append((method, path, body, bool(delegate)))
+        return {k: {} for k in ("trigger", "recover", "relay", "replay", "job", "type")}
+
+    def post(self, path, body=None, key=None):
+        return self.call("POST", path, body, key)
+
+    def patch(self, path, body=None, key=None):
+        return self.call("PATCH", path, body, key)
+
+
+def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
+    """Each of these changes a setting the route checks against a person (an owner, an admin, a mover, whoever manages
+    the trigger): BotOps sends them as its requester, never with its own rights."""
+    from clients import remotecli
+    monkeypatch.setattr(remotecli, "Client", _Recorder)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    commands = [
+        ["task", "type", "create", "--name", "Ops", "--default-visibility", "private"],
+        ["task", "type", "update", "ops", "--default-visibility", "public"],
+        ["task", "type", "delete", "ops"],
+        ["task", "types", "--name", "Legacy"],
+        ["release", "schedule", "--off"], ["release", "now", "--note", "hotfix"],
+        ["task-manager", "on"], ["task-manager", "schedule", "daily", "--at", "09:00"], ["task-manager", "run"],
+        ["task-manager", "bot", "off"], ["stall-triage", "--off"],
+        ["team", "budget", "--hour", "5"],
+        ["trigger", "create", "Orders"], ["trigger", "update", "orders", "--name", "Shop"], ["trigger", "rotate", "orders"],
+        ["trigger", "sign", "orders", "--off"], ["trigger", "recover", "orders"], ["trigger", "replay", "orders", "d1"],
+        ["trigger", "delete", "orders"],
+        ["trigger", "relay", "create", "orders"], ["trigger", "relay", "rotate", "orders"],
+        ["trigger", "relay", "delete", "orders"], ["relay", "set", "orders", "--wake", "on"],
+        ["tag", "create", "launch", "--label", "Launch"],
+    ]
+    for words in commands:
+        _Recorder.calls = []
+        remotecli.run(hubcli.parser().parse_args(words))
+        assert _Recorder.calls and all(delegated for *_, delegated in _Recorder.calls), (words, _Recorder.calls)
+        if "--default-visibility" in words:
+            assert _Recorder.calls[0][2]["default_visibility"] == words[-1]
+
+
+def test_a_plain_webhook_header_sends_no_secret_key():
+    """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
+    from clients import hubtools
+    fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
+    assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
