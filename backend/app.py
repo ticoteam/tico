@@ -1082,8 +1082,13 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
-        for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
+        hold_kind = value.pop("blocked_kind", None)
+        for field in ("blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
+        # A review-gate or worktree hold says its own why, so the screen never folds it into a bot wait's line
+        # (ui/app/tasks.js taskBotWait); other kinds stay server-only.
+        if hold_kind in ("gate", "worktree"):
+            value["blocked_kind"] = hold_kind
         # Most list rows have no hold or accumulated clock; omit empty optional fields.
         for field in ("blocked_since", "blocked_reason", "building_started_at", "building_seconds"):
             if not value.get(field):

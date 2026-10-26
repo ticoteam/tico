@@ -65,6 +65,8 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     assert current['step']['name'] == 'Blocked'
     assert current['status'] == 'waiting'
     assert 'receipt' in current['blocked_reason']
+    # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.js taskBotWait).
+    assert current['blocked_kind'] == 'gate'
     assert current['version'] > task['version']
     with api.app.state.store.transaction() as c:
         from backend import task_blocked
@@ -185,6 +187,7 @@ def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, ki
         after = H.task(c, task['id'])
         assert (after['status'], after['note'], after['blocked_kind'], after['blocked_since']) == (
             'waiting', held['note'], kind, held['blocked_since'])
+    assert get(api, 'tasks/' + task['id'])['task']['blocked_kind'] == kind
 
 
 def test_review_fix_steps_accrue_active_building_time(api, monkeypatch):

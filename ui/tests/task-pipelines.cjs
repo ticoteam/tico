@@ -227,7 +227,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
     // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold says its own why.
-    Object.assign(brief, {blocked_since: '2026-10-02T10:00:00Z', blocked_kind: 'dependency', blocked_reason: 'Needs the launch plan reviewed first.'});
+    Object.assign(brief, {blocked_since: '2026-10-02T10:00:00Z', blocked_reason: 'Needs the launch plan reviewed first.'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => /· since/.test(document.querySelector('#task-body [data-board-blocked="tbrief"]')?.title || ''));
     assert.equal(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').count(), 1);
