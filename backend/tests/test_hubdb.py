@@ -264,6 +264,7 @@ class Rule5Tasks(HubCase):
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
         self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
                           (json.dumps({"bot_contact": "tasks"}),))
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)

@@ -112,4 +112,4 @@ def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cau
     if failure in ('timeout', 'transport'):
         assert 'HTTP' not in error['detail']
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and current['version'] == task['version']
+    assert current['step']['name'] == 'Blocked' and current['version'] > task['version']

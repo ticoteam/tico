@@ -743,7 +743,9 @@ def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
     # A working status still changes without a step: the bot's ask sets it waiting.
     assert post(api, path + '/ask', {'text': 'Which page?'}, token=ops)
     assert get(api, path)['task']['status'] == 'waiting'
-    assert get(api, path)['task']['step']['name'] == 'On Deck', 'waiting is not a step: the ticket keeps its own'
+    assert get(api, path)['task']['step']['name'] == 'Blocked'
+    with api.app.state.store.read() as c:
+        assert H.task(c, ticket['id'])['blocked_from_step'] == ticket['step_id']
     # A bot refused Done on more tickets than the quarantine limit is not quarantined: each names its ticket.
     for n in range(H.QUARANTINE_AT + 1):
         other = post(api, 'tasks', {'owner': 'ops', 'title': f'Fix page {n}', 'body': 'Please.', 'type': typ['id']})

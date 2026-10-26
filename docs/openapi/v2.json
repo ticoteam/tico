@@ -16828,7 +16828,7 @@
         ]
       },
       "post": {
-        "summary": "Change a task; send the version you read (409 version_conflict otherwise)",
+        "summary": "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations",
         "operationId": "updateTask",
         "parameters": [
           {
@@ -22684,6 +22684,10 @@
           },
           "message_id": {
             "type": "string"
+          },
+          "shown_once": {
+            "type": "object",
+            "description": "Confirm only, on a card that makes a one-time value (a new computer's code): {code, expires, operator}, in this answer alone and never stored on the card"
           }
         },
         "required": [
@@ -36360,7 +36364,8 @@
                   "review",
                   "ready",
                   "done",
-                  "declined"
+                  "declined",
+                  "closed"
                 ]
               },
               {

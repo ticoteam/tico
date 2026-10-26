@@ -32,6 +32,7 @@ pub const SCHEMA: &str = "
       thread TEXT PRIMARY KEY, message TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS session_repo_rules(
       thread TEXT PRIMARY KEY, digest TEXT NOT NULL);
+    -- No longer written (sessions are never rotated by size); kept so an older runner on this file still finds it.
     CREATE TABLE IF NOT EXISTS session_sizes(
       thread TEXT PRIMARY KEY, turns INTEGER NOT NULL, last_input INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS import_cursors(
@@ -269,9 +270,8 @@ impl State {
             c.execute(
                 "DELETE FROM sessions WHERE bot=? AND conversation=? AND runtime=? AND thread=?",
                 params![bot, conversation, runtime, thread],
-            )?;
-            // Its size is only read to decide whether to resume it (crate::rotate).
-            c.execute("DELETE FROM session_sizes WHERE thread=?", params![thread]).map(|_| ())
+            )
+            .map(|_| ())
         })
     }
 
@@ -311,23 +311,6 @@ impl State {
             }
             c.query_row("SELECT message FROM session_cursors WHERE thread=?", params![thread], |r| r.get(0)).optional()
         })
-    }
-
-    /// A turn on a saved thread: its turns so far and the input tokens of the newest (crate::rotate), from which the
-    /// next turn decides whether to resume it or start a fresh one.
-    pub fn note_turn(&self, thread: &str, input: i64) -> Result<(), String> {
-        self.with(|c| {
-            c.execute(
-                "INSERT INTO session_sizes VALUES(?,1,?) ON CONFLICT(thread) DO UPDATE SET turns=turns+1, last_input=excluded.last_input",
-                params![thread, input.max(0)],
-            )
-            .map(|_| ())
-        })
-    }
-
-    /// (turns, input tokens of the newest turn) of a saved thread, None for one no turn here has measured.
-    pub fn session_size(&self, thread: &str) -> Result<Option<(i64, i64)>, String> {
-        self.with(|c| c.query_row("SELECT turns, last_input FROM session_sizes WHERE thread=?", params![thread], |r| Ok((r.get(0)?, r.get(1)?))).optional())
     }
 
     /// What a thread was last given under `thread` in session_repo_rules (state.py repo_rules): the repo-rules
@@ -380,6 +363,21 @@ mod tests {
         assert!(!state.epoch_moved("cfo", "", "bot", 0).unwrap());
         assert!(state.epoch_moved("ops", "", "bot", 2).unwrap());
         assert_eq!(state.session("cfo", "bot", "claude").unwrap().as_deref(), Some("f-old"));
+    }
+
+    #[test]
+    fn a_state_file_from_a_runner_that_counted_session_sizes_still_opens_and_keeps_its_sessions() {
+        let dir = temp();
+        let state = State::open(&dir).unwrap();
+        state.save_session("ops", "bot", "claude", "t-old").unwrap();
+        drop(state);
+        let db = rusqlite::Connection::open(dir.join("runner.sqlite")).unwrap();
+        db.execute("INSERT INTO session_sizes(thread, turns, last_input) VALUES ('t-old', 3, 612000)", []).unwrap();
+        drop(db);
+        let state = State::open(&dir).unwrap();
+        assert_eq!(state.session("ops", "bot", "claude").unwrap().as_deref(), Some("t-old"));
+        state.forget_session("ops", "bot", "claude", "t-old").unwrap();
+        assert_eq!(state.session("ops", "bot", "claude").unwrap(), None);
     }
 
     #[test]

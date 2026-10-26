@@ -318,6 +318,11 @@ def test_removed_manager_receipt_does_not_count(api, removal):
 def test_manager_receipt_in_private_child_still_requires_mover_visibility(api):
     task = ticket(api, private=False)
     with api.app.state.store.transaction() as c:
+        # Ana heads every bot that reports to no one, so cmo reports to another root person she does not manage.
+        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster['people'].append({'id': 'zed', 'email': 'zed@acme.example'})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cmo'")
         c.execute("UPDATE bot_config SET reports_to='cmo' WHERE bot='cpo'")
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
         c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=? WHERE id=?",

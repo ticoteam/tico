@@ -15,6 +15,8 @@ which creates the seat first:
    repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
    BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot.
 """
+from dataclasses import replace
+
 from . import ceo_bot
 from . import hubdb as H
 from . import lifecycle
@@ -192,7 +194,9 @@ def candidates(auth, onboarding, c, who, seat_id):
     recommended, each with a one-line reason and a suggested model. Deterministic and local: the same seat gives the same
     list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
-    _may_hire(auth, c, who, row)
+    # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
+    # their own tap on a card (botops_act.CONFIRM).
+    _may_hire(auth, c, replace(who, confirmed=True) if who.via == "botops" else who, row)
     value, cards = _recruitable(onboarding)
     departments = {d["id"]: d["name"] for d in value["departments"]}
     title = [(stem, word) for stem, word in R._words(row["title"])]

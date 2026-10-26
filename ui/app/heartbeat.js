@@ -140,13 +140,60 @@ function bindRunnerRestart(root) {
     };
   });
 }
+// A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
+// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule (Chris, Oct 26).
+// Details opens that card (settings.js executionReview) with the evidence.
+function stoppedLines(issue, list) {
+  if (!issue.runs?.length) return '';
+  const button = (i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}">${label}</button>`;
+  // When every run stopped the same routine way the card's own line already says it is not a bug.
+  const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
+  const line = (run, i) => `<li class="stopped-line" data-run-row="${i}">
+    <span class="stopped-name" title="${esc(run.title || '')}">${esc(run.title || 'A request you can’t open')}</span>
+    <span class="stopped-why">${esc(run.why)}${run.routine && !shared ? ' · not a bug' : ''}</span>
+    ${issue.can_review ? `<div class="stopped-picks">${run.retry ? button(i, 'resume', 'Try again', true) + button(i, 'dismiss', 'Don’t retry')
+      : button(i, 'dismiss', 'Don’t retry', true) + button(i, 'resume', 'Try again')}</div>` : ''}
+    <p class="stopped-result" data-result role="status" aria-live="polite"></p></li>`;
+  list.push(issue);
+  const risky = issue.can_review && issue.runs.some(run => !run.retry);
+  return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
+    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
+    ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;
+}
+function bindStoppedLines(panel, list) {
+  panel.querySelectorAll('[data-runs]').forEach(ul => {
+    const issue = list[+ul.dataset.runs];
+    ul.querySelectorAll('[data-run-row]').forEach(li => {
+      const run = issue.runs[+li.dataset.runRow], buttons = li.querySelectorAll('button'), result = li.querySelector('[data-result]');
+      buttons.forEach(button => button.onclick = async () => {
+        const decision = button.dataset.runDecision;
+        buttons.forEach(b => b.disabled = true);
+        result.classList.remove('err'); result.textContent = 'Saving choice…';
+        try {
+          // A message folded into the run rides on it: one choice settles them all.
+          let deferred = false;
+          for (const job of run.jobs) deferred = (await reconcileStopped(job, decision)).deferred || deferred;
+          li.dataset.decided = decision;
+          result.textContent = stoppedOutcome(decision, deferred);
+        } catch (e) {
+          result.classList.add('err'); result.textContent = e.message;
+          buttons.forEach(b => b.disabled = false);
+          return;
+        }
+        if (!ul.querySelector('[data-run-row]:not([data-decided])')) void refresh(false);
+      });
+    });
+  });
+}
 function needsYou() {
   document.querySelector('.needs-you')?.remove();
   const issues = (S.status?.health_issues || []).filter(needsPerson);
   const panel = document.createElement('section'); panel.className = 'needs-you';
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
-  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div><strong>${esc(issue.title)}</strong><p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p class="muted">${esc(issue.action)}</p>` : ''}</div>
-    ${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">Review now</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div>`;
+  const stopped = [];
+  // The text and its lines take the full width; the actions sit under them, each as wide as its words.
+  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div><strong>${esc(issue.title)}</strong><p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p class="muted">${esc(issue.action)}</p>` : ''}${stoppedLines(issue, stopped)}</div>
+    <div class="issue-buttons">${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">${issue.runs?.length ? 'Details' : 'Review now'}</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div></div>`;
   panel.innerHTML = `<header><h2>${issues.length === 1 ? 'One thing needs you' : `${issues.length} things need you`}</h2><button class="ghost" data-close aria-label="Close">Close</button></header>
     <div data-list>${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
     <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
@@ -158,6 +205,7 @@ function needsYou() {
   });
   panel.querySelectorAll('a[href]').forEach(a => a.addEventListener('click', close));
   bindRunnerRestart(panel);
+  bindStoppedLines(panel, stopped);
   document.body.appendChild(panel);
   return panel;
 }

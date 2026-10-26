@@ -25,7 +25,8 @@ def review(c, row, *, parent_id=None):
     parent = H.task(c, parent) if parent else None
     if not parent or parent['owner'] == row['owner']:
         return False
-    step = c.execute('SELECT name FROM task_steps WHERE id=?', (parent.get('step_id'),)).fetchone()
+    step = c.execute('SELECT name FROM task_steps WHERE id=?',
+                     (parent.get('blocked_from_step') if parent.get('blocked_since') else parent.get('step_id'),)).fetchone()
     return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
 
 
@@ -99,6 +100,8 @@ def refusal(c, row, config, woken=False):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
     that, while waits, the off switch and the task cap still do."""
+    if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate" or waiting(c, row, starting=True)):
+        return "task_wait"
     if not startable(c, row):
         return None
     if waiting(c, row, starting=True, include_next_run=False):

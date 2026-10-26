@@ -21,17 +21,17 @@ def comment_rights(c, auth, who, task_id):
     row = auth.task(c, who, task_id)
     from . import lifecycle
     lifecycle.refuse_send(c, who, None, what="task comments")
-    if who.role == "bot" and who.actor not in (row["owner"], row["requester"]):
+    if who.role == "bot" and not H.task_participant(c, who.actor, row):
         delegated = c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                               (task_id, who.actor, H.now())).fetchone()
         if not delegated and not H.task_ancestor_party(c, who.actor, row) and not H.type_bot_reads(c, who.actor, row) \
                 and not H.task_manager_acts(c, who.actor, row):
-            raise Problem("forbidden", "Reading a task does not grant permission to comment", 403)
+            raise Problem("forbidden", "Only task parties, their managers, delegates, ancestor parties or bots allowed by the task type may comment", 403)
     origin = None if H.task_private(c, row) else H.task_origin(c, row)
     others = [a for a in dict.fromkeys([row["owner"], row["requester"], origin])
               if a and a not in (who.actor, H.KEEPER)]
     target = next((a for a in others if H.is_bot(a)), None)
-    if target and who.actor != row["owner"]:
+    if target and not H.task_represents(c, who.actor, row["owner"]):
         auth.require_write(c, who, H.actor_id(target))
     if target:
         auth.require_bot_contact(c, who, target, task_id=task_id, kind="comment")

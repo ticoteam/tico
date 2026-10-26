@@ -219,7 +219,7 @@ STABLE = [
     ("/api/v2/tasks/labels", "get", "Tasks", "listTaskLabels", "Labels in use (ETag: If-None-Match answers 304 when unchanged)", None),
     ("/api/v2/tasks/{tid}", "get", "Tasks", "getTask", "A task with its history, comments and messages", "TaskDetail"),
     ("/api/v2/tasks/{tid}", "post", "Tasks", "updateTask",
-     "Change a task; send the version you read (409 version_conflict otherwise)", "TaskResult"),
+     "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations", "TaskResult"),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     ("/api/v2/tasks/{tid}/files", "post", "Tasks", "attachTaskFile", "Attach a file; the same name adds a version", "TaskFileResult"),
     ("/api/v2/tasks/{tid}/comments", "get", "Tasks", "listTaskComments", "Comments and questions with their answers", "TaskComments"),
@@ -1023,7 +1023,10 @@ SCHEMAS = {
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
-                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s"},
+                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s",
+                                  "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
+                                                 "one-time value (a new computer's code): {code, expires, operator}, "
+                                                 "in this answer alone and never stored on the card"}},
                                  required=["action"]),
     # Goals and KPIs
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
