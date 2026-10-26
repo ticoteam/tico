@@ -56,7 +56,7 @@ async function offlineRetry(browser) {
   const box=page.locator('#chat-composer textarea');
   await box.fill('Hello offline');
   await page.locator('#chat-composer').getByRole('button',{name:'Send',exact:true}).click();
-  await page.getByText('No connection. Your message will send by itself',{exact:false}).waitFor();
+  await page.getByText('Offline or connection lost. Your message will send by itself',{exact:false}).waitFor();
   assert.equal(sends.length,3,'three quick tries, then it waits');
   assert.equal(await box.inputValue(),'Hello offline','the message stays in the box');
   offline=false;

@@ -42,9 +42,16 @@ ARCHIVED_WINDOW = 3600
 PAIRABLE = ("hermes", "openclaw")
 
 
+# One bot's config and agent record, read through read_cache so a page that primes them for every bot
+# (views.prime_machines) reads neither again per bot.
+CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+ROW_SQL = "SELECT * FROM agents WHERE bot=?"
+
+
 def external_harness(c, bot):
     """The bot's harness id when it is external, else None."""
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    from .read_cache import one
+    row = one(c, CONFIG_SQL, (bot,))
     if not row:
         return None
     config = H._json(row["config_json"], {}) or {}
@@ -52,7 +59,8 @@ def external_harness(c, bot):
 
 
 def row(c, bot):
-    return c.execute("SELECT * FROM agents WHERE bot=?", (bot,)).fetchone()
+    from .read_cache import one
+    return one(c, ROW_SQL, (bot,))
 
 
 def presence(c, bot, harness=None, now=None):
@@ -63,7 +71,8 @@ def presence(c, bot, harness=None, now=None):
         return None
     from . import external_sync
     if harness in external_sync.HARNESSES:
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        from .read_cache import one
+        config = one(c, CONFIG_SQL, (bot,))
         return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
