@@ -234,7 +234,7 @@ class TaskUpdate(Contract):
     close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
-    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on; "" clears
+    waiting_on: str | None = Field(default=None, max_length=200)    # the person it waits on, or a bot owning its blocker; "" clears
     rank: float | None = None
     type: ID | None = None
     step: str | None = Field(default=None, max_length=200)   # "" clears the step

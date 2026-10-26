@@ -43,7 +43,11 @@ function taskBlockedStrip(it) {
   const open = taskOpenBlockers(it.task); if (!open.length) return '';
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');
-  return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}" title="${esc(`Blocked by ${all}`)}"><span>Blocked by ${esc(name)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
+  // A bot's prerequisite work names the bot; the reason and what blocks it are the tooltip.
+  const bot = taskBotWait(it.task);
+  const label = bot ? `Waiting on ${clipLine(bot.name, 48)}` : `Blocked by ${name}`;
+  const tip = bot ? `${taskWaitLine(it.task)}\nBlocked by ${all}` : `Blocked by ${all}`;
+  return `<button type="button" class="bcard-blocked" data-board-blocked="${esc(it.key)}"${bot ? ' data-board-waits-bot' : ''} title="${esc(tip)}"><span>${esc(label)}</span>${open.length > 1 ? `<span class="tnum">+${open.length - 1}</span>` : ''}</button>`;
 }
 function taskBoardFocused(items, state) {
   const focus = state.boardFocus;

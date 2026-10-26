@@ -213,6 +213,22 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-body [data-board-unfocus]').waitFor();
     await page.keyboard.press('x');
     await page.waitForFunction(() => document.querySelectorAll('#task-body .bcard').length === 4 && !document.querySelector('[data-board-unfocus]'));
+    // Waiting on a bot's prerequisite (`--on bot:ops`): the strip and the task name the bot, with the owner's reason.
+    const brief = tasks.find(task => task.id === 'brief');
+    Object.assign(brief, {status: 'waiting', note: 'Needs the launch plan reviewed first.'});
+    await page.evaluate(() => tasksLoad(TASKS_ST));
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Waiting on Ops');
+    assert.equal(await page.locator('#task-body [data-board-blocked="tbrief"]').getAttribute('title'),
+      'Waiting on Ops: Needs the launch plan reviewed first.\nBlocked by Plan the launch');
+    await page.locator('#task-body [data-task-key="tbrief"] .bcard-title').click();
+    await page.waitForFunction(() => TASKS_ST.peek === 'tbrief' && document.querySelector('#task-peek')?.open);
+    assert.equal((await peek.locator('p.task-wait:not(.task-quiet)').textContent()).replace(/\s+/g, ' ').trim(),
+      'Waiting on Ops: Needs the launch plan reviewed first.');
+    await peek.locator('[data-modal-close]').click();
+    await peek.waitFor({state: 'hidden'});
+    Object.assign(brief, {status: 'review', note: ''});
+    await page.evaluate(() => tasksLoad(TASKS_ST));
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
     await drag('tbrief', '#task-body [data-task-key="tplan"]', 0.1);
     await page.waitForFunction(() => TASKS_ST.tasks.find(t => t.id === 'brief').version === 2);
     assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/brief', body: {version: 1, step_rank: 0}}, 'above the top card: its rank less one');

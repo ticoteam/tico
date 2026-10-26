@@ -41,7 +41,19 @@ const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
+// A waiting task held by a bot doing prerequisite work: the first open blocker a bot owns (`--on bot:<slug>`,
+// backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only blocked, not
+// set waiting, still reads "Blocked by".
+function taskBotWait(t) {
+  if (t?.status !== 'waiting') return null;
+  const b = taskBlockers(t).find(r => !['done', 'closed', 'declined'].includes(String(r.status || '')) && actorSlug(r.owner));
+  if (!b) return null;
+  const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b};
+}
 function taskWaitLine(t) {
+  const bot = taskBotWait(t);
+  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}`;
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
