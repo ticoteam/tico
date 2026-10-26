@@ -6032,12 +6032,14 @@ def _task_party(conn, actor, row):
 
 def _task_close_allowed(conn, actor, row, note, mover=None):
     _task_private_writer(conn, actor, row)
-    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. Reading it is
-    # not enough: someone refused its status and note must not be able to end it.
-    if is_human(actor) and not _task_party(conn, actor, row):
+    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. The person it
+    # waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
+    # someone refused its status and note must not be able to end it.
+    if is_human(actor) and not _task_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
             refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
-                                         f"({actor_id(row['requester'])}), its owner, or a person who moves tasks")
+                                         f"({actor_id(row['requester'])}), its owner, the person it waits on, "
+                                         "or a person who moves tasks")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover

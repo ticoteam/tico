@@ -106,6 +106,14 @@ class ClosingNeedsEdit(Case):
         child = self.make(CMO, "Draft the sales email", SEO, parent_id=parent["id"])
         self.assertEqual(H.task_close(self.conn, CARA, child["id"])["status"], "closed")    # requester of the parent
 
+    def test_the_person_a_task_waits_on_closes_it(self):
+        """A bot's question waits on a person; "not now" is theirs to say even when they can't edit the task."""
+        t = self.make(CMO, "Approve the launch budget?", CMO)
+        self.refused("close", H.task_close, self.conn, CARA, t["id"])
+        # As a bot's question to her leaves it (hub task question): waiting on her, the bot still its owner.
+        self.conn.execute("UPDATE tasks SET status='waiting', waiting_on=? WHERE id=?", (CARA, t["id"]))
+        self.assertEqual(H.task_close(self.conn, CARA, t["id"], note="Not now")["status"], "closed")
+
     def test_the_caller_says_when_a_person_moves_tasks(self):
         t = self.make(ANA, "Draft the launch post", CMO)
         self.assertEqual(H.task_close(self.conn, CARA, t["id"], mover=True)["status"], "closed")

@@ -51,7 +51,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
   request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester, or a person who can edit it, closes it. Every
+  product lane). The owner marks it `done`; only the requester, a person who can edit it, or the person it waits on closes it. Every
   task has a comment thread, on the record with the author.
 - **Message** — one line in a conversation. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. A message sent while
   its bot answers in the same conversation goes into that turn when the harness can steer (`steer` in its manifest)
