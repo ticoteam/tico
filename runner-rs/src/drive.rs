@@ -43,6 +43,10 @@ pub struct Segment {
 
 /// The goal side of one attempt, shared by the turn and any fallback.
 pub struct GoalRun {
+    /// Shared by native goal continuations and fallback stretches of this run.
+    pub deadline_warned: bool,
+    /// A time limit still fails the drive, but settlement must retain its last answer and usage.
+    pub cut: Option<Drove>,
     pub chat_goal: Option<Value>,
     pub controlled: bool,
     pub failure: Option<String>,
@@ -56,6 +60,7 @@ pub struct Drive<'a> {
     pub thread: &'a str,
     pub effort: Option<&'a str>,
     pub limit: Instant,
+    pub warning_at: Instant,
     pub limit_name: &'a str,
     pub flags: &'a Flags,
     pub wake: &'a Notify,
@@ -76,6 +81,19 @@ pub struct Drive<'a> {
 const YIELD_ASK: &str = "Another bot's turn is waiting for the ChatGPT login this turn runs on. Stop at a safe point \
 now: let the command in progress finish, commit and push your work in progress, note on the task where you stopped \
 and what comes next, then end this turn. It continues right after the other turn.";
+
+pub(crate) fn warning_at(start: Instant, limit: Instant) -> Instant {
+    let span = limit.saturating_duration_since(start);
+    let lead = if span < Duration::from_secs(600) { span / 2 } else { Duration::from_secs(300) };
+    limit - lead
+}
+
+fn deadline_warning(now: Instant, limit: Instant) -> String {
+    // Report the actual remaining budget, including fractional minutes for short or delayed checks.
+    let minutes = limit.saturating_duration_since(now).as_secs_f64() / 60.0;
+    let minutes = format!("{minutes:.2}").trim_end_matches('0').trim_end_matches('.').to_string();
+    format!("You have {minutes} minutes left in this run's time limit. Stop at a safe point now: commit or stash what is in progress, push what is ready, and leave a hand-off note on the task. The run ends at the limit.")
+}
 
 impl Runner {
     #[allow(clippy::too_many_arguments)]
@@ -99,6 +117,8 @@ impl Runner {
         let scrub = |t: &str| d.redactor.map(|r| r.scrub_text(t)).unwrap_or_else(|| t.to_string());
         let (mut reply, mut tokens, mut outcome) = (String::new(), json!({}), "interrupted".to_string());
         let (mut limited, mut capacity, mut retryable, mut acted, mut complete) = (false, false, false, false, false);
+        let mut last_text = String::new();
+        let mut in_text_delta = false;
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -182,6 +202,12 @@ impl Runner {
                     else if self.stopping() { "Runner stopped during execution".into() }
                     else { "Computer lost or heartbeat stopped (execution lease expired)".into() };
                 let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                if late {
+                    let text = answer(&earlier, &last_text);
+                    goal.cut = Some(Drove { outcome: "interrupted".into(),
+                        reply: if text.is_empty() { "Run time limit reached before a final answer. Check the task for its hand-off note and the worktree for unfinished work.".into() } else { text },
+                        tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn: turn.clone(), yielded: false });
+                }
                 return Err(Fail::runtime(why));
             }
             while let Ok(ev) = rx.try_recv() {
@@ -294,8 +320,16 @@ impl Runner {
                     let (id, saved, row) = (aid.to_string(), if kind == "turn_failed" { "error".to_string() } else { kind.clone() }, clean.clone());
                     self.state.off(move |s| s.append(&id, &saved, &row)).await?;
                     d.wake.notify_one();
-                    if kind == "message" && (truthy(event.get("final")) || reply.is_empty()) {
-                        reply = text_of(&clean["text"]);
+                    if kind == "message" {
+                        last_text = text_of(&clean["text"]);
+                        in_text_delta = false;
+                        if truthy(event.get("final")) || reply.is_empty() {
+                            reply = last_text.clone();
+                        }
+                    } else if kind == "delta" && event["delta_kind"] != "thought" {
+                        if !in_text_delta { last_text.clear(); }
+                        last_text.push_str(&text_of(&clean["text"]));
+                        in_text_delta = true;
                     }
                     if kind == "tokens" {
                         tokens = event.clone();
@@ -360,8 +394,20 @@ impl Runner {
                 complete = false;
                 earlier = answer(&earlier, &reply);
                 reply.clear();
+                last_text.clear();
+                in_text_delta = false;
                 earlier_tokens = Some(spent(&earlier_tokens, &tokens));
                 tokens = json!({});
+            }
+            let now = Instant::now();
+            if !complete && salvage.is_none() && !goal.deadline_warned && now >= d.warning_at && now < d.limit {
+                goal.deadline_warned = true;
+                let warning = deadline_warning(now, d.limit);
+                let delivered = host.supports_steer() && matches!(
+                    tokio::time::timeout(d.limit.saturating_duration_since(now), host.steer(thread, &turn, &warning)).await,
+                    Ok(Ok(())));
+                self.state.append(aid, "diagnostic", &json!({"text": warning, "deadline_warning_delivered": delivered}))?;
+                d.wake.notify_one();
             }
             if last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
                 let step: Result<(), Fail> = async {
@@ -453,6 +499,15 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
 
+    #[test]
+    fn deadline_warning_reports_the_actual_remaining_minutes() {
+        let now = Instant::now();
+        for (seconds, minutes) in [(300, "5"), (180, "3"), (150, "2.5")] {
+            assert_eq!(deadline_warning(now, now + Duration::from_secs(seconds)),
+                format!("You have {minutes} minutes left in this run's time limit. Stop at a safe point now: commit or stash what is in progress, push what is ready, and leave a hand-off note on the task. The run ends at the limit."));
+        }
+    }
+
     /// A hub that has let this attempt's lease go: renewals, inputs and goal reads are refused as stale, while
     /// events and the result are still taken (backend/execution.py `attempt` with `active=False` / `final=True`).
     async fn lapsed_hub() -> (String, Arc<Mutex<Vec<String>>>) {
@@ -537,10 +592,10 @@ mod tests {
                         mut carried: BTreeMap<String, Value>) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
-        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, limit: Instant::now() + Duration::from_secs(60),
+        let d = Drive { limit_name: "max_run_minutes (60 minutes)", aid: "acme-late", host, thread, effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60),
                         flags: f, wake: &wake, redactor: None, runtime, bot: "acme", session: thread, login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
-        let mut goal = GoalRun { chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
+        let mut goal = GoalRun { deadline_warned: false, cut: None, chat_goal, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), thread.into()) };
         let mut rejected = None;
         let drove = tokio::time::timeout(Duration::from_secs(10), runner.drive(&d, rx, "turn-1".into(), &mut segment, &mut carried, &mut rejected, &mut goal))
             .await
@@ -568,13 +623,50 @@ mod tests {
         let f = flags(false);
         let wake = Notify::new();
         let d = Drive { aid: "diagnostics", host: &host, thread: "th", effort: None,
-            limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
+            warning_at: Instant::now(), limit: Instant::now(), limit_name: "max_run_minutes (60 minutes)", flags: &f, wake: &wake,
             redactor: None, runtime: "claude", bot: "acme", session: "th", login: None, fresh: None };
         let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
-        let mut goal = GoalRun { chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
+        let mut goal = GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None, paused: None, tries_key: ("acme".into(), "th".into()) };
         let err = runner.drive(&d, &mut rx, "turn".into(), &mut segment, &mut BTreeMap::new(), &mut None, &mut goal).await.err().unwrap();
         assert_eq!(err.text, "Timeout: max_run_minutes (60 minutes)");
+        assert!(!goal.cut.as_ref().unwrap().reply.is_empty(), "even a silent timeout has a useful result");
         assert!(runner.state.pending("diagnostics").unwrap().iter().any(|e| e["payload"]["end_reason"] == err.text));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deadline_warning_timeout_retains_redacted_streamed_text_and_usage() {
+        let (url, _) = lapsed_hub().await;
+        let (runner, dir) = runner_at(&url);
+        runner.state.record(&json!({"id": "stream-cut"})).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        for event in [json!({"kind": "message", "text": "Old progress"}),
+                      json!({"kind": "delta", "text": "Saved ", "delta_kind": "text"}),
+                      json!({"kind": "delta", "text": "synthetic-secret", "delta_kind": "text"}),
+                      json!({"kind": "delta", "text": "private reasoning", "delta_kind": "thought"}),
+                      json!({"kind": "tokens", "usage": {"input": 4, "output": 2}, "input": 4, "output": 2})] {
+            tx.send(event).unwrap();
+        }
+        let flags = flags(false);
+        let wake = Notify::new();
+        let limit = Instant::now() + Duration::from_millis(250);
+        let redactor = Arc::new(Redactor::new(&["synthetic-secret".into()]));
+        let d = Drive { aid: "stream-cut", host: &host, thread: "th", effort: None,
+                        limit, warning_at: limit, limit_name: "max_run_minutes (60 minutes)", flags: &flags,
+                        wake: &wake, redactor: Some(&redactor), runtime: "claude", bot: "acme", session: "th", login: None, fresh: None };
+        let mut goal = GoalRun { deadline_warned: false, cut: None, chat_goal: None, controlled: false, failure: None,
+                                 paused: None, tries_key: ("acme".into(), "th".into()) };
+        let mut segment = Segment { meter: Meter::default(), config: json!({}), profile: None, billing: "api" };
+        let result = tokio::time::timeout(Duration::from_secs(3), runner.drive(&d, &mut rx, "turn".into(), &mut segment,
+                                         &mut BTreeMap::new(), &mut None, &mut goal)).await.unwrap();
+        assert_eq!(result.err().unwrap().text, "Timeout: max_run_minutes (60 minutes)");
+        let cut = goal.cut.unwrap();
+        assert_eq!(cut.reply, format!("Saved {}", redactor.scrub_text("synthetic-secret")));
+        assert_eq!(cut.tokens["input"], 4);
+        assert!(!cut.reply.contains("Old progress") && !cut.reply.contains("private reasoning"));
         std::fs::remove_dir_all(dir).ok();
     }
 
