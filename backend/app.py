@@ -1087,7 +1087,9 @@ def create_app(settings=None):
                 pipelines = H.type_list(c)
         typ = next((t for t in pipelines if t["id"] == row.get("type_id")), None)
         value["type"] = {"id": typ["id"], "name": typ["name"]} if typ else None
-        value["step"] = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
+        step = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None) if typ else None
+        # A step's check pool is the type's setting (Settings > Tasks), not sent again on each of a board's tasks.
+        value["step"] = {k: v for k, v in step.items() if k not in ("check_pool", "check_limit")} if step else None
         if c is not None:
             value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
             value["roles"] = TRo.roles_of(c, row["id"])

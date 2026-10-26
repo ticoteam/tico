@@ -44,7 +44,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS check_waits(
   id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, step_id TEXT NOT NULL, title TEXT NOT NULL,
   heads TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'waiting',
-  child_id TEXT, created TEXT NOT NULL, updated TEXT NOT NULL);
+  child_id TEXT, created TEXT NOT NULL, updated TEXT NOT NULL, attempt_id TEXT);
 CREATE INDEX IF NOT EXISTS check_waits_open ON check_waits(state, created);
 CREATE INDEX IF NOT EXISTS check_waits_ticket ON check_waits(ticket_id, state);
 """
@@ -55,6 +55,46 @@ def ensure(c):
     c.executescript(SCHEMA)
     H.add_column(c, "task_steps", "check_pool", "TEXT")
     H.add_column(c, "task_steps", "check_limit", "INTEGER")
+    H.add_column(c, "check_waits", "attempt_id", "TEXT")
+
+
+def capture_attempt(c, turn_id):
+    """Freeze the actual check attempt and its ticket-head provenance after this run's usage is recorded."""
+    turn = c.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
+    check = H.task(c, turn["task_id"]) if turn and turn["task_id"] else None
+    if not check or not kind_of(check):
+        return None
+    finished_owner = check.get("owner")
+    from . import task_relations as TR
+    ticket_id = TR.parent_of(c, check["id"])
+    if not ticket_id:
+        return None
+    head = str(check.get("verdict_head") or "").lower()
+    if not head:
+        event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='review_head' "
+                          "ORDER BY ts DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+        head = str(event[0] if event else "").split(",")[0].lower()
+    from . import check_independence
+    result = check_independence.capture_attempt(c, ticket_id, check["id"], head, turn_id)
+    verdict = str(check.get("verdict") or "").lower()
+    decided = c.execute("SELECT ts FROM task_events WHERE task_id=? AND field='verdict' "
+                        "ORDER BY ts DESC,rowid DESC LIMIT 1", (check["id"],)).fetchone()
+    started = c.execute("SELECT started FROM turns WHERE id=?", (turn_id,)).fetchone()
+    if verdict and decided and started and decided["ts"] >= started["started"]:
+        from . import verdict_moves
+        consumed = verdict_moves.after_capture(c, check["id"], head, turn_id)
+        eligibility = consumed.get("eligibility") if consumed and consumed.get("consumed") else None
+        if eligibility and not eligibility.get("eligible"):
+            reroute_existing(c, H.task(c, ticket_id), check, head, turn_id, eligibility["reason"])
+    current = H.task(c, check["id"])
+    if current and current.get("status") in H.ACTIVE_STATUSES and current.get("owner") == finished_owner:
+        return result
+    done = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_pool_freed' AND new=? LIMIT 1",
+                     (check["id"], turn_id)).fetchone()
+    if not done:
+        H._task_event(c, check["id"], H.KEEPER, "check_pool_freed", None, turn_id, "")
+        freed(c, {**check, "owner": finished_owner})
+    return result
 
 
 def _ready(c):
@@ -179,19 +219,54 @@ def makers(c, slug):
     """Every model company a checker may run on: its own model, and what its last few runs actually ran on (a bot whose
     model is not signed in runs on its fallback, which is the company that would do the check)."""
     from .usage_records import ran_on
-    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? ORDER BY started DESC LIMIT ?",
+    turns = [r[0] for r in c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC LIMIT ?",
                                      (slug, RECENT_TURNS))]
-    found = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
+    recent = ran_on(c, turns).values()
+    found = set()
+    for run in recent:
+        segments = run["segments"]
+        if not segments or any(not segment.get("family") for segment in segments):
+            return set()
+        found.update(segment["family"] for segment in segments)
     return (found | {maker(c, slug)}) - {""}
 
 
-def builder_makers(c, ticket):
-    """Every model company that wrote the ticket's work: its runs so far and its owner's own model."""
-    from .check_models import authors_of
-    found = set(authors_of(c, None, ticket["id"]))
-    if H.is_bot(ticket["owner"]):
-        found.add(maker(c, H.actor_id(ticket["owner"])))
-    return found - {""}
+def candidate_details(c, slugs):
+    """Configured model and latest executed model for a small pool shown in Settings > Tasks."""
+    from . import providers
+    from .shared_bots import follow
+    from .usage_records import ran_on
+    out = []
+    for slug in dict.fromkeys(str(s) for s in slugs):
+        bot = c.execute("SELECT display_name FROM bots WHERE slug=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
+        if not bot:
+            continue
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        config = follow(c, slug, H._json(row["config_json"], {}) or {}) if row else {}
+        runtime, model = providers.bot_choice(c, None, config)
+        configured = providers.MODEL_BY_ID.get(model or "") or {}
+        configured_provider = configured.get("provider") or providers.author_provider(runtime)
+        turn = c.execute("SELECT id FROM turns WHERE bot=? AND finished IS NOT NULL ORDER BY finished DESC,id DESC LIMIT 1",
+                         (slug,)).fetchone()
+        actual = None
+        if turn:
+            run = ran_on(c, [turn["id"]])[turn["id"]]
+            segments = run["segments"]
+            makers = {part["family"] for part in segments if part.get("family")}
+            models = list(dict.fromkeys(part.get("model") for part in segments if part.get("model")))
+            family = next(iter(makers)) if len(makers) == 1 else None
+            if family != configured_provider or not family:
+                labels = [providers.MODEL_BY_ID.get(mid, {}).get("label") or mid for mid in models]
+                actual = {"model": ", ".join(labels) if labels else "Unknown model",
+                          "provider": providers.PROVIDER_BY_ID.get(family, {}).get("label") if family else "Unknown provider",
+                          "family": family}
+        out.append({"slug": slug, "name": bot["display_name"],
+                    "configured": {"model": configured.get("label") or model or "Unknown model",
+                                   "provider": providers.PROVIDER_BY_ID.get(configured_provider, {}).get("label")
+                                   if configured_provider else "Unknown provider",
+                                   "family": configured_provider},
+                    "runtime": actual})
+    return out
 
 
 def _first_reviewers(c, ticket):
@@ -204,17 +279,17 @@ def _first_reviewers(c, ticket):
     return out
 
 
-def ranked(c, ticket, step, slugs, limit):
+def ranked(c, ticket, step, slugs, limit, exclude=()):
     """(free members best first, why none is) for this ticket's check at `step`. Best is fewest open checks, then the
     longest idle (no turn yet counts as longest), then by name."""
-    builders = builder_makers(c, ticket)
-    exclude = _first_reviewers(c, ticket) if step["name"] == REVIEW_TWO else set()
+    from .check_independence import assess
+    excluded = set(exclude) | (_first_reviewers(c, ticket) if step["name"] == REVIEW_TWO else set())
     free, why = [], set()
     for slug in slugs:
-        if slug in exclude or "bot:" + slug == ticket["owner"]:
+        if slug in excluded or "bot:" + slug == ticket["owner"]:
             continue
-        company = makers(c, slug)
-        if not company or company & builders:
+        decision = assess(c, ticket, slug)
+        if not decision["eligible"]:
             why.add("company")
             continue
         if not online(c, slug):
@@ -389,14 +464,85 @@ def entered(c, actor, ticket, snapshots=None):
     return _wait(c, ticket, step, title, heads, reason or "no reviewer could take it")
 
 
-def _wait(c, ticket, step, title, heads, reason):
+def _wait(c, ticket, step, title, heads, reason, attempt_id=None):
     ts = H.now()
     row = {"id": H.new_id(), "ticket_id": ticket["id"], "step_id": step["id"], "title": title,
-           "heads": ",".join(heads), "reason": reason, "state": "waiting", "created": ts, "updated": ts}
-    c.execute("INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created,updated) "
-              "VALUES(:id,:ticket_id,:step_id,:title,:heads,:reason,:state,:created,:updated)", row)
+           "heads": ",".join(heads), "reason": reason, "state": "waiting", "created": ts, "updated": ts,
+           "attempt_id": attempt_id}
+    c.execute("INSERT INTO check_waits(id,ticket_id,step_id,title,heads,reason,state,created,updated,attempt_id) "
+              "VALUES(:id,:ticket_id,:step_id,:title,:heads,:reason,:state,:created,:updated,:attempt_id)", row)
     H._task_event(c, ticket["id"], H.KEEPER, "check_waiting", None, row["id"], f"{title}: waiting, {reason}")
     return row
+
+
+def reroute_existing(c, ticket, check, head, attempt_id, reason):
+    """Keep an ineligible verdict for audit and send the same check to another eligible pool member, or wait unowned."""
+    ticket = H.task(c, ticket["id"] if isinstance(ticket, dict) else ticket)
+    check = H.task(c, check["id"] if isinstance(check, dict) else check)
+    found = pool(c, ticket.get("step_id")) if ticket else None
+    head = str(head or "").lower()
+    if (not ticket or not check or not found or not head or str(check.get("verdict_head") or "").lower() != head
+            or check.get("status") != "done" or TR_parent(c, check["id"]) != ticket["id"]):
+        return None
+    if head not in _heads(_prs(c, ticket, step), None):
+        return None
+    provenance = c.execute("SELECT 1 FROM check_head_provenance WHERE check_id=? AND head=? AND turn_id=?",
+                           (check["id"], head, attempt_id)).fetchone()
+    if not provenance:
+        return None
+    event = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+                      "ORDER BY ts DESC,rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
+    held = H._json(event[0], {}) if event else {}
+    if (held.get("check_id"), str(held.get("head") or "").lower(),
+            held.get("attempt_id") or held.get("turn_id")) != (check["id"], head, attempt_id):
+        return None
+    previous = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='check_rerouted' "
+                         "ORDER BY ts DESC,rowid DESC LIMIT 1", (ticket["id"],)).fetchone()
+    prior_event = H._json(previous[0], {}) if previous else {}
+    if prior_event.get("attempt_id") == attempt_id:
+        return prior_event
+    step, slugs, limit = found
+    title = str(check.get("title") or "")
+    prior = H.actor_id(check.get("owner") or "")
+    free, why = ranked(c, ticket, step, slugs, limit, exclude=(prior,))
+    note = f"The previous verdict was kept for audit but is not independent ({reason}). Recheck {head} using your own model."
+    for slug in free:
+        c.execute("SAVEPOINT reroute_same_check")
+        body = str(check.get("body") or "").rstrip() + f"\n\n{note}"
+        try:
+            previous_verdict = str(check.get("verdict") or "")
+            previous_head = str(check.get("verdict_head") or "")
+            c.execute("UPDATE tasks SET verdict=NULL,verdict_head=NULL WHERE id=? AND verdict=? AND verdict_head=?",
+                      (check["id"], previous_verdict, previous_head))
+            H._task_event(c, check["id"], H.KEEPER, "verdict_rerouted", previous_verdict,
+                          json.dumps({"head": previous_head, "attempt_id": attempt_id}, sort_keys=True), reason)
+            moved = H.task_update(c, ticket["owner"], check["id"], owner="bot:" + slug, status="open",
+                                  body=body, note="Tico routed this same check to a different model family.")
+        except H.Refused:
+            c.execute("ROLLBACK TO reroute_same_check")
+            c.execute("RELEASE reroute_same_check")
+            continue
+        c.execute("RELEASE reroute_same_check")
+        outcome = {"check_id": check["id"], "head": head, "attempt_id": attempt_id,
+                   "owner": slug, "waiting": False}
+        H._task_event(c, ticket["id"], H.KEEPER, "check_rerouted", prior, json.dumps(outcome, sort_keys=True),
+                      f"{title} at {head}: {reason}")
+        return {**outcome, "check": moved}
+    existing = next((r for r in waiting(c, ticket["id"]) if r["step_id"] == step["id"]
+                     and head in r["heads"].split(",")), None)
+    wait = existing or _wait(c, ticket, step, title, [head], why or reason, attempt_id=attempt_id)
+    if not wait.get("child_id"):
+        c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (check["id"], wait["id"]))
+    outcome = {"check_id": check["id"], "head": head, "attempt_id": attempt_id,
+               "owner": None, "waiting": True, "wait_id": wait["id"]}
+    H._task_event(c, ticket["id"], H.KEEPER, "check_rerouted", prior, json.dumps(outcome, sort_keys=True),
+                  f"{title} at {head}: waiting for an independent checker ({reason})")
+    return {**outcome, "check": check, "wait": wait}
+
+
+def TR_parent(c, task_id):
+    from . import task_relations as TR
+    return TR.parent_of(c, task_id)
 
 
 def _take(c, wait, only=None):
@@ -446,6 +592,8 @@ def freed(c, row):
     if not H.is_bot(row.get("owner")) or not CHECK_TITLE.match(str(row.get("title") or "").strip()):
         return None
     if not H.TR.parent_of(c, row["id"]):
+        return None
+    if c.execute("SELECT 1 FROM turns WHERE task_id=? AND finished IS NULL LIMIT 1", (row["id"],)).fetchone():
         return None
     slug = H.actor_id(row["owner"])
     for wait in _all_waiting(c):

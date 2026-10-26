@@ -229,7 +229,8 @@ function taskOwnerOptions(selected = '') {
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.name)}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+      `<option value="${esc(e.name)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
+        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
 }
 function taskCreateModal() {
   let d = $('#task-create');

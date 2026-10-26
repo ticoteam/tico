@@ -7807,6 +7807,8 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     from . import run_diagnostics
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='attempts' AND type='table'").fetchone():
         run_diagnostics.finish(conn, turn_id, exit_code, summary)
+    from . import check_pools
+    check_pools.capture_attempt(conn, turn_id)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
     return row
 

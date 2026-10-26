@@ -35913,6 +35913,12 @@
           },
           "status": {
             "type": "string"
+          },
+          "check_pool": {
+            "type": "array"
+          },
+          "check_limit": {
+            "type": "integer"
           }
         },
         "required": [
@@ -35981,6 +35987,36 @@
               "declined"
             ],
             "title": "Status"
+          },
+          "check_pool": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Pool"
+          },
+          "check_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Limit"
           }
         },
         "additionalProperties": false,

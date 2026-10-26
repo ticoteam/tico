@@ -5,7 +5,7 @@ from backend import check_pools
 from backend import hubdb as H
 from backend.store import encode
 from backend.tests.test_github import api, get, headers  # noqa: F401
-from backend.tests.test_review_gate import HEAD, move, ticket
+from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
 
 RECEIPT = f"Tests: base {'c' * 40} head {HEAD}: 9 passed, 0 failed"
 # The builder (cpo) runs on Anthropic; rev-a and rev-b on OpenAI; rev-c on Anthropic like the builder.
@@ -36,6 +36,17 @@ def set_pool(api, task, step, pool, limit=2):
     r = api.post("/api/v2/task-types/" + task["type_id"], headers=headers(), json={"steps": steps})
     assert r.status_code == 200, r.text
     return r.json()["type"]
+
+
+def ticket(api, receipt):
+    """A synthetic PR built by cpo on Anthropic, with head-specific run evidence for the family gate."""
+    task = base_ticket(api, receipt)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES(?,?,?,?,?)",
+                  ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
+        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
+                  "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+    return task
 
 
 def busy(api, slug, title="Review 1: PR #77"):
@@ -79,6 +90,88 @@ def test_entering_review_1_files_the_check_to_the_least_busy_reviewer_and_wakes_
     age = woken(api, "rev-a", check["id"])
     assert age is not None and age < 60, "A is woken within a minute"
     assert woken(api, "rev-b", check["id"]) is None
+
+
+def test_pool_candidate_model_details_show_configured_and_actual_families(api):
+    """A bot label never stands in for its configured model, and a fallback run is shown separately."""
+    with api.app.state.store.transaction() as c:
+        H.sync_registry(c, {
+            "reviewer-xai": {"name": "Reviewer xAI", "runtime": "fake", "status": "active"},
+            "pr-reviewer-sol": {"name": "Reviewer GPT", "runtime": "fake", "status": "active"},
+        }, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
+            "reviewer-xai", encode({"runtime": "claude", "model": "claude-haiku-5-5"}), "engineering", "ana"))
+        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
+            "pr-reviewer-sol", encode({"runtime": "codex", "model": "gpt-6-sol"}), "engineering", "ana"))
+        c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
+                  (H.now(), H.now()))
+        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
+                  "VALUES('fallback-turn',0,'claude-opus-5-5','anthropic','claude')")
+        candidates = {item["slug"]: item for item in check_pools.candidate_details(c,
+                      ["reviewer-xai", "pr-reviewer-sol"])}
+    assert candidates["reviewer-xai"]["configured"]["provider"] == "Anthropic"
+    assert candidates["reviewer-xai"]["runtime"] is None
+    assert candidates["pr-reviewer-sol"]["configured"]["provider"] == "OpenAI"
+    assert candidates["pr-reviewer-sol"]["runtime"]["provider"] == "Anthropic"
+    assert "Claude Opus" in candidates["pr-reviewer-sol"]["runtime"]["model"]
+
+
+def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('builder-turn','cpo',?,?,?)",
+                  (H.now(), H.now(), task["id"]))
+        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
+                  "VALUES('builder-turn',0,'claude-opus-5-5','anthropic','claude')")
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,finished,task_id) VALUES('checker-turn','rev-a',?,?,?)",
+                  (H.now(), H.now(), check["id"]))
+        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
+                  "VALUES('checker-turn',0,'gpt-6-sol','openai','codex')")
+        check_pools.capture_attempt(c, "checker-turn")
+        evidence = c.execute("SELECT * FROM check_head_provenance WHERE check_id=? AND head=?",
+                             (check["id"], HEAD)).fetchone()
+    assert evidence and evidence["known"] == 1
+    assert json.loads(evidence["builder_families"]) == ["anthropic"]
+    assert json.loads(evidence["checker_families"]) == ["openai"]
+
+
+def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_checker(api):
+    """A GPT-configured reviewer that runs Claude cannot advance an Anthropic-built PR."""
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    assert check["owner"] == "bot:rev-a"
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
+        actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "claude-opus-5-5",
+                  "provider": "anthropic", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "claude",
+                  "harness": "claude", "effort": "high", "profile": "engineering"}
+        H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
+        rerouted = H.task(c, check["id"])
+        active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
+        active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
+    assert rerouted["id"] == check["id"] and rerouted["owner"] == "bot:rev-b"
+    assert rerouted["status"] == "open" and rerouted["verdict"] == "approve"
+    assert [child["id"] for child in active] == [check["id"]], "rerouting keeps exactly one active check for the head"
+
+
+def test_unknown_builder_runtime_waits_instead_of_claiming_independence(api):
+    team(api)
+    task = base_ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    assert move(api, task).status_code == 200
+    assert checks(api, task) == []
+    [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
+    assert wait["label"] == "Waiting for a reviewer"
+    assert "different model company" in wait["reason"]
 
 
 def test_with_every_reviewer_at_its_limit_the_check_waits_and_the_first_to_finish_takes_it(api):

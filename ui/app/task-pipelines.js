@@ -212,6 +212,25 @@ function taskTypeEditor(type = null) {
   dialog.addEventListener('close', () => dialog.remove());
   dialog.querySelector('[data-close]').onclick = () => dialog.close();
   const rows = dialog.querySelector('[data-steps]');
+  const poolHints = async row => {
+    const target = row.querySelector('[data-pool-models]'), value = row.querySelector('[aria-label="Check pool"]').value;
+    const bots = [...new Set(value.split(',').map(slug => slug.trim()).filter(Boolean))].slice(0, 40);
+    const request = (row._poolHintsRequest || 0) + 1;
+    row._poolHintsRequest = request;
+    if (!bots.length) { target.textContent = 'Enter bot slugs to see each configured model and provider.'; return; }
+    target.textContent = 'Loading model details…';
+    try {
+      const data = await get('/v2/check-pool-candidates?bots=' + encodeURIComponent(bots.join(',')));
+      if (request !== row._poolHintsRequest || !target.isConnected) return;
+      target.innerHTML = (data.candidates || []).map(bot => {
+        const configured = `${bot.configured.model} (${bot.configured.provider})`;
+        const runtime = bot.runtime ? ` · latest run: ${bot.runtime.model} (${bot.runtime.provider}); next run may differ` : '';
+        return `<span>${esc(bot.name)}: ${esc(configured + runtime)}</span>`;
+      }).join('') || 'No visible bots found for these slugs.';
+    } catch (error) {
+      if (request === row._poolHintsRequest && target.isConnected) target.textContent = `Model details unavailable: ${error.message}`;
+    }
+  };
   const addStep = step => {
     const row = document.createElement('div'); row.className = 'task-step-edit'; row.dataset.stepId = step?.id || '';
     row.innerHTML = `<input required aria-label="Step name" value="${esc(step?.name || '')}" placeholder="Step name">
@@ -219,12 +238,15 @@ function taskTypeEditor(type = null) {
       <select aria-label="Step status">${PIPELINE_STATUSES.filter(status => STEP_STATUSES.includes(status) || step?.status === status).map(status => `<option value="${status}"${step?.status === status ? ' selected' : ''}>${esc(STATUS_WORD[status] || status)}</option>`).join('')}</select>
       <input aria-label="Check pool" value="${esc((step?.check_pool || []).join(', '))}" placeholder="Check pool: bots, comma-separated" title="The bots that may do this step's check. Tico gives each check to the least busy one from another model company than the builder.">
       <input type="number" min="1" max="20" aria-label="Open checks each" value="${esc(String(step?.check_limit || 2))}" title="How many open checks each bot in the pool may hold">
+      <small class="task-step-models muted" data-pool-models role="status">Enter bot slugs to see each configured model and provider.</small>
       <button class="ghost" type="button" data-up aria-label="Move step up">↑</button><button class="ghost" type="button" data-down aria-label="Move step down">↓</button>
       <button class="ghost danger" type="button" data-remove aria-label="Remove step">×</button>`;
     row.querySelector('[data-up]').onclick = () => { if (row.previousElementSibling) rows.insertBefore(row, row.previousElementSibling); };
     row.querySelector('[data-down]').onclick = () => { if (row.nextElementSibling) rows.insertBefore(row.nextElementSibling, row); };
     row.querySelector('[data-remove]').onclick = () => row.remove();
+    row.querySelector('[aria-label="Check pool"]').addEventListener('input', () => { void poolHints(row); });
     rows.append(row);
+    if (step?.check_pool?.length) void poolHints(row);
   };
   (type?.steps || [{name: 'Open', status: 'open'}]).forEach(addStep);
   dialog.querySelector('[data-add-step]').onclick = () => addStep();

@@ -26,7 +26,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
     const tag = {id: 'release-tag', key: 'release-2026-10-02', label: 'release',
       metadata: {date: '2026-10-02'}, markdown: '- [ ] Smoke checks', is_template: false, version: 1};
-    const bots = [{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true}];
+    const bots = [{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true},
+      {name: 'pr-reviewer-sol', display_name: 'Reviewer GPT', status: 'active', resolved_model: 'GPT 6.1 Sol', resolved_provider: 'OpenAI',
+        latest_runtime_model: 'Claude Opus 5.5', latest_runtime_provider: 'Anthropic'},
+      {name: 'reviewer-xai', display_name: 'Reviewer xAI', status: 'active', resolved_model: 'Claude Haiku 5.5', resolved_provider: 'Anthropic'}];
     let refuseMove = false;
     const tasks = ['draft', 'copy', 'complete', null].map((stepId, index) => {
       const step = types[1].steps.find(step => step.id === stepId) || null;
@@ -59,6 +62,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/routines') return json({routines: []});
+      if (p === '/api/v2/check-pool-candidates') return json({candidates: url.searchParams.get('bots').split(',').map(slug =>
+        slug === 'rev-a' ? {slug, name: 'Reviewer xAI', configured: {model: 'Claude Haiku 5.5', provider: 'Anthropic'}, runtime: null}
+          : {slug, name: 'Reviewer GPT', configured: {model: 'GPT 6.1 Sol', provider: 'OpenAI'},
+            runtime: {model: 'Claude Opus 5.5', provider: 'Anthropic'}})});
       if (p === '/api/v2/tasks/labels') return json({labels: [tag.key], tags: [tag]});
       if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags: [tag]});
       if (p.startsWith('/api/v2/preferences/') && req.method() === 'GET') {
@@ -267,6 +274,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await page.locator('#task-new').click();
     await page.locator('#task-create select[name=type]').waitFor();
     assert.equal(await page.locator('#task-create select[name=type]').count(), 1);
+    const assigned = await page.locator('#task-create select[name=owner] option[value="pr-reviewer-sol"]').textContent();
+    assert.match(assigned, /GPT 6\.1 Sol \(OpenAI\).*Claude Opus 5\.5 \(Anthropic\)/,
+      'choosing a checker shows configured and latest runtime families beside its name');
     await page.locator('#task-create [data-modal-close]').click();
     types[1].steps.push({id: 'verified', name: 'Verified', status: 'done', position: 5, type_id: 'marketing'},
       {id: 'filed', name: 'Filed', status: 'closed', position: 6, type_id: 'marketing'});
@@ -304,6 +314,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // A step's check pool and each checker's limit of open checks (backend/check_pools.py).
     const firstStep = page.locator('.task-type-editor [data-steps] .task-step-edit').first();
     await firstStep.locator('[aria-label="Check pool"]').fill('rev-a, rev-b,');
+    await page.getByText('Reviewer xAI: Claude Haiku 5.5 (Anthropic)', {exact: false}).waitFor();
+    await page.getByText('Reviewer GPT: GPT 6.1 Sol (OpenAI) · latest run: Claude Opus 5.5 (Anthropic); next run may differ',
+      {exact: true}).waitFor();
     await firstStep.locator('[aria-label="Open checks each"]').fill('3');
     assert.equal(await page.locator('.task-type-editor [name=typeBots]').inputValue(), 'parties', 'a type starts with its bots kept to their own tasks');
     await page.locator('.task-type-editor [name=typeBots]').selectOption('work');
