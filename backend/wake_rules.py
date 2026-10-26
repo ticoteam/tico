@@ -51,9 +51,12 @@ ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
 FLAG = "needs_action"
-VERDICT = re.compile(r"\bVERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{7,40}\b", re.I | re.M)
-# The same clause read for its fields: a review or QA child's verdict and the head it judged (hubdb.record_verdict).
-VERDICT_FIELDS = re.compile(r"\bVERDICT:\s*(approve|changes|pass|fail)\b(?:\s+PR\s+#\d+)?(?:\s+head\s+([0-9a-f]{7,40})\b)?",
+VERDICT = re.compile(r"^\s*VERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{7,40}\b", re.I | re.M)
+# The same verdict read for its fields, as a clause anywhere in prose: a review or QA child's verdict and the head it
+# judged (hubdb.record_verdict). A quoted format line ("approve|changes", "pass or fail", "PR #<n> head <sha>")
+# names no verdict, so it never overwrites a real one before it.
+VERDICT_FIELDS = re.compile(r"\bVERDICT:\s*(approve|changes|pass|fail)(?![\w-])(?!\s*[|/])(?!\s+or\b)"
+                            r"(?:\s+PR\s+#\d+\b)?(?:\s+head\s+([0-9a-f]{7,40})\b)?(?!\s+(?:PR|head)\b)",
                             re.I | re.M)
 
 

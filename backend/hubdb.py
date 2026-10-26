@@ -4514,6 +4514,18 @@ def _subtask_result_cycle(conn, row):
     return f"{reopened}:"
 
 
+def _check_cycle_start(conn, row):
+    """When a check's current cycle began (its last reopen, else "") and whether its stored verdict came after it."""
+    reopened = _one(conn, "SELECT rowid AS n, ts FROM task_events WHERE task_id=? AND field='status' "
+                          "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined') "
+                          "ORDER BY rowid DESC LIMIT 1", (row["id"],))
+    if not reopened:
+        return {"at": "", "current": bool(row.get("verdict"))}
+    given = conn.execute("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='verdict' "
+                         "AND new IS NOT NULL", (row["id"],)).fetchone()[0]
+    return {"at": reopened["ts"], "current": bool(row.get("verdict")) and given > reopened["n"]}
+
+
 VERDICTS = ("approve", "changes", "pass", "fail")
 HEAD_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -5487,18 +5499,22 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if effective == "done":
             from . import profiles
             from .wake_rules import verdict_fields
-            if profiles.is_review_task(conn, row) or check_model(conn, row["id"]):
+            if profiles.is_check(conn, row):
                 supplied = verdict is not None or actor == row["owner"] and verdict_fields(note)
+                since = _check_cycle_start(conn, row)
+                if row.get("verdict") and not since["current"]:
+                    # A verdict from before the last reopen judged an earlier head; it does not finish this cycle.
+                    row = {**row, "verdict": None, "verdict_head": None}
                 if not (row.get("verdict") or supplied):
-                    # Older releases missed inline clauses. Recover only the owner's
-                    # saved words, never a requester or another participant's verdict.
+                    # Older releases missed inline clauses. Recover only the owner's saved words from this
+                    # cycle, never a requester or another participant's verdict.
                     sources = _rows(conn.execute(
                         "SELECT ts AS at, new AS text FROM task_events WHERE task_id=? AND actor=? AND field='note' "
-                        "UNION ALL SELECT created AS at, body AS text FROM messages WHERE conversation_id=? "
-                        "AND from_actor=? AND kind IN ('say','notice') AND deleted_at IS NULL "
-                        "AND (json_extract(refs_json,'$.task')=? OR (json_extract(refs_json,'$.task') IS NULL "
-                        "AND conversation_id IN (SELECT id FROM conversations WHERE task_id=?))) "
-                        "ORDER BY at DESC", (task_id, row["owner"], row["conversation_id"], row["owner"], task_id, task_id)))
+                        "AND ts>? UNION ALL SELECT m.created AS at, m.body AS text FROM messages m "
+                        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? "
+                        "AND m.from_actor=? AND m.kind IN ('say','notice') AND m.deleted_at IS NULL "
+                        f"AND m.created>? AND {MESSAGE_TASK_SQL}=? ORDER BY at DESC",
+                        (task_id, row["owner"], since["at"], row["conversation_id"], row["owner"], since["at"], task_id)))
                     for source in sources:
                         if verdict_fields(source["text"]):
                             record_verdict(conn, row["owner"], row, text=source["text"])
@@ -5713,8 +5729,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if row.get(field) is not None:
             _task_event(conn, task_id, actor, field, row[field], None, note or "")
             sets.append(field + "=NULL")
+    # A reopened check judges again; record any new verdict after the reopen event starts its cycle.
+    reopening = row["status"] in ("done", "closed", "declined") and status in ACTIVE_STATUSES
+    if reopening:
+        for field in ("verdict", "verdict_head"):
+            if row.get(field) is not None:
+                _task_event(conn, task_id, actor, field, row[field], None, note or "")
+        conn.execute("UPDATE tasks SET verdict=NULL, verdict_head=NULL WHERE id=?", (task_id,))
+        row = {**row, "verdict": None, "verdict_head": None}
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
-    verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
+    verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
     if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
             v is None for v in (visibility, public_title, public_summary, size)):
         return row
@@ -5731,6 +5755,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
         _set_status(conn, actor, row, status, type, step, note or "")
+    if reopening:
+        verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
     args["id"] = task_id
     args["updated"] = ts
     if sets:
