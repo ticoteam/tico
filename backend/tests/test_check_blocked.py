@@ -142,7 +142,7 @@ def test_same_blocker_joins_the_open_ask_and_both_wake(api):
     first = create(api, "cpo", {"owner": "human:ana", "title": "Grant Actions write", "body": "403 on dispatch.",
                                 "blocker": REFUSAL})["task"]
     reply = create(api, "qa", {"owner": "human:ana", "title": "Remote test run refused", "body": "403.",
-                               "blocker": {**REFUSAL, "repo": "Acme/App", "endpoint": " /Workflow_Dispatch "}})
+                               "blocker": {**REFUSAL, "repo": "Acme/App", "endpoint": " workflow_dispatch "}})
     second = reply["task"]
     assert reply["joined"]["task"] == first["id"]
     assert first["id"] in reply["warning"] and "--kind blocked_by --remove" in reply["warning"]
@@ -173,6 +173,24 @@ def test_different_endpoint_is_a_separate_ask(api):
     assert "joined" not in repo and repo["task"]["owner"] == "human:ana"
     with api.app.state.store.transaction() as c:
         assert not H.TR.blocker_ids(c, other["task"]["id"]) and first["task"]["status"] != "done"
+
+
+@pytest.mark.parametrize("endpoint", ["/hooks/Deploy", "/hooks/deploy/"])
+def test_case_or_slash_different_endpoint_is_a_separate_ask(api, endpoint):
+    refusal = {**REFUSAL, "endpoint": "/hooks/deploy"}
+    first = create(api, "cpo", {"owner": "human:ana", "title": "Deploy endpoint refused", "body": "403.",
+                                "blocker": refusal})["task"]
+    other = create(api, "qa", {"owner": "human:ana", "title": "Other endpoint refused", "body": "403.",
+                               "blocker": {**refusal, "endpoint": endpoint}})
+    assert "joined" not in other and other["task"]["owner"] == "human:ana"
+    same = create(api, "cmo", {"owner": "human:ana", "title": "Deploy refused again", "body": "403.",
+                              "blocker": {**refusal, "endpoint": " /hooks/deploy "}})
+    assert same["joined"]["task"] == first["id"], "an identical path still joins its open ask"
+    with api.app.state.store.transaction() as c:
+        assert not H.TR.blocker_ids(c, other["task"]["id"])
+        assert any(not (H._json(m["refs_json"], {}) or {}).get("quiet")
+                   for m in to(c, "human:ana", other["task"]["id"])), "a distinct endpoint reaches the person"
+        assert H.task(c, first["id"])["owner"] == "human:ana"
 
 
 def test_unlinking_a_joined_task_asks_separately(api):

@@ -25,17 +25,17 @@ def ensure(c):
 
 
 def key(blocker):
-    """The match key of a {repo, status, endpoint} blocker: repository case-folded, endpoint case-folded with its
-    spaces collapsed and outer slashes trimmed. ValueError when a part is missing or malformed."""
+    """The match key of a {repo, status, endpoint} blocker: repository case-folded, endpoint identity preserved
+    after trimming surrounding whitespace. ValueError when a part is missing or malformed."""
     blocker = blocker or {}
     repo = str(blocker.get("repo") or "").strip().lower()
     status = blocker.get("status")
-    endpoint = " ".join(str(blocker.get("endpoint") or "").split()).strip("/").lower()
+    endpoint = str(blocker.get("endpoint") or "").strip()
     if not REPO.match(repo):
         raise ValueError("blocker repo is owner/name, e.g. ticoteam/tico")
     if isinstance(status, bool) or not isinstance(status, int) or not 100 <= status <= 599:
         raise ValueError("blocker status is the HTTP status the service answered, e.g. 403")
-    if not endpoint or len(endpoint) > 200:
+    if not endpoint.strip("/") or len(endpoint) > 200:
         raise ValueError("blocker endpoint names what refused, e.g. workflow_dispatch (at most 200 characters)")
     return f"{repo} {status} {endpoint}"
 

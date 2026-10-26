@@ -590,7 +590,8 @@ for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names t
 status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
 the open ask, and the reply says so. Every task it blocks wakes when the ask is done. Unlinking it
 (`hub task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
-own ask. A different endpoint is a different blocker. Private tasks never join or are joined. When DevOps
+own ask. Endpoint case and slashes are significant; only surrounding whitespace is ignored. A different
+endpoint is a different blocker. Private tasks never join or are joined. When DevOps
 files the person ask for a blocker, its own open tasks for that blocker wait on it.
 The card and task show what it waits for and since when. When an automatic hold clears, the task
 returns to the step it left, without advancing through the refused gate. An owner-declared hold
