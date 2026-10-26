@@ -57,7 +57,9 @@ def next_run_held(c, row):
     return False
 
 
-def waiting(c, row, starting=False, *, include_next_run=True):
+def waiting(c, row, starting=False, *, include_next_run=True, result=False):
+    """`result`: the claim is handing out a subtask's result (refs.subtask). The task's open subtasks never hold
+    that back, or a parent waiting on two subtasks hears from neither until both finish; every other wait does."""
     if snoozed(row) or include_next_run and next_run_held(c, row):
         return True
     if H._has_table(c, 'worktree_waits') and c.execute(
@@ -65,11 +67,11 @@ def waiting(c, row, starting=False, *, include_next_run=True):
             (row['id'],)).fetchone():
         return True
     from .milestone_waits import pending
-    if (row.get('waiting_on') or H.TR.live_blocker(c, row['id'], H.ACTIVE_STATUSES)
+    if (row.get('waiting_on') or H.live_blocker(c, row['id'], children=not result)
             or pending(c, row['id']) or c.execute(
                 'SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1', (row['id'],)).fetchone()):
         return True
-    why = H.waiting_for(c, row)
+    why = H.waiting_for(c, row, children=not result)
     # A new parent and the work someone filed beneath it may share the same bot's session.
     # Let that session coordinate its own work; another owner's child remains an awaited result.
     if starting and why == 'an open child task':
@@ -96,11 +98,13 @@ def counts(c, bot, who=None, tasks=None):
     return {'going': going, 'waiting': queued}
 
 
-def refusal(c, row, config, woken=False):
+def refusal(c, row, config, woken=False, result=False):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
-    that, while waits, the off switch and the task cap still do."""
-    if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate" or waiting(c, row, starting=True)):
+    that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
+    Waiting task's open subtasks do not hold back (`waiting`)."""
+    if row and row.get("blocked_since") and (row.get("blocked_kind") == "gate"
+                                              or waiting(c, row, starting=True, result=result)):
         return "task_wait"
     if not startable(c, row):
         return None

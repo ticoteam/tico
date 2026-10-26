@@ -1231,9 +1231,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     conversation = H.conversation(c, message["conversation_id"])
     task_id = H.message_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
-    if (task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER
-            and not (message.get("refs") or {}).get("run_now")):
-        if why := auto_tasks.refusal(c, task, followed, woken=True):
+    refs = message.get("refs") or {}
+    if task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER and not refs.get("run_now"):
+        # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
+        # do not hold it back, though a snooze, a person, an approval or a worktree still does.
+        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask"))):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
