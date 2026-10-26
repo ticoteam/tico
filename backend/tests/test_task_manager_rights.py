@@ -124,6 +124,26 @@ def test_manager_blockers_stale_link_and_reparent(api, manager):
         assert all(e['actor'] == actor for e in H.task_history(c, task['id']) if e['field'] in ('blocked_by', 'parent_id', 'link'))
 
 
+@pytest.mark.parametrize('descendant_blocked', [False, True])
+def test_manager_reparent_preserves_ancestor_blocker_guard(api, manager, descendant_blocked):
+    token, _ = manager
+    parent = make(api)
+    child = make(api)
+    blocked = make(api, parent_id=child['id']) if descendant_blocked else child
+    path = 'tasks/' + blocked['id'] + '/relations'
+    post(api, path, {'task': parent['id'], 'kind': 'blocked_by'}, token=token)
+    response = post(api, 'tasks/' + child['id'] + '/relations',
+                    {'task': parent['id'], 'kind': 'parent'}, token=token, expected=422)
+    assert 'ancestor' in str(response)
+    with api.app.state.store.read() as c:
+        assert TR.parent_of(c, child['id']) is None
+        assert TR.blocker_ids(c, blocked['id']) == [parent['id']]
+    post(api, path, {'task': parent['id'], 'kind': 'blocked_by', 'remove': True}, token=token)
+    post(api, 'tasks/' + child['id'] + '/relations', {'task': parent['id'], 'kind': 'parent'}, token=token)
+    with api.app.state.store.read() as c:
+        assert TR.parent_of(c, child['id']) == parent['id']
+
+
 def test_requester_manager_closes_reopens_owner_manager_bot_cannot_close(api, manager):
     token, actor = manager
     owned = make(api)
