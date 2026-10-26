@@ -35090,6 +35090,37 @@
         "type": "object",
         "title": "TaskAskResolve"
       },
+      "TaskBlocker": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Repo"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status"
+          },
+          "endpoint": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Endpoint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repo",
+          "status",
+          "endpoint"
+        ],
+        "title": "TaskBlocker",
+        "description": "What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."
+      },
       "TaskComment": {
         "properties": {
           "public": {
@@ -35328,6 +35359,16 @@
             "type": "boolean",
             "title": "Qa Not Checkable Live",
             "default": false
+          },
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "top": {
             "type": "boolean",
