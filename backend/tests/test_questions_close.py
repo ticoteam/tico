@@ -133,7 +133,9 @@ def test_ending_a_task_above_also_ends_the_wait_its_question_left_on_a_task_belo
     assert now_["id"] not in after and count == len(after)
     with api.app.state.store.transaction() as c:
         assert H.task(c, now_["id"])["waiting_on"] is None and cached_matches(c)    # the bot's count follows
-        # Asked under a task that already ended: the hourly sweep takes the question and its wait.
+        # Asked under a task that already ended (reopened by hand below it): the hourly sweep takes the question and
+        # its wait.
+        H.task_update(c, ANA, late["id"], status="open")
         pick(c, late["id"])
         waiting_on_ana(c, late["id"])
         assert listed(c, late["id"])

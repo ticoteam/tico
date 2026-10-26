@@ -6387,6 +6387,13 @@ def _finish_children(conn, actor, parent, children=None, mover=None, quiet=False
     changed = {"closed": [], "detached": []}
     number = parent.get("number")
     said = "Closed with its parent task" + (f" #{number}" if number is not None else "")
+    ended = {parent["id"], *TR.descendant_ids(conn, parent["id"])}
+
+    def still_asked(kid):
+        """A card asking a person (_ask_in_subtask) that a live task outside this tree still waits on."""
+        return ask_card(conn, kid) and any(
+            blocked not in ended and (task(conn, blocked) or {}).get("status") in ACTIVE_STATUSES
+            for blocked in TR.blocked_ids(conn, kid["id"]))
 
     def walk(above):
         for kid_id in TR.child_ids(conn, above):
@@ -6394,9 +6401,10 @@ def _finish_children(conn, actor, parent, children=None, mover=None, quiet=False
             if not kid:
                 continue
             if kid["status"] not in ("done", "closed", "declined"):
-                if actor != KEEPER and not task_private_readable(conn, actor, kid):
+                if (actor != KEEPER and not task_private_readable(conn, actor, kid)) or still_asked(kid):
                     # A private subtask the actor cannot read is neither theirs to close nor a reason their own task
-                    # stays open: it leaves the tree as it is, a standalone task its own parties still have.
+                    # stays open, and a person's card another task still waits on is not finished with: each leaves
+                    # the tree as it is, a standalone task its own parties still have.
                     TR.set_parent(conn, KEEPER, kid_id, None, note="Made standalone when its parent task finished")
                     changed["detached"].append(_child_name(conn, parent, kid))
                     continue

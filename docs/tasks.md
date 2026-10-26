@@ -784,7 +784,8 @@ standalone task, keeping its own subtasks, and the record says "Made standalone:
 asks which when the task has open subtasks. Each is the actor's own close or detach of that subtask,
 under the usual rules: a bot closes only subtasks it asked for, and one it may neither close nor
 detach refuses the whole finish, naming it, with nothing changed. A private subtask the actor
-cannot read is made standalone either way, and named only "a private subtask". Reopening the parent does not
+cannot read is made standalone either way, and named only "a private subtask"; so is a person's
+question card another open task still waits on. Reopening the parent does not
 reopen them; its history says which are "Still closed from when it closed", to reopen by hand.
 Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
