@@ -1118,10 +1118,9 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
 
 
-def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api):
-    """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
-    a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
-    choice saved for it; the line carries it once every request it settles has one, so the card shows the outcome."""
+def busy_folded_run(api):
+    """A run interrupted with a comment folded into it, a second comment queued behind it and the bot's lane busy:
+    one Needs you line settling two requests, where a choice is saved for the lane's next turn (deferred)."""
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -1140,7 +1139,14 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api)
     rival(api, machine, attempt)
     [line] = stopped_issue(api)['runs']
     assert len(line['jobs']) == 2 and line['decided'] is None and all('decided' not in j for j in line['jobs'])
-    first, second = line['jobs']
+    return line['jobs']
+
+
+def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api):
+    """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
+    a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
+    choice saved for it; the line carries it once every request it settles has one, so the card shows the outcome."""
+    first, second = busy_folded_run(api)
     body = {'decision': 'resume', 'note': 'Check what already happened, then continue.',
             'acknowledge_uncertain_effects': True}
     assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'attempt_id': first['attempt_id']})['deferred'] is True
@@ -1153,6 +1159,18 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api)
     # A reader who may not decide still sees that a choice is saved, without the handles.
     [seen] = stopped_issue(api, 'ben-test')['runs']
     assert seen['decided'] == 'resume' and 'jobs' not in seen
+
+
+def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api):
+    """The Details card decides each folded request on its own, so one can be saved as Try again and the other as
+    Don't retry. The line is still settled ("mixed"): without it the card offered a choice that sends nothing."""
+    first, second = busy_folded_run(api)
+    body = {'note': 'Each request was decided on its own.', 'acknowledge_uncertain_effects': True}
+    for job, decision in ((first, 'resume'), (second, 'dismiss')):
+        assert post(api, f"jobs/{job['id']}/reconcile",
+                    {**body, 'decision': decision, 'attempt_id': job['attempt_id']})['deferred'] is True
+    [line] = stopped_issue(api)['runs']
+    assert [j['decided'] for j in line['jobs']] == ['resume', 'dismiss'] and line['decided'] == 'mixed'
 
 
 def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():

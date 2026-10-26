@@ -239,7 +239,11 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     holding.runs = [{...stoppedRun('Billing 3/5', true, ['r2']), decided: 'resume',
       jobs: [{id: 'r2', attempt_id: 'a-r2', decided: 'resume'}]},
     {...stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
-      decided: null, jobs: [{id: 'r1', attempt_id: 'a-r1', decided: 'dismiss'}, {id: 'r1b', attempt_id: 'a-r1'}]}];
+      decided: null, jobs: [{id: 'r1', attempt_id: 'a-r1', decided: 'dismiss'}, {id: 'r1b', attempt_id: 'a-r1'}]},
+    // The Details card decided each folded request on its own, differently: the line is settled all the same.
+    {...stoppedRun('Rotate the deploy keys', false, ['r3', 'r3b']), decided: 'mixed',
+      jobs: [{id: 'r3', attempt_id: 'a-r3', decided: 'resume'}, {id: 'r3b', attempt_id: 'a-r3', decided: 'dismiss'}]},
+    {...stoppedRun('Weekly digest', true, ['r4']), decided: null}];
     // A reader who is not the bot's operator (can_review false) gets the lines without handles: no decision buttons.
     extra.push({...holding, bot: 'legal', title: 'Legal has 2 stopped runs holding up work', can_review: false,
       runs: [{title: null, cause: 'interrupted', why: 'Interrupted on its computer', routine: true, retry: false,
@@ -254,13 +258,31 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       'Choice saved. The bot is busy; Tico will try again when its turn ends.');
     assert.equal(await saved.locator('button').count(), 2);
     assert.equal(await saved.locator('button:enabled').count(), 0);
-    const partway = builderRows.nth(1);
+    const partway = builderRows.nth(1), mixed = builderRows.nth(2), open = builderRows.nth(3);
     assert.deepEqual(await partway.locator('button:enabled').allInnerTexts(), ['Don’t retry']);
+    assert.equal(await mixed.locator('[data-result]').innerText(),
+      'Choices saved. The bot is busy; Tico will apply them when its turn ends.');
+    assert.equal(await mixed.locator('button:enabled').count(), 0);
+    const builderCard = panel.locator('.settings-issue', {hasText: 'Builder has 2 stopped runs'});
+    assert.match(await builderCard.innerText(), /Try again tells the bot/);
     // The rest goes through at once, but the request saved earlier still waits for the bot's turn, so the line says so.
     deferred = false;
     await partway.locator('[data-run-decision=dismiss]').click();
     await partway.locator('[data-result]', {hasText: 'Tico will dismiss this run when its turn ends.'}).waitFor();
     assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1b', 'dismiss']]);
+    // Needs you closed and reopened before a refresh (a line is still open) keeps the outcome and offers nothing more;
+    // the hint about Try again goes once no risky line is left to decide.
+    await page.evaluate(() => needsYou());
+    assert.equal(await partway.locator('[data-result]').innerText(),
+      'Choice saved. The bot is busy; Tico will dismiss this run when its turn ends.');
+    assert.equal(await partway.locator('button:enabled').count(), 0);
+    assert.doesNotMatch(await builderCard.innerText(), /Try again tells the bot/);
+    // Deciding the last open line refreshes the card.
+    const reread = page.waitForResponse(r => new URL(r.url()).pathname === '/api/status', {timeout: 5000});
+    await open.locator('[data-run-decision=resume]').click();
+    await open.locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
+    await reread;
+    assert.deepEqual(decisions.map(d => [d.id, d.decision]), [['r1b', 'dismiss'], ['r4', 'resume']]);
     const legal = panel.locator('.settings-issue', {hasText: 'Legal has 2 stopped runs'});
     assert.equal(await legal.locator('.stopped-line').count(), 2);
     assert.equal(await legal.locator('.stopped-line').nth(0).locator('.stopped-name').innerText(), 'A request you can’t open');

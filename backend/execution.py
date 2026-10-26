@@ -556,7 +556,7 @@ def stopped_rows(c, who, auth, bot, limit=5):
     a task `who` may not read), why it stopped, whether that is `routine`, whether Try again is the safe pick
     (`retry`, by the same rule as the review card, retry_facts), when it stopped, and the jobs a decision settles.
     A choice saved while the bot's lane was busy (reconcile_job, deferred) keeps its job held: that job carries it as
-    `decided`, and a row whose every job has one carries it too, so a refreshed card shows the outcome instead of
+    `decided`, and a row whose every job has one carries it too ("mixed" when they differ), so a refreshed card shows the outcome instead of
     offering a second choice that would be refused. `runs` counts every readable run; rows stop at `limit`."""
     rows, by_run = [], {}
 
@@ -586,8 +586,9 @@ def stopped_rows(c, who, auth, bot, limit=5):
                        "jobs": [handle(job)]}
         rows.append(by_run[key])
     for row in rows:
+        # The Details card decides each folded request on its own, so they can differ.
         saved = {job.get("decided") for job in row["jobs"]}
-        row["decided"] = saved.pop() if len(saved) == 1 else None
+        row["decided"] = None if None in saved else saved.pop() if len(saved) == 1 else "mixed"
     return rows, len(by_run)
 
 
