@@ -1082,6 +1082,7 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
+        value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
         # Most list rows have no hold or accumulated clock; omit empty optional fields.
