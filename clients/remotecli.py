@@ -112,6 +112,8 @@ def run(args, who=None):
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
+    if args.cmd == "settings":
+        return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
         return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.

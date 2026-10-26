@@ -251,6 +251,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub sleep set --hours N [--runners on|off]
                                            1-24 quiet hours, 0 = off; bot computers stop with it unless --runners off
     hub notice list                        notices from Tico Team, newest first (tico.notice in rules)
+    hub settings find "<words>"            a control in Settings by its words: key, place, who may change it, class
+    hub settings show <key> [--bot B|--computer C|--person P|--id I]
+                                           its value, who may change it and the link to its card
+    hub settings set <key> <value> [--bot B|--computer C|--person P|--id I]
+                                           change it as yourself (BotOps: as the person who asked; a confirm one is
+                                           their Confirm card, a person-only one says why and links the card)
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -1851,6 +1857,23 @@ def parser():
     s = notice.add_parser("list", help="the notices Tico Team sent, newest first")
     s.set_defaults(fn="notice list")
 
+    catalogue = sub.add_parser("settings", help="find, read and change a control in Settings by its words "
+                               "(docs/permissions.md)").add_subparsers(dest="sub")
+    s = catalogue.add_parser("find", help="settings whose name, place or key hold these words")
+    s.add_argument("words")
+    s.set_defaults(fn="settings find")
+    for leaf, text in (("show", "one setting: its value, who may change it and its card"),
+                       ("set", "change one setting as yourself, or BotOps as the person who asked")):
+        s = catalogue.add_parser(leaf, help=text)
+        s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
+        if leaf == "set":
+            s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
+        target = s.add_mutually_exclusive_group()
+        target.add_argument("--bot", help="the bot, for a setting set per bot")
+        target.add_argument("--computer", help="the computer, for a setting set per computer")
+        target.add_argument("--id", help="the one thing it sets: a trigger, webhook, rule, routine, repository...")
+        target.add_argument("--person", help="the person's id, for a setting set per person")
+        s.set_defaults(fn="settings " + leaf)
     release = sub.add_parser("release", help="the team's releases: ask for one now, or set the daily hour").add_subparsers(dest="sub")
     s = release.add_parser("now", help="ask the Release Manager to release what is at Pending Release now (hotfix, "
                                        "midday release); one task listing the tickets")
