@@ -471,7 +471,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
     beside a young free one is neither."""
-    from .execution import bot_claimable, prime_claimables
+    from .execution import bot_claimable, prime_claimables, queued_reasons
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
@@ -573,6 +573,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
+            # Counts belong to the individual job's task, not the representative oldest job.
+            groups = {}
+            for job, why in queued_reasons(c, settings, where[0], slug, limits):
+                key = why or "slow"
+                group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created"]})
+                group["queued"] += 1
+                group["oldest"] = min(group["oldest"], job["created"])
+            row["queue_reasons"] = list(groups.values())
             reason = ("limit" if refused == "limit" else "updating" if where[0] in updating
                       else "restarting" if where[0] in restarting else refused or "slow")
             slow.append({**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"})
@@ -771,10 +779,20 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix("Open Runs", "#/settings", "runs")
+        queue_reasons = row.get("queue_reasons") or []
+        if len(queue_reasons) > 1 and reason not in ("no_slot", "busy", "updating", "restarting"):
+            # Keep one bot row, but never describe all its jobs with the oldest job's hold.
+            words = {"task_wait": "waiting for a snooze, prerequisite, person or check",
+                     "task_next_run": "deferred to the next run or a stored resume condition",
+                     "slow": "ready to start"}
+            text = "; ".join(_plural(item["queued"], "job") + ": " + words.get(item["reason"],
+                            HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"))
+                             for item in queue_reasons)
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
                    | {"why": text[:320], "fix": fix if full else None,
+                      **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 
