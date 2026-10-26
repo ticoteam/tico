@@ -6144,11 +6144,9 @@ def _waiting_bot(conn, actor, row, bot_actor_id):
                f"Nothing {slug} owns blocks this task, so Tico cannot tell which of its work resumes it: link that "
                f"task first with hub task wait {row['id']} --on task:<its task>, then --on {bot_actor_id}")
     if first["owner"] != bot_actor_id:
-        # A private blocker the actor cannot read is not named.
-        which = (f"task:{first['id']}, is {actor_id(first['owner'])}'s" if task_private_readable(conn, actor, first)
-                 else "is someone else's")
+        # Keep diagnostics independent of the blocker's read audience.
         refuse(conn, actor, "waiting_on",
-               f"This task's first open blocker, {which}, so its views would name them, not {slug}: wait on that "
+               f"This task's first open blocker belongs to another owner, so its views would not name {slug}: wait on that "
                f"blocker's owner, or take it off with hub task wait {row['id']} --on task:<it> --remove first")
     return ""
 

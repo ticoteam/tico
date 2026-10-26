@@ -7,7 +7,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_api import api  # noqa: F401  (fixture)
+from backend.tests.test_api import api, get, headers, post, restrict, setup_attempt  # noqa: F401  (fixture)
 
 
 @pytest.fixture
@@ -65,9 +65,9 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, out
     ("bot:finance", "finance is not an active bot on the team"),
     ("bot:nobody", "bot:nobody is not a person or an active bot on the team"),
     ("ops!", "ops! is not a person or an active bot on the team"),
-    ("bot:cpo", "first open blocker, task:"),           # a bot that does not own the prerequisite here
+    ("bot:cpo", "first open blocker belongs to another owner"),           # a bot that does not own the prerequisite here
 ])
-def test_an_invalid_bot_target_is_refused_with_the_valid_target_and_changes_nothing(c, target, says):
+def test_an_invalid_bot_target_is_refused_with_guidance_and_changes_nothing(c, target, says):
     task, _ = parked(c)
     before = dict(H.task(c, task["id"]))
     with pytest.raises(H.Refused) as refused:
@@ -120,3 +120,41 @@ def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
     H.task_update(c, "bot:cpo", other["id"], status="waiting", waiting_on="ana",
                   note="Approve the launch post? I'll publish it after.")
     assert H.wait_detail(c, H.task(c, other["id"]))["on"] == "human:ana"
+
+
+@pytest.mark.parametrize("readable", [False, True])
+def test_api_bot_wait_mismatch_preserves_task_and_uses_generic_diagnostic(api, readable):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','ops')")
+    _, _, attempt = setup_attempt(api, "cpo", operator="ben")
+    token = attempt["token"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Ship after prerequisite", "", "bot:cpo", lint=False, private=False)
+        pre = H.task_create(c, "human:ana", "Complete prerequisite", "", "bot:ops", lint=False, private=False)
+    post(api, "tasks/" + task["id"] + "/relations", {"task": pre["id"], "kind": "blocked_by"})
+    with api.app.state.store.transaction() as c:
+        if not readable:
+            restrict(c, "ops", see={"everyone": True}, read={"people": ["ana"]}, write={"people": ["ana"]})
+        assert H.task_private_readable(c, "bot:cpo", pre)  # company visibility is only part of read access
+        before = dict(H.task(c, task["id"]))
+        events = [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))]
+    detail = get(api, "tasks/" + task["id"], token)["task"]
+    rows = get(api, "tasks", token)["tasks"]
+    listed = next(t for t in rows if t["id"] == task["id"])
+    for served in (detail, listed):
+        links = [r["id"] for rs in served.get("relations", {}).values() for r in rs]
+        assert (pre["id"] in links) is readable
+    assert (pre["id"] in {t["id"] for t in rows}) is readable
+    get(api, "tasks/" + pre["id"], token, expected=200 if readable else 403)
+    response = api.post("/api/v2/tasks/" + task["id"], headers=headers(token), json={
+        "version": before["version"], "status": "waiting", "note": "Needs prerequisite first.",
+        "waiting_on": "bot:cpo"})
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "waiting_on", response.text
+    assert "first open blocker" in response.text
+    assert pre["id"] not in response.text and "ops" not in response.text
+    with api.app.state.store.read() as c:
+        after = dict(H.task(c, task["id"]))
+        assert {k: after[k] for k in ("status", "note", "waiting_on", "version")} == {
+            k: before[k] for k in ("status", "note", "waiting_on", "version")}
+        assert [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task["id"],))] == events
