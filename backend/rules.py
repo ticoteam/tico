@@ -1140,10 +1140,11 @@ def seed_dev(conn):
         return
 
 
-def step_entered(conn, actor, row):
+def step_entered(conn, actor, row, *, skip=()):
     """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
     else hears nothing. Only rows that name `step_entered` start this, so a team without them writes no message on a
-    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach."""
+    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
+    Callers can skip recipients already notified by the event that moved the task."""
     try:
         if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
             return
@@ -1153,7 +1154,7 @@ def step_entered(conn, actor, row):
         who = [row.get("owner"), row.get("requester"), H.bot_actor(qa) if qa else None,
                H.bot_actor(manager) if manager else None]
         conv = H.conversation(conn, row.get("conversation_id"))
-        for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor):
+        for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
             if _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
