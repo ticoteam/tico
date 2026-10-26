@@ -1065,7 +1065,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert claim(api, machine)                             # reviewed: the waiting work runs
 
 
-def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is_not_a_bug(api):
+def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is_not_a_bug(api, monkeypatch):
     """Oct 26 (Chris): a computer restart held Builder (OpenAI)'s runs, and Needs you showed "6 stopped runs" as one
     paragraph of quoted titles. A message folded into a run rides on its line (one choice settles both), the count is
     of runs, and the interruption is named with its time so the person knows it is not a bug."""
@@ -1102,6 +1102,16 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
         'Ship the receipts fix', 'interrupted', 'Interrupted on its computer', True)
     assert sorted(j['id'] for j in line['jobs']) == sorted(jobs)
     assert {j['attempt_id'] for j in line['jobs']} == {attempt['id']}
+    # A run past the listed ones may have stopped some other way: the shared "not a bug" line needs every run shown.
+    from backend import execution
+    listed = execution.stopped_rows
+    def one_more_run(*args, **kwargs):
+        rows, runs = listed(*args, **kwargs)
+        return rows, runs + 1
+    monkeypatch.setattr(execution, 'stopped_rows', one_more_run)
+    issue = stopped_issue(api)
+    assert issue['more_runs'] == 1 and issue['detail'] == '1 queued request waits until you decide.'
+    monkeypatch.setattr(execution, 'stopped_rows', listed)
     for job in line['jobs']:
         post(api, f"jobs/{job['id']}/reconcile", {'attempt_id': job['attempt_id'], 'decision': 'resume',
              'note': 'Check what already happened, then continue.', 'acknowledge_uncertain_effects': True})
