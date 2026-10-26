@@ -1458,6 +1458,13 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     # against them see the same database.
     visible = auth.task_sql(c, who)
     raw = H.needs_you(c, who.actor)
+    from . import assigned_start
+    listed = {row['id'] for key in ('tasks', 'waiting', 'declined') for row in raw[key]}
+    for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor):
+        if (assigned_start.manager(c, row) == who.actor and row['id'] not in listed
+                and _readable(auth, c, who, row['id'])):
+            raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
+                                 'note': assigned_start.description(c, row, auth.settings)})
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
@@ -1497,6 +1504,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                     "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
+            if row.get('assigned_not_started'):
+                item.update(assigned_not_started=True, note=row['note'])
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.

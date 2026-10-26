@@ -29,8 +29,12 @@ ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
+CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+
+
 def _config(c, bot):
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    from .read_cache import one
+    row = one(c, CONFIG_SQL, (bot,))
     return H._json(row["config_json"], {}) or {} if row else {}
 
 

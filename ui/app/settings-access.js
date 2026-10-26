@@ -62,7 +62,8 @@ function settingsAccessCell(e) {
 }
 // Who owns a bot: its creator and co-owners (and its operator). Whoever it reports up to and the admins own it too,
 // without being listed. Any owner adds or removes humans here; the server checks it (docs/permissions.md).
-async function settingsEditBotOwners(slug) {
+// `stage` (the bot editor): Done hands the save to the editor, which runs it with Save bot.
+async function settingsEditBotOwners(slug, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
   let dialog = botSettingsPanel('bot-owners-editor', 'owner-picker', 'bot-owners-title') || $('#bot-owners-editor');
@@ -76,7 +77,7 @@ async function settingsEditBotOwners(slug) {
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-owners-title">Who owns ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-owners-close aria-label="Close">✕</button></div>
     <div class="owner-picker-body">${e.operator ? `<p class="muted">${esc(settingsPersonName(e.operator))} is responsible for this bot and always stays an owner.</p>` : ''}
       <div class="owner-options">${people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${listed.has(person.id) || person.id === e.operator ? 'checked' : ''} ${person.id === e.operator ? 'disabled' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
-      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span></div></div></form>`;
+      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span></div></div></form>`;
   dialog.querySelectorAll('[data-owners-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
@@ -84,10 +85,15 @@ async function settingsEditBotOwners(slug) {
     const add = [...chosen].filter(id => !listed.has(id) && id !== e.operator), remove = [...listed].filter(id => !chosen.has(id) && id !== e.operator);
     const status = dialog.querySelector('[data-owners-status]');
     if (!add.length && !remove.length) { settingsPanelClose(dialog); return; }
+    if (stage) {
+      stage(async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/co-owners`, {add, remove}))?.revision ?? rev + 1,
+        people.filter(person => chosen.has(person.id) || person.id === e.operator));
+      settingsPanelClose(dialog); return;
+    }
     dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
     try {
       await post(`/v2/bots/${encodeURIComponent(slug)}/co-owners`, {add, remove});
-      settingsPanelClose(dialog); await loadSettings(); toast(`Updated who owns ${e.display_name}`);
+      settingsPanelClose(dialog); await loadSettings(); toast('Saved');
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
@@ -111,7 +117,7 @@ async function settingsMailSummary(root, slug) {
     cell.textContent = mailSettingText(m) + (m.unapproved ? ' · bot.yaml asks for more' : '');
   } catch { cell.textContent = ''; }
 }
-async function settingsEditMail(slug, after) {
+async function settingsEditMail(slug, after, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
   let dialog = botSettingsPanel('bot-mail-editor', 'owner-picker', 'bot-mail-title') || $('#bot-mail-editor');
@@ -121,23 +127,30 @@ async function settingsEditMail(slug, after) {
     document.body.append(dialog);
   }
   let m;
-  try { m = await get(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`); } catch (error) { toast(error.message); return; }
+  try { m = await get(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`); } catch (error) { toast(error.message, true); return; }
   const asks = m.requested ? `bot.yaml asks: ${m.requested.outbound_send ? 'send without approval' : 'no sending'}${m.requested.forward_to.length ? `, forward to ${m.requested.forward_to.join(', ')}` : ''}.` : 'bot.yaml asks for nothing.';
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-mail-title">Mail sending for ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-mail-close aria-label="Close">✕</button></div>
     <div class="owner-picker-body">
       <p class="muted">With sending on, ${esc(e.display_name)} mails people in the team, the sender of a thread it answers and the forward addresses below without asking each time. Everyone else still needs an approval. ${esc(asks)}</p>
       <label class="owner-option"><input type="checkbox" name="outbound_send" ${m.outbound_send ? 'checked' : ''}><span>Send without a per-message approval</span></label>
       <label>Forward addresses<input name="forward_to" type="text" autocomplete="off" spellcheck="false" value="${esc((m.forward_to || []).join(', '))}" placeholder="me@personal.example"></label>
-      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
+      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
   dialog.querySelectorAll('[data-mail-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const form = event.target, status = dialog.querySelector('[data-mail-status]');
     const forward_to = form.elements.forward_to.value.split(/[,;\s]+/).map(a => a.trim()).filter(Boolean);
+    const outbound_send = form.elements.outbound_send.checked;
+    if (stage) {
+      // Mail settings carry no bot revision: the next save starts from the same one.
+      stage(async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`, {outbound_send, forward_to}); return rev; },
+        {set: true, outbound_send, forward_to});
+      settingsPanelClose(dialog); return;
+    }
     dialog.querySelectorAll('button,input').forEach(control => { control.disabled = true; }); status.textContent = 'Saving…';
     try {
       await post(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`, {outbound_send: form.elements.outbound_send.checked, forward_to});
-      settingsPanelClose(dialog); toast(`Updated mail sending for ${e.display_name}`); if (after) void after();
+      settingsPanelClose(dialog); toast('Saved'); if (after) void after();
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => { control.disabled = false; });
@@ -155,7 +168,7 @@ function accessPresetOf(policy) {
   if (!policy.see.everyone && same(policy.see, policy.read) && same(policy.read, policy.write)) return 'private';
   return 'custom';
 }
-async function settingsEditAccess(slug) {
+async function settingsEditAccess(slug, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
   let data;
@@ -199,7 +212,7 @@ async function settingsEditAccess(slug) {
       <fieldset class="access-presets"><legend>Access</legend>${ACCESS_PRESETS.map(([value, label, hint]) =>
         `<label><input type="radio" name="preset" value="${value}" ${value === preset ? 'checked' : ''}><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('')}</fieldset>
       <div data-access-pickers></div>
-      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></div></form>`;
+      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></div></form>`;
   paintPickers();
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-access-status]');
   dialog.querySelectorAll('[data-access-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
@@ -227,10 +240,15 @@ async function settingsEditAccess(slug) {
   form.onsubmit = async event => {
     event.preventDefault();
     collect();
+    if (stage) {
+      const policy = {see: draft.see, read: draft.read, write: draft.write};
+      stage(async rev => (await put(`/v2/bots/${encodeURIComponent(slug)}/access`, {...policy, revision: rev}))?.revision ?? rev + 1, policy);
+      settingsPanelClose(dialog); return;
+    }
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = 'Saving…';
     try {
       await put(`/v2/bots/${encodeURIComponent(slug)}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
-      settingsPanelClose(dialog); await loadSettings(); toast(`Updated access to ${e.display_name}`);
+      settingsPanelClose(dialog); await loadSettings(); toast('Saved');
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false; }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };

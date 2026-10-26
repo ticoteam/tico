@@ -49,6 +49,9 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=general]').click();
     const input = page.locator('#settings-team-icon-file'), status = page.locator('#settings-team-icon-status');
+    // A toast lasts a few seconds, so an earlier save's Saved is still up during the next one: each wait counts only
+    // toasts that appeared after this mark.
+    const forgetToasts = () => page.evaluate(() => document.querySelectorAll('.toast').forEach(t => { t.dataset.seen = '1'; }));
     await page.waitForFunction(() => !document.querySelector('#settings-team-icon').hidden);
     await input.setInputFiles({name:'logo.gif',mimeType:'image/gif',buffer:logo});
     assert.match(await status.innerText(), /PNG, JPEG or WebP/);
@@ -56,11 +59,13 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     assert.match(await status.innerText(), /up to 1 MB/);
     assert.equal(writes.length,0);
     failures = 1;
+    await forgetToasts();
     await input.setInputFiles({name:'logo.png',mimeType:'image/png',buffer:logo});
     await page.waitForFunction(() => document.querySelector('#settings-team-icon-change').disabled);
     await page.evaluate(async () => { await loadSettings(); route(); });
     assert.equal(await page.locator('#settings-team').isVisible(),true);
-    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status').textContent === 'Team icon saved');
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast:not([data-seen])')].some(t => t.textContent === 'Saved'));
+    assert.equal(await status.innerText(), '', 'no error left under the icon');
     assert.equal(writes.length,2);
     assert.equal(writes[0].key,writes[1].key);
     assert.deepEqual(writes[0].body,logo);
@@ -82,8 +87,10 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await input.setInputFiles({name:'retry.png',mimeType:'image/png',buffer:logo});
     await page.waitForFunction(() => document.querySelector('#settings-team-icon-status').textContent.includes('Could not confirm'));
     const pending = writes.at(-1).key;
+    await forgetToasts();
     await input.setInputFiles({name:'retry.png',mimeType:'image/png',buffer:logo});
-    await page.waitForFunction(() => document.querySelector('#settings-team-icon-status').textContent === 'Team icon saved');
+    await page.waitForFunction(() => [...document.querySelectorAll('.toast:not([data-seen])')].some(t => t.textContent === 'Saved'));
+    assert.equal(await status.innerText(), '', 'no error left under the icon');
     assert.equal(writes.at(-1).key,pending);
     role = 'human';
     await page.reload();

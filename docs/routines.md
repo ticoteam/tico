@@ -105,7 +105,7 @@ idempotency: a coalesced or retried occurrence can repeat an effect.
 ## Seeing what ran
 
 The Routines page (`#/recurring`) and each bot's Routines card list every routine the signed-in
-human can see: cadence, next fire, whether it is armed, whether it is paused, and — when the
+human can see: cadence, next fire, whether it is on (each row has its On switch and Edit), whether it is paused, and — when the
 bot reads email — its mailboxes. Expand a row for the recent firings: the occurrence, the outcome
 (`created`, `coalesced`, `event`), the task's status, when its latest run started, how long
 it ran, and a link to the task. `hub sql` reads the same rows: `schedules`,

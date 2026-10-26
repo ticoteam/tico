@@ -53,7 +53,8 @@ async function renderSettingsRepos(fresh) {
   if (!$('#set-repos')) return;
   const admin = settingsIsAdmin(), dis = admin ? '' : ` disabled title="${REPO_LOCKED}"`;
   if (!REPOS.github_connected) {
-    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${S.me?.role === 'owner' ? ` <a href="${INTEGRATIONS}" data-repos-connect>Connect GitHub</a>` : ''}</p>`;
+    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${S.me?.role === 'owner' ? ` <a href="${INTEGRATIONS}" data-repos-connect>Connect GitHub</a>`
+      : ` <span data-repos-ask>Ask ${esc(settingsOwnerName() || 'the owner')} to connect GitHub.</span>`}</p>`;
     return;
   }
   const bots = (REPOS.repositories || []).filter(r => r.bot_repo).length;
@@ -63,6 +64,7 @@ async function renderSettingsRepos(fresh) {
       <label class="repos-bots"><input type="checkbox" data-repos-archived${REPOS_SHOW_ARCHIVED ? ' checked' : ''}>Show archived</label>
       <button class="ghost repos-small" type="button" data-repos-refresh${dis}>Refresh</button></header>
     <p class="repos-line">Refreshes daily and on Refresh. Archived repositories are hidden unless Show archived is selected.</p>
+    ${admin ? '' : settingsWhoCanHTML('which repositories bots use', {admins: true})}
     <div class="repos-bar"><span class="repos-k" id="repos-newbot">New bots get</span>
       ${repoSegHTML('repos_new_bot', 'New bots get', [['own', 'Own repo only'], ['all', 'All ticked repos']], REPOS.new_bot_default || 'own', !admin)}
       <input type="search" class="repos-filter" data-repos-filter placeholder="Filter" aria-label="Filter repositories" autocomplete="off" hidden></div>
@@ -95,11 +97,13 @@ async function reposSave(name, body, control) {
   if (!row) return;
   const tick = control.matches('[data-repo-tick]');
   if (tick) control.disabled = true;
+  settingsFieldClear(control);
   try {
     const saved = await put(`/v2/repositories/${repoPath(name)}`, body);
     Object.assign(row, saved && saved.full_name ? saved : body,
       body.setup_command !== undefined && !(saved && saved.full_name) ? {setup_source: body.setup_command ? 'settings' : null} : {});
-  } catch (error) { toast(error.message, true); }
+    toast('Saved');
+  } catch (error) { settingsFieldError(control, error.message); }
   if (tick) { control.disabled = false; if (document.activeElement === document.body) control.focus(); }
   reposPatchRow(row);
 }
@@ -117,9 +121,10 @@ document.addEventListener('change', async event => {
   }
   if (t.name === 'repos_new_bot') {
     const before = REPOS.new_bot_default || 'own';
-    try { await put('/v2/repositories/settings', {new_bot_default: t.value}); REPOS.new_bot_default = t.value; }
+    settingsFieldClear(t.closest('.repo-seg'));
+    try { await put('/v2/repositories/settings', {new_bot_default: t.value}); REPOS.new_bot_default = t.value; toast('Saved'); }
     catch (error) {
-      toast(error.message, true);
+      settingsFieldError(t.closest('.repo-seg'), error.message);
       const back = host.querySelector(`input[name=repos_new_bot][value="${before}"]`); if (back) back.checked = true;
     }
   }

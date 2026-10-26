@@ -105,6 +105,27 @@ Omit the value to read it. The matching MCP tool and `POST /api/v2/bots/{bot}/ke
 the same permissions and revision check. **Settings → Rules** lists **Start assigned tasks** using
 WHEN/THEN wording; its `start_task` catalog action uses the same task delivery and claim checks.
 
+Hand a ready batch of On Deck tickets to builders in one pass. Each assigned ticket already has its
+own session and can start on a free turn; it does not need another Lead turn for each ticket.
+The ordinary task cap and prerequisite checks still apply to the whole batch.
+
+If an open assignment has no attempt after one hour, **Recover unstarted assignments** wakes its
+owner once, including a Lead. Waiting, snoozed and deferred work is excluded. The recovery wake
+does not bypass a task cap, an explicit automatic-start off switch or any execution hold. If it
+still has no attempt two hours after that wake, Health and its manager's Needs you show
+**Assigned, not started**, the task title and its current refusal reason. Only readers of that
+task see it; being the manager does not grant access to a private task. An attempt, a wait or
+completion clears the item. A new assignment starts its own one-hour clock.
+
+Health checks the queued job's lane and claim refusal even when the bot has another turn running.
+For claimable work it measures the job the claim would take first, including priority for a person's
+message, so an older job does not hide a person waiting for a reply or make a young queue look stuck.
+The oldest queued job outside a running lane continuously observed refusing claims for twelve
+hours becomes a stuck item, with the current reason. A different job or reason, a pause or hold,
+or a gap of more than five minutes in observations starts a new clock. An old queue alone does
+not establish twelve hours of refusal. Missing task conversations and failed recovery delivery
+are recorded once and shown with the unstarted assignment, rather than silently omitted.
+
 ## Work that is waiting
 
 Keep actively worked tasks in **Doing**. When another task must finish first, relate the blocker,
@@ -360,7 +381,7 @@ nothing by then (the team's days after the ask, 3 by default, or its later `by`;
 `--default-kind` is required with `--if-no-answer`), Tico answers for them with "No answer from Ana by
 Oct 16, so Writer goes ahead with what it said it would do: Yes", which wakes the bot with that choice. A send,
 spending money or a delete never goes ahead without an answer: the card says so, and on its date the question closes and the bot decides without it. The owner turns this off,
-or changes the days, in Settings > Humans (**Bots go ahead on their recommendation**).
+or changes the days, in Settings > People (**Bots go ahead on their recommendation**).
 
 A send, a spend, a delete, any default when the owner turned going ahead off, and any default once the person has
 written since the ask (a comment, a Clarify tap) never goes ahead, but its question still closes on its date: the bot is

@@ -53,29 +53,30 @@ async function profileSave(slug, body, revision) {
     let count = 0;
     try { count = (await get(`/v2/bots/${encodeURIComponent(slug)}/profile`)).rules || 0; } catch {}
     const what = count ? `${count} wake rule${count === 1 ? '' : 's'}` : 'its own wake rules';
-    if (!confirm(`Leaving Custom deletes ${what} of ${empName(slug)}'s. Go on?`)) return null;
+    if (!await settingsConfirm({title: 'Leave Custom?', ok: 'Leave Custom', text: `Leaving Custom deletes ${what} of ${empName(slug)}'s.`})) return null;
     return post(`/v2/bots/${encodeURIComponent(slug)}/profile`, {...body, expected_revision: revision, confirm_drop_rules: true});
   }
 }
-async function profileChange(target) {
+// The bot editor holds a profile change until Save bot (settingsEditBot): the save it will run, given the bot's
+// revision, or null when the box shows what is saved. Picking Custom shows its own fields once saved.
+function profileStaged(target) {
   const box = target.closest('[data-bot-profile-box]'), slug = box?.dataset.botProfileBox;
-  const e = S.emps.find(row => row.name === slug); if (!e) return;
-  const current = e.profile?.name || 'doer';
-  let body;
-  if (target.matches('[data-bot-profile]')) {
-    if (target.value === target.dataset.current) return;
-    body = {profile: target.value};
-  } else {
-    const key = target.dataset.profileKey;
-    body = {profile: current, [key]: key === 'sweeps' ? target.checked : key === 'digest_hour' ? Number(target.value) : target.value};
-  }
-  box.querySelectorAll('select, input').forEach(el => { el.disabled = true; });
-  try {
-    const out = await profileSave(slug, body, e.revision);
-    if (out) toast(body.profile === current ? 'Profile updated' : `${empName(slug)} is now ${profileLabel(body.profile)}`);
-  } catch (error) { toast(error.message, true); }
-  await loadSettings();      // the revision moved, or the picker goes back to what is saved
-  if (box.isConnected) box.innerHTML = profileFieldsHTML(S.emps.find(row => row.name === slug) || e, PROFILE_LIST);
+  if (!S.emps.find(row => row.name === slug)) return null;
+  const select = box.querySelector('[data-bot-profile]');
+  const initial = el => el.type === 'checkbox' ? el.defaultChecked : [...(el.options || [])].find(o => o.defaultSelected)?.value ?? el.defaultValue;
+  const valueOf = el => el.type === 'checkbox' ? el.checked : el.value;
+  const words = box.querySelector('[data-profile-description]'), chosen = PROFILE_LIST?.find(c => c.name === select.value);
+  if (words && chosen) words.textContent = chosen.description || '';
+  const body = {profile: select.value};
+  if (select.value === initial(select)) box.querySelectorAll('[data-profile-key]').forEach(el => {
+    if (String(valueOf(el)) !== String(initial(el))) body[el.dataset.profileKey] = el.dataset.profileKey === 'digest_hour' ? Number(el.value) : valueOf(el);
+  });
+  if (select.value === initial(select) && Object.keys(body).length === 1) return null;
+  return async rev => {
+    const out = await profileSave(slug, body, rev);
+    if (!out) throw new Error('Profile not changed: Custom keeps its wake rules. Pick Custom again, or press Save bot to ask again.');
+    return out.revision ?? rev + 1;
+  };
 }
 // A history row's value: the profile and, when it set any, its own numbers.
 function profileHistoryWords(value) {

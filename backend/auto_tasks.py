@@ -19,18 +19,45 @@ def startable(c, row):
     return row.get('type_id') == H.GENERAL_TYPE or bool(step and step[0] == 'On Deck')
 
 
-def review(c, row):
+def review(c, row, *, parent_id=None):
     """A delegated review child has its own session and no task cap."""
-    parent = H.TR.parent_of(c, row['id'])
+    parent = parent_id or (H.TR.parent_of(c, row['id']) if row.get('id') else None)
     parent = H.task(c, parent) if parent else None
     if not parent or parent['owner'] == row['owner']:
         return False
     step = c.execute('SELECT name FROM task_steps WHERE id=?', (parent.get('step_id'),)).fetchone()
-    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA'))
+    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
 
 
-def waiting(c, row, starting=False):
-    if snoozed(row) or row.get('next_run'):
+def next_run_held(c, row):
+    """A real next-run deferral holds; a task reopened from Waiting has work of its own again.
+
+    Read the transition so already-queued Open notices recover too. A later quiet-work decision,
+    stored resume condition or a run that picked up the reopened work still owns it.
+    """
+    if not row.get('next_run'):
+        return False
+    if row.get('resume_json') or row['status'] != 'open':
+        return True
+    move = c.execute("SELECT rowid,ts,old,new FROM task_events WHERE task_id=? AND field='status' "
+                     "ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()
+    if not move or (move['old'], move['new']) != ('waiting', 'open'):
+        return True
+    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='quiet' AND actor<>? AND rowid>? LIMIT 1",
+                 (row['id'], H.KEEPER, move['rowid'])).fetchone():
+        return True
+    if row.get('carried_by') and H._has_table(c, 'attempts'):
+        carrier = c.execute("SELECT state,created FROM attempts WHERE id=?", (row['carried_by'],)).fetchone()
+        if carrier and (carrier['state'] in ('leased', 'running') or
+                        carrier['state'] == 'completed' and carrier['created'] >= move['ts']):
+            # Settlement clears untouched work's carrier. A completed carrier retained after this
+            # reopen already worked it; only a later reopen makes that delivery obsolete.
+            return True
+    return False
+
+
+def waiting(c, row, starting=False, *, include_next_run=True):
+    if snoozed(row) or include_next_run and next_run_held(c, row):
         return True
     if H._has_table(c, 'worktree_waits') and c.execute(
             "SELECT 1 FROM worktree_waits WHERE task_id=? AND state IN ('waiting','reserved') LIMIT 1",
@@ -74,8 +101,10 @@ def refusal(c, row, config, woken=False):
     that, while waits, the off switch and the task cap still do."""
     if not startable(c, row):
         return None
-    if waiting(c, row, starting=True):
+    if waiting(c, row, starting=True, include_next_run=False):
         return 'task_wait'
+    if next_run_held(c, row):
+        return 'task_next_run'
     from . import profiles
     if not woken and (why := profiles.pull_refusal(c, row, config)):
         return why                  # the profile does not pull open tasks by itself (backend/profiles.py)
@@ -149,6 +178,9 @@ def enqueue(c, row):
 def started(c, row):
     if not startable(c, row):
         return row
+    if row.get('next_run') and not next_run_held(c, row):
+        c.execute('UPDATE tasks SET next_run=0,carried_by=NULL WHERE id=?', (row['id'],))
+        H._task_event(c, row['id'], H.KEEPER, 'next_run', '1', '0', 'reopened from waiting')
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
     H._set_status(c, H.KEEPER, row, status='doing', step=step, note='Automatic start on a free turn')

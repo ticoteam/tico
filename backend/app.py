@@ -6331,6 +6331,8 @@ def create_app(settings=None):
     install_groups(app, store, auth, mutate, settings)
     from .report_order import install as install_report_order
     install_report_order(app, store, auth, mutate)
+    from .settings_catalog import install as install_settings_catalog
+    install_settings_catalog(app, store, auth, settings)
     from .support import install as install_support
     install_support(app, store, settings, census)
     from .inbound import install as install_inbound

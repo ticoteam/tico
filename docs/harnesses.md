@@ -169,7 +169,8 @@ all three and press **Apply** to use the existing confirmation and checkpoint tr
 a field alone does not switch the running bot. Cancel restores the saved selection. In the bot editor,
 **Save bot** with a model picked but not applied opens the same confirmation; press **Prepare change** to
 save the bot and start the change, or **Cancel** to keep the editor open with "Model change not applied".
-A fallback picked in the bot editor is saved by its **Apply** button or by **Save bot**; if it can't be
+Everything else in the bot editor (fallback, task model, access, owners, computer, profile, run budget) is held until
+**Save bot**, which saves it all together; a line above the button lists what is not saved yet. If something can't be
 saved, the editor stays open with the reason.
 
 A subscription quota response is a usage limit. The runner uses its configured fallback, or another
@@ -217,7 +218,7 @@ Use **Task model** to choose a harness, model and effort for a bot's task sessio
 3. Click **Apply**.
 
 The **Tasks** mark gets an accent dot when a task model is set. For example, you can keep a bot on Sonnet 5.5
-and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot editor, then click **Apply** or
+and choose Haiku 5.5 for its tasks. You can also use **Task model** in the bot editor, then click
 **Save bot**. To clear the choice, pick **Same as bot** and apply it. Changing the bot's own model leaves its task model set.
 
 If a choice cannot be saved, the row or editor shows the reason. A saved task model that cannot run falls back

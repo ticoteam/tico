@@ -244,3 +244,19 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
   .strat-realign-goal{flex-direction:column;align-items:stretch;gap:6px}
   .strat-realign-f{flex-basis:auto}
 }
+/* Goal suggestion cards (ui/goals-kpis.js goalPropHtml): what yes changes on one line, then what it would change, why,
+   and the buttons named for what they do. The target fields of an Add a KPI card stay folded until opened. */
+.kpi-prop[data-prop-kind]{align-items:flex-start}
+.kpi-prop[data-prop-kind] .kpi-prop-main{flex:1 1 auto;flex-direction:column;align-items:stretch;gap:3px}
+.kpi-prop-head{overflow-wrap:anywhere}.kpi-prop-target{font-size:var(--t-base)}
+.kpi-prop-warn{font-size:var(--t-sm)}.kpi-prop-warn::before{content:'';display:inline-block;width:7px;height:7px;margin-right:6px;border-radius:50%;background:var(--wait);vertical-align:1px}
+.kpi-prop-line{margin:0 0 4px;font-size:var(--t-sm);flex-basis:100%}
+.kpi-prop-do:has(.kpi-prop-line){flex-wrap:wrap;max-width:280px}
+.kpi-prop-set{margin-top:4px;font-size:var(--t-base)}.kpi-prop-set summary{cursor:pointer;color:var(--accent,inherit);width:max-content}
+.kpi-prop-tf{margin-top:6px;display:grid;gap:var(--s2,8px)}
+.prop-np{display:grid;gap:2px;margin:2px 0;font-size:var(--t-base);line-height:1.4}
+.prop-np-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
+.prop-np-k{color:var(--muted);font-size:var(--t-sm)}.prop-np-v{overflow-wrap:anywhere;white-space:pre-line}
+.prop-np-label{margin-top:4px;font-weight:600;font-size:var(--t-sm)}
+.prop-np-clamp .prop-np-v{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.prop-np>.linkish{justify-self:start;font-size:var(--t-sm)}

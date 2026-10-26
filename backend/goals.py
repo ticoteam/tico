@@ -794,6 +794,57 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
     return None
 
 
+# What a goal suggestion card says beside the payload (ui/goals-kpis.js goalPropHtml): the names, the measure an Add a
+# KPI suggestion adds (new or reused), targets in words, and Now / Proposed for new wording or a new definition.
+CARD_FIELDS = {"name": "Name", "definition": "Definition", "unit": "Unit", "direction": "Direction",
+               "cadence": "Cadence", "source_note": "Source"}
+
+
+def card(conn, p, hidden, editor):
+    """What the card tells this reader. `hidden`: owners whose goals and KPIs the reader may not read
+    (backend/goal_routes.py hidden_owners); nothing of theirs is read in, not a reused measure's unit either.
+    `editor`: the reader edits the strategy, so reads unpublished bets; anyone else reads the published ones."""
+    pl, kind = p.get("payload") or {}, p["kind"]
+    seen = lambda record: record if record and record["owner"] not in hidden else None
+    row = seen(goal(conn, p["goal_id"]) if p.get("goal_id") else None)
+    record = seen(kpi(conn, p["kpi_id"]) if p.get("kpi_id") else None)
+    out = {"goal_title": row and row["title"], "kpi_name": record and record["name"]}
+    if kind == "goal_kpi":
+        used = kpi(conn, pl["kpi_id"]) if pl.get("kpi_id") else None
+        if used and not seen(used):
+            out["measure"] = {"name": "a measure you cannot see", "definition": "", "source_note": "", "unit": "",
+                              "direction": "up", "existing": True, "hidden": True}
+            out["target_label"] = K.target_label({}, pl.get("target"))
+            return out
+        spec = used or {"direction": "up", **(pl.get("kpi") or {})}
+        out["measure"] = {"name": spec.get("name") or "", "definition": spec.get("definition") or "",
+                          "source_note": spec.get("source_note") or "", "unit": spec.get("unit") or "",
+                          "direction": spec.get("direction") or "up", "existing": bool(used)}
+        out["target_label"] = K.target_label(spec, pl.get("target"))
+    elif kind == "kpi_target" and record:
+        # The target it has now is the link's on that goal: only for a reader of the goal.
+        link = next(iter(K.links_of(conn, goal_id=row["id"], kpi_id=record["id"])), None) if row else None
+        out["target_label"] = K.target_label(record, pl)
+        if row:
+            out["now_label"] = K.target_label(record, link)
+    elif kind == "kpi_definition" and record:
+        out["changes"] = [{"label": CARD_FIELDS.get(k, k), "now": record.get(k) or "", "proposed": v}
+                          for k, v in K.clean(dict(pl)).items()]
+    elif kind == "goal_wording" and row:
+        changes = [{"label": label, "now": row.get(k) or "", "proposed": pl[k]}
+                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k)]
+        if pl.get("bet_id"):
+            from . import strategy
+            if editor:
+                bet = lambda bid: (strategy.bet(conn, str(bid)) or {}).get("statement") if bid else ""
+            else:
+                published = {b.get("id"): b.get("statement") for b in (strategy.current(conn) or {}).get("bets") or []}
+                bet = lambda bid: published.get(bid) if bid else ""
+            changes.append({"label": "Serves", "now": bet(row.get("bet_id")) or "", "proposed": bet(pl["bet_id"]) or ""})
+        out["changes"] = changes
+    return out
+
+
 WHY_REPLACED = "Replaced by a newer Why"
 
 
@@ -840,11 +891,12 @@ def proposal(conn, proposal_id):
     return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)))
 
 
-def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None):
+def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None, target=None):
     """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once.
     A Why may be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options
     (`option`, the CEO Bot's pick when None), made as the CEO Bot (backend/ceo_suggest.py). A strategy realignment is
-    confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py)."""
+    confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py). An Add a KPI suggestion may be
+    confirmed with the person's own `target` for the link, checked as any link's target is, in place of its own."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:
@@ -861,6 +913,15 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         H.refuse(conn, actor, "kind", "only a recovery is confirmed with one of its options")
     if moves and (row["kind"] != "strategy_realign" or decision != "confirm"):
         H.refuse(conn, actor, "kind", "only a strategy realignment is confirmed with moves")
+    if target is not None:
+        if row["kind"] != "goal_kpi" or decision != "confirm":
+            H.refuse(conn, actor, "kind", "only an Add a KPI suggestion is confirmed with a target")
+        payload = row["payload"]
+        measure = (kpi(conn, payload["kpi_id"]) if payload.get("kpi_id")
+                   else {"direction": "up", **(payload.get("kpi") or {})}) or {}
+        _, error = K.validate_target(measure, target)
+        if error:
+            _lint(conn, actor, error)
     result = None
     if row["kind"] == "recovery" and decision == "confirm":
         from . import ceo_suggest
@@ -880,7 +941,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
         elif row["kind"] == "kpi_target":
             kpi_link(conn, actor, goal_id, kpi_id, payload)
         elif row["kind"] == "goal_kpi":
-            target = payload.get("target") or {"kind": "none"}
+            target = target if target is not None else payload.get("target") or {"kind": "none"}
             if payload.get("kpi_id"):
                 kpi_link(conn, actor, goal_id, payload["kpi_id"], target)
                 result = {"kpi_id": payload["kpi_id"]}

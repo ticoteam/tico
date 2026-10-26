@@ -95,7 +95,7 @@ const types = Array.from({length: 12}, (_, i) => ({id: 'type-' + i, name: 'Type 
     assert.equal(await inView(page), true, 'fresh load: Public roadmap is in view');
     await page.locator('[data-settings-tab=devices]').click();
     await page.evaluate(() => { location.hash = '#/settings/roadmap'; });
-    await page.waitForFunction(() => location.hash === '#/settings' && !document.querySelector('#settings-tasks').hidden);
+    await page.waitForFunction(() => location.hash === '#/settings/tasks' && !document.querySelector('#settings-tasks').hidden);
     assert.equal(await inView(page), true, 'card drawn earlier: Public roadmap is in view after the router resets the scroll');
     await page.close();
 

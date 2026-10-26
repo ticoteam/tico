@@ -63,7 +63,7 @@ Every human on the team has one role:
 | **Admin** | humans the owner makes admins (the old "bot administrators": the list is read under either name for one release) | manage every bot but the built-in ones (below), humans and computers (enrol, revoke, open to members' bots); set what members may do and the bot limit. They cannot make or remove admins or owners. They are credential administrators and see the SQL page, unless the owner turns that off ([Team rules](#team-rules)) |
 | **Member** | everyone else | create and manage their own bots, add coworkers, and use the bots they are allowed to |
 
-Settings > Humans (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
+Settings > People (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
 **Can sign in** switch, and a ⋯ menu with two capabilities per member:
 
 - **Can add bots** (`create_bots`): on for everyone unless switched off.
@@ -77,7 +77,7 @@ API tokens and delegated Assistant/BotOps actions cannot link it. This grants sh
 grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
 them, but the eight Inbox agent tools carry no company-linking authority.
 
-The **team's domain** is the domain(s) the owner allows to sign in (Settings > Humans, **Anyone at <domain> can sign in**); when
+The **team's domain** is the domain(s) the owner allows to sign in (Settings > People, **Anyone at <domain> can sign in**); when
 none is set it is the owner's own email domain. When that is a public email service such as gmail.com, it is the team email domain the
 owner gave in Finish setup (**Names**, optional), then the team domains of the humans already on the roster; with none of those,
 members add nobody until the owner adds a human or sets a domain. A newly added human goes on the roster and on the sign-in list, so they can
@@ -96,7 +96,7 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
 ## Team rules
 
-The product favours getting going fast, and the owner tightens it later. Settings > Humans (owner only, saved as they change;
+The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
 `GET` and `PUT /api/v2/access/rules`) has ten switches, all **on** by default:
 
 | Rule | On (default) | Off |
@@ -126,7 +126,7 @@ routines, access or place, and only the owner may add them. A member cannot regi
 The CEO Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
-Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
+Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
 ([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
@@ -480,6 +480,35 @@ A bot that becomes active without a computer (added active, turned on, resumed, 
 only computer, else the least busy online one that takes it (a bot BotOps builds prefers BotOps's own computer, where its repository is). A member's bot goes on that member's own computer or one opened to members' bots,
 and never on a closed one. With none that takes it the bot stays as it is and the answer says so; the scheduler places it as soon as one can
 (`backend/placement.py`). Humans see a bot that is only set up, not yet turned on, as "Setting up".
+
+## The settings catalogue
+
+Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
+key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > Humans > Team rules),
+who may change it, its class, the route and body it writes, and a link that opens that card
+(`#/settings/<tab>/<card>`). A person, or BotOps for them, finds and changes a setting without knowing the route:
+
+    hub settings find "sql"                                  key, name, where, class and who may change it
+    hub settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
+    hub settings set release.times 09:30,17:00               change it with your rights (BotOps: the requester's)
+
+`show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
+what `set` does when BotOps asks for a person:
+
+- **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
+  the privacy count): it changes at once, as that person, and the answer names the new value.
+- **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
+  ownership, the CEO bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
+  confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
+  `hub settings set` runs at once. A confirm entry whose route BotOps can't yet put on a card is person-only until it
+  can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
+  answers with a one-line reason and the card's link.
+
+Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
+The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
+the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
+in `NOT_SETTINGS` with the reason it needs none.
 
 ## Write without Read
 

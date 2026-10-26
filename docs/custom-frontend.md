@@ -169,7 +169,7 @@ The token is shown once and only its hash is kept. `GET /api/v2/me/tokens` lists
 `POST /api/v2/me/tokens/{id}/revoke` ends one at once. Know what you are creating:
 
 - **There are no scopes.** A personal token acts with its human's own rights, including a member's.
-  Members can create tokens by default; the owner can turn off member tokens in **Settings → Humans**.
+  Members can create tokens by default; the owner can turn off member tokens in **Settings → People**.
   A token grants no extra rights and cannot create or revoke tokens. See
   [External agent permissions](connect-an-agent.md).
 - It lasts 90 days unless you say otherwise, at most a year. Rotate before it expires. It ends when the human leaves
