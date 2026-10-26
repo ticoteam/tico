@@ -368,7 +368,7 @@ def test_pipeline_child_keeps_review_and_allows_fix_move(api, title):
         assert H.task(c, task['id'])['step_id'] == review_step
         H.task_update(c, task['owner'], task['id'], step='fixes')
         assert H.task(c, task['id'])['step_id'] == 'fixes'
-        person = H.task_create(c, 'human:ana', 'Security: confirm the vendor contract', 'Choose one.', 'human:ana', parent_id=task['id'])
+        person = H.task_create(c, 'human:ana', 'Confirm the vendor contract', 'Choose one.', 'human:ana', parent_id=task['id'])
         task_blocked.sweep(c, H.now(), task_ids=[task['id']])
         assert H.task(c, task['id'])['status'] == 'waiting', 'a check child must not hide another child wait'
         H.task_update(c, 'human:ana', person['id'], status='done')
