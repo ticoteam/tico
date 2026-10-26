@@ -52,3 +52,16 @@ def test_a_member_cannot_change_another_persons_trigger_through_botops(api, boto
     ana = turn(api, botops, person="ana-test", text="Rename the shop trigger")
     err, result = mcp(api, "hub_trigger_update", {"id": "shop", "name": "Store"}, ana["token"])
     assert not err and result["name"] == "Store", result
+
+
+def test_an_owner_changes_a_triggers_signing_through_botops_but_never_hands_it_a_secret(api, botops):
+    post(api, "triggers", {"name": "Hook"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Check GitHub's signature on the hook trigger, then stop")
+    err, signed = mcp(api, "hub_trigger_sign", {"id": "hook", "preset": "github"}, ana["token"])
+    assert not err and signed["preset"] == "github", signed
+    err, off = mcp(api, "hub_trigger_sign", {"id": "hook", "off": True}, ana["token"])
+    assert not err and off["signed"] is False, off
+    # A secret typed into a chat with BotOps is refused before the route runs: the person sets it in Settings.
+    err, refused = mcp(api, "hub_trigger_sign", {"id": "hook", "secret": "s" * 24}, ana["token"])
+    assert err, refused
+    finish(api, botops, ana)
