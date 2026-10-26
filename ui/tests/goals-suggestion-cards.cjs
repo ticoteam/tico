@@ -42,6 +42,8 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     const goals = [{id: 'g-cmo', title: GOAL, owner: 'bot:cmo', parent_id: null, status: 'yellow', status_source: 'auto', rank: 0, kpis: [], why: 'More landlords find us.'}];
     const panelProp = {...prop('p-panel', 'goal_kpi', {kpi: {name: 'Signups'}, target: {kind: 'maintain', min: 40}},
       {measure: measure('Signups', {definition: 'New accounts', source_note: 'Stripe'}), target_label: 'range 40+'}), may_decide: true};
+    // A recovery is out of this card's scope: in a goal's panel it keeps the recovery card's words.
+    const recovery = {...prop('p-rec', 'recovery', {pick: 0, options: [{label: 'Move the demo task to Sales'}]}, {}), may_decide: true};
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
@@ -56,7 +58,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
-      if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: [], proposals: posted.some(x => x.id === 'p-panel') ? [] : [panelProp]});
+      if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: [], proposals: [...posted.some(x => x.id === 'p-panel') ? [] : [panelProp], recovery]});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
       if (decide) {
@@ -136,6 +138,7 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     assert.match(await inPanel.innerText(), /Add the measure Signups to Double organic signups\s+New accounts\s+Target range 40\+/);
     assert.doesNotMatch(await inPanel.innerText(), /No data source|No target yet/);
     assert.equal(await inPanel.locator('details.kpi-prop-set summary').innerText(), 'Change the target');
+    assert.deepEqual(await page.locator('#goal-panel[open] [data-proposal="p-rec"] .kpi-prop-do button').allInnerTexts(), ['Approve', 'Reject']);
     await inPanel.locator('[data-prop-yes]').click();
     assert.deepEqual(await decided('p-panel'), {decision: 'confirm'});
     assert.deepEqual(errors, []);
