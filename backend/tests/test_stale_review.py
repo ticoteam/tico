@@ -493,6 +493,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     blocked = task("Print the flyer", status="waiting", days_ago=0)
     first = task("Renew the domain", status="open", days_ago=2)
     twin = task("Renew the domain ", status="open", days_ago=0)
+    spaced = task("renew  THE domain", status="open", days_ago=0)       # case and inner spaces too (title_key)
     snoozed = task("Ask about the lease", status="open", days_ago=0)
     with store.transaction() as c:
         c.execute("INSERT INTO task_relations VALUES(?,?,'parent','bot:ops',?)", (child, parent, H.now()))
@@ -506,6 +507,7 @@ def test_other_reasons_parent_blockers_snooze_and_twin_titles(stale):
     assert found[child] == "Its parent task is done"
     assert found[blocked] == "Everything it was blocked by is done"
     assert found[twin].startswith("Same title as an older open task of the same owner") and first not in found
+    assert found[spaced].startswith("Same title as an older open task of the same owner")
     assert found[snoozed].startswith("Its snooze ended")
 
 
