@@ -24,6 +24,7 @@ def links(api, goal_id):
 
 
 def test_an_add_a_kpi_card_names_the_measure_says_what_it_counts_and_that_it_has_no_target_or_source(api):
+    goal_manager(api, level=2)          # above Passive, so Needs you lists suggestions not yet asked
     goal, activation = goal_with_kpi(api)
     new = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos", "definition": "Demos held, per week"}}, goal["id"])
     card = tree_card(api, new["id"])
@@ -39,6 +40,7 @@ def test_an_add_a_kpi_card_names_the_measure_says_what_it_counts_and_that_it_has
         "Activation", "Signed-up accounts that finish setup", True)
     assert card["target_label"].startswith("→ 25%")
     # Needs you draws the same card.
+    sync(api)
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i.get("proposal", {}).get("id") == reuse["id"]]
     assert item["proposal"]["card"]["measure"]["name"] == "Activation"
 
