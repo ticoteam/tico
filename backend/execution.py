@@ -530,12 +530,20 @@ def isolation_refused(c, who, auth, bot):
 
 def held_back(c, who, auth, bot, limit=3):
     """The bot's queued work the claim's interrupted-work fence (unfenced_sql) passes over, as `who` may read it:
-    (count, titles of up to `limit` tasks it is on). Each job waits behind a stopped run on its task or chat until
-    someone reviews that run, so a stopped run with work behind it needs a person, not a later look."""
+    (count, titles of up to `limit` tasks it is on). A saved recovery choice is already a review, so its lane wait
+    must not be turned into another choice prompt; count jobs only when an unresolved stopped run still blocks them."""
     fence, count, titles = auth.task_sql(c, who), 0, []
+    task_sql = queued_task_sql()
+    held_task_sql = task_sql.replace("m.", "um.").replace("cv.", "uc.")
     for row in c.execute(f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id "
                          f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
+                         "AND EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
+                         "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot "
+                         "AND u.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
+                         "WHERE r.job_id=u.id AND r.attempt_id=u.attempt_id) AND (("
+                         f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
+                         f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
                          "ORDER BY j.created", (bot,)).fetchall():
         if not (privacy.message_readable(c, privacy.actor(who), row)
                 and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):

@@ -201,6 +201,23 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
 
 
+def test_a_saved_task_choice_with_queued_work_waits_for_the_live_lane_without_asking_again(api):
+    """A saved choice is reviewed even when same-task work remains fenced behind its busy lane (Review 1)."""
+    from backend.tests.test_execution_review import rival
+
+    machine, attempt, task_id, _ = task_held(api)
+    rival(api, machine, attempt)
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+                  'note': 'Reviewed; continue after the other run ends.', 'acknowledge_uncertain_effects': True})
+    assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
+    assert len([job for job in queued_on(api, task_id) if job['id'] != attempt['job_id']]) == 1
+    issue = uncertain_issue(api)
+    assert issue['needs_person'] is False
+    assert 'saved 1 stopped run for later' in issue['title']
+    assert 'Choose Try again or Don\'t retry' not in issue['detail']
+    assert not issue.get('held_back')
+
+
 def test_a_queued_reset_deferral_does_not_create_a_held_review(api):
     """A known-empty retry deferred to the primary reset is queued work, not an unresolved held attempt (Dev 545)."""
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
