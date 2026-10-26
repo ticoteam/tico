@@ -535,8 +535,16 @@ task's box. The bot that asked is told either way, as *<name> marked this done: 
 comment on the next line when there is one. When a bot needs a specific answer it asks a yes/no
 or choice question instead.
 
-Done stays Done, including tasks the owner requested for itself, old bot-requested tasks,
-and completed routine runs. Closing is a separate decision; it records `closed_at` and
+An owner can reopen a Done task with `hub task update <id> --status doing`, or put it back
+with `hub task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
+On Deck. A bot owner must include a note when returning work to open. Automatic starts wait
+60 minutes after an owner puts work back, unless the task gets a comment, a new link, or a
+blocker finishes. Ordinary note edits and automatic notices do not end that wait. A linked
+blocker still holds the task. If a blocker arrives after Tico automatically started it and
+no run has finished on it yet, Tico returns it to the queue as part of linking the blocker;
+the owner does not need to take a turn.
+
+Closing is a separate decision; it records `closed_at` and
 `closed_by`, preserving the completion time if the work was already Done. Earlier history
 is preserved, including tasks that older versions closed automatically. Use **Close task** in the
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
@@ -594,14 +602,15 @@ The digits alone are not read as a number, since a cut-short id can look the sam
 
 Numbers range from 1 to 999999999; an exhausted sequence refuses a new number without creating a task.
 
-A mover can also make a custom type **steps only**: its tasks are finished or brought back only by
+A mover can also make a custom type **steps only**: its tasks are finished or brought back by
 moving to a step. Closing, declining, reopening or finishing one directly (`close`, or a `status`
-without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`) for every
-person and bot, and the task window offers no Done, Close or Reopen on them. A task that should not
+without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`), except
+that an owner may reopen Done with doing or open (with a note for open). The task window offers
+no Done, Close or Reopen on them. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
 are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
-rather than marking them done or closed. Without it, a bare status lands the task in the first step
+rather than marking them done or closed. Without steps only, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
 
 Engineering boards include **Blocked** immediately before In Progress. Its status is `waiting`;
