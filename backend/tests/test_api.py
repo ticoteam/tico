@@ -60,6 +60,19 @@ def api(tmp_path, api_database):
         yield client
 
 
+
+def unrelated_task_managers(c, *slugs):
+    """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
+    import json
+    roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    if not any(p['id'] == 'privacy-lead' for p in roster['people']):
+        roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
+    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+    targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
+    for slug in targets:
+        c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot=?", (slug,))
+
+
 def restrict(c, bot, **audience):
     """Set a bot's access straight in the database: see, read and write all go to `audience`
     (people, teams, bots), or per level with see=, read=, write= each an audience dict."""

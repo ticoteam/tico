@@ -104,6 +104,17 @@ def test_manager_comment_and_question_wake_owner_without_mention(api, manager):
             assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
 
 
+def test_requester_manager_comment_wakes_owner_with_requester_permissions(api, manager):
+    token, actor = manager
+    task = make(api, owner='bot:cmo', requester='bot:ops')
+    result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.'}, token=token)
+    assert result['woke'] and result['comment']['from_actor'] == actor
+    with api.app.state.store.read() as c:
+        message = H.message(c, result['comment']['id'])
+        assert message['to_actor'] == 'bot:cmo'
+        assert c.execute('SELECT 1 FROM jobs WHERE message_id=?', (message['id'],)).fetchone()
+
+
 def test_manager_blockers_stale_link_and_reparent(api, manager):
     token, actor = manager
     task = make(api)

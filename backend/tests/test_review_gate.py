@@ -316,6 +316,9 @@ def test_removed_unrelated_and_wrong_actor_evidence_cannot_open_review(api):
 @pytest.mark.parametrize('reader', ['human:ana', 'bot:cpo'])
 def test_private_child_receipt_must_be_readable_by_both_mover_and_builder(api, reader):
     task = ticket(api, private=False)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         child = H.task_create(c, 'human:ana', 'Evidence', 'x', 'cmo', parent_id=task['id'], next_run=True)
         c.execute("UPDATE tasks SET title='Review 1: previous', private=1, requester=?, note=? WHERE id=?",

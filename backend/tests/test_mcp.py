@@ -242,6 +242,9 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
 
 def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
     """`private: true` is a private task whose two parties are the bot and the person asked, whoever started the run."""
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     _, _, attempt = setup_attempt(api)          # Ana started this run; the question goes to Ben
     png = base64.b64encode(b"\x89PNG for ben").decode()
     ask = {"question": "Approve the Q3 bonus pool?", "on": "ben", "private": True,

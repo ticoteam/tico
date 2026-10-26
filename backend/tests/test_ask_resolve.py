@@ -8,6 +8,14 @@ from backend.tests.test_tasks_board import api, headers, post  # noqa: F401
 ANA, OPS = "human:ana", "bot:ops"
 
 
+
+@pytest.fixture(autouse=True)
+def private_tasks_have_an_unrelated_manager(api):
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+
+
 def question(c, actor, task_id, text="Which month should the report use?", who=ANA, refs=None):
     ask = {"questions": [{"id": "month", "header": "Month", "question": text, "multi": False, "other": True,
                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
