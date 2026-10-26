@@ -6078,11 +6078,20 @@ def _waiting_bot(conn, actor, row, bot_actor_id):
         refuse(conn, actor, "waiting_on",
                f"{slug} is not an active bot on the team, so nothing it does can resume this task: wait on a person "
                "with --on, or on an active bot's task with hub task wait <task> --on task:<other>")
-    owned = [b for b in TR.live_blockers(conn, row["id"], ACTIVE_STATUSES) if b["owner"] == bot_actor_id]
-    if not owned:
+    # The first open blocker, in the order the task's relations are served (TR.grouped), is the one its views name,
+    # so the bot named here must own that one: naming a bot behind it would show another owner's name.
+    first = (TR.live_blockers(conn, row["id"], ACTIVE_STATUSES) or [None])[0]
+    if not first:
         refuse(conn, actor, "waiting_on",
                f"Nothing {slug} owns blocks this task, so Tico cannot tell which of its work resumes it: link that "
                f"task first with hub task wait {row['id']} --on task:<its task>, then --on {bot_actor_id}")
+    if first["owner"] != bot_actor_id:
+        # A private blocker the actor cannot read is not named.
+        which = (f"task:{first['id']}, is {actor_id(first['owner'])}'s" if task_private_readable(conn, actor, first)
+                 else "is someone else's")
+        refuse(conn, actor, "waiting_on",
+               f"This task's first open blocker, {which}, so its views would name them, not {slug}: wait on that "
+               f"blocker's owner, or take it off with hub task wait {row['id']} --on task:<it> --remove first")
     return ""
 
 

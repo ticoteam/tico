@@ -65,7 +65,7 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, out
     ("bot:finance", "finance is not an active bot on the team"),
     ("bot:nobody", "bot:nobody is not a person or an active bot on the team"),
     ("ops!", "ops! is not a person or an active bot on the team"),
-    ("bot:cpo", "Nothing cpo owns blocks this task"),      # a bot with no open prerequisite here
+    ("bot:cpo", "first open blocker, task:"),           # a bot that does not own the prerequisite here
 ])
 def test_an_invalid_bot_target_is_refused_with_the_valid_target_and_changes_nothing(c, target, says):
     task, _ = parked(c)
@@ -88,10 +88,30 @@ def test_a_bot_whose_prerequisite_already_finished_is_refused(c):
     assert H.task(c, task["id"])["status"] == "open"
 
 
-def test_a_person_wait_still_works_and_a_bot_wait_replaces_it(c):
+def test_only_the_owner_of_the_first_open_blocker_can_be_named(c):
+    """The views name the first open blocker's owner, so naming a bot behind it would show the wrong bot."""
+    task, _ = parked(c)                                          # ops's blocker, linked first
+    qa = H.task_create(c, "human:ana", "QA the receipt gate fix", "", "bot:cpo", lint=False)
+    TR.relate(c, "bot:cpo", task["id"], qa["id"], "blocked_by")
+    before = dict(H.task(c, task["id"]))
+    with pytest.raises(H.Refused) as refused:
+        H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="bot:cpo", note="Needs QA's pass.")
+    assert refused.value.rule == "waiting_on" and "first open blocker" in str(refused.value)
+    assert H.task(c, task["id"])["version"] == before["version"]
+    H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="bot:ops", note="Needs the review.")
+    assert H.task(c, task["id"])["status"] == "waiting"
+
+
+def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
+    # A bot's task waiting on a person files them an ask; naming the bot whose work blocks it is still accepted, stores
+    # no person, and leaves the person's ask open for them to answer.
     task, _ = parked(c)
+    H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="ana", note="Can you look at this first?")
+    assert H.wait_detail(c, H.task(c, task["id"]))["on"] == "human:ana"
     H.task_update(c, "bot:cpo", task["id"], status="waiting", waiting_on="bot:ops", note="Needs review.")
-    assert H.task(c, task["id"])["waiting_on"] is None
+    after = H.task(c, task["id"])
+    assert after["waiting_on"] is None and after["note"] == "Needs review."
+    assert H.wait_detail(c, after)["on"] == "human:ana"
     other = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cpo", lint=False)
     H.task_update(c, "bot:cpo", other["id"], status="waiting", waiting_on="ana",
                   note="Approve the launch post? I'll publish it after.")

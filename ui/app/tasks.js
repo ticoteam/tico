@@ -41,13 +41,17 @@ const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
-// A waiting task held by a bot doing prerequisite work: the first open blocker a bot owns (`--on bot:<slug>`,
-// backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only blocked, not
-// set waiting, still reads "Blocked by".
+// A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
+// must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
+// blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
+// task, the ask child a bot's task files for them, or an open question to them) keeps their ask, so its note is never
+// shown as a bot's reason.
 function taskBotWait(t) {
-  if (t?.status !== 'waiting') return null;
-  const b = taskBlockers(t).find(r => !['done', 'closed', 'declined'].includes(String(r.status || '')) && actorSlug(r.owner));
-  if (!b) return null;
+  const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
+  if (t?.status !== 'waiting' || actorPerson(t.waiting_on) || taskAskToPerson(t)
+      || taskRels(t, 'parent', 'in').some(r => open(r) && actorPerson(r.owner))) return null;
+  const b = taskBlockers(t).find(open);
+  if (!b || !actorSlug(b.owner)) return null;
   const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
   return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b};
 }

@@ -226,7 +226,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       'Waiting on Ops: Needs the launch plan reviewed first.');
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
-    Object.assign(brief, {status: 'review', note: ''});
+    // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
+    const opsBlocker = brief.relations.blocks[0];
+    brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner: 'human:ana', direction: 'in'}, opsBlocker]};
+    await page.evaluate(() => tasksLoad(TASKS_ST));
+    await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Legal review');
+    // A task that waits on a person keeps their ask: on them directly, or through the ask child a bot's task files.
+    for (const held of [{waiting_on: 'human:ana'}, {relations: {blocks: [opsBlocker],
+      parent: [{id: 'ask-ana', title: 'Approve the launch post?', status: 'open', owner: 'human:ana', direction: 'in'}]}}]) {
+      Object.assign(brief, {relations: {blocks: [opsBlocker]}, waiting_on: null}, held);
+      await page.evaluate(() => tasksLoad(TASKS_ST));
+      await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
+    }
+    Object.assign(brief, {status: 'review', note: '', waiting_on: null, relations: {blocks: [opsBlocker]}});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"]')?.innerText === 'Blocked by Plan the launch');
     await drag('tbrief', '#task-body [data-task-key="tplan"]', 0.1);
