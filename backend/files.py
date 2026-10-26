@@ -23,6 +23,7 @@ from . import models as M
 from .auth import Identity
 from .blobs import register
 from .store import H, Problem, encode, repo_url
+from . import read_cache
 from . import task_privacy as privacy
 from clients import bot_files as BF
 
@@ -98,6 +99,26 @@ def refused(exc):
     return Problem("file_refused", str(exc), 422)
 
 
+VERSIONS_SQL = "SELECT blob_id,attempt_id FROM bot_file_versions WHERE file_id=?"
+
+
+def prime_visible(c, rows):
+    """Read what file_visible checks for all of `rows` together: their tasks, versions and blobs. A Files page
+    decides every active file to count the ones the caller may see, and one file at a time was thousands of
+    queries; file_visible still makes each decision, from these rows."""
+    privacy.snapshot(c)
+    if read_cache.cache(c) is None:
+        return
+    H.prime_tasks(c, {row["task_id"] for row in rows if row["task_id"]})
+    versions = {row["id"]: [] for row in rows}
+    for part in H.chunks(sorted(versions)):
+        for v in c.execute("SELECT file_id,blob_id,attempt_id FROM bot_file_versions WHERE file_id IN (%s)"
+                           % ",".join("?" * len(part)), part):
+            versions[v["file_id"]].append(v)
+    read_cache.prime_rows(c, VERSIONS_SQL, {(fid,): found for fid, found in versions.items()})
+    privacy.prime_blobs(c, {v["blob_id"] for found in versions.values() for v in found})
+
+
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, and never a runner's."""
     if who.role not in ("owner", "human", "bot"):
@@ -105,7 +126,7 @@ def file_visible(c, auth, who, row, cache):
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
     # `cache` lives for one read: a run's tasks are read once, however many files it made.
-    for version in c.execute("SELECT blob_id,attempt_id FROM bot_file_versions WHERE file_id=?", (row["id"],)):
+    for version in read_cache.rows(c, VERSIONS_SQL, (row["id"],)):
         if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
             return False
         if version["attempt_id"] and not privacy.attempt_readable(c, privacy.actor(who), version["attempt_id"],
@@ -640,11 +661,12 @@ class Files:
         with self.store.read() as c:
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
-            rows = [r for r in c.execute("SELECT * FROM bot_files WHERE bot=? AND archived=0 "
-                                         "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
-                                         "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot)) "
-                                         "ORDER BY last_activity_at DESC, id DESC", (bot,))
-                    if self.visible(c, who, r, cache)]
+            rows = c.execute("SELECT * FROM bot_files WHERE bot=? AND archived=0 "
+                             "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
+                             "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot)) "
+                             "ORDER BY last_activity_at DESC, id DESC", (bot,)).fetchall()
+            prime_visible(c, rows)
+            rows = [r for r in rows if self.visible(c, who, r, cache)]
             start = 0
             if cursor:
                 try:

@@ -213,6 +213,8 @@ def run(args, who=None):
                                                   "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
+    if fn == "stall-triage":
+        return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
         op = os.environ.get("HUB_OPERATION_ID")
@@ -402,34 +404,29 @@ def run(args, who=None):
         return post(f"notes/{args.id}/cancel", {})["note"]
     if cmd == "task":
         asked = getattr(args, "on_behalf_of", None) or False
-        if sub == "type":
-            if args.type_sub == "delete":
-                return post("task-types/" + args.id + "/delete", {})
-            body = {}
-            if args.name is not None:
-                body["name"] = args.name
-            if args.steps_file:
-                body["steps"] = json.loads(Path(args.steps_file).read_text())
-            if args.bots:
-                body["bots"] = args.bots
-            if args.numbered is not None:
-                body["numbered"] = args.numbered
-            if getattr(args, "steps_only", None) is not None:
-                body["steps_only"] = args.steps_only
-            return post("task-types" + ("/" + args.id if args.type_sub == "update" else ""), body)
-        if sub == "types":
-            if args.delete:
-                if not args.id:
-                    raise ValueError("Choose a type to delete")
-                return post("task-types/" + args.id + "/delete", {})
-            if args.name is not None or args.steps_file:
-                body = {}
-                if args.name is not None:
-                    body["name"] = args.name
-                if args.steps_file:
-                    body["steps"] = json.loads(Path(args.steps_file).read_text())
-                return post("task-types" + ("/" + args.id if args.id else ""), body)
-            return client.get("task-types" + ("/" + args.id if args.id else ""))
+        if sub in ("type", "types"):
+            # The task type tools: BotOps changes a type as the person who asked it (clients/hubtools.py _as_person).
+            from clients import hubtools
+            name, steps_file = getattr(args, "name", None), getattr(args, "steps_file", None)
+            edits = name is not None or bool(steps_file)
+            if sub == "type":
+                change = args.type_sub
+            else:                       # `task types`: the older form, which lists unless told to change something
+                change = "delete" if args.delete else ("update" if args.id else "create") if edits else None
+            if change is None:
+                return client.get("task-types" + ("/" + args.id if args.id else ""))
+            if change != "create" and not args.id:
+                raise ValueError("Choose a type to " + change)
+            if change == "create" and name is None:
+                raise ValueError("Name the new type with --name")
+            fields = {"operation_id": key, **({"id": args.id} if change != "create" else {})}
+            if change != "delete":
+                for name in ("name", "bots", "numbered", "steps_only", "default_visibility"):
+                    if getattr(args, name, None) is not None:
+                        fields[name] = getattr(args, name)
+                if steps_file:
+                    fields["steps"] = json.loads(Path(steps_file).read_text())
+            return hubtools.BY_NAME["hub_task_type_" + change]["fn"](client, fields)
         if sub == "create":
             body = Path(args.body_file).read_text() if args.body_file else args.body
             payload = {"owner": target(args.owner), "title": args.title, "body": body,
