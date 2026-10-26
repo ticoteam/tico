@@ -306,10 +306,10 @@ Tapping any line opens that owner's panel (a sheet at the bottom on a phone). It
 words, what it supports and its colour (or **Let CEO Bot set it**). Under each goal are its KPIs, its latest
 check-in, **Post update** and **Add KPI**. **Post update** (a check-in) is there for whoever may colour the goal: say in a
 sentence what is going on and, if you like, how it is going (on track, at risk or off track). On a goal no KPI judges, that
-answer sets its colour for three weeks; a goal whose KPIs carry a target and a colour keeps their colour, and the update is
-kept as your words. Tapping a KPI shows its history (a chart and the readings with their evidence), its definition
-and version, its owner, its targets and the CEO Bot's latest check-in, with a way back. **Add goal** and **Add KPI**
-(a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
+answer sets its colour for three weeks; a colour a person set stays, as does the colour of a goal whose KPIs carry a target
+and a colour, and the update is kept as your words. Tapping a KPI shows its history (a chart and the readings with their
+evidence), its definition and version, its owner, its targets and the CEO Bot's latest check-in, with a way back.
+**Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. The
 [Strategy line](#the-company-section) sits above everything, each goal in a panel shows its
 [Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
