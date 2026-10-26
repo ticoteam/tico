@@ -18,18 +18,22 @@ REMOVED = ("deleted_at", "hidden_at", "superseded_at")
 _FAILURE = r"(?:fail(?:s|ing|ed|ures?)?|errors?)"
 _FIX = r"(?:fix(?:ed|ing)|repair(?:ed|ing)|resolv(?:ed|ing)|correct(?:ed|ing))"
 _PAST = r"(?:earlier|previous|prior|historical|old)"
+# A non-zero count, in digits or words ("Two failures remain").
+_COUNT = r"(?:[1-9][0-9]*|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|several|multiple)"
 # Where an earlier failure was seen ("seen at the prior head"). Only these words
 # may sit between the failure and its repair, so "2 failed tests need fixing"
 # and "2 failures were not fixed" stay failures.
-_SEEN_WORD = (rf"(?:seen|found|reported|observed|at|on|in|from|the|a|an|last|{_PAST}|head|run|"
-              r"commit|build|CI|tests?)\s+")
+_SEEN_TERM = (rf"(?:seen|found|reported|observed|at|on|in|from|the|a|an|last|{_PAST}|head|run|"
+              r"commit|build|CI|tests?)")
+_SEEN_WORD = rf"{_SEEN_TERM}\s+"
 _SEEN = rf"(?:{_SEEN_WORD}){{0,8}}"
 _AUX_WORD = r"(?:is|was|were|are|has|have|had|been|now|already)\s+"
 _AUX = rf"(?:{_AUX_WORD}){{0,5}}"
 # After a where-seen gap the repair must be the clause's own verb ("have been
-# fixed."), so "2 failed on the commit fixing the parser" or "2 failed in the
-# repaired fixture" stays a failure.
-_SEEN_REPAIR = (rf"(?:{_SEEN_WORD}){{1,8}}(?:{_AUX_WORD}){{1,5}}(?:fixed|repaired|resolved|corrected)"
+# fixed.", "at prior head, now fixed."), so "2 failed on the commit fixing the
+# parser" or "2 failed in the repaired fixture" stays a failure.
+_SEEN_REPAIR = (rf"(?:{_SEEN_WORD}){{0,7}}{_SEEN_TERM}(?:\s*[;,]\s*|\s+)(?:{_AUX_WORD}){{1,5}}"
+                r"(?:fixed|repaired|resolved|corrected)"
                 r"(?=\s*(?:[.;,:!?)]|$|\b(?:but|and)\b))")
 # A historical subject can still describe a failure that is happening now.
 CURRENT_FAILURE = re.compile(
@@ -37,40 +41,49 @@ CURRENT_FAILURE = re.compile(
     rf"(?:{_SEEN}{_AUX}{_FIX}\s*[;,]?\s*(?:but\s+)?(?:(?:they|it|this|that)\s+)?)?"
     r"(?:(?:is|are|has|have|been|now|still|keeps)\s+){0,4}"
     r"(?:recurring|recurs|recurred|reoccurred|returned|persisting|persists|persistent|present|happening|"
-    r"(?:is|are)\s+(?:still\s+)?back)\b", re.I)
+    r"remain(?:s|ing)?|(?:is|are)\s+(?:still\s+)?back)\b", re.I)
 HISTORY = re.compile(
     rf"\b(?:{_PAST}\s+)?(?:test\s+)?{_FAILURE}\s+(?:tests?\s+)?(?:{_SEEN_REPAIR}|{_AUX}{_FIX}\b)|"
     rf"\b{_PAST}\s+(?:test\s+)?{_FAILURE}\b|"
     rf"\b{_FIX}\s+(?:(?:the|a|an|earlier|previous|prior|test|fixture|[0-9]+)\s+){{0,5}}{_FAILURE}\b", re.I)
-# A counted failure in a sentence that names its own head is a result at that
-# head even without a test word ("Re-run at head <sha>: 2 failed").
+# A counted failure in a clause that names its own head is a failure at that
+# head even without a test word ("Re-run at head <sha>: 2 failed"). It never
+# makes a pass: "Lint at head <sha>: passed after 2 errors fixed" is no receipt.
 COUNTED_FAILURE = re.compile(
-    rf"\b[1-9][0-9]*\s+(?:{_PAST}\s+)?(?:tests?\s+)?{_FAILURE}\b|\b{_FAILURE}\s*[:=]\s*[1-9][0-9]*\b", re.I)
+    rf"\b{_COUNT}\s+(?:{_PAST}\s+)?(?:tests?\s+)?{_FAILURE}\b|"
+    rf"\b{_FAILURE}(?:\s+tests?)?\s*[:=]\s*[1-9][0-9]*\b", re.I)
 
 
 CONTINUATION = re.compile(
-    rf"^\s*[0-9]+\s+(?:(?:{_PAST}|test)\s+){{0,3}}"
-    rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b[0-9]+\s+(?:tests?\s+)?{_FAILURE}\b|"
-    rf"\b{_FAILURE}\s*[:=]\s*[1-9][0-9]*\b", re.I)
+    rf"^\s*(?:[0-9]+|{_COUNT})\s+(?:(?:{_PAST}|test)\s+){{0,3}}"
+    rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b{_COUNT}\s+(?:tests?\s+)?{_FAILURE}\b|"
+    rf"\b{_FAILURE}(?:\s+tests?)?\s*[:=]\s*[1-9][0-9]*\b", re.I)
 
 
-def _recognise(line, test_context=False):
-    """Recognise one head's result clause, retaining failure precedence."""
+def _recognise(line, test_context=False, failure_only=False):
+    """Recognise one head's result clause, retaining failure precedence.
+
+    `failure_only` context (a headed failure count, no test word) yields only
+    a failure; anything else in that clause is not a test receipt.
+    """
     match = HEAD.search(line)
     shas = list(SHA.finditer(line))
-    if not test_context and not TEST.search(line):
+    tested = test_context or TEST.search(line)
+    if not tested and not failure_only:
         return None
     head = match[1].lower() if match else shas[0][0].lower() if len(shas) == 1 else None
     outcome = ZERO.sub("", line)
     def history(match):
         # "2 earlier failed" is still a counted outcome. Repair phrases such
         # as "2 failures now fixed" describe a repair even when they have counts.
-        counted = re.search(r"\b[1-9][0-9]*\s+$", outcome[:match.start()])
+        counted = re.search(rf"\b{_COUNT}\s+$", outcome[:match.start()], re.I)
         historical = re.match(rf"{_PAST}\b", match[0], re.I) and not re.search(rf"\b{_FIX}\b", match[0], re.I)
         return match[0] if counted and historical else ""
     result = HISTORY.sub(history, outcome)
     status = ("failed" if CURRENT_FAILURE.search(outcome) or FAIL.search(result) else "unrecognised" if PLAN.search(result)
               else "passed" if PASS.search(result) else "unrecognised")
+    if not tested and status != "failed":
+        return None
     return {"head": head, "status": status, "text": line}
 
 
@@ -100,8 +113,8 @@ def recognise_many(line):
             else:
                 clauses.append(part)
         for clause in clauses:
-            context = TEST.search(sentence) or (SHA.search(clause) and COUNTED_FAILURE.search(clause))
-            if receipt := _recognise(clause, test_context=bool(context)):
+            counted = bool(SHA.search(clause) and COUNTED_FAILURE.search(clause))
+            if receipt := _recognise(clause, test_context=bool(TEST.search(sentence)), failure_only=counted):
                 found.append({**receipt, "text": line})
     return found
 
@@ -143,8 +156,20 @@ def sources(task):
     return sorted(out, key=lambda s: (s["created"], s["message"] or ""))
 
 
+def _lines(text):
+    """An unheaded failure line ("failing tests: 2") continues the headed line above it."""
+    lines = []
+    for line in text.splitlines():
+        if (lines and SHA.search(lines[-1]) and not SHA.search(line)
+                and (CONTINUATION.search(line) or CURRENT_FAILURE.search(line))):
+            lines[-1] = lines[-1].rstrip() + "\n" + line
+        else:
+            lines.append(line)
+    return lines
+
+
 def receipts(task):
-    return [{**source, **receipt} for source in sources(task) for line in source["text"].splitlines()
+    return [{**source, **receipt} for source in sources(task) for line in _lines(source["text"])
             for receipt in recognise_many(line)]
 
 

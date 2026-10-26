@@ -208,6 +208,26 @@ def test_repaired_prior_failures_and_headed_rerun_failures_after_1546(result, st
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == status
 
 
+@pytest.mark.parametrize('note,status', [
+    # A repaired failure count is not a test word: these were no receipt before #1588.
+    (f'Lint at head {HEAD}: passed after 2 errors fixed.', 'missing'),
+    (f'Deploy at head {HEAD}: success; 2 prior errors resolved.', 'missing'),
+    (f'Re-run at head {HEAD}: 9 passed; 2 earlier failures fixed.', 'missing'),
+    # Dev 517 QA: failures counted in words, or on a continuation, still block.
+    (f'Tests at head {HEAD}: 9 passed. Two failures remain.', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed; 2 failures were fixed. Two failures remain.', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed. The failures remain.', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed. Three tests failed.', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed. Failing tests: 2', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed.\nfailing tests: 2', 'failed'),
+    (f'Tests at head {HEAD}: 9 passed. Lint: 1 failure at prior head, now fixed.', 'passed'),
+    (f'Tests at head {HEAD}: 9 passed. No failures remain.', 'passed'),
+    (f'Tests at head {HEAD}: 9 passed.\nBase at {OLD}: 2 failed', 'passed'),
+])
+def test_repaired_counts_give_no_test_context_and_word_counts_block(note, status):
+    assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == status
+
+
 def test_headed_failure_count_needs_no_test_word():
     note = f'Re-run at head {HEAD}: 2 failed.'
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == 'failed'
