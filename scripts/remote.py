@@ -103,7 +103,8 @@ def main(argv=None):
     parser.add_argument('--setup', choices=('python', 'browser', 'rust', 'all'),
                         help='what the VM installs first (default: guessed from the command)')
     parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
-    parser.add_argument('--minutes', type=int, default=30, help='time limit for the command (1 to 60)')
+    # The whole default Python suite takes 25-28 minutes on 4 vCPUs; a 30-minute limit cut it off near the end.
+    parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')
     parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)

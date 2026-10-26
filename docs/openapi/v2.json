@@ -7027,6 +7027,77 @@
         ]
       }
     },
+    "/api/v2/goals/{gid}/reopen": {
+      "post": {
+        "summary": "Bring a done or dropped goal back with a colour and one line why, or auto for the colour it had; whoever may set its colour",
+        "operationId": "reopenGoal",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalReopen"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Goals"
+        ]
+      }
+    },
     "/api/v2/goals/{gid}/status": {
       "post": {
         "summary": "Set the colour by hand with one sentence (red, yellow, green) or end the goal (done, dropped). It sticks, with the setter's name, until a person hands it back",
@@ -12772,7 +12843,7 @@
     },
     "/api/v2/proposals/{pid}/decide": {
       "post": {
-        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what can't be done comes back as a new recovery saying why",
+        "summary": "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. A recovery applies exactly the chosen option (`option`, else the CEO Bot's pick) in the CEO Bot's name; what can't be done comes back as a new recovery saying why",
         "operationId": "decideGoalProposal",
         "parameters": [
           {
@@ -16757,7 +16828,7 @@
         ]
       },
       "post": {
-        "summary": "Change a task; send the version you read (409 version_conflict otherwise)",
+        "summary": "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations",
         "operationId": "updateTask",
         "parameters": [
           {
@@ -22613,6 +22684,10 @@
           },
           "message_id": {
             "type": "string"
+          },
+          "shown_once": {
+            "type": "object",
+            "description": "Confirm only, on a card that makes a one-time value (a new computer's code): {code, expires, operator}, in this answer alone and never stored on the card"
           }
         },
         "required": [
@@ -26736,6 +26811,16 @@
               }
             ],
             "title": "Moves"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KpiTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -26852,6 +26937,10 @@
               "null"
             ]
           },
+          "card": {
+            "type": "object",
+            "description": "What its card says beside the payload: goal_title, kpi_name; an Add a KPI suggestion's measure {name, definition, source_note, unit, direction, existing} and target_label; a new target's now_label and target_label; a new definition's or wording's changes [{label, now, proposed}]"
+          },
           "may_decide": {
             "type": "boolean",
             "description": "Whether the caller may confirm or reject it"
@@ -26913,6 +27002,41 @@
           "suggested"
         ],
         "additionalProperties": true
+      },
+      "GoalReopen": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "red",
+                  "yellow",
+                  "green",
+                  "auto"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Note",
+            "default": ""
+          },
+          "undo": {
+            "type": "boolean",
+            "title": "Undo",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "GoalReopen"
       },
       "GoalResult": {
         "type": "object",
@@ -28892,9 +29016,10 @@
             "enum": [
               "fresh",
               "stale",
-              "missing"
+              "missing",
+              "archived"
             ],
-            "description": "stale: one period missed; missing: never read or two missed. Never zero"
+            "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"
           },
           "spark": {
             "type": "array",
@@ -28909,9 +29034,10 @@
               "yellow",
               "red",
               "gray",
-              "none"
+              "none",
+              null
             ],
-            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target"
+            "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target; null is an archived goal link with no colour"
           },
           "reason": {
             "type": "string"
@@ -34683,6 +34809,10 @@
               "null"
             ]
           },
+          "step_since": {
+            "type": "string",
+            "description": "A Dev ticket at a working step (In Progress, a Fixes step): when it entered that step or came back to work; absent otherwise"
+          },
           "relations": {
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; direction is out when this task is the subtask, blocker, duplicate or follow-up, in for the other end, both for related. Subtasks are in the task's children.",
@@ -34962,6 +35092,37 @@
         "type": "object",
         "title": "TaskAskResolve"
       },
+      "TaskBlocker": {
+        "properties": {
+          "repo": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Repo"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 599.0,
+            "minimum": 100.0,
+            "title": "Status"
+          },
+          "endpoint": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Endpoint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repo",
+          "status",
+          "endpoint"
+        ],
+        "title": "TaskBlocker",
+        "description": "What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."
+      },
       "TaskComment": {
         "properties": {
           "public": {
@@ -35200,6 +35361,16 @@
             "type": "boolean",
             "title": "Qa Not Checkable Live",
             "default": false
+          },
+          "blocker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskBlocker"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "top": {
             "type": "boolean",
@@ -36236,7 +36407,8 @@
                   "review",
                   "ready",
                   "done",
-                  "declined"
+                  "declined",
+                  "closed"
                 ]
               },
               {

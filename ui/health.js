@@ -63,12 +63,17 @@ function hlCheckHtml(check) {
   const owner = check.id === 'version' && HL?.audience === 'owner';
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
-  const result = owner && HL_CHECK_MSG
-    ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '';
+  // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
+  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+    ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
+  const result = (owner && HL_CHECK_MSG
+    ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
+    + (update || (owner && busy) ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : '');
   return `<li class="hl-check ${esc(check.status)}" data-hl-check="${esc(check.id)}" data-status="${esc(check.status)}">
     <span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[check.status] || HL_ICONS.unknown}</span>
     <div class="hl-main"><strong>${esc(check.label)}</strong><p>${esc(check.summary)}</p>${result}</div>
-    <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
+    <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${update}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
 }
 
 // Report this on what is red: Support opens with it attached (ui/support.js), unless this server turned support off.
@@ -145,11 +150,18 @@ async function hlMonitorToggle(box) {
   await hlRefresh();
 }
 
+// A bot's queue as Pipeline splits it (backend/health.py `_queue_words`): work that can start, work behind an interrupted
+// run nobody reviewed, and work held on purpose.
+function hlQueueWords(row) {
+  return [row.queued ? `${row.queued} queued` : '', row.dead ? `${row.dead} behind an interrupted run` : '',
+    row.held ? `${row.held} held on purpose` : ''].filter(Boolean);
+}
+
 // Bots with queued work that is not starting, or left in setup for a day (backend/health.py `_stuck`): who, why, and
 // one fix. Overview shows the same rows.
 window.hlStuckHtml = function hlStuckHtml(rows) {
   return (rows || []).map(row => `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${row.queued ? ` · ${row.queued} queued` : ''}</span>
+    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
     ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${row.why}`, detail: row.why, ref: row.bot, group: 'stuck:' + row.reason})}</li>`).join('');
 };
 
@@ -182,7 +194,7 @@ function hlPageDraw() {
   const host = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${row.queued ? ', ' + row.queued + ' waiting' : ''}</span></li>`).join('');
+  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.js shows only the ones that do).
@@ -249,6 +261,11 @@ async function hlCheckUpdates() {
     const reply = await fetch(API + '/v2/system/update/check', {method: 'POST'});
     const notice = await reply.json().catch(() => ({}));
     if (!reply.ok) throw apiFailure(notice, reply);
+    // The release it found is the one Update now installs, here and in the sidebar.
+    if (notice?.available && notice.latest && S.config) {
+      S.config.update = {...(S.config.update || {}), available: true, latest: notice.latest, current: notice.current || S.config.update?.current};
+      window.renderNewVersion?.();
+    }
     await hlRefresh();
     // An available update is already the Version line, refreshed above: say it once, not twice.
     HL_CHECK_MSG = notice?.checking ? {text: 'Still checking. Look again in a moment.'}
@@ -318,6 +335,8 @@ document.addEventListener('change', event => {
 
 document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
+  const update = event.target.closest('[data-hl-update]');
+  if (update) { if (typeof nvBusy !== 'undefined' && !nvBusy) { update.disabled = true; void nvStart(); } return; }
   const setup = event.target.closest('[data-hl-setup-check]');
   if (setup) { void hlSetupCheck(setup); return; }
   const move = event.target.closest('[data-stuck-move]');

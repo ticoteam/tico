@@ -52,7 +52,7 @@ async function open(browser, role, hash = '#/settings/rules', viewport = {width:
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], writes = [], lists = [];
   const rules = fixture(role), suggestions = suggestionsFor();
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('pageerror', e => errors.push(e.stack || e.message));
   await page.route('**/*', route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname;
     const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -69,6 +69,8 @@ async function open(browser, role, hash = '#/settings/rules', viewport = {width:
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', can_manage: role === 'owner'}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/ceo-bot') return json({name: 'CEO', level: 1, regular_checks: true,
+      levels: [{level: 1, name: 'Level 1', sentence: 'A short synthetic description.'}], level_history: []});
     if (p === '/api/v2/tasks/t-acme') return json({task: {id: 't-acme', title: 'Renew the acme.example domain'}});
     if (p === '/api/v2/release-schedule') return json({on: true, times: ['10:00'], bot: '', writer: '', zone: 'UTC', release_manager: 'ops',
       technical_writer: '', next: null, last: null, pending: 2, can_change: role === 'owner', can_release: role === 'owner'});
@@ -312,6 +314,37 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
       assert.equal(await page.locator('[data-rules-filter] a[href="#/bot/ops/settings"]').count(), 1);
       assert.deepEqual(errors, []);
       await page.close();
+    }
+    {
+      // Catalogue refusal links and tab links leave another page for the right Settings section at both widths.
+      for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
+        const {page, errors} = await open(browser, 'owner', '#/settings/rules', viewport);
+        await row(page, 'r-team').waitFor();
+        await page.evaluate(() => { S.emps ||= []; });
+        const links = [
+          ['#/settings/ceo', 'ceo'],       // includes the CEO-level person-only refusal link
+          ['#/settings/devices', 'devices'],
+          ['#/settings/bots', 'bots'],
+          ['#/settings/recurring', 'recurring'],
+          ['#/settings/tasks', 'tasks'],
+          ['#/settings/health', 'health'],
+          ['#/settings/bots/settings-turn-budgets', 'bots'], // existing tab/card form
+        ];
+        for (const [href, tab] of links) {
+          await page.evaluate(() => { location.hash = '#/updates'; });
+          await page.waitForFunction(() => S.route === '#/updates');
+          await page.evaluate(value => { location.hash = value; }, href);
+          await page.waitForFunction(expected => location.hash === `#/settings/${expected}` && SETTINGS_TAB === expected, tab);
+          assert.equal(await page.locator(`[data-settings-tab="${tab}"]`).getAttribute('aria-selected'), 'true', href);
+          assert.deepEqual(errors, [], href);
+        }
+        await page.evaluate(() => { location.hash = '#/updates'; });
+        await page.waitForFunction(() => S.route === '#/updates');
+        await page.evaluate(() => { location.hash = '#/settings/webhooks/outgoing'; });
+        await page.waitForFunction(() => location.hash === '#/settings/webhooks' && SETTINGS_TAB === 'webhooks' && WH.tab === 'outgoing');
+        assert.deepEqual(errors, []);
+        await page.close();
+      }
     }
     {
       // Phone width: the rows wrap; nothing in the page scrolls sideways.

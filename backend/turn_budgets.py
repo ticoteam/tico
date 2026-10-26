@@ -110,8 +110,7 @@ def refusal(c, bot, message):
     person's message, else None. Read only (execution.job_refusal)."""
     if str(message.get("from_actor") or "").startswith("human:"):
         return None
-    row = c.execute("SELECT held_at FROM bot_budget WHERE bot=?", (bot,)).fetchone()
-    return "budget" if row and row["held_at"] else None
+    return "budget" if get(c, bot).get("held_at") else None
 
 
 def enforce(c, settings, job, message, now=None):

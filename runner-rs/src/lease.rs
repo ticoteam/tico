@@ -53,7 +53,11 @@ async fn renew_loop(client: Client, aid: String, flags: Arc<Flags>, every: Durat
                 let lease = reply["lease_seconds"].as_f64().unwrap_or(60.0);
                 *flags.deadline.lock().unwrap() = before + Duration::from_secs_f64((lease - 10.0).max(0.0));
                 if reply["stop"] == true {
-                    // A person pressed Stop: the turn is interrupted and reported as interrupted, not lost.
+                    // A person pressed Stop, or the bot was quarantined (its `stop_reason`): the turn is interrupted
+                    // and reported as interrupted, not lost.
+                    if let Some(why) = reply["stop_reason"].as_str().filter(|why| !why.is_empty()) {
+                        *flags.stop_reason.lock().unwrap() = Some(why.to_string());
+                    }
                     flags.stopped.store(true, Ordering::SeqCst);
                 }
             }
@@ -77,6 +81,7 @@ mod tests {
         Arc::new(Flags {
             lost: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now()),
@@ -116,6 +121,27 @@ mod tests {
             renewer.abort();
         });
         assert!(!flags.lost.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_stop_with_a_reason_stops_the_turn_with_that_reason_and_does_not_lose_the_lease() {
+        // Dev 573: a quarantined bot's renewal is a Stop with the quarantine's reason, not a stale lease.
+        let stop = r#"{"lease_until":"x","lease_seconds":90,"stop":true,"stop_reason":"Quarantined: 10 refusals today, resumes about 10:05 UTC"}"#;
+        let (url, _) = hub(vec![(200, stop); 4]);
+        let client = Client::new(&url, "runner-token", 5, 0).unwrap();
+        let flags = flags();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let renewer = spawn(&client, "a3".into(), flags.clone(), Duration::from_millis(20));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !flags.stopped.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.expect("renewal did not stop the turn");
+            renewer.abort();
+        });
+        assert!(!flags.lost.load(Ordering::SeqCst));
+        assert_eq!(flags.stop_reason.lock().unwrap().as_deref(), Some("Quarantined: 10 refusals today, resumes about 10:05 UTC"));
     }
 
     #[test]

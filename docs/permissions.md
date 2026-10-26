@@ -63,7 +63,7 @@ Every human on the team has one role:
 | **Admin** | humans the owner makes admins (the old "bot administrators": the list is read under either name for one release) | manage every bot but the built-in ones (below), humans and computers (enrol, revoke, open to members' bots); set what members may do and the bot limit. They cannot make or remove admins or owners. They are credential administrators and see the SQL page, unless the owner turns that off ([Team rules](#team-rules)) |
 | **Member** | everyone else | create and manage their own bots, add coworkers, and use the bots they are allowed to |
 
-Settings > Humans (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
+Settings > People (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
 **Can sign in** switch, and a ⋯ menu with two capabilities per member:
 
 - **Can add bots** (`create_bots`): on for everyone unless switched off.
@@ -77,7 +77,7 @@ API tokens and delegated Assistant/BotOps actions cannot link it. This grants sh
 grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
 them, but the eight Inbox agent tools carry no company-linking authority.
 
-The **team's domain** is the domain(s) the owner allows to sign in (Settings > Humans, **Anyone at <domain> can sign in**); when
+The **team's domain** is the domain(s) the owner allows to sign in (Settings > People, **Anyone at <domain> can sign in**); when
 none is set it is the owner's own email domain. When that is a public email service such as gmail.com, it is the team email domain the
 owner gave in Finish setup (**Names**, optional), then the team domains of the humans already on the roster; with none of those,
 members add nobody until the owner adds a human or sets a domain. A newly added human goes on the roster and on the sign-in list, so they can
@@ -96,14 +96,14 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
 ## Team rules
 
-The product favours getting going fast, and the owner tightens it later. Settings > Humans (owner only, saved as they change;
+The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
 `GET` and `PUT /api/v2/access/rules`) has ten switches, all **on** by default:
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
-| **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
+| **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
@@ -126,8 +126,8 @@ routines, access or place, and only the owner may add them. A member cannot regi
 The CEO Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
-Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
-([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
+Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
+([Recruiting a seat](onboarding.md#recruiting-a-seat)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
 ## Bots that create repositories
@@ -389,6 +389,30 @@ bot** turns it off. In a run carrying a person's rights, the token writes the re
 run in progress, only BotOps' own. A token is reused only for the exact same repositories, so a wider one never reaches a
 narrower run.
 
+**What still waits for the person's tap.** The rights BotOps borrows are never a confirmation: only the person's own click
+on a Confirm card in their BotOps chat is, and it runs the stored request as them. So BotOps answers these with
+`needs_confirm` and a card, and nothing changes until the tap:
+- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/people/{id}`);
+- a credential granted to a person or to every computer (a grant to a bot, and taking a grant back, stay direct);
+- placing a member's bot on a computer that does not take members' bots;
+- the routes in `botops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots
+  switch and revoking it, deciding a proposal, a support request, a file's sharing, directory sync, disconnecting Slack
+  or GitHub, and picking a seat's candidate (listing candidates stays direct);
+- always, whatever the person said: handing over ownership (`POST /api/v2/access/owner`, the owner only), updating Tico
+  (`POST /api/v2/system/update`), a change to the rules **BotOps changes providers and limits without asking** or
+  **BotOps manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
+  never in BotOps' answer;
+- providers (turning the Tico AI Gateway off or back to automatic included, the owner only) and raised limits when the
+  owner turned **BotOps changes providers and limits without asking** off.
+
+What only an owner or an admin may ask for is refused at once for a member, not handed over as a card that fails. A few
+routes give back a secret's value, and BotOps acting for a person is refused them (`403 person_only`, with where the person
+does it): revealing a stored credential, making someone a password, making a personal API token and making a SCIM token.
+A secret in a request body is refused too (`422 secret_in_request`), including the Gateway's `key` and Slack's
+`bot_token` and `app_token`. A body the route itself would refuse, an unknown field included, gets the route's own
+`422` and no card: a card never stores or shows back what its route has no place for. Each step of a bulk card is
+checked against its own route, and one step refused refuses the whole card.
+
 If a friendly tool refuses for permissions, BotOps retries the same action with `hub_api` before handing work back. Both use the same rights.
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update
@@ -480,6 +504,35 @@ A bot that becomes active without a computer (added active, turned on, resumed, 
 only computer, else the least busy online one that takes it (a bot BotOps builds prefers BotOps's own computer, where its repository is). A member's bot goes on that member's own computer or one opened to members' bots,
 and never on a closed one. With none that takes it the bot stays as it is and the answer says so; the scheduler places it as soon as one can
 (`backend/placement.py`). Humans see a bot that is only set up, not yet turned on, as "Setting up".
+
+## The settings catalogue
+
+Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
+key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > People > Team rules),
+who may change it, its class, the route and body it writes, and a link that opens that card
+(`#/settings/<tab>/<card>`). A person, or BotOps for them, finds and changes a setting without knowing the route:
+
+    hub settings find "sql"                                  key, name, where, class and who may change it
+    hub settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
+    hub settings set release.times 09:30,17:00               change it with your rights (BotOps: the requester's)
+
+`show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
+what `set` does when BotOps asks for a person:
+
+- **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
+  the privacy count): it changes at once, as that person, and the answer names the new value.
+- **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
+  ownership, the CEO bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
+  confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
+  `hub settings set` runs at once. A confirm entry whose route BotOps can't yet put on a card is person-only until it
+  can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
+  answers with a one-line reason and the card's link.
+
+Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
+The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
+the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
+in `NOT_SETTINGS` with the reason it needs none.
 
 ## Write without Read
 

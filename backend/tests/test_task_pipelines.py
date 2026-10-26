@@ -68,9 +68,13 @@ def test_waiting_and_wont_do_steps_are_retired_once_and_their_tasks_keep_their_p
     product = c.execute("SELECT id FROM task_steps WHERE type_id='product-roadmap' AND status='declined'").fetchall()
     H.migrate(c)
     place = dict(c.execute('SELECT id, step_id || ":" || status FROM tasks').fetchall())
-    assert place == {'was-in-review': 'review:waiting', 'no-history': 'deck:waiting', 'dropped': 'closed:declined',
+    blocked = next(s['id'] for s in H.type_get(c, 'dev')['steps'] if s['name'] == 'Blocked')
+    assert place == {'was-in-review': blocked + ':waiting', 'no-history': blocked + ':waiting', 'dropped': 'closed:declined',
                      'general': 'general-open:waiting'}
-    assert not c.execute("SELECT 1 FROM task_steps WHERE status IN ('waiting','declined') AND type_id<>'product-roadmap'").fetchone()
+    saved = H.task(c, 'was-in-review')
+    assert saved['blocked_from_step'] == 'review'
+    assert saved['blocked_from_status'] == 'review'
+    assert not c.execute("SELECT 1 FROM task_steps s JOIN task_types t ON t.id=s.type_id WHERE s.status IN ('waiting','declined') AND t.id<>'product-roadmap' AND NOT (t.role='engineering' AND s.name='Blocked' AND s.status='waiting')").fetchone()
     # The Product roadmap's Declined is public: it stays.
     assert product and c.execute("SELECT id FROM task_steps WHERE type_id='product-roadmap' AND status='declined'").fetchall() == product
     events = c.execute("SELECT count(*) FROM task_events").fetchone()[0]
@@ -90,12 +94,12 @@ def test_a_waiting_task_keeps_its_step_and_a_declined_one_closes_and_no_step_may
     c.execute("INSERT INTO tasks(id,title,status,body,note,type_id,step_id) VALUES('t','A ticket','review','x','',?,?)",
               (dev['id'], steps['Review 1']))
     state = lambda status: H._task_state(c, H.KEEPER, H.task(c, 't'), status=status)[1:]
-    assert state('waiting') == (steps['Review 1'], 'waiting')
+    assert state('waiting') == (steps['Blocked'], 'waiting')
     assert state('declined') == (steps['Closed'], 'declined')
     c.execute("UPDATE tasks SET status='waiting',step_id=? WHERE id='t'", (steps['Review 1 Fixes'],))
     assert state('doing') == (steps['Review 1 Fixes'], 'doing'), 'leaving waiting keeps a step of that status'
     c.execute("UPDATE tasks SET status='closed',step_id=? WHERE id='t'", (steps['Closed'],))
-    assert state('waiting') == (steps['On Deck'], 'waiting'), 'a finished task brought back waiting starts at the first step'
+    assert state('waiting') == (steps['Blocked'], 'waiting'), 'a finished task brought back waiting enters Blocked'
     for status in ('waiting', 'declined'):
         try:
             H.type_update(c, H.KEEPER, dev['id'], steps=[*dev['steps'], {'name': 'Held', 'status': status}])

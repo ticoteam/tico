@@ -275,6 +275,98 @@ def test_a_run_that_started_a_fresh_session_says_why_and_the_week_counts_it(api,
     assert sum(bucket["rotated"] for bucket in rows) == (1 if case == "rotated" else 0)
 
 
+@pytest.mark.parametrize("session,said", [
+    ({"kind": "resumed", "why": "compacted"}, None),
+    ({"kind": "resumed"}, None),
+    ({"kind": "new", "why": "none_saved"}, None),
+    ({"kind": "new", "why": "not_found"}, "Started a new session: the old one wasn't on this computer"),
+    ({"kind": "new", "why": "resume_failed", "detail": "exit 1"},
+     "Started a new session: the old one could not be continued"),
+    ({"kind": "new", "why": "fallback_side"},
+     "Started a new session: the run used a fallback model, which keeps a session of its own"),
+    ({"kind": "new", "why": "a_newer_reason"}, "Started a new session (a_newer_reason)"),
+])
+def test_a_run_says_whether_it_resumed_its_session_and_a_new_one_is_in_the_tasks_history(api, session, said):
+    r = machine(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    post(api, f"attempts/{attempt['id']}/complete",
+         {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE, "session": session}, r["token"])
+    row = turn(api, attempt)
+    assert (row["session_kind"], row["session_why"]) == (session["kind"], session.get("why"))
+    assert row["rotated"] is None
+    with api.app.state.store.read() as c:
+        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session'",
+                                              (task["id"],))]
+    assert notes == ([said] if said else [])
+
+
+def test_a_completion_from_an_older_runner_has_no_session_and_a_session_that_is_too_long_is_refused(api):
+    r = machine(api)
+    post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    attempt = claim(api, r)
+    start(api, r, attempt)
+    body = {"outcome": "completed", "last_seq": 0, "text": "", "usage": USAGE}
+    post(api, f"attempts/{attempt['id']}/complete", {**body, "session": {"kind": "new", "why": "x" * 61}}, r["token"],
+         expected=422)
+    post(api, f"attempts/{attempt['id']}/complete",
+         {**body, "rotated": {"reason": "turns", "tokens": 10, "turns": 9, "limit": 8}}, r["token"])
+    row = turn(api, attempt)
+    assert (row["rotated"], row["session_kind"], row["session_why"]) == ("turns", None, None)
+
+
+def test_a_persons_clear_and_a_topic_change_in_a_task_room_are_in_the_tasks_history(api):
+    from backend import views
+    machine(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Watch the release", "body": "Each hour."})
+    with api.app.state.store.transaction() as c:
+        room = c.execute("SELECT id FROM conversations WHERE task_id=?", (task["id"],)).fetchone()[0]
+        views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room)
+        views.clear_chat_session(c, api.app.state.store.settings, "human:ana", "ops", room, {"reason": "topic_change"})
+        notes = [e["note"] for e in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='session' "
+                                              "ORDER BY rowid", (task["id"],))]
+    assert notes == ["Started a new session: a person cleared it",
+                     "Started a new session: the conversation moved to a new topic"]
+
+
+def lost(c, bot, why, n, kind="new", hours=1):
+    for i in range(n):
+        c.execute("INSERT INTO turns(id,bot,started,session_kind,session_why) VALUES(?,?,?,?,?)",
+                  (f"{bot}-{why}-{hours}-{i}", bot, H.shift(H.now(), hours=-hours), kind, why))
+
+
+def session_findings(api):
+    from backend import health_monitor
+    with api.app.state.store.read() as c:
+        return {f["key"]: f for f in health_monitor._session_checks(c)}
+
+
+def test_health_names_a_bot_that_lost_its_session_more_than_twice_in_a_day(api):
+    with api.app.state.store.transaction() as c:
+        lost(c, "ops", "not_found", 2)
+        lost(c, "cmo", "not_found", 1)
+        lost(c, "cmo", "resume_failed", 1)
+        lost(c, "cmo", "prompt_too_long_after_compact", 1)
+        lost(c, "cfo", "not_found", 5, hours=25)             # not in the last day
+    found = session_findings(api)
+    assert list(found) == ["new_sessions:cmo"]                # two for ops is not more than two
+    assert "3 new ones in a day" in found["new_sessions:cmo"]["title"]
+    with api.app.state.store.transaction() as c:
+        lost(c, "ops", "interrupted", 1)
+    assert set(session_findings(api)) == {"new_sessions:cmo", "new_sessions:ops"}
+
+
+def test_health_does_not_count_a_first_session_a_cleared_one_or_a_topic_change(api):
+    with api.app.state.store.transaction() as c:
+        lost(c, "ops", "none_saved", 10)
+        lost(c, "ops", "fallback_side", 10)
+        lost(c, "ops", "person_clear", 10)
+        lost(c, "ops", "topic_change", 10)
+        lost(c, "ops", "not_found", 10, kind="resumed")
+    assert session_findings(api) == {}
+
+
 def test_a_restore_ends_open_runs_with_an_outcome(api):
     r = machine(api)
     post(api, "tasks", {"owner": "ops", "title": "Check the bank feed", "body": "Daily."})

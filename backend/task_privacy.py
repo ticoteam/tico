@@ -788,6 +788,18 @@ STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s 
 STATUS_TASK_COLUMNS = "id,owner,requester,status,private,guest,waiting_on"
 
 
+def status_tasks_sql(match):
+    """A bot's tasks `status` reads, `match` being `=?` or `IN (...)` and bound four times. Each part is one
+    index: OR-ing owner and requester made SQLite read every task the bots ever had, finished ones included,
+    to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
+    live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
+    return (f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner{match} AND {live} "
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester{match} AND {live} "
+            # `+` keeps the few private tasks on their own index (tasks_private), not the owner's every task.
+            f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE private IS NOT 0 "
+            f"AND (+owner{match} OR +requester{match})")
+
+
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
     {slug: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
@@ -796,8 +808,7 @@ def status_inputs(c, bots):
     for part in H.chunks(out):
         actors = ["bot:" + bot for bot in part]
         marks = " IN (" + ",".join("?" * len(actors)) + ")"
-        for t in c.execute(f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) AND {STATUS_TASKS_SQL}",
-                           actors * 2):
+        for t in c.execute(status_tasks_sql(marks), actors * 4):
             t = dict(t)
             for party in {t["owner"], t["requester"]}:
                 if party in actors:
@@ -807,6 +818,10 @@ def status_inputs(c, bots):
             out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
         for m in c.execute(ASKS_SQL.format(marks), actors):
             out[H.actor_id(m["from_actor"])]["asks"].append(m)
+    # Each open ask and approval is checked as read here, its tasks, parents and rooms read together: not a few
+    # queries per message, which on a busy team were most of a status page's statements.
+    if read_cache.cache(c) is not None:
+        prime_messages(c, [m for kinds in out.values() for m in (*kinds["approvals"], *kinds["asks"])])
     return out
 
 
@@ -818,8 +833,7 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
     row = dict(row)
     tid = row.get("task_id")
     tasks = tasks if tasks is not None else [dict(t) for t in c.execute(
-        f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE (owner=? OR requester=?) AND {STATUS_TASKS_SQL}",
-        ("bot:" + row["bot"], "bot:" + row["bot"]))]
+        status_tasks_sql("=?"), ("bot:" + row["bot"],) * 4)]
     task = next((t for t in tasks if t["id"] == tid), None) if tid else None
     if tid and task is None:
         task = _task(c, tid)
@@ -840,13 +854,14 @@ def status(c, who, row, *, tasks=None, approvals=None, asks=None):
                  if (t["requester"] == bot and H.is_human(t["owner"]))
                  or (t["owner"] == bot and t["status"] == "waiting" and H.is_human(t.get("waiting_on") or ""))}
         if len(waits) < len(live):
+            # Both are the message rows (`m.*`) as stored, read in this snapshot.
             for m in asks if asks is not None else c.execute(ASKS_SQL.format("=?"), (bot,)):
-                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m):
+                if m["about"] in live and m["about"] not in waits and message_readable(c, actor(who), m, current=True):
                     waits.add(m["about"])
         approvals = approvals if approvals is not None else c.execute(APPROVALS_SQL.format(by="", match="=?"), ("bot:" + row["bot"],))
         # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
         row["needs_human"] = len(waits) + sum(
-            message_readable(c, actor(who), m) and not (dict(m).get("approval_task") in waits)
+            message_readable(c, actor(who), m, current=True) and not (dict(m).get("approval_task") in waits)
             for m in approvals)
     return row
 

@@ -130,7 +130,7 @@ def test_one_hold_covers_every_bot_on_the_login_and_a_persons_message_still_gets
     assign(api, machine, "finance")
     ready(api, machine, ["ops", "finance"])
     post(api, "tasks", {"owner": "ops", "title": "First", "body": "Please do it."})
-    limit(api, machine, claim(api, machine))
+    limit(api, machine, claim(api, machine), errors=("Usage limit",))
     post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
     ready(api, machine, ["ops", "finance"])
     assert claim(api, machine) is None                      # finance signs in with the same login on this computer

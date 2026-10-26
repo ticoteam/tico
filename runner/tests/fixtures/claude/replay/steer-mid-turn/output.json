@@ -10,6 +10,7 @@
         "kind": "tool",
         "parent_id": null,
         "summary": "sleep",
+        "outside_actions": [],
         "tool": "Bash",
         "status": "started",
         "item_id": "toolu_014eqw9Fr3wvygGxTHVQyjTr"

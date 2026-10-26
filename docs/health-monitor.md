@@ -16,8 +16,10 @@ It shows the company count, warning and stop levels, and when the incident opene
 See [Company turn levels](computers.md#company-turn-levels) for what counts, defaults, recovery and how an admin changes the levels.
 This record does not provide the separate automatic fixer.
 
-Health's **Stuck bots** check and `hub health check` name the bot, queued job count, oldest queued age,
-why it cannot start, and a fix or a command to inspect its runs. **Tasks not progressing** names visible tasks
+Health's **Stuck bots** check and `hub health check` name the bot, its queue split as `hub pipeline` splits it (jobs
+that can start, jobs behind an interrupted run awaiting review, jobs held on purpose), the oldest age, why it cannot
+start, and a fix or a command to inspect its runs. Work held on purpose never makes a bot stuck. The web Stuck list,
+Overview and the silent-computer line split the queue the same way. **Tasks not progressing** names visible tasks
 and links their recovery diagnosis. Settings > Health shows the same summaries.
 
 **Pull requests not progressing** names visible bot PRs that have remained conflicting for more than 12 hours,
@@ -39,6 +41,7 @@ Once an hour, while it is on, the server checks the install in plain code (`back
 | `default_login_limited` | setup | A computer's default login for an AI tool (the one a turn uses with no subscription) is out of quota: in the last day at least two turns on it stopped on a usage limit and none has completed since, and the provider gave no reset time or one still ahead. One finding per computer and tool; it goes away once a turn on that login completes or the reset time passes. Fallback hops and check-model turns count; a turn the provider refused for temporary model capacity does not (a check or task model's either), nor a turn on a subscription, nor one on a tool each bot signs in with its own key (`api_keys = "bot"`: Gemini CLI, pi). While it lasts, a check or review subtask on that login moves to the next check model instead of retrying ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) |
 | `check_limited` | setup | A bot's check or review subtask on another model ([A subtask on a check model](tasks.md#a-subtask-on-a-check-model)) has been held by that model's usage limit for 12 hours: its job is still queued and every turn on it since then stopped on the limit, as Tico retries it after each reset. The finding names the bot, the model, since when and the task (a private task is not named). One finding per check task; it goes away once a turn on it ends any other way, it completes, or the task is done, closed or declined |
 | `run_hold` | setup | Tico held a bot after five runs in a row failed within a minute of starting ([Failed runs wait, then stop](how-it-works.md)). The finding names the bot and the kind of error (usage limit, session too large, sign-in, gateway, other); it goes away when the bot is released, or when its next try (Tico runs one on its own at growing intervals, 30 minutes to 8 hours) completes |
+| `new_sessions` | setup | A bot started more than two new sessions in the last 24 hours because its old one was not found on its computer, would not resume or compact, was interrupted, or was still too large to send after compacting ([Sessions](sessions.md#checkpoints-and-resume)). A first session, a person's Clear and a topic change do not count. One finding per bot; it goes away when the count falls to two or fewer |
 | `turn_budget` | setup | Tico held a bot for starting more runs in an hour or a day than its run budget allows. The finding names the bot and the window; it goes away when the bot is released or its budget raised |
 | `reviewer_holds_tasks` | setup | A bot with the Reviewer profile owns open tasks that are not review or QA requests; a Reviewer does not pull those by itself ([Profiles](how-it-works.md#profiles)). One finding per bot; it goes away when the tasks move or the profile changes |
 | `responder_has_tasks` | setup | A bot with the Responder profile, which takes no tasks, has open tasks. One finding per bot |

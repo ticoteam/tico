@@ -8,6 +8,7 @@ for a subagent, its type and model; never the call's arguments or output, so non
 """
 
 import json
+from datetime import timezone
 
 from fastapi import Request
 
@@ -102,6 +103,51 @@ def decision_note(actor, detail):
     return clip(detail.get("shown") or note.split("\n\n")[0], 400)
 
 
+# The job's state beside a recovery decision: a saved choice still waiting for its lane is held.
+JOB_WORDS = {"uncertain": "Held", "cancelled": "Cancelled", "queued": "Queued", "leased": "Running", "running": "Running",
+             "input": "Running", "completed": "Done"}
+
+
+def decided_by(actor):
+    """Who made a recovery decision: Tico's own auto-reconcile, BotOps, a person, or another bot (an operator)."""
+    return ("tico" if actor == H.KEEPER else "botops" if actor == "bot:" + H.FLEET_MAINTAINER
+            else "person" if H.is_human(actor) else "bot")
+
+
+def recovery(c, job_ids):
+    """{job_id: decision} from job_recovery, the one record of a stopped run's resume or dismiss (the stopped-runs
+    card reads it too, execution.stopped_rows): each job's latest decision and the attempt it was about. Read here
+    each time, never copied onto the job, so a later decision replaces an earlier one wherever the job shows.
+    job_recovery keeps that row after the job runs again, so `current` says whether the decision is still about the
+    job's current try, and only then does `state` carry the job's state: a later try's stop is not the decision's."""
+    out = {}
+    for part in H.chunks(sorted(set(job_ids))):
+        for r in c.execute("SELECT r.job_id,r.attempt_id,r.decision,r.note,r.actor,r.created,j.state AS job_state,"
+                           "j.attempt_id AS job_attempt FROM job_recovery r JOIN jobs j ON j.id=r.job_id "
+                           f"WHERE r.job_id IN ({','.join('?' * len(part))})", part):
+            current = r["job_attempt"] == r["attempt_id"]
+            out[r["job_id"]] = {"decision": "resume" if r["decision"] == "resume" else "dismiss",
+                                "attempt_id": r["attempt_id"], "current": current,
+                                "state": r["job_state"] if current else None,
+                                "by": r["actor"], "by_kind": decided_by(r["actor"]),
+                                "at": r["created"], "note": decision_note(r["actor"], {"note": r["note"]})}
+    return out
+
+
+def decision_label(decided, name):
+    """"Cancelled: dismissed by BotOps at 09:50Z, <note>": the job's state, the decision, who, when (UTC) and the
+    note, as one line. Once the job has moved to a later try the state is not this decision's, so the line says only
+    what was decided: "Resumed by BotOps at 09:50Z, <note>". `name` turns the decider's actor into a person's name."""
+    who = "Tico's auto-reconcile" if decided["by_kind"] == "tico" else name(decided["by"])
+    at = H.parse_ts(decided["at"])
+    at = at and at.astimezone(timezone.utc)
+    verb = "resumed" if decided["decision"] == "resume" else "dismissed"
+    state = decided.get("state")
+    line = ((f"{JOB_WORDS.get(state, str(state).capitalize())}: {verb}" if state else verb.capitalize())
+            + f" by {who}" + (f" at {at.strftime('%H:%M')}Z" if at else ""))
+    return line + (f", {decided['note']}" if decided.get("note") else "")
+
+
 def next_step(attempt, tries, job, decisions, retries):
     """What followed an attempt: a recorded decision, a person's retry, the hub's own retry, or a wait."""
     decided = decisions.get(attempt["id"])
@@ -189,6 +235,7 @@ def run_view(c, auth, who, tid):
             events[r["attempt_id"]].append((json.loads(r["payload_json"]), r["created"]))
     from .usage_records import ran_on
     made = ran_on(c, ids)
+    saved = recovery(c, jobs)
     out = []
     for r in turns:
         job_tries = tries.get(r["job_id"], [])
@@ -209,6 +256,10 @@ def run_view(c, auth, who, tid):
             "paused": login_waits.paused(c, r["id"], r["state"], r["result_json"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
+            # The job's state now and its recovery decision when that decision was about this try (job_recovery); the
+            # decision's own `state` is set only while it is about the job's current try.
+            "job_state": (job_rows.get(r["job_id"]) or {}).get("state"),
+            "decision": decision if (decision := saved.get(r["job_id"])) and decision["attempt_id"] == r["id"] else None,
             "subagents": subagents, "background": background,
             # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
             "wake": H._json(r["wake_json"])})

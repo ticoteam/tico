@@ -1348,3 +1348,35 @@ def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prep
         c.execute("UPDATE tasks SET status='review' WHERE id=?", (tid,))
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     assert {a['link_id'] for a in actions if a['action'] == 'remove'} == {original['link_id'], newer['link_id']}
+
+
+@pytest.mark.parametrize('manager', ['bot', 'person'])
+def test_owner_managers_provision_reports_worktrees_without_granting_repo_access(prepared, manager):
+    """Managers act on the owner's computer using the owner's existing repository grants."""
+    from backend.auth import Identity
+    api, tid, _ = prepared
+    identities = api.app_state.store.settings.test_identities
+    identities['manager-test'] = (Identity('bot:cpo', 'bot', runner_id='r2', attempt_id='manager-attempt') if manager == 'bot'
+                                  else Identity('human:riley', 'human', 'riley@acme.example'))
+    if manager == 'bot':
+        from backend.tests.test_github_app import _box
+        _box(api)
+        with api.app_state.store.transaction() as c:
+            c.execute("INSERT OR REPLACE INTO assignments VALUES('cpo','r2',1,?,'ana')", (H.now(),))
+            c.execute("INSERT INTO messages(id,from_actor,to_actor,kind,body,created) VALUES('manager-message','human:ana','bot:cpo','say','Manage work',?)", (H.now(),))
+            job = c.execute("SELECT id FROM jobs WHERE message_id='manager-message'").fetchone()[0]
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) VALUES('manager-attempt',?,'cpo','r2',1,'synthetic-manager','running',?,?)",
+                      (job, H.shift(H.now(), hours=1), H.now()))
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='cmo'")
+        c.execute("UPDATE bot_config SET reports_to='human:riley' WHERE bot='cpo'")
+        c.execute("UPDATE humans SET teams_json='[\"sales\"]' WHERE id='riley'")
+    response = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'manager-test')
+    assert response.status_code == 200, response.text
+    with api.app_state.store.read() as c:
+        link = H.task_links(c, tid)[0]
+        assert link['computer_id'] == 'r1' and link['added_by'] == identities['manager-test'].actor
+        assert json.loads(link['detail_json'])['owner'] == 'bot:cmo'
+    # Removing the owner's repository grant still refuses its manager.
+    put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'read'})
+    assert post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'manager-test').status_code == 403

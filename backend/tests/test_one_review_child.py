@@ -40,8 +40,8 @@ def test_a_new_head_or_a_finished_check_allows_the_next_request(api):
     second = child(api, task, "QA: the new head", owner="cpo")["task"]
     assert second["id"] != qa["id"]
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cmo", qa["id"], status="done", note="Done.")
-        H.task_update(c, "bot:cpo", second["id"], status="done", note="Done.")
+        H.task_update(c, "bot:cmo", qa["id"], status="done", note="Done.", verdict="pass", verdict_head=HEAD)
+        H.task_update(c, "bot:cpo", second["id"], status="done", note="Done.", verdict="pass", verdict_head=OLD)
     child(api, task, "QA: once more", expected=200)
 
 
