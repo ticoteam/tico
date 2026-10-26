@@ -4570,6 +4570,9 @@ def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
         return False
     conn.execute("UPDATE tasks SET verdict=?, verdict_head=? WHERE id=?", (verdict, head, row["id"]))
     _task_event(conn, row["id"], actor, "verdict", row.get("verdict"), verdict + (f" {head}" if head else ""), "")
+    # The verdict moves its Dev ticket, as Tico, the moment it is recorded (backend/verdict_moves.py).
+    from . import verdict_moves
+    verdict_moves.after_verdict(conn, row)
     return True
 
 
@@ -4594,6 +4597,15 @@ def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, q
             refs["inputs"] = [source]
             refs.update({k: v for k, v in original["refs"].items() if k in ("turn_id", "run")})
     silent = quiet or parent["status"] in ("done", "closed", "declined")
+    # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
+    # step or a merge to do, which goes first in the builder's queue (backend/verdict_moves.py).
+    from . import verdict_moves
+    moved = verdict_moves.delivery(conn, judged) if judged.get("verdict") else None
+    if moved:
+        text = moved["say"] + "\n\n" + text
+        silent = silent or moved["quiet"]
+        if moved.get("handoff") and not silent:
+            refs[verdict_moves.HANDOFF] = moved["handoff"]
     if resume_hint:
         text = ("Subtask result returned to this task's session. Continue this task here; the result needs "
                 "no relay, separate delivery turn or task run command.\n\n" + text)
@@ -5449,7 +5461,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None):
+                verdict_head=None, skip_step_wake=()):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5742,7 +5754,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if closing_step:
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
-        _set_status(conn, actor, row, status, type, step, note or "")
+        _set_status(conn, actor, row, status, type, step, note or "", skip_step_wake=skip_step_wake)
     args["id"] = task_id
     args["updated"] = ts
     if sets:

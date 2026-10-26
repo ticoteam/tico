@@ -86,10 +86,12 @@ FLOOR_EVENTS = {
     "needs_action": "a message its sender flagged needs-action",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
     "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
+    "builder_handoff": "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or "
+                       "a merge",
 }
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
-          "gate": "verdict"}
+          "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {
     "blocker_done": ("blocker_done", "a task this one waits on (blocked_by) finished"),

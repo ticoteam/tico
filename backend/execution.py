@@ -17,6 +17,7 @@ from .auth import Identity
 from .batch_work import isolated
 from .harnesses import reports_tool_calls
 from .statuses import PARKED_SQL
+from .verdict_moves import HANDOFF_FIRST_SQL
 from .store import H, P, Problem, bot_readiness, digest, encode, message_page, readiness_document
 
 # The wait after a usage limit whose provider gave no reset time; a reported reset is used instead.
@@ -1242,7 +1243,7 @@ def bot_claimable(c, settings, runner_id, bot):
     """(reason, first, person) for `bot`'s queued work on `runner_id`'s next claim: `reason` as bot_refusal says it;
     otherwise None with `first`, when the job the claim would hand out next was queued, and `person`, True when a
     person sent it. The scan keeps the claim's own order (Execution.candidate: a redirect, then a person's message, then
-    the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
+    a builder hand-off, then the longest waiting), so Health ages the job the claim would take: an old held job beside a young free one is
     neither held nor slow, and neither is an old free job behind a young chat the claim takes first."""
     from .shared_bots import follow
     runner = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
@@ -1264,8 +1265,8 @@ def bot_claimable(c, settings, runner_id, bot):
     for job in c.execute(f"SELECT j.*,m.from_actor,{unfenced_sql()} free,{scoped_sql()} in_scope FROM jobs j "
                          "JOIN messages m ON m.id=j.message_id "
                          "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=? AND j.state='queued' AND j.held=0 "
-                         "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,j.created,j.id",
-                         (bot,)).fetchall():
+                         "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
+                         f"{HANDOFF_FIRST_SQL},j.created,j.id", (bot,)).fetchall():
         person = str(job["from_actor"]).startswith("human:")
         if not job["in_scope"]:
             why = "scoped"
@@ -1892,9 +1893,10 @@ class Execution:
             ("AND m.from_actor LIKE 'human:%' " if people_only else "") +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then task rank, then the longest waiting.
+            # then a builder hand-off (backend/verdict_moves.py); then task rank, then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN m.from_actor LIKE 'human:%' THEN 0 ELSE 1 END,"
-            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,(qt.rank IS NULL),qt.rank,j.created,j.id",
+            f"CASE j.bot {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,{HANDOFF_FIRST_SQL},"
+            "(qt.rank IS NULL),qt.rank,j.created,j.id",
             (*bots, who.runner_id, *((job_id,) if job_id is not None else ()),
              *(v for bot in bots for v in (bot, held.get(bot, 0)))))
         candidates = candidates.fetchall()
