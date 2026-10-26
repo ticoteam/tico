@@ -185,7 +185,7 @@ def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
     checking = start(api, machine, task["id"], "closure-task")
     task = checking["task"]
     path = f"tasks/{task['id']}"
-    refused = post(api, path, {"version": task["version"], "status": "closed"}, checking["token"], expected=422)
+    refused = post(api, path, {"version": task["version"], "status": "closed"}, checking["token"], expected=403)
     assert "only they close" in str(refused).lower()
     post(api, path, {"version": task["version"], "status": "closed", "title": "Changed"}, expected=422)
     with api.app.state.store.read() as c:

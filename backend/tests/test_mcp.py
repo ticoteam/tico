@@ -80,7 +80,9 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
 
     literal = next(arg for arg in get_args(TaskUpdate.model_fields["status"].annotation)
                    if get_origin(arg) is Literal)
-    statuses = get_args(literal)
+    # HTTP accepts closed as close:true. CLI/MCP keep their dedicated close action.
+    assert "closed" in get_args(literal)
+    statuses = tuple(status for status in get_args(literal) if status != "closed")
     assert hubcli.TASK_UPDATE_STATUSES == statuses
     assert hubtools.TASK_UPDATE_STATUSES == tuple(status for status in statuses if status != "ready")
     schema = hubtools.BY_NAME["hub_task_update"]["inputSchema"]
