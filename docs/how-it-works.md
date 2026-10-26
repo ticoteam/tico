@@ -310,7 +310,7 @@ or used a tool is a run that did nothing. After the run acted, a runner that kep
 on that same thread after the two-minute hold, with a note to carry on without repeating completed work. It never
 hands that continuation to a fallback or a fresh thread. If the thread cannot resume, or the continuation hits
 capacity again, the run waits for review as *uncertain*. Older runners that cannot keep the thread hold it for
-review immediately. A quota or billing refusal ("Quota exceeded. Check your plan and
+review immediately, and are never handed a continuation: it waits in the queue for a runner that can continue it. A quota or billing refusal ("Quota exceeded. Check your plan and
 billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says

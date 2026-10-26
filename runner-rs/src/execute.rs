@@ -1396,8 +1396,10 @@ impl Runner {
                         session = Some(crate::continuity::Session::new(why, Some(error)));
                     }
                 }
-                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag).
-                if resumed && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
+                // continuation compacts only the thread it continues; another one is left as it is for CONTINUE_LOST.
+                let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
+                if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
                         Ok(()) => session = Some(crate::continuity::Session::compacted()),
@@ -3340,6 +3342,18 @@ for line in sys.stdin:
             assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
             assert_eq!(rig.methods().iter().filter(|m| *m == "turn/start").count(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_compacts_a_thread_it_does_not_continue() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({}), json!({})).await;
+        let saved = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"compact_first": true}), Some("another-thread")).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(!rig.methods().iter().any(|m| m == "thread/compact/start"), "{:?}", rig.methods());
+        assert_eq!(rig.saved().as_deref(), Some(saved.as_str()));
     }
 
     #[tokio::test]

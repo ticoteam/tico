@@ -77,6 +77,10 @@ ROOTS = "session_roots_v1"
 # it sets it in the task's session beside the turn's prompt. Any other runner is handed no task-room goal.
 TASK_GOALS = "task_goals_v1"
 
+# A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
+# other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
+CAPACITY_CONTINUE = "capacity_continue_v1"
+
 
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
@@ -125,6 +129,10 @@ def roots_on(runner):
 
 def task_goals_on(runner):
     return TASK_GOALS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+
+
+def capacity_continue_on(runner):
+    return CAPACITY_CONTINUE in set(H._json(runner["capabilities_json"], []) or []) if runner else False
 
 
 def session_task_id(c, bot, config, task_id, roots):
@@ -2001,7 +2009,7 @@ class Execution:
     def candidate(self, c, who, body, runner, *, job_id=None, people_only=False):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
         message (start_places.from_person), on a computer that holds every other start."""
-        lanes, roots = lanes_on(runner), roots_on(runner)
+        lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = {(r["bot"], r["lane"]) for r in c.execute(
@@ -2068,6 +2076,8 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
+            if not continues and capacity_continuation(c, row["id"]):
+                continue        # left queued for a runner that continues its thread: this one would start it afresh
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
                 return row
@@ -3658,8 +3668,9 @@ class Execution:
                      **({"fallback_failed": body.fallback} if hopped else {}),
                      **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
         elif busy_acted or repeated_capacity:
+            when = "again on its continued thread" if repeated_capacity else "after the run had acted"
             settle_status(c, row["bot"], "crashed", f"{runtime} {login_holds.CAPACITY_KIND} at {H.now()[11:16]} "
-                          "after the run had acted; this run is saved for review", claimed=row["created"], stop=aid)
+                          f"{when}; this run is saved for review", claimed=row["created"], stop=aid)
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           "The Tico AI Gateway key is not working; save a new one in Settings > Computers",

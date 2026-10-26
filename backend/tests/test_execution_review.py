@@ -671,12 +671,14 @@ def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=
                                                      'limited': not acted, 'continues': continues}, machine['token'])
 
 
-def claim_at(api, monkeypatch, machine, at):
+def claim_at(api, monkeypatch, machine, at, continues=True):
+    """A claim at `at` by a runner that does (`continues`) or does not advertise capacity continuation."""
     from backend.store import H
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
-    ready(api, machine, ['ops'])
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
+                                    "capabilities": ['capacity_continue_v1'] if continues else []}, token=machine['token'])
     return claim(api, machine)
 
 
@@ -701,6 +703,18 @@ def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, 
         assert execution.H.status(c, 'ops')['state'] == 'crashed'
     assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
     assert claim_at(api, monkeypatch, machine, at(600)) is None
+
+
+def test_a_runner_that_cannot_continue_a_thread_is_never_handed_the_continuation(api, monkeypatch):
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    # A runner from before capacity continuation would ignore `continue_thread` and start the job on a fresh thread.
+    assert claim_at(api, monkeypatch, machine, at(121), continues=False) is None
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    following = claim_at(api, monkeypatch, machine, at(130))
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
 
 
 def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_moves_to_a_fallback(api, monkeypatch):
