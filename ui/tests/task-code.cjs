@@ -9,7 +9,8 @@
 //  - a task with no code links and no children has no rail at all; on a phone the rail sits under the details;
 //  - the bot page's Active rows carry one small PR badge each, from the task's pr_state, and none without PRs;
 //  - Runs (GET /tasks/{id}/run-view): the checkpoint with its author, background work still running, each try with what
-//    woke it and what followed it, and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
+//    woke it and what followed it (a resume or dismiss decision beside its state: "Cancelled: dismissed by BotOps at 09:50Z, <note>";
+//    none on a try with no decision), and the subagent tree with a nested subagent under its parent; a task with no runs has no section.
 // TASK_CODE_SHOTS=<dir> saves the screenshots for the owner.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -78,7 +79,15 @@ function fixtures() {
       {run: 'a1', bot: 'eng', job: 'j1', try: 1, tries: 2, state: 'expired', outcome: 'interrupted', created: ago(900), started: ago(898), finished: ago(600),
        took_s: 298, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [{kind: 'grace', at: ago(610)}],
        reason: 'Lease expired before completion', next: {kind: 'resumed', by: 'keeper', at: ago(130), note: 'Resumed automatically: it recorded no tool call.'},
-       subagents: [], background: []}]};
+       // Resumed by Tico, then the job ran try 2: the decision is history, with no state of the later try.
+       job_state: 'running', decision: {decision: 'resume', attempt_id: 'a1', current: false, state: null, by: 'keeper', by_kind: 'tico',
+         at: '2026-10-26T07:05:00Z', note: 'Resumed automatically: it recorded no tool call.'}, subagents: [], background: []},
+      // The Dev 563 shape: cut at its time limit, then dismissed by BotOps with a note (job_recovery).
+      {run: 'a0', bot: 'eng', job: 'j0', try: 1, tries: 1, state: 'interrupted', outcome: 'interrupted', created: ago(5400), started: ago(5398), finished: ago(1800),
+       took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
+       next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
+       job_state: 'cancelled', decision: {decision: 'dismiss', attempt_id: 'a0', current: true, state: 'cancelled', by: 'bot:botops', by_kind: 'botops',
+         at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'}, subagents: [], background: []}]};
   return {tasks: [parent, plain, ...others], tree, runView};
 }
 
@@ -103,7 +112,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const me = {id: 'ana', name: 'Ana', email: 'ana@example.com', role: 'owner', mover, cloud: true, registered: true};
-  const bots = [['eng', 'Engineer'], ['api', 'API Engineer']].map(([name, display_name]) =>
+  const bots = [['eng', 'Engineer'], ['api', 'API Engineer'], ['botops', 'BotOps']].map(([name, display_name]) =>
     ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, operator: 'ana', can_manage: true,
       users: [{id: 'ana', name: 'Ana'}], my_access: {see: true, read: true, write: true}}));
   await page.route('**/*', async route => {
@@ -285,7 +294,7 @@ async function desktop(browser) {
   assert.match(await runs.locator('.truns-cp').innerText(), /Summary step built; receipts next\.\s*Engineer · 5m ago/);
   assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m ago']);
   const tries = runs.locator('.truns-try');
-  assert.equal(await tries.count(), 2);
+  assert.equal(await tries.count(), 3);
   assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5 \(high\)/);
   // What ran and why: the fallback from the bot's task model (backend/task_models.py).
   assert.match(await tries.first().innerText(), /Ran on the bot's model claude-opus-5-5 \(high\): task model grok-4\.6 \(low\) could not run \(grok is not signed in on this bot's computer\)/);
@@ -298,7 +307,18 @@ async function desktop(browser) {
     /^general-purpose\s*claude-opus-5-5 \(the run’s model\) · completed · 42s · 3 tool calls · in the background\s*Explore\s*claude-haiku-5-5 · running$/);
   assert.equal(await tries.first().locator('.truns-tree .truns-tree li').count(), 1, 'a nested subagent sits under its parent');
   await tries.nth(1).locator('summary').click();
-  assert.match(await tries.nth(1).innerText(), /Try 1 of 2 · lease expired · 4m 58s[\s\S]*Lease expired before completion[\s\S]*Run again automatically, 2m ago\s*Resumed automatically/);
+  // A decision about an earlier try is history once the job ran again: no "Running:" from the later try beside it.
+  assert.match(await tries.nth(1).locator('summary').innerText(), /^Try 1 of 2 · lease expired · Resumed by Tico's auto-reconcile at 07:05Z · 4m 58s/);
+  assert.match(await tries.nth(1).innerText(), /Lease expired before completion[\s\S]*Resumed by Tico's auto-reconcile at 07:05Z, Resumed automatically: it recorded no tool call\./);
+  // A try with no recovery decision carries no decision label; a dismissed one says it beside its state.
+  assert.equal(await runs.locator('.truns-decision').count(), 2);
+  assert.doesNotMatch(await tries.first().locator('summary').innerText(), /dismissed|resumed/i);
+  assert.match(await tries.nth(2).locator('summary').innerText(), /^Try 1 of 1 · stopped · Cancelled: dismissed by BotOps at 09:50Z · /);
+  await tries.nth(2).locator('summary').click();
+  assert.equal(await tries.nth(2).locator('.truns-decision').innerText(),
+    'Cancelled: dismissed by BotOps at 09:50Z, Finished before the 60-min limit. Nothing to redo.');
+  assert.doesNotMatch(await tries.nth(2).innerText(), /Not run again/, 'the decision line replaces the bare next line');
+  if (SHOTS) await runs.screenshot({path: path.join(SHOTS, 'task-runs-decision-dark.png')});
   if (SHOTS) { fs.mkdirSync(SHOTS, {recursive: true}); await runs.screenshot({path: path.join(SHOTS, 'task-runs-dark.png')}); }
   // Subtasks: the roll-up, one level, PR badges, expand a child.
   assert.equal(await rail.locator('.sub-sum').innerText(), '4 of 10 done · 7 PRs merged');

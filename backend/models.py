@@ -2278,6 +2278,14 @@ class TaskSnooze(Contract):
     until: str = Field(min_length=10, max_length=40)
 
 
+class TaskQaWaiver(Contract):
+    # A person waives a Dev ticket's In QA step for one exact pull request head, with a reason (backend/qa_waivers.py).
+    # Never a QA verdict; CI, both reviews and release approval stay required.
+    head: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    reason: str = Field(min_length=1, max_length=2000)
+    step: str | None = Field(default=None, max_length=200)    # the step to waive; only "In QA" is accepted
+
+
 class TaskDefer(Contract):
     # Exactly one (backend/quiet_work.py defer): a task to wait for, a time, the next run, or "handled".
     after: str | None = Field(default=None, min_length=1, max_length=80)

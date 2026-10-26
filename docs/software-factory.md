@@ -35,14 +35,15 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 - **Builder: use the strongest model at high effort.** Today that is Claude Opus. It writes the code and makes the
   final call on every review comment, so don't save money here.
-- **Reviewers: use a different model family from the Builder.** What matters most is that Reviewer 1 and Reviewer 2
-  come from model families other than the Builder's (for example GPT or Grok against a Claude Builder), so they
-  catch what the Builder's model misses. The Builder still decides what to act on.
+- **Reviewers: prefer a different model family from the Builder.** Reviewer 1 and Reviewer 2 from model families
+  other than the Builder's (for example GPT or Grok against a Claude Builder) catch what the Builder's model misses.
+  It is a preference, not a gate: when no reviewer from another family is free, a same-family reviewer reviews
+  rather than the change waiting. The Builder still decides what to act on.
 - **For reliability, turn effort up.** Higher effort on the Builder, the reviewers and QA catches more before
   release.
 - **To save money:**
   - drop Reviewer 2
-  - run the reviewers on lower-effort or cheaper models, keeping them in a different family from the Builder
+  - run the reviewers on lower-effort or cheaper models, in a different family from the Builder where one is available
   - don't cut the Builder
 
 ## Rules that make it work

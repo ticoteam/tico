@@ -5621,6 +5621,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 # The move Tico retries once what refused it clears (backend/move_retry.py).
                 if getattr(exc, "review_gate", None):
                     exc.review_gate["step"] = target_step["name"]
+                    # A move onto another board names that board: its step names mean nothing on the task's own.
+                    if type_id != row.get("type_id"):
+                        exc.review_gate["type"] = type_id
                 raise
         from . import review_gate
         if target_step and target_step["name"] in review_gate.PAST_REVIEW and step_id != row.get("step_id"):
@@ -6328,17 +6331,27 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     return after
 
 
-def waiting_for(conn, row):
+def waiting_for(conn, row, *, children=True):
     """What a task's owner is waiting for, in words, or None when there is nothing (`wait_detail`)."""
-    return (wait_detail(conn, row) or {}).get("why")
+    return (wait_detail(conn, row, children=children) or {}).get("why")
 
 
-def wait_detail(conn, row):
+def live_blocker(conn, task_id, *, children=True):
+    """The first unfinished task blocking this one; with `children=False`, the first that is not one of its subtasks."""
+    if children:
+        return TR.live_blocker(conn, task_id, ACTIVE_STATUSES)
+    own = {r[0] for r in conn.execute(TR.CHILD_IDS, (task_id,))}
+    return next((b["id"] for b in TR.live_blockers(conn, task_id, ACTIVE_STATUSES) if b["id"] not in own), None)
+
+
+def wait_detail(conn, row, *, children=True):
     """What a task's owner is waiting for, or None when there is nothing: {"why": words, "on": the actor it waits on, or
     None when no one actor holds it ("person" for an undecided approval, "external" for GitHub or a release)}.
 
     Something is: a question its owner asked about it that nobody has answered, an unfinished
     child, an unfinished blocker, an approval not yet decided, or a person it names (`waiting_on`).
+    `children=False` leaves out its open subtasks, as children and as blockers: what still holds a subtask's
+    result back from it (auto_tasks.waiting with `result`).
     """
     live = "('done','closed','declined')"
     asks = _rows(conn.execute(
@@ -6352,15 +6365,16 @@ def wait_detail(conn, row):
             return {"why": "an unanswered question", "on": open_ask["to_actor"]}
     from . import profiles, review_gate
     engineering = review_gate.engineering(conn, row)
-    children = _rows(conn.execute(f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
-                                  "ORDER BY created,id", (row["id"],)))
-    for child in children:
+    open_children = _rows(conn.execute(
+        f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
+        "ORDER BY created,id", (row["id"],))) if children else []
+    for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
         # An explicit blocked_by relation below still holds on any such child.
         if engineering and is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
             continue
         return {"why": "an open child task", "on": child["owner"]}
-    blocker = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)
+    blocker = live_blocker(conn, row["id"], children=children)
     if blocker:
         return {"why": "an open blocker", "on": (_one(conn, "SELECT owner FROM tasks WHERE id=?", (blocker,)) or {}).get("owner")}
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
@@ -6403,14 +6417,19 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     at = at or now()
     cutoff = shift(at, hours=-grace_hours)
     moved = []
-    # A gate or worktree hold clears only through task_blocked reconciliation, which knows its real condition
-    # (fresh CI, no unlinked pushes); reopening one here would claim nothing is outstanding when something is.
+    from . import move_retry, review_gate
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
-                                  "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
                                   "AND updated<=? ORDER BY updated", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
+                continue
+            # A gate or worktree hold on an engineering ticket clears only through task_blocked reconciliation, which
+            # knows its real condition (fresh CI, no unlinked pushes), and a move Tico still retries clears when it is
+            # made; reopening either here would claim nothing is outstanding when something is. A gate hold on
+            # another board that no retry will clear is released here, or nothing ever would.
+            if row.get("blocked_kind") in ("gate", "worktree") and (
+                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at))):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("

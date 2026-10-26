@@ -8,9 +8,11 @@ they wait on (`H.wait_detail`, the same reasons a ticket's Waiting tag gives), a
 The queue is told apart honestly: a queued job behind an interrupted run nobody reviewed (`execution.unfenced_sql`)
 is never handed out until that run is resumed or dismissed, so it is `dead`, never `queued`; a job its wake preset
 holds is `held`. Failed attempts in the window are counted by cause with their first and last time. Every job and
-attempt counts only when the caller may read it (backend/task_privacy.py), as on a bot's page.
+attempt counts only when the caller may read it (backend/task_privacy.py), as on a bot's page. A stopped run's
+recovery decision (resume or dismiss) is listed beside the bot's queue with who made it, when and its note.
 
-Counts and ids only: no titles, bodies or run text.
+Counts and ids only: no titles, bodies or run text; a decision's note is the decider's words (Tico's own can name the
+task), shown only to a reader who may open the run's conversation.
 """
 
 import json
@@ -25,6 +27,7 @@ from .store import H, Problem
 TASK_CAP = 5000            # tickets read for one report; `truncated` says when a type holds more live ones
 IDS_PER_STEP = 50          # ticket ids listed per step; the count is always whole
 DEAD_IDS = 20              # dead job ids listed per bot
+DECISIONS_LISTED = 20      # held or recently decided stopped runs listed per bot, newest first
 ATTEMPT_CAP = 5000         # readable failed attempts counted for one window; past it `complete_after` says how far back counts are whole
 ATTEMPT_SCAN = 50000       # failed attempts read for one window, readable or not
 ATTEMPT_PAGE = 1000
@@ -123,13 +126,31 @@ def job_queues(c, who, bots, now=None):
     count of a bot's waiting work, here and on its page (backend/bot_rows.py, views.attention), so the two never
     disagree. A job behind a run nobody reviewed (`execution.unfenced_sql`) is `dead`, a job its wake preset holds
     is `held`; only the rest is `queued`."""
-    from .execution import unfenced_sql
     privacy.snapshot(c)
     actor = privacy.actor(who)
     memo = {}
+
+    def readable(row):
+        return privacy.message_readable(c, actor, row, current=True) and (
+            not row["job_attempt"] or privacy.attempt_readable(c, actor, row["job_attempt"], memo))
+    out = _split(c, bots, now, readable)
+    for q in out.values():
+        del q["oldest_queued_at"], q["oldest_dead_at"]
+    return out
+
+
+def queue_counts(c, bots, now=None):
+    """job_queues' split over every job, with the oldest queued and dead job's time (`oldest_queued_at`,
+    `oldest_dead_at`). Health reads it, so the queued count it shows a bot is the one Pipeline shows an operator who may
+    read all of that bot's jobs."""
+    return _split(c, bots, now, None)
+
+
+def _split(c, bots, now, readable):
+    from .execution import unfenced_sql
     now = now or H.now()
-    out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "dead_ids": []}
-           for b in bots}
+    out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "oldest_queued_at": None,
+               "oldest_dead_at": None, "dead_ids": []} for b in bots}
     for part in H.chunks(list(out)):
         marks = ",".join("?" * len(part))
         for row in c.execute(
@@ -137,22 +158,23 @@ def job_queues(c, who, bots, now=None):
                 f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
                 "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
                 f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created, j.id", part):
-            if not privacy.message_readable(c, actor, row, current=True) or (
-                    row["job_attempt"] and not privacy.attempt_readable(c, actor, row["job_attempt"], memo)):
+            if readable and not readable(row):
                 continue
             q = out[row["job_bot"]]
             if row["job_state"] == "uncertain":
                 q["uncertain"] += 1
             elif not row["free"]:
                 q["dead"] += 1
+                q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
                 if len(q["dead_ids"]) < DEAD_IDS:
                     q["dead_ids"].append(row["job_id"])
             elif row["job_held"]:
                 q["held"] += 1
             else:
                 q["queued"] += 1
-                if q["oldest_queued_hours"] is None:
-                    q["oldest_queued_hours"] = hours(row["job_created"], now)
+                q["oldest_queued_at"] = q["oldest_queued_at"] or row["job_created"]
+    for q in out.values():
+        q["oldest_queued_hours"] = hours(q["oldest_queued_at"], now)
     return out
 
 
@@ -169,6 +191,54 @@ def queues_report(c, who, bots, now):
             if privacy.attempt_readable(c, actor, row["id"], memo):
                 out[row["bot"]]["running"] += 1
                 out[row["bot"]]["stalled"] += bool(row["stalled_at"])
+    return out
+
+
+def decisions_report(c, auth, who, bots, since):
+    """{bot: [decision]}: each readable job with a recovery decision (run_view.recovery, the job_recovery record) that
+    still holds it (a saved choice waiting for its lane) or was made since `since`, newest first, at most
+    DECISIONS_LISTED a bot. Each row names the job's state while the decision is about its current try (null and
+    `current` false once a later try has run), the decision, who made it (BotOps, a person or Tico's
+    auto-reconcile), when, and its note, and `label` says it as one line. The note is a decider's own words; it is left out for a reader who cannot open the run's
+    conversation, as the run page leaves the run out."""
+    from .execution import owner_name
+    from .run_view import decision_label, recovery
+    actor = privacy.actor(who)
+    memo, out, opened = {}, {b: [] for b in bots}, {}
+
+    def can_open(cid):
+        if cid not in opened:
+            try:
+                auth.conversation(c, who, cid)
+                opened[cid] = True
+            except Problem:
+                opened[cid] = False
+        return opened[cid]
+    for part in H.chunks(list(out)):
+        marks = ",".join("?" * len(part))
+        rows = c.execute(
+            "SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, r.attempt_id AS decided_attempt "
+            "FROM job_recovery r JOIN jobs j ON j.id=r.job_id JOIN messages m ON m.id=j.message_id "
+            f"WHERE j.bot IN ({marks}) AND ((j.state='uncertain' AND r.attempt_id=j.attempt_id) OR r.created>=?) "
+            "ORDER BY r.created DESC, j.id",
+            (*part, since)).fetchall()
+        kept, listed = [], {}
+        for r in rows:
+            if (listed.get(r["job_bot"], 0) < DECISIONS_LISTED and privacy.message_readable(c, actor, r, current=True)
+                    and privacy.attempt_readable(c, actor, r["decided_attempt"], memo)):
+                kept.append(r)
+                listed[r["job_bot"]] = listed.get(r["job_bot"], 0) + 1
+        saved = recovery(c, [r["job_id"] for r in kept])
+        for r in kept:
+            d = saved[r["job_id"]]
+            if not can_open(r["conversation_id"]):
+                d = {**d, "note": None}
+            # A decision about an earlier try is history: no state of the job's later try is put beside it.
+            state = d["state"] and ("held" if d["state"] == "uncertain" else d["state"])
+            out[r["job_bot"]].append({"job": r["job_id"], "attempt": d["attempt_id"], "current": d["current"],
+                                      "state": state, "decision": d["decision"], "by": d["by"],
+                                      "by_kind": d["by_kind"], "at": d["at"], "note": d["note"],
+                                      "label": decision_label(d, lambda a: owner_name(c, a))})
     return out
 
 
@@ -263,7 +333,10 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
         raise Problem("not_found", "Bot not found", 404)      # unknown, or not one whose runs the caller may read
     queues = queues_report(c, who, bots, now)
     failures = failures_report(c, who, bots, window)
-    busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "dead", "uncertain"))}
+    for b, decided in decisions_report(c, auth, who, bots, window).items():
+        queues[b]["decisions"] = decided
+    busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "dead", "uncertain",
+                                                                "decisions"))}
     busy |= set(failures["by_bot"])
     return {"now": now, "type": {"id": typ["id"], "name": typ["name"]},
             "filters": {"owner": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
