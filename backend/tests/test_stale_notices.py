@@ -95,3 +95,32 @@ def test_news_about_a_step_the_ticket_has_left_is_dropped(api):
     with api.app.state.store.read() as c:
         assert queued(c, old) == "cancelled"
         assert queued(c, kept) != "cancelled", "a ticket still at the step keeps its news"
+
+
+def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
+    # Tico makes a refused review move itself once a receipt is posted (backend/move_retry.py): the refusal the Builder
+    # was told of is then no longer news. A ticket still held keeps it.
+    from backend import review_gate
+    from backend.tests.test_dev_ticket_rules import dev_type
+    r = fleet(api)
+    with api.app.state.store.transaction() as c:
+        typ = dev_type(c)
+        step = {st["name"]: st["id"] for st in typ["steps"]}
+        moved, still = (H.task_create(c, "human:ana", title, "Build.", "bot:ops", type=typ["id"], step="In Progress",
+                                      lint=False) for title in ("Fix the connection", "Fix the login"))
+        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='ops'")
+        for t in (moved, still):
+            review_gate.notify(c, "human:ana", {"task": t["id"], "kind": "receipt", "head": "a" * 40,
+                                                "pr": "https://github.example/acme/app/pull/7",
+                                                "text": "Review refused: missing test receipt."})
+        old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? "
+                               "AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
+                     for t in (moved, still))
+        # The refusal held both (a step move to Blocked) before it told the Builder.
+        c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))
+        c.execute("UPDATE messages SET created=? WHERE id IN (?,?)", (H.shift(H.now(), minutes=-5), old["id"], kept["id"]))
+        H._task_event(c, moved["id"], H.KEEPER, "step", step["Blocked"], step["Pending Release"])
+    claim(api, r)
+    with api.app.state.store.read() as c:
+        assert queued(c, old) == "cancelled"
+        assert queued(c, kept) != "cancelled", "a ticket still held keeps the refusal"

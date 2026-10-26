@@ -29,7 +29,21 @@ def slotted_command(env, argv, orig_argv, executable, os_name=os.name):
         return None
     if {'--collect-only', '--co'} & set(orig_argv):
         return None
-    return ['bash', str(HEAVY), executable, *orig_argv[1:]]
+    command = ['bash', str(HEAVY), executable, *orig_argv[1:]]
+    # With TICO_HEAVY_REMOTE=1 heavy.sh sends a run to a RunsOn VM, which tests the pushed commit. A run of the few
+    # test files a bot just changed tests its uncommitted work, so it stays here; a whole suite goes.
+    if env.get('TICO_HEAVY_REMOTE') == '1' and 0 < len(named_files(orig_argv[1:])) <= LOCAL_FILES:
+        return ['env', 'TICO_HEAVY_REMOTE=0', *command]
+    return command
+
+
+LOCAL_FILES = 3
+
+
+def named_files(args):
+    """The test files a pytest command line names (a file or a node id in one); a directory names none of them."""
+    return {arg.split('::')[0] for arg in args if not arg.startswith('-') and arg.split('::')[0].endswith('.py')
+            and arg.split('::')[0].rsplit('/', 1)[-1].startswith('test_')}
 
 
 def reexec():

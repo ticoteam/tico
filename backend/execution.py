@@ -1422,14 +1422,17 @@ def obsolete_notices_sql():
     late warning for a task that has since left that step, news about a step (`at_step`: a verdict's move, a step
     entered) once the task is at another step, unless a person's act caused it,
     a pull request's checks result for a head no open pull request on the task is at any more (a newer push supersedes it),
-    and a self-filed task's "New task" notice while the task is parked and its filing turn has ended. The
+    the review gate's comment on a refused move once the ticket has changed step since (Tico made the move, or someone
+    moved it elsewhere), and a self-filed task's "New task" notice while the task is parked and its filing turn has ended. The
     idle claim asks the same question: when it counted notices the claim keeps, every claim from that computer went
     on to the write lock for nothing. It goes from this computer's bots to their queued jobs (jobs_queue): left to
     itself SQLite starts from every keeper notice ever sent, tens of milliseconds on each of a runner's claims."""
     return ("FROM assignments x CROSS JOIN jobs j CROSS JOIN messages m "
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             "WHERE x.runner_id=? AND j.bot=x.bot AND j.state='queued' AND m.id=j.message_id "
-            "AND m.from_actor=? AND m.kind='notice' "
+            "AND m.from_actor=? AND (m.kind='say' AND json_extract(m.refs_json,'$.review_gate') IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.ts>m.created AND e.field='step') "
+            "OR m.kind='notice' "
             "AND ((t.status IN ('done','closed','declined') "
             "AND coalesce(json_extract(m.refs_json,'$.caused_by'),'') NOT LIKE 'human:%') "
             "OR (m.body LIKE 'New task from %' AND m.to_actor=t.owner "
@@ -1448,7 +1451,7 @@ def obsolete_notices_sql():
             "AND EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' AND coalesce(l.state,'')<>'closed' "
             "AND coalesce(json_extract(l.detail_json,'$.head_sha'),'')<>'') "
             "AND NOT EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=t.id AND l.kind='pr' "
-            "AND lower(json_extract(l.detail_json,'$.head_sha'))=lower(json_extract(m.refs_json,'$.pr_head'))))) "
+            "AND lower(json_extract(l.detail_json,'$.head_sha'))=lower(json_extract(m.refs_json,'$.pr_head')))))) "
             "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id "
             "AND r.attempt_id=j.attempt_id AND r.decision='resume')")
 

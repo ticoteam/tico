@@ -346,3 +346,9 @@ SCENARIOS = [
              setup=lambda run, w, team: tickets(run, w, 6), board=design_board,
              styles={"reviewer": {"changes": 0.4}}, checks=standard(*REVIEW_TIMEOUT)),
 ]
+
+
+
+from .cases import SCENARIOS as _CASES      # evals/factory/cases/: one file per scenario
+
+SCENARIOS += _CASES

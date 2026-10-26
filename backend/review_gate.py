@@ -392,5 +392,9 @@ def notify(c, actor, notice):
                  "AND json_extract(refs_json,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return
+    # A temporary GitHub failure is Tico's to retry on its timer (backend/move_retry.py) and nobody's to fix: the
+    # comment stays on the ticket without waking its owner for a turn with nothing to do, which by the time the
+    # owner's queue reaches it reads a ticket the retry has already moved.
     H._write_message(c, H.KEEPER, row["owner"], notice["text"], conv, "say",
-                     {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True)}, None, None)
+                     {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True),
+                      **({"quiet": True} if notice.get("temporary") else {})}, None, None)

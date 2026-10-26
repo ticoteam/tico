@@ -45,6 +45,7 @@ class World:
         self.rng = rng or random.Random(0)
         self.ci_fail = ci_fail   # chance a CI run on a new head fails (a flaky or broken change)
         self.ci = {}             # pr number -> (head, when its checks finish, passed)
+        self.ci_skip = 0.0       # chance a new PR's only CI check is skipped or neutral on every head (a path filter)
         self.tick = dt.timedelta(minutes=tick_minutes)
         self.tmp = Path(tempfile.mkdtemp(prefix="factory-sim-"))
         self.prs = {}        # pr number -> {"task": id, "head": sha, "merged": bool}
@@ -146,6 +147,18 @@ class World:
         self.scheduler.tick()
         with self.store.transaction() as c:
             flush_wakes(c)
+        if getattr(self, "github_reads", False):
+            # With the GitHub App connected the app's loop also retries refused review moves and reads gate holds
+            # afresh (backend/app.py); both read GitHub, so without the App there is nothing for them to do.
+            from backend import move_retry, task_blocked
+            move_retry.tick(self.app.state.github_app, force=True)
+            task_blocked.fresh(self.app.state.github_app, force=True)
+
+    def retry_moves(self):
+        """The server's retry of refused review moves (backend/move_retry.py), which the app runs beside its GitHub
+        sync: a move the review gate refused is made once what refused it changes (a receipt posted, CI finished)."""
+        from backend import move_retry
+        return move_retry.tick(self.app.state.github_app, store=self.store, force=True)
 
     def heartbeat(self, ready):
         self.post("runners/heartbeat", {"version": "test", "platform": "test",
@@ -215,6 +228,9 @@ class World:
         number = self.next_pr
         self.next_pr += 1
         self.prs[number] = {"task": task_id, "head": uuid.uuid4().hex + uuid.uuid4().hex[:8], "merged": False}
+        self.prs[number]["heads"] = [(self.now(), self.prs[number]["head"])]
+        if self.ci_skip and self.rng.random() < self.ci_skip:
+            self.prs[number]["skip_ci"] = True
         self.post(f"tasks/{task_id}/links", {"url": self.pr_url(number)}, token=token)
         self.hook("pull_request", self.pr_payload(number, "opened"))
         self.start_ci(number)
@@ -223,6 +239,7 @@ class World:
     def push(self, number):
         self.prs[number].setdefault("old_heads", []).append(self.prs[number]["head"])
         self.prs[number]["head"] = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+        self.prs[number].setdefault("heads", []).append((self.now(), self.prs[number]["head"]))
         self.hook("pull_request", self.pr_payload(number, "synchronize"))
         self.start_ci(number)
         return self.prs[number]["head"]
@@ -238,11 +255,18 @@ class World:
             if due <= self.now():
                 del self.ci[number]
                 if self.prs[number]["head"] == head and not self.prs[number]["merged"]:
+                    # A skipped-only PR's suite ends skipped or neutral: GitHub lets it merge, but no test ran.
+                    skip = ("skipped", "neutral")[int(head, 16) % 2] if self.prs[number].get("skip_ci") else None
                     self.hook("check_suite", {"action": "completed", "repository": {"full_name": REPO}, "check_suite": {
                         "id": number * 1000 + len(head), "head_sha": head, "status": "completed",
-                        "conclusion": "success" if passed else "failure", "app": {"slug": "github-actions"},
+                        "conclusion": skip or ("success" if passed else "failure"), "app": {"slug": "github-actions"},
                         "pull_requests": [{"number": number, "html_url": self.pr_url(number)}]}})
                     self.prs[number]["ci"] = (head, passed)
+
+    def head_at(self, number, when):
+        """The PR's head at `when` (a datetime)."""
+        heads = self.prs[number].get("heads") or [(when, self.prs[number]["head"])]
+        return next((head for at, head in reversed(heads) if at <= when), heads[0][1])
 
     def ci_state(self, number):
         """'passing', 'failing' or 'pending' for the PR's current head."""
@@ -256,6 +280,68 @@ class World:
             return
         self.prs[number]["merged"] = True
         self.hook("pull_request", self.pr_payload(number, "closed", merged=True))
+
+    # ------------------------------------------------------------------ fake GitHub reads (opt in)
+    def connect_github(self):
+        """Answer the GitHub App's reads from this fake GitHub, as a hub with the App connected does: a review move
+        then reads each PR's head and checks afresh, and the scheduler pass retries refused moves and reads gate holds.
+        Only the HTTP boundary is faked (the App's row, its token mint and its calls), as backend/tests do. While
+        `github_fault` is set ("timeout", or an HTTP status such as 502 or 429), every read and token mint fails that
+        way. Without this call the hub has no App and the gate reads the webhook cache, as every other scenario does."""
+        import re
+        from types import SimpleNamespace
+        from backend import task_blocked
+        from backend.store import Problem
+        service = self.app.state.github_app
+        self.github_reads, self.github_fault = True, None
+        self.github_failed = []          # (when, fault) per read or mint that failed
+        task_blocked._fresh["seen"].clear()
+        task_blocked._fresh["tried"].clear()
+        token = {"until": None}
+
+        def down():
+            if not self.github_fault:
+                return
+            self.github_failed.append((self.now(), self.github_fault))
+            if self.github_fault == "timeout":   # what GitHubApp._call raises when httpx times out
+                raise Problem("github_unreachable", "GitHub could not be reached; try again shortly", 502,
+                              retryable=True, extra={"timed_out": True})
+            return int(self.github_fault)
+
+        def mint(repos, permissions, **kw):
+            # An installation token lasts an hour, so a long outage reaches the mint as well as the reads.
+            if not token["until"] or token["until"] <= self.now():
+                if status := down():
+                    raise Problem("github_token", f"GitHub would not issue an installation token (HTTP {status})",
+                                  502, extra={"github_status": status})
+                token["until"] = self.now() + dt.timedelta(hours=1)
+            return "sim-token", token["until"].strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        def answer(status, payload):
+            return SimpleNamespace(status_code=status, json=lambda: payload, headers={}, text=json.dumps(payload))
+
+        def call(method, path, **kw):
+            if status := down():
+                return answer(status, {"message": "Server Error" if status >= 500 else "Too Many Requests"})
+            if found := re.fullmatch(rf"/repos/{REPO}/pulls/(\d+)", path):
+                pr = self.prs.get(int(found[1]))
+                return answer(200, {"head": {"sha": pr["head"]}, "merged": pr["merged"]}) if pr else answer(404, {})
+            if found := re.fullmatch(rf"/repos/{REPO}/commits/(\w+)/(check-runs|statuses)", path):
+                if found[2] == "statuses":
+                    return answer(200, [])
+                runs = []
+                for number, pr in self.prs.items():
+                    head, passed = pr.get("ci") or (None, None)
+                    if pr["head"] == found[1] or head == found[1]:
+                        done = head == found[1]
+                        runs.append({"id": number * 1000, "name": "tests", "status": "completed" if done else "in_progress",
+                                     "conclusion": ("success" if passed else "failure") if done else None})
+                return answer(200, {"check_runs": runs})
+            return answer(404, {"message": "Not Found"})
+
+        service.row = lambda c=None: {"org": REPO.split("/")[0], "installation_id": 1, "app_id": 1}
+        service.mint = mint
+        service._call = call
 
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
