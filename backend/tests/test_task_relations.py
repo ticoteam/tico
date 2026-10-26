@@ -92,8 +92,11 @@ def test_the_table_keeps_one_parent_and_related_stored_once(tmp_path):
     with pytest.raises(H.Refused):
         TR.relate(c, "human:ana", d, a, "parent", mover=True)             # its own ancestor
     TR.relate(c, "human:ana", b, a, "blocks", mover=True)
-    TR.relate(c, "human:ana", d, a, "blocks", mover=True)
-    assert TR.blocker_ids(c, a) == [b, d]
+    with pytest.raises(H.Refused):
+        TR.relate(c, "human:ana", d, a, "blocks", mover=True)            # a cannot wait for its own parent
+    other = H.task_create(c, "human:ana", "Write another part", "", "bot:cmo", lint=False)["id"]
+    TR.relate(c, "human:ana", other, a, "blocks", mover=True)
+    assert TR.blocker_ids(c, a) == [b, other]
     with pytest.raises(H.Refused):
         TR.relate(c, "human:ana", a, b, "blocks", mover=True)             # b already blocks a
 
