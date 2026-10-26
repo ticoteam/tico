@@ -445,7 +445,19 @@ def evidence(c, row, actor, receipt_owner=None):
     return result
 
 
-def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_owner=None):
+def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=None, receipt_owner=None):
+    from . import hubdb as H
+    try:
+        _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner)
+    except H.Refused as exc:
+        # The mover a refused move is retried as (backend/move_retry.py): the actor the move was made as, which can
+        # differ from the request's caller (BotOps acting for a person, a service key acting as Tico).
+        if getattr(exc, "review_gate", None) is not None:
+            exc.review_gate.setdefault("by", reader or actor)
+        raise
+
+
+def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
     from . import hubdb as H
     if not engineering(c, row):
         return
@@ -457,7 +469,9 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
                    "Review refused: no linked PR. Link the current PR before asking a reviewer. "
                    "The owner or a person who may edit this ticket can link it.")
         return  # A board-only step move has no software reviewer to wake.
-    facts = evidence(c, row, actor, receipt_owner)
+    # Tico's retry of a refused move (backend/move_retry.py) reads as whoever made the move: the keeper is on no private
+    # task, and evidence that mover cannot read must not pass the move for them.
+    facts = evidence(c, row, reader or actor, receipt_owner)
     if note is not None:
         facts["note"] = note
         facts["updated"] = H.now()
@@ -503,6 +517,8 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_ow
 
 def reject(c, actor, row, kind, head, pr, text, retryable=False):
     from . import hubdb as H
+    from . import move_retry
+    text += move_retry.hint(kind, text)
     try:
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:

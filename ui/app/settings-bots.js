@@ -118,13 +118,14 @@ document.addEventListener('click', event => {
   if (event.target.closest('[data-off-providers]')) settingsShow('models');
 });
 // Keep the three choices local until Apply, so selecting a harness cannot start a transition. `none` allows no
-// choice at all, named by it when it is a string ("Same as bot" for a task model), else "None".
-function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings') {
+// choice at all, named by it when it is a string ("Same as bot" for a task model), else "None". `noEffort` hides the
+// Effort picker where another one stands beside it (a task model's is Task effort, settingsTaskParts).
+function settingsChoiceFields(current = '', disabled = false, none = false, label = 'Model settings', noEffort = false) {
   return `<div class="settings-model-choice" role="group" aria-label="${esc(label)}" data-choice-fields data-current="${esc(current)}" ${disabled ? 'data-readonly' : ''} ${none ? `data-allow-none="${esc(none === true ? 'None' : none)}"` : ''}>
     <label>Harness / provider<select data-choice-harness aria-label="Harness / provider" ${disabled ? 'disabled' : ''}></select></label>
     <label data-choice-model-label>Model<select data-choice-model aria-label="Model" ${disabled ? 'disabled' : ''}></select></label>
     <div class="settings-tier" data-choice-tier hidden></div>
-    <label>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
+    <label ${noEffort ? 'hidden' : ''}>Effort<select data-choice-effort aria-label="Effort" ${disabled ? 'disabled' : ''}></select></label>
     <div class="settings-choice-blocks" data-choice-blocks></div>
   </div>`;
 }
@@ -261,7 +262,7 @@ function settingsChoiceCombo(e, kind) {
   const manage = settingsCanManageBot(e);
   return `<div class="settings-choice" data-bot-choice="${esc(e.name)}" data-kind="${kind}" data-current="${esc(current)}">
     ${!current && !spec.none ? `<small class="muted">${esc(settingsDefaultLabel(e))}</small>` : ''}
-    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.name}`)}
+    ${settingsChoiceFields(current, !manage, spec.none || false, `${spec.name} for ${e.display_name || e.name}`, kind === 'task')}
     ${manage ? '<button type="button" class="ghost" data-choice-apply disabled>Apply</button>' : ''}
   </div>`;
 }
@@ -275,23 +276,99 @@ function settingsChoiceCell(e, kind) {
   return `<button type="button" class="sb-pick" data-choice-open="${esc(e.name)}" data-kind="${kind}" aria-haspopup="dialog" aria-expanded="false"
     aria-label="${fallback ? 'Fallback' : 'Model'} for ${esc(e.display_name || e.name)}: ${esc(label)}" title="${esc(label)}">${text}<span class="sb-pick-caret" aria-hidden="true"></span></button>`;
 }
-// The bots table's task indicator, beside the model: faint when tasks run on the bot's own model, marked when they
-// run on another. It opens the bot's task-model row under it (SETTINGS_BOTS_VIEW.taskOpen).
-function settingsTaskIndicator(e) {
-  const task = e.task_model, open = SETTINGS_BOTS_VIEW.taskOpen.has(e.name);
-  const label = task?.model ? `Tasks run on ${settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)}`
-    : 'Tasks run on the same model as the bot';
-  if (!settingsCanManageBot(e) && !task?.model) return '';
-  return `<button type="button" class="sb-task-mark${task?.model ? ' on' : ''}" data-task-open="${esc(e.name)}" aria-expanded="${open}"
-    aria-label="${esc(`${label}. Task model for ${e.display_name || e.name}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks</button>`;
+// A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length, each
+// "Same as bot" until set. The record's model may be '' (its tasks run on the bot's own model).
+const settingsTaskSet = task => !!(task?.model || task?.reasoning_effort || task?.compact_at);
+const settingsContextName = tokens => !tokens ? '' : SETTINGS_COMPACT_AT.find(([size]) => size === tokens)?.[1]
+  || (tokens >= 1e6 && tokens % 1e6 === 0 ? `${tokens / 1e6}M` : `${Math.round(tokens / 1000)}k`);
+// The model a bot's tasks run on: its task model, else its own (or the team default it follows).
+const settingsTaskRunsOn = (e, model = e.task_model?.model) => model || e.model || e.resolved_model || '';
+// The efforts a model takes, as its Effort picker lists them (a Gateway pick by its tier's current version).
+function settingsModelEfforts(id) {
+  const t = settingsTierParse(id), row = (t && settingsModel(`${t.tier}-${SETTINGS_DATA.gateway.tiers[t.tier]?.current}`)) || settingsModel(id);
+  return row?.efforts?.length ? [...row.efforts] : t ? ['low', 'high', 'max'] : [];
 }
-// The row a task indicator opens under its bot: the same three pickers, Apply, and Close. Clearing it to
-// "Same as bot" returns the bot's tasks to its own model; the bot's own model never changes here.
+// What the bot's tasks run on, in a few words: "Claude Haiku 5.5 · high · 600k", "the bot's model · 600k".
+function settingsTaskWords(task) {
+  const context = settingsContextName(task?.compact_at);
+  const model = task?.model ? settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)
+    : ["the bot's model", settingsEffortName(task?.reasoning_effort)].filter(Boolean).join(' · ');
+  return [model, context].filter(Boolean).join(' · ');
+}
+// The /task-model body for one change, carrying the other parts as they are: `choice` a task model ({harness, model,
+// effort}, null for Same as bot), `effort` a task effort ('' for Same as bot), `compact_at` a task context length (null
+// for Same as bot). The effort goes only where the model that runs tasks takes it; a new task model otherwise takes
+// its own picker's. Null when all three are the same as the bot.
+function settingsTaskBody(e, change = {}) {
+  const was = e.task_model || {};
+  const choice = 'choice' in change ? change.choice : was.model ? {harness: was.harness || was.runtime, model: was.model, effort: was.reasoning_effort} : null;
+  let effort = 'effort' in change ? change.effort || '' : was.reasoning_effort || '';
+  const compact_at = 'compact_at' in change ? change.compact_at || null : was.compact_at || null;
+  if (effort && !settingsModelEfforts(settingsTaskRunsOn(e, choice?.model)).includes(effort)) effort = '';
+  if (choice?.model && !effort) effort = choice.effort || '';
+  if (!choice?.model && !effort && !compact_at) return null;
+  return choice?.model ? {harness: choice.harness, model: choice.model, effort: effort || null, compact_at}
+    : {model: null, effort: effort || null, compact_at};
+}
+// The Task effort choices for the model that runs tasks; "Same as bot" only while that is the bot's own model.
+function settingsTaskEffortPaint(select, efforts, current, own) {
+  const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
+  select.innerHTML = settingsTaskEffortOptions(efforts, current, own, option);
+  select.disabled = !select.hasAttribute('data-manage') || efforts.length <= (own ? 0 : 1);
+}
+function settingsTaskEffortOptions(efforts, current, own, option) {
+  return (own ? option('', 'Same as bot', !current) : '')
+    + (current && !efforts.includes(current) ? option(current, `${settingsEffortName(current)} (current)`, true, true) : '')
+    + efforts.map(id => option(id, id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), id === current)).join('');
+}
+// Task effort and Task context length beside the Task model: labelled like its pickers in the bots table's task row
+// (`row`), rows like Compact at in the bot editor.
+function settingsTaskParts(e, row = false) {
+  const task = e.task_model, own = !task?.model, manage = settingsCanManageBot(e), name = e.display_name || e.name;
+  const effort = task?.reasoning_effort || '', context = task?.compact_at || null;
+  const efforts = settingsModelEfforts(settingsTaskRunsOn(e));
+  const option = (value, label, selected, disabled = false) => `<option value="${esc(value)}" ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(label)}</option>`;
+  const sizes = SETTINGS_COMPACT_AT.some(([size]) => size === context) || !context ? SETTINGS_COMPACT_AT : [...SETTINGS_COMPACT_AT, [context, settingsContextName(context)]];
+  const cls = row ? '' : 'class="settings-inline-select"';
+  const effortSelect = `<select ${cls} data-task-effort="${esc(e.name)}" data-current="${esc(effort)}" ${manage ? 'data-manage' : ''}
+    aria-label="Task effort for ${esc(name)}" ${manage && efforts.length > (own ? 0 : 1) ? '' : 'disabled'}>${settingsTaskEffortOptions(efforts, effort, own, option)}</select>`;
+  const contextSelect = `<select ${cls} data-task-context="${esc(e.name)}" data-current="${context || ''}" aria-label="Task context length for ${esc(name)}" ${manage ? '' : 'disabled'}>
+    ${option('', 'Same as bot', !context)}${sizes.map(([size, label]) => option(size, label, size === context)).join('')}</select>`;
+  return row ? `<label class="sb-task-part">Task effort${effortSelect}</label><label class="sb-task-part">Task context length${contextSelect}</label>`
+    : `<div class="sb-row"><span>Task effort</span>${effortSelect}<span></span></div>
+    <div class="sb-row"><span>Task context length</span>${contextSelect}<span></span></div>`;
+}
+// The bots table's task indicator, beside the model: faint while tasks run as the bot does, marked when any task
+// setting differs ("Tasks · 600k" with a task context length). It opens the bot's task row under it
+// (SETTINGS_BOTS_VIEW.taskOpen).
+function settingsTaskIndicator(e) {
+  const task = e.task_model, set = settingsTaskSet(task), open = SETTINGS_BOTS_VIEW.taskOpen.has(e.name);
+  const label = set ? `Tasks run on ${settingsTaskWords(task)}` : 'Tasks run on the same model as the bot';
+  const context = settingsContextName(task?.compact_at);
+  if (!settingsCanManageBot(e) && !set) return '';
+  return `<button type="button" class="sb-task-mark${set ? ' on' : ''}" data-task-open="${esc(e.name)}" aria-expanded="${open}"
+    aria-label="${esc(`${label}. Task settings for ${e.display_name || e.name}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks${context ? ` · ${esc(context)}` : ''}</button>`;
+}
+// The row a task indicator opens under its bot: the task model's pickers and Apply, Task effort and Task context
+// length (each saves on its own when changed), and Close. The bot's own model never changes here.
 function settingsTaskRow(e, columns) {
   return `<tr class="sb-task-row" data-task-row="${esc(e.name)}"><td colspan="${columns}"><div class="sb-task-under">
-    <span class="sb-task-head">Tasks · ${esc(e.display_name || e.name)}</span>${settingsChoiceCombo(e, 'task')}
+    <span class="sb-task-head">Tasks · ${esc(e.display_name || e.name)}</span>${settingsChoiceCombo(e, 'task')}${settingsTaskParts(e, true)}
     <button type="button" class="ghost" data-task-close="${esc(e.name)}">Close</button></div>
     ${settingsTaskWarning(e)}</td></tr>`;
+}
+// A Task effort or Task context length changed in the bots table's task row: saved at once, the rest kept.
+async function settingsSaveTaskPart(select) {
+  const effort = 'taskEffort' in select.dataset, slug = select.dataset.taskEffort || select.dataset.taskContext;
+  const e = S.emps.find(row => row.name === slug);
+  if (!e || select.value === (select.dataset.current || '')) return;
+  select.disabled = true;
+  try { await settingsSaveTaskModel(e, effort ? {effort: select.value} : {compact_at: Number(select.value) || null}, e.revision); }
+  catch (error) { select.value = select.dataset.current || ''; toast(error.message, true); }
+  finally {
+    if (select.isConnected) select.disabled = false;
+    else $(`[data-task-row] [${effort ? 'data-task-effort' : 'data-task-context'}="${CSS.escape(slug)}"]`)?.focus();
+  }
 }
 // The plain-words warning for a cheaper task model on a high-stakes bot, as the server judges it against the bot's
 // model now (`task_model_warning`, backend/task_models.py `warning`), under the task model in the row and the editor.
@@ -338,6 +415,7 @@ function settingsWireCombos(root, onPick = settingsPickChoice) {
       fields.dataset.current = box.dataset.current || '';
       const picker = settingsWireChoiceFields(fields, (value, valid) => {
         if (button) button.disabled = !valid || value === (box.dataset.current || '');
+        box.dispatchEvent(new CustomEvent('tico:choice', {bubbles: true}));   // the bot editor repaints Task effort
       });
       box.picker = picker;   // the bot editor's Save reads a pick that was never Applied
       if (!button) return;
@@ -364,7 +442,7 @@ async function settingsPickChoice(box, value) {
   if (!e || value === current) return;
   const input = box.querySelector('input[type=search]');
   if (box.dataset.kind === 'task') {
-    try { await settingsSaveTaskModel(e, value, e.revision); }
+    try { await settingsSaveTaskModel(e, {choice: value ? settingsChoiceFromValue(value) : null}, e.revision); }
     catch (error) { toast(error.message, true); }
     return;
   }
@@ -390,14 +468,16 @@ async function settingsPickChoice(box, value) {
   await settingsBeginTransition(box, e, {kind:'model', model:choice.model, effort:choice.effort,
     harness:choice.harness, expected_generation:e.machine?.generation || 0, expected_revision:e.revision});
 }
-// POST the task model ('' is the same as the bot) and say what the bot's tasks now run on. A pick its computer cannot
-// run yet saves all the same, as does a cheaper one on a high-stakes bot: the toast and the row say so. The bot
-// editor's Save passes `inEditor`: it reloads and toasts once at the end, and takes the revision this made.
-async function settingsSaveTaskModel(e, value, revision, inEditor = false) {
-  const saved = await post(`/v2/bots/${encodeURIComponent(e.name)}/task-model`, {task_model: settingsFallbackBody(value), expected_revision: revision});
-  const choice = value ? settingsChoiceFromValue(value) : null;
+// POST one change to the bot's task settings (settingsTaskBody: the other parts are carried as they are) and say what
+// its tasks now run on. A pick its computer cannot run yet saves all the same, as does a cheaper one on a high-stakes
+// bot: the toast and the row say so. The bot editor's Save passes `inEditor`: it reloads and toasts once at the end,
+// and takes the revision this made.
+async function settingsSaveTaskModel(e, change, revision, inEditor = false) {
+  const body = settingsTaskBody(e, change);
+  const saved = await post(`/v2/bots/${encodeURIComponent(e.name)}/task-model`, {task_model: body, expected_revision: revision});
+  const task = saved.task_model !== undefined ? saved.task_model : body && {...body, reasoning_effort: body.effort};
   const cannot = saved.readiness?.can_run === false ? ` For now they run on its own model: ${saved.readiness.problem}.` : '';
-  const said = `${choice ? `${e.display_name}'s tasks run on ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}.`
+  const said = `${settingsTaskSet(task) ? `${e.display_name}'s tasks run on ${settingsTaskWords(task)}.`
     : `${e.display_name}'s tasks run on the same model as ${e.display_name}.`}${cannot}${saved.warning ? ` ${saved.warning}` : ''}`;
   if (inEditor) { if (cannot || saved.warning) toast(said); return saved.revision; }
   await loadSettings();
@@ -580,8 +660,9 @@ async function settingsBulkApplyKind(slug, choice, kind) {
       return {state: 'skipped', note: 'Already on this model'};
     try {
       if (kind === 'task') {
+        // The task model and its effort change; the bot's own task context length stays.
         const saved = await post(`/v2/bots/${encodeURIComponent(slug)}/task-model`, {
-          task_model: {harness: choice.harness, model: choice.model, effort: choice.effort}, expected_revision: e.revision});
+          task_model: settingsTaskBody(e, {choice, effort: choice.effort}), expected_revision: e.revision});
         return {state: 'changed', note: [`Now ${settingsChoiceLabel(choice.harness, choice.model, choice.effort)}`,
           saved.readiness?.can_run === false ? `For now tasks use the bot model: ${saved.readiness.problem}` : '', saved.warning || ''].filter(Boolean).join('. ')};
       }
@@ -754,6 +835,8 @@ function renderSettingsBots() {
     }
     const machine = event.target.closest('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
+    const part = event.target.closest('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
+    if (part) void settingsSaveTaskPart(part);
   };
   settingsWireCombos(el);
   const copyAll = $('#copy-setup-prompt');

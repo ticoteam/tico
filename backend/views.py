@@ -520,7 +520,7 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows
+            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows, unreviewed
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
@@ -565,6 +565,20 @@ def operation_issues(c, who, auth):
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
                     why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
                     runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
+            elif (late := unreviewed(c, who, slug))[0]:
+                # Two hours with no decision: a person's now, on Health and in its operator's Needs you, whoever else
+                # was asked (Dev 543). Others who read the bot still see it on Health, not in their Needs you.
+                count, hours = late
+                them = "it" if count == 1 else "them"
+                newer = uncertain - count
+                more = f" {newer} more stopped since." if newer > 0 else ""
+                operator = auth.operator(c, who, slug)
+                add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
+                    f"waiting {hours} h",
+                    f"Nobody has decided {them} yet. Tico paused only that request so it will not repeat a possible "
+                    f"outside action.{held_note}{more}{queued_note} Choose Try again or Don't retry.",
+                    bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
+                    waiting_hours=hours)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
