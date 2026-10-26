@@ -191,14 +191,15 @@ def reconcile(c, task_id, snapshots=None):
 FRESH_EVERY_S = 60                  # how often fresh() looks
 FRESH_PER_PASS = 20
 _fresh_lock = threading.Lock()
-_fresh = {"at": 0.0, "seen": {}}
+_fresh = {"at": 0.0, "seen": {}, "tried": {}}
 
 
 def fresh(service, store=None, force=False):
     """Gate holds the cached read keeps, read once afresh from GitHub per change in what the gate reads: the webhook
     cache counts skipped checks as passing, so all-green hosted checks at the current head clear a hold only from a
     fresh read (review_gate.problem). A hold with a move Tico still retries is left to that retry, which reads GitHub
-    itself (backend/move_retry.py). Returns the ids of tasks whose hold cleared."""
+    itself (backend/move_retry.py). The holds tried longest ago go first, so reads that keep failing on some
+    holds never keep the rest from their turn. Returns the ids of tasks whose hold cleared."""
     from . import hubdb as H, move_retry, review_gate
     store = store or service.store
     with _fresh_lock:
@@ -216,18 +217,24 @@ def fresh(service, store=None, force=False):
             if _fresh["seen"].get(row['id']) != seen:
                 due.append((row, prs, seen))
     # Forget holds that ended, so the record stays as small as the holds that are live.
-    for task_id in set(_fresh["seen"]) - held:
-        _fresh["seen"].pop(task_id, None)
+    for record in (_fresh["seen"], _fresh["tried"]):
+        for task_id in set(record) - held:
+            record.pop(task_id, None)
+    due.sort(key=lambda item: _fresh["tried"].get(item[0]['id'], 0.0))
     cleared = []
     for row, prs, seen in due[:FRESH_PER_PASS]:
+        _fresh["tried"][row['id']] = time.monotonic()
         snapshots = review_gate.snapshot(service, prs)
         if not snapshots:
             _fresh["seen"][row['id']] = seen
             continue                    # no GitHub App configured: the cached read is all there is
         with store.transaction() as c:
             now_row = H.task(c, row['id'])
-            if not now_row or now_row.get('version') != row.get('version'):
-                continue                # changed while GitHub was read; the next pass reads again
+            # Anything the gate reads that changed while GitHub was read (an edit, or a webhook's newer check result
+            # at the same head, which leaves the task version alone) supersedes this read; the next pass reads again.
+            if (not now_row or now_row.get('version') != row.get('version')
+                    or move_retry.fingerprint(c, now_row) != seen):
+                continue
             # A failed read is tried again next pass; a complete one waits for the next change in what the gate reads.
             if not any(s.get('error') for s in snapshots.values()):
                 _fresh["seen"][row['id']] = seen

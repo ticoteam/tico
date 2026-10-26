@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import hubdb as H, task_blocked
-from backend.tests.test_github import api, headers, post  # noqa: F401
+from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
 from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, get, move
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
@@ -141,3 +141,52 @@ def test_stale_receipt_review_moves_without_passing_checks_are_still_refused(api
     # With no hosted check passing at all, an all-skipped read is no pass either.
     github(api, monkeypatch, {'check 1': 'skipped'})
     assert move(api, task, 'Review 2').status_code == 422
+
+
+def test_a_same_head_failure_landing_during_the_read_keeps_the_hold(api, monkeypatch):
+    """A check webhook changes the PR link but not the task version: a green read it supersedes must not clear."""
+    from backend import review_gate
+    from backend.tests.test_github import _suite
+    task = ticket(api, STALE)
+    held(api, task)
+    service = api.app.state.github_app
+    github(api, monkeypatch, GREEN)
+    read = review_gate.snapshot
+    def raced(service, prs):
+        found = read(service, prs)
+        _suite(api, 'github-actions', 'completed', 'failure', sha=HEAD)
+        return found
+    monkeypatch.setattr(review_gate, 'snapshot', raced)
+    assert task_blocked.fresh(service, force=True) == []
+    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
+
+
+def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatch):
+    from backend import review_gate
+    first = ticket(api, STALE)
+    second = post(api, 'tasks', {'owner': 'cpo', 'title': 'Improve replies', 'body': 'Build replies.',
+                                 'type': first['type_id'], 'step': 'In Progress', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': HEAD}))
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (STALE, second['id']))
+    second = get(api, 'tasks/' + second['id'])['task']
+    held(api, first)
+    held(api, second)
+    service = api.app.state.github_app
+    github(api, monkeypatch, GREEN)
+    with api.app.state.store.read() as c:
+        broken = {p['id'] for p in review_gate.links(c, H.task(c, first['id']))}
+    read, tried = review_gate.snapshot, []
+    def snapshot(service, prs):
+        tried.append({p['id'] for p in prs} <= broken)
+        if {p['id'] for p in prs} <= broken:
+            return {p['id']: {'error': True, 'why': 'GitHub answered 404'} for p in prs}
+        return read(service, prs)
+    monkeypatch.setattr(review_gate, 'snapshot', snapshot)
+    monkeypatch.setattr(task_blocked, 'FRESH_PER_PASS', 1)
+    passes = [task_blocked.fresh(service, force=True) for _ in range(2)]
+    assert len(tried) == 2 and sorted(tried) == [False, True], 'one read a pass, and the failing hold does not take both'
+    assert [second['id']] in passes
+    assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'Blocked'
+    broken.clear()          # GitHub answers again: the failed hold is read on the next pass and clears
+    assert task_blocked.fresh(service, force=True) == [first['id']]
