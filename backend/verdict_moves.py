@@ -244,19 +244,23 @@ def delivery(c, check):
     row = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY ts DESC, rowid DESC "
                     "LIMIT 1", (check["id"],)).fetchone()
     out = H._json(row[0], {}) if row else None
-    if not out or (out.get("verdict"), out.get("head")) != (str(check.get("verdict") or "").lower(),
-                                                            str(check.get("verdict_head") or "").lower()):
-        marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
-                           "ORDER BY rowid DESC LIMIT 1", (TR.parent_of(c, check["id"]) or "",)).fetchone()
-        pending = H._json(marker["new"], {}) if marker else {}
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
-                         (check["id"],)).fetchone()
-        if turn and pending.get("check_id") == check["id"] and pending.get("attempt_id") == turn["id"]:
-            return {"verdict": str(check.get("verdict") or "").lower(),
-                    "head": str(check.get("verdict_head") or "").lower(), "pending": True,
-                    "quiet": True, "say": "This check verdict is waiting for its executed attempt to be captured."}
-        return None
-    return out
+    marker = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_wait' "
+                       "ORDER BY rowid DESC LIMIT 1", (TR.parent_of(c, check["id"]) or "",)).fetchone()
+    pending = H._json(marker["new"], {}) if marker else {}
+    turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started DESC,id DESC LIMIT 1",
+                     (check["id"],)).fetchone()
+    waiting = turn and pending.get("check_id") == check["id"] and pending.get("attempt_id") == turn["id"]
+    # A rerouted check can get the same verdict at the same head from its next checker: that attempt's own outcome is
+    # still to come, so the earlier attempt's is not it.
+    if out and (out.get("verdict"), out.get("head")) == (str(check.get("verdict") or "").lower(),
+                                                         str(check.get("verdict_head") or "").lower()) \
+            and not (waiting and out.get("attempt_id") not in (None, turn["id"])):
+        return out
+    if waiting:
+        return {"verdict": str(check.get("verdict") or "").lower(),
+                "head": str(check.get("verdict_head") or "").lower(), "pending": True,
+                "quiet": True, "say": "This check verdict is waiting for its executed attempt to be captured."}
+    return None
 
 
 def merge_ready(c, row):

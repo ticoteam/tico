@@ -191,6 +191,63 @@ def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_
     assert [child["id"] for child in active] == [check["id"]], "rerouting keeps exactly one active check for the head"
 
 
+def _finish(c, turn, bot, check, model, provider, runtime):
+    """`bot` records approve at HEAD in its own turn on `check`, then the turn finishes with the model it actually ran."""
+    c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES(?,?,?,?)", (turn, bot, H.now(), check["id"]))
+    H.task_update(c, "bot:" + bot, check["id"], status="done", verdict="approve", verdict_head=HEAD)
+    actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": model, "provider": provider,
+              "est_cost_usd": 0.01, "billing": "subscription", "runtime": runtime, "harness": runtime,
+              "effort": "high", "profile": "engineering"}
+    H.turn_finish(c, H.KEEPER, turn, usage={**actual, "segments": [actual]})
+    return actual
+
+
+def _step(c, task):
+    return c.execute("SELECT s.name FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.id=?",
+                     (task["id"],)).fetchone()[0]
+
+
+def test_rerouted_check_given_the_same_verdict_at_the_same_head_by_an_independent_checker_moves_once(api):
+    """The rerouted check keeps the earlier verdict for audit; the next checker's identical verdict is its own."""
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
+        assert H.task(c, check["id"])["owner"] == "bot:rev-b" and _step(c, task) == "Review 1"
+        actual = _finish(c, "review-2", "rev-b", check, "gpt-6-sol", "openai", "codex")
+        moves = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='verdict_move' ORDER BY rowid",
+                          (check["id"],)).fetchall()
+        assert [json.loads(m[0])["attempt_id"] for m in moves] == ["review-1", "review-2"]
+        assert _step(c, task) == "Review 2"
+        H.turn_finish(c, H.KEEPER, "review-2", usage={**actual, "segments": [actual]})
+        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='verdict_move'",
+                         (check["id"],)).fetchone()[0] == 2, "a duplicate finish moves nothing again"
+        audit = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='verdict_rerouted'",
+                          (check["id"],)).fetchone()
+    assert audit["old"] == "approve" and json.loads(audit["new"]) == {"head": HEAD, "attempt_id": "review-1"}
+
+
+def test_rerouted_check_given_the_same_verdict_by_another_same_family_run_waits_with_the_same_child(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        _finish(c, "review-1", "rev-a", check, "claude-opus-5-5", "anthropic", "claude")
+        _finish(c, "review-2", "rev-b", check, "claude-opus-5-5", "anthropic", "claude")
+        waits = c.execute("SELECT child_id,attempt_id FROM check_waits WHERE ticket_id=? AND state='waiting'",
+                          (task["id"],)).fetchall()
+        rerouted = c.execute("SELECT new FROM task_events WHERE task_id=? AND field='check_rerouted' ORDER BY rowid",
+                             (task["id"],)).fetchall()
+        assert _step(c, task) == "Review 1"
+    assert [dict(w) for w in waits] == [{"child_id": check["id"], "attempt_id": "review-2"}]
+    assert [json.loads(r[0])["attempt_id"] for r in rerouted] == ["review-1", "review-2"]
+
+
 def test_unknown_builder_runtime_waits_instead_of_claiming_independence(api):
     team(api)
     task = base_ticket(api, RECEIPT)

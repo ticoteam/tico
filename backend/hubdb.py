@@ -4566,7 +4566,7 @@ def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
             refuse(conn, actor, "kind", "a verdict belongs on a review or QA subtask, which this task is not")
     elif actor != row["owner"] or not TR.parent_of(conn, row["id"]):
         return False
-    if (verdict, head) == (row.get("verdict"), row.get("verdict_head")):
+    if (verdict, head) == (row.get("verdict"), row.get("verdict_head")) and not _verdict_rerouted(conn, row["id"]):
         return False
     conn.execute("UPDATE tasks SET verdict=?, verdict_head=? WHERE id=?", (verdict, head, row["id"]))
     _task_event(conn, row["id"], actor, "verdict", row.get("verdict"), verdict + (f" {head}" if head else ""), "")
@@ -4574,6 +4574,14 @@ def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
     from . import verdict_moves
     verdict_moves.after_verdict(conn, row)
     return True
+
+
+def _verdict_rerouted(conn, task_id):
+    """Whether the check went to another checker since its last verdict (check_pools.reroute_existing). The verdict it
+    keeps is the earlier checker's, for audit, so the new checker's verdict is its own even when verdict and head match."""
+    last = _one(conn, "SELECT field FROM task_events WHERE task_id=? AND field IN ('verdict','verdict_rerouted') "
+                      "ORDER BY ts DESC,rowid DESC LIMIT 1", (task_id,))
+    return bool(last) and last["field"] == "verdict_rerouted"
 
 
 def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, quiet=False, resume_hint=False):
