@@ -152,10 +152,10 @@ def wanted(conn, owner_id, at=None, reads=None):
             item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
                     "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
             used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None
-            if used and _may_read(reads, who, used["owner"]):
+            if used and not _may_read(reads, who, used["owner"]):
+                continue            # they may not add a measure they may not read (goal-proposals decide)
+            if used:
                 item["measure_name"] = used["name"]     # an Add a KPI that reuses a measure names it
-            else:
-                used = None
             # A bot's goal or measure named in the ask is its activity: the ask is the person's and the CEO Bot's.
             if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner"]) for r in (goal, record, used) if r):
                 item["private"] = True

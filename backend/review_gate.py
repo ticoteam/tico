@@ -255,7 +255,8 @@ def evidence(c, row, actor, receipt_owner=None):
 def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=None, receipt_owner=None):
     from . import hubdb as H
     try:
-        _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner)
+        if notice := problem(c, row, actor, snapshots, note, require_pr, receipt_owner, reader=reader):
+            reject(c, actor, row, *notice)
     except H.Refused as exc:
         # The mover a refused move is retried as (backend/move_retry.py): the actor the move was made as, which can
         # differ from the request's caller (BotOps acting for a person, a service key acting as Tico).
@@ -264,7 +265,8 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False, reader=Non
         raise
 
 
-def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
+def problem(c, row, actor, snapshots=None, note=None, require_pr=False, receipt_owner=None, reader=None):
+    """Read the current gate without writing refusals; shared by automatic hold clearing."""
     from . import hubdb as H
     if not engineering(c, row):
         return
@@ -272,7 +274,7 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
     prs = links(c, row)
     if not prs:
         if require_pr:
-            reject(c, actor, row, "receipt", "unknown", {"url": "no linked PR"},
+            return ("receipt", "unknown", {"url": "no linked PR"},
                    "Review refused: no linked PR. Link the current PR before asking a reviewer. "
                    "The owner or a person who may edit this ticket can link it.")
         return  # A board-only step move has no software reviewer to wake.
@@ -292,13 +294,13 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
-            reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
-                                                  "Retry the review move. Anyone allowed to move this ticket can retry.",
-                   retryable=detail.get("retryable", False))
+            return ("ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
+                                  "Retry the review move. Anyone allowed to move this ticket can retry.",
+                    detail.get("retryable", False))
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
-            reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
+            return ("ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
                    "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
                    "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
     for pr in prs:
@@ -319,7 +321,7 @@ def _check(c, actor, row, snapshots, note, require_pr, reader, receipt_owner):
             else:
                 action = ("Post a passing test receipt naming the current head on this ticket, then retry the review move. "
                           + writers + " can post it.")
-            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}")
+            return ("receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}")
 
 
 def reject(c, actor, row, kind, head, pr, text, retryable=False):
@@ -338,6 +340,11 @@ def notify(c, actor, notice):
     """After refusal rollback, keep one Builder comment per ticket/head/check kind."""
     from . import hubdb as H
     row = H.task(c, notice["task"])
+    if row:
+        from .task_blocked import hold
+        hold(c, row["id"], notice["text"], "gate")
+        c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
+            json.dumps({**{k: notice[k] for k in ("head", "kind", "pr")}, "at": H.now()}), row["id"]))
     if not row or actor == row["owner"]:
         return
     conv = H.conversation(c, row["conversation_id"])

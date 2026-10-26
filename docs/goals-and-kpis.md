@@ -321,7 +321,10 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 - Everyone signed in reads the strategy and its versions. Only the owner publishes one, on their own click
   ([Strategy](strategy.md#who-may-do-what)).
 - Team goals and team KPIs are visible to everyone signed in. A bot's goals and KPIs, and its automatic KPIs, are
-  visible to whoever may Read the bot.
+  visible to whoever may Read the bot. A goal shows its KPIs, and their numbers in its colour's reason, to everyone
+  who reads it, so a bot's KPI goes only on a goal that no one reads who may not read that bot (its own goals, say):
+  linking one elsewhere is refused, by hand or by saying yes to a suggestion, and so is handing such a goal to
+  someone else. A goal linked before this rule shows without that KPI to whoever may not read it.
 - A goal's owner, the owner of the goal it supports and anyone above the owner on the team chart set its colour, edit it and
   choose its KPIs and targets. The team owner may do all of it.
 - A KPI's owner (or anyone above them; the team owner for a team KPI) edits the KPI. Its readings are logged by that

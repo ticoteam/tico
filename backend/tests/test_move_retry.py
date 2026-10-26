@@ -43,7 +43,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert 'Tico retries this move itself when a passing test receipt' in refused.text
     assert [r['step'] for r in retries(api, task)] == ['Review 1']
     # Nothing changed: no retry, no new refusal.
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert tick(api) == [task['id']]
@@ -74,7 +74,7 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:   # a change, but not a receipt
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     tries = retries(api, task)
     assert len(tries) == 2 and tries[-1]['tries'] == 1 and tries[-1]['state'] == 'waiting'
     assert tick(api) == [] and len(retries(api, task)) == 2      # same inputs: not tried again
@@ -83,7 +83,7 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     with api.app.state.store.transaction() as c:
         H.task_update(c, H.KEEPER, task['id'], step='Done')
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
-    assert fresh['step']['name'] == 'In Progress'
+    assert fresh['step']['name'] == 'Blocked'
     assert tick(api) == [] and step(api, task) == 'Done'
 
 
@@ -141,7 +141,7 @@ def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api
     assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == []   # inside the 5 minutes
     for minutes in (6, 12):
         assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
-    assert step(api, task) == 'In Progress' and devops_tasks(api) == []
+    assert step(api, task) == 'Blocked' and devops_tasks(api) == []
     assert retries(api, task)[-1]['problem_code'] == 'github_unreachable'
     back()
     assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == [task['id']]
@@ -200,7 +200,7 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert move_retry.tick(api.app.state.github_app, at=later(13 * 60), force=True) == []
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Blocked'
 
 
 def test_a_private_tickets_blocker_is_private_to_devops_and_does_not_name_it(api, monkeypatch):
@@ -245,7 +245,7 @@ def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     assert move(api, task).status_code == 422           # ana cannot read it
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET note='unrelated' WHERE id=?", (task['id'],))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     assert retries(api, task)[-1]['by'] == 'human:ana'  # a refused retry keeps the mover it reads as
 
 
@@ -256,3 +256,55 @@ def test_a_refused_move_is_retried_as_the_actor_it_was_made_as_not_the_caller(ap
             H.task_update(c, 'human:ana', task['id'], step='Review 1', review_prs={})
         move_retry.remember(c, H.bot_actor('botops'), refused.value.review_gate)
     assert retries(api, task)[-1]['by'] == 'human:ana'
+
+
+def test_a_refused_move_held_blocked_is_retried_even_when_the_blocked_sweep_runs_first(api):
+    """A refused move holds the ticket on Blocked (backend/task_blocked.py). When what refused it clears, the move is
+    made, not undone: the blocked sweep must not send it back to its earlier step and drop the remembered move."""
+    from backend import task_blocked
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    assert step(api, task) == 'Blocked'
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+        task_blocked.sweep(c, H.now())
+    assert step(api, task) == 'Blocked'
+    assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
+    with api.app.state.store.read() as c:
+        assert H.task(c, task['id'])['blocked_since'] is None
+
+
+def test_a_gate_hold_with_no_live_retry_goes_back_to_its_earlier_step(api):
+    """Once Tico no longer retries the move (it expired), the blocked sweep clears the gate hold as before."""
+    from datetime import datetime, timezone
+    from backend import task_blocked
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+        task_blocked.sweep(c, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z')
+    assert step(api, task) == 'In Progress'
+
+
+def test_a_retry_that_another_wait_keeps_on_blocked_claims_no_move_and_waits_for_a_change(api):
+    """A gate hold with another wait beside it (here a person's child task) stays Blocked when Tico retries the move:
+    that is no move, so Tico says nothing and does not try again until something changes."""
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, 'human:ana', 'Choose a machine', 'Choose one.', 'human:ana', parent_id=task['id'])
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+
+    def claimed():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE body LIKE 'Tico moved this ticket%'").fetchone()[0]
+    for _ in range(3):
+        assert tick(api) == []
+    assert step(api, task) == 'Blocked' and claimed() == 0
+    assert len(retries(api, task)) == 2 and retries(api, task)[-1]['state'] == 'waiting'
+    # The other wait ends: that is a change, and the remembered move is made.
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'human:ana', child['id'], status='done')
+    assert tick(api) == [task['id']] and step(api, task) == 'Review 1' and claimed() == 1
