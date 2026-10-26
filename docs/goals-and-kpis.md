@@ -96,6 +96,11 @@ A goal's colour is set automatically:
 The automatic colour is worked out again whenever a reading, a target, a link or a check-in changes, whenever the CEO
 Bot runs its status pass, and once an hour, because data goes stale as time passes.
 
+A sub-goal, a goal that supports another goal, is coloured in exactly the same way as a goal with no parent: from its own
+KPIs, check-ins and tasks. Its parent does not decide or hold back its colour. A sub-goal with data gets its colour on the
+next status pass, including one that had no colour before; a sub-goal with no data stays uncoloured. A colour a person set
+stays, and the CEO Bot only suggests a different one. Turning the regular checks off changes nothing, as for any goal.
+
 ### A human can override
 
 A colour a human sets (`hub goal status`, or the colour control on the Goals page) is theirs. It carries their name and
