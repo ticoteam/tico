@@ -149,7 +149,7 @@ EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in A
 # refs.wake spellings the writers use -> the event a rule names.
 WAKE_ALIASES = {"stalled": "stall", "stuck_retry": "stall", "stuck_cause": "stall", "occurrence": "routine",
                 "next-run": "next_run", "background-done": "background_done", "watcher-done": "watcher",
-                "held-messages": "backlog"}
+                "held-messages": "backlog", "step_status": "status_check"}
 # `trigger` (an incoming webhook's id) and `type` (its extracted type, a trailing * matches a prefix) are read only for
 # events without a task.
 WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type")

@@ -157,11 +157,12 @@ def _snooze_reason(c, row, at):
 
 def _twin_reason(c, row):
     marks = ",".join("?" * len(STATUSES))
-    twin = c.execute(f"SELECT id,created FROM tasks WHERE owner=? AND id<>? AND status IN ({marks}) "
-                     "AND lower(trim(title))=lower(trim(?)) AND (created<? OR (created=? AND id<?)) "
-                     "ORDER BY created LIMIT 1",
-                     (row["owner"], row["id"], *STATUSES, row["title"] or "", row["created"] or "",
-                      row["created"] or "", row["id"])).fetchone()
+    key = H.title_key(row["title"])
+    twin = next((r for r in c.execute(f"SELECT id,created,title FROM tasks WHERE owner=? AND id<>? AND status IN ({marks}) "
+                                      "AND (created<? OR (created=? AND id<?)) ORDER BY created",
+                                      (row["owner"], row["id"], *STATUSES, row["created"] or "",
+                                       row["created"] or "", row["id"]))
+                 if H.title_key(r[2]) == key), None)
     return f"Same title as an older open task of the same owner (from {_day(twin[1])})" if twin else None
 
 

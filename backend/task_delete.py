@@ -36,7 +36,8 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
 
 # Rows that only describe the task: kept with it in the trash.
 TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
-             "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits")
+             "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
+             "task_check_models")
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
@@ -324,6 +325,12 @@ def restore_tasks(c, ids, actor=None):
             if number is not None and c.execute("SELECT 1 FROM tasks WHERE number=?", (number,)).fetchone():
                 task["number"] = None
                 unlinked.setdefault(e["task_id"], []).append("number")
+            if task.get("type_id") and not c.execute("SELECT 1 FROM task_types WHERE id=?", (task["type_id"],)).fetchone():
+                # Its type was deleted while it sat in the trash: it comes back on General, without a step.
+                task["type_id"] = H.GENERAL_TYPE
+                task["step_id"] = None
+                task["step_rank"] = None
+                unlinked.setdefault(e["task_id"], []).append("type")
             if task.get("step_id") and not c.execute("SELECT 1 FROM task_steps WHERE id=?", (task["step_id"],)).fetchone():
                 # Its step was retired (Waiting and Won't do are no longer steps): it comes back without one.
                 task["step_id"] = None

@@ -13,7 +13,7 @@ import shlex
 from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login, providers,
-               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, watchers)
+               releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
 
@@ -121,7 +121,7 @@ def runner_route_latency(c, now=None):
     return None
 
 
-def _computers(c, runners_online, settings):
+def _computers(c, runners_online, settings, limits=None):
     from .readiness import computer_login, login_warning, SIGNED_OUT
     since = {r["id"] for r in runners_online}
     rows, fleet = [], runner_versions.load(c)
@@ -168,7 +168,7 @@ def _computers(c, runners_online, settings):
                                   or n in run_on.get(r["id"], ())]})
     from .start_places import summary, describe
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings)
+        row["turn_counts"] = summary(c, row["id"], settings, limits)
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
@@ -464,14 +464,14 @@ def quiet_minutes(last_seen):
     return int((datetime.now(timezone.utc) - seen).total_seconds() // 60) if seen else 0
 
 
-def _waiting(c, online_ids, settings=None):
+def _waiting(c, online_ids, settings=None, limits=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
     The third list is every bot with queued work that is not starting, with the computer's own
     reason (`_stuck`). An idle bot's reason is the claim's own (execution.bot_refusal); only work the
     claim has no reason to hold is "slow", a Tico bug, and only once the job the claim would take is old: an old held job
     beside a young free one is neither."""
-    from .execution import bot_claimable
+    from .execution import bot_claimable, prime_claimables
     cutoff = H.shift(H.now(), minutes=-QUEUE_MINUTES)
     person_cutoff = H.shift(H.now(), minutes=-PERSON_QUEUE_MINUTES)
     # A job its wake preset holds is waiting on purpose (backend/wake_presets.py), not stuck.
@@ -525,6 +525,7 @@ def _waiting(c, online_ids, settings=None):
     from .login_waits import unknown_holder
     orphaned = {r["bot"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
+    prime_claimables(c, [slug for slug in queued if slug in assigned])
     for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
         slug = bot["slug"]
         count, oldest = queued.get(slug, (0, None))
@@ -559,7 +560,7 @@ def _waiting(c, online_ids, settings=None):
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             idle = slug not in busy and where[0] not in full
             refused, first, person = (('company_limit', None, False) if company_stopped else
-                                      bot_claimable(c, settings, where[0], slug)) if idle else (None,) * 3
+                                      bot_claimable(c, settings, where[0], slug, limits)) if idle else (None,) * 3
             if idle and not refused:
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue        # the job the claim would take is young: the older ones wait behind it or are held
@@ -1314,6 +1315,25 @@ def _aged_pr_checks(c, who, auth, full, kind):
                    fixes=[_fix("Open tasks", "#/tasks")])] if items else []
 
 
+def _prime_claims(c):
+    """Every bot's own rows that the claim check reads (execution.claim_refusal) for the queued work on each computer
+    and each stuck bot, read one table at a time: the page makes a few statements however many bots it checks."""
+    from .events import prime_bot_rows
+    from .execution import GATEWAY_WAIT
+    from .read_cache import cache, prime_rows
+    if cache(c) is None:
+        return
+    slugs = [row[0] for row in c.execute("SELECT slug FROM bots")]
+    prime_bot_rows(c, slugs)
+    keys = [GATEWAY_WAIT + slug for slug in slugs]
+    found = {}
+    for part in H.chunks(keys):
+        found.update((row["key"], row) for row in c.execute(
+            f"SELECT value_json,key FROM registry_metadata WHERE key IN ({','.join('?' * len(part))})", part))
+    prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
+               {(key,): [found[key]] if key in found else [] for key in keys})
+
+
 def view(c, who, settings, auth, github, config):
     if who.role != "bot":
         _person(who)
@@ -1321,8 +1341,10 @@ def view(c, who, settings, auth, github, config):
     full = kind in ("owner", "admin")
     online = _online_runners(c)
     online_ids = {r["id"] for r in online}
-    computers = _computers(c, online, settings)
-    waiting, slow, stuck_rows = _waiting(c, online_ids, settings)
+    _prime_claims(c)
+    limits = usage_limits.company(c)       # one, so the spend of every period is summed once for all the bots
+    computers = _computers(c, online, settings, limits)
+    waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits)
     # A bot onboarding for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
     listed = {row["bot"] for row in stuck_rows}
     stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]

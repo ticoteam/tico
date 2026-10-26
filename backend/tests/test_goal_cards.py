@@ -141,3 +141,108 @@ def test_a_flags_task_says_what_the_ceo_bot_noticed(api):
     with api.app.state.store.read() as c:
         name = ceo_bot.name(c)
     assert task["title"] == f"The {name} noticed something on Raise activation"
+
+
+def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
+    goal, kpi = goal_with_kpi(api)
+    proposed = {"kind": "improve", "baseline": 10, "target": 40, "deadline": "2099-06-30"}
+    new = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}, "target": proposed}, goal["id"])
+    post(api, f"goal-proposals/{new['id']}/decide", {"decision": "confirm", "target": IMPROVE})
+    link = links(api, goal["id"])["Weekly demos"]
+    assert (link["target"], link["deadline"]) == (25, "2099-12-31")
+    # Reusing a measure, the person's "no target" clears the one the CEO Bot proposed.
+    other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
+    reuse = propose(api, "goal_kpi", {"kpi_id": kpi["id"], "target": IMPROVE}, other["id"])
+    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
+    assert links(api, other["id"])["Activation"]["kind"] == "none"
+
+
+# A member may not read the inbox bot (the base fixture: it is Ana's alone), so nothing of its goals or measures reaches
+# her through a suggestion: not its name, what it counts, its source, its unit, nor the target it has now.
+SECRETS = ("NDAs waiting", "Unsigned NDAs in the mail", "Mailbox count", "Close all NDAs")
+
+
+def inbox_measure(api):
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
+    kpi = post(api, "kpis", {"name": "NDAs waiting", "unit": "docs", "direction": "down", "cadence": "daily",
+                             "definition": "Unsigned NDAs in the mail", "source_note": "Mailbox count",
+                             "goal_id": hidden["id"]})["kpi"]
+    return hidden, kpi
+
+
+def leaks(response):
+    return [s for s in SECRETS if s in str(response)]
+
+
+def test_a_suggestion_about_a_hidden_bots_measure_or_goal_shows_none_of_it(api):
+    hidden, secret = inbox_measure(api)
+    definition = propose(api, "kpi_definition", {"definition": "Within 3 days"}, kpi_id=secret["id"])
+    assert definition["id"] in {p["id"] for p in get(api, "goals/tree")["proposals"]}        # Ana reads it
+    tree = get(api, "goals/tree", "cara-test")
+    assert definition["id"] not in {p["id"] for p in tree["proposals"]} and leaks(tree) == []
+    # A measure she reads, on a goal she may not: its target suggestion there is that goal's.
+    goal, kpi = goal_with_kpi(api)
+    post(api, f"goals/{hidden['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 30})
+    target = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, hidden["id"], kpi["id"])
+    [mine] = [p for p in get(api, f"kpis/{kpi['id']}")["proposals"] if p["id"] == target["id"]]
+    assert mine["card"]["goal_title"] == "Close all NDAs by Q4" and mine["card"]["now_label"]
+    detail = get(api, f"kpis/{kpi['id']}", "cara-test")
+    assert target["id"] not in {p["id"] for p in detail["proposals"]} and leaks(detail) == []
+
+
+def test_needs_you_does_not_name_a_hidden_goal_when_the_reader_can_edit_its_kpi(api):
+    goal_manager(api, level=2)  # Above Passive, where unfiled proposals are shown in Needs you.
+    visible, kpi = goal_with_kpi(api, owner="cara", token="cara-test")
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:inbox", "top": True})["goal"]
+    post(api, f"goals/{hidden['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 30})
+    secret = propose(api, "kpi_target", {"kind": "maintain", "min": 50}, hidden["id"], kpi["id"])
+    visible_proposal = propose(api, "kpi_target", {"kind": "maintain", "min": 60}, visible["id"], kpi["id"])
+
+    needs_you = get(api, "goals/needs-you", "cara-test")
+    proposal_ids = {item.get("proposal", {}).get("id") for item in needs_you["items"]}
+    assert visible_proposal["id"] in proposal_ids
+    assert secret["id"] not in proposal_ids and "Close all NDAs by Q4" not in str(needs_you)
+
+
+def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_bot(api):
+    goal_manager(api, level=2)
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:cpo", "top": True})["goal"]
+    proposal = propose(api, "goal_wording", {"title": "Close all NDAs this month"}, hidden["id"])
+    # CPO's nearest person is Ben. He is a regular member and cannot read CPO's records.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
+        from backend import goal_asks as GA
+        assert GA._person(c, "bot:cpo", api.app.state.auth.owner_id(c), GA._org(c)) == "human:ben"
+        # Model the per-person Read grant: the assigned person has no Read on CPO.
+        GA.sync(c, api.app.state.auth.owner_id(c), reads=lambda person, owner: False)
+
+    assert not [task for task in asks(api) if task["ref"] == proposal["id"]]
+    assert "Close all NDAs by Q4" not in str(asks(api))
+
+
+def sync_reading(api):
+    """The CEO Bot's pass as the app runs it: told whose measures each person may read."""
+    from backend import goal_asks as GA
+    with api.app.state.store.transaction() as c:
+        return GA.sync(c, api.app.state.auth.owner_id(c), reads=GA.readers(c, api.app.state.auth))
+
+
+def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_it(api):
+    goal_manager(api, level=2)
+    _, secret = inbox_measure(api)
+    hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
+    reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
+    [item] = [i for i in get(api, "goals/needs-you", "cara-test")["items"] if i.get("proposal", {}).get("id") == reuse["id"]]
+    measure = item["proposal"]["card"]["measure"]
+    assert measure["hidden"] and (measure["unit"], measure["definition"], measure["source_note"]) == ("", "", "")
+    assert leaks(item) == [] and "docs" not in str(item["proposal"]["card"])
+    # Her task says a measure is to be added, not which; Ana's, for her own goal, names it and is hers alone.
+    anas = post(api, "goals", {"title": "Sign faster", "owner": "ana"})["goal"]
+    named = propose(api, "goal_kpi", {"kpi_id": secret["id"]}, anas["id"])
+    sync_reading(api)
+    tasks = {a["ref"]: a for a in asks(api)}
+    assert tasks[reuse["id"]]["title"] == "Add a measure to Keep customers?"
+    assert leaks(tasks[reuse["id"]]) == []
+    assert tasks[named["id"]]["title"] == "Add the measure NDAs waiting to Sign faster?"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT private FROM tasks WHERE id=?", (tasks[named["id"]]["id"],)).fetchone()[0] == 1

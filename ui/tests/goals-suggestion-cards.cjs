@@ -31,6 +31,8 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
         {measure: measure('Weekly demos', {definition: 'Demos held, per week'}), target_label: ''}),
       prop('p-reuse', 'goal_kpi', {kpi_id: 'k-act'},
         {measure: measure('Activation', {definition: 'Signed-up accounts that finish setup', source_note: 'Product database', unit: '%', existing: true}), target_label: ''}),
+      prop('p-hidden', 'goal_kpi', {kpi_id: 'k-secret'},
+        {measure: measure('a measure you cannot see', {hidden: true, existing: true}), target_label: ''}),
       prop('p-blank', 'goal_kpi', {kpi: {name: 'Trials started'}}, {measure: measure('Trials started'), target_label: ''}),
       prop('p-tgt', 'kpi_target', {kind: 'improve', target: 60, deadline: '2027-12-31'}, {kpi_name: 'Activation', now_label: '→ 65% by Dec 31', target_label: '→ 60% by Dec 31, 2027'}, {kpi_id: 'k-act'}),
       prop('p-def', 'kpi_definition', {definition: 'Finish setup within 7 days'},
@@ -91,6 +93,10 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     const reused = await card('p-reuse').innerText();
     assert.match(reused, /Add the measure Activation to Double organic signups\s+Signed-up accounts that finish setup/);
     assert.doesNotMatch(reused, /existing KPI|No data source/);
+    // A hidden reused measure must not be described as missing a source or definition.
+    const hidden = await card('p-hidden').innerText();
+    assert.match(hidden, /Add the measure a measure you cannot see to Double organic signups/);
+    assert.doesNotMatch(hidden, /What it counts is not written down yet|No data source/);
     // The goal editor's target fields, folded away under "Set a target (optional)".
     const set = card('p-new').locator('details.kpi-prop-set');
     assert.equal(await set.locator('summary').innerText(), 'Set a target (optional)');

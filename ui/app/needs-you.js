@@ -68,6 +68,8 @@ async function needsRecommend(button, ask, version) {
     personTasksReload();
   } catch (e) { toast(e.message, true); button.disabled = false; button.textContent = label; }
 }
+// Finished and reopened only by a step move (backend/views.py needs_items `steps_only`; the types list as a fallback).
+const needsStepsOnly = it => !!it.steps_only || pipelineStepsOnly(it);
 function needsV2Item(it, folded, showName = true) {
   const kind = String(it.kind || 'task');
   const from = taskRequester(it) || it.requested_by || '';
@@ -83,7 +85,8 @@ function needsV2Item(it, folded, showName = true) {
   } else if (kind === 'setup') {
     // A setup card is no task: it goes away by itself once the sign-in is done (backend/models_preset.py).
     acts.push(`<a class="button primary" href="${esc(it.link || '#/settings')}">${esc(it.link_label || 'Open Settings')}</a>`);
-  } else {
+  } else if (!needsStepsOnly(it)) {
+    // A Product roadmap item moves only by its steps, as in the task window: no Done, Reopen or Close here.
     if (it.status !== 'done') acts.push(`<button class="${rec ? 'ghost' : 'primary'}" type="button" data-v2-task="${esc(it.id)}" data-v2-status="done">Done</button>`);
     if (['done', 'declined'].includes(String(it.status))) acts.push(`<button class="ghost" type="button" data-v2-task="${esc(it.id)}" data-v2-status="open">Reopen</button>`);
     acts.push(`<button class="ghost danger" type="button" data-v2-task="${esc(it.id)}" data-v2-close="1">Close</button>`);

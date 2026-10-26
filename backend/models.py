@@ -251,7 +251,7 @@ class TaskUpdate(Contract):
 
 
 class TaskStepInput(Contract):
-    public_name: str | None = Field(default=None, min_length=1, max_length=200)
+    public_name: str | None = Field(default=None, max_length=200)      # "" keeps the step off public pages
     id: ID | None = None
     name: ID
     position: int | None = None
@@ -476,6 +476,12 @@ class GoalCreate(Contract):
 class GoalStatus(Contract):
     status: Literal["red", "yellow", "green", "done", "dropped"]
     note: str = Field(default="", max_length=2000)
+
+
+class GoalReopen(Contract):
+    status: Literal["red", "yellow", "green", "auto"] | None = None
+    note: str = Field(default="", max_length=300)
+    undo: bool = False
 
 
 class GoalUpdate(Contract):
@@ -1724,14 +1730,15 @@ class BotWakePreset(Contract):
 class BotTaskCondition(Contract):
     """One row of a filter tab (backend/bot_task_tabs.py FIELDS): a task must match every row. A list value is "any
     of"; days are whole numbers. bot_task_tabs.condition checks each value against the field."""
-    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "created_within",
+    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "needs", "created_within",
                    "updated_within", "done_within", "due", "label"]
     value: int | str | list[str]
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): a built-in view, or a filter of rows that a task must
-    all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's filter, still accepted and stored as rows."""
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
+    filter, still accepted and stored as rows."""
     name: str = Field(min_length=1, max_length=40)
     builtin: Literal["needs", "active", "blocked", "done"] | None = None
     show_count: bool = True
@@ -2269,6 +2276,16 @@ class ReleaseScheduleUpdate(Contract):
     times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
     bot: str | None = Field(default=None, max_length=100)
     writer: str | None = Field(default=None, max_length=100)
+
+
+class SettingsPlan(Contract):
+    """Set one settings catalogue entry (backend/settings_catalog.py): the value, and the bot, computer or person it is
+    for when the setting is set per one."""
+    value: Any = None
+    bot: str | None = Field(default=None, max_length=200)
+    computer: str | None = Field(default=None, max_length=200)
+    person: str | None = Field(default=None, max_length=200)
+    id: str | None = Field(default=None, max_length=200)
 
 
 class ReleaseNow(Contract):
