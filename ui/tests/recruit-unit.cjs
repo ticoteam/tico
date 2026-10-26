@@ -6,9 +6,9 @@ const path = require('node:path');
 
 (async () => {
   let allowed = true, created = [], opened = [], dialog, resolveCatalog, submitHandlerAtShow;
-  const submit = {}, status = {}, button = {dataset:{recruitCreate:'support'}};
+  const submit = {}, status = {classList:{add(){},remove(){},toggle(){}}}, button = {dataset:{recruitCreate:'support'}};
   const results = {innerHTML:'',querySelectorAll:()=>[button],replaceChildren(){}};
-  const form = {querySelector:()=>submit};
+  const form = {querySelector:()=>submit,elements:{title:{get value(){return values.title;},focus(){}},brief:{get value(){return values.brief;},focus(){}}}};
   const makeDialog = () => ({id:'',className:'',innerHTML:'',setAttribute(){},showModal(){
     submitHandlerAtShow=form.onsubmit;
   },close(){},addEventListener(){},
@@ -19,7 +19,7 @@ const path = require('node:path');
     console,Set,FormData:class {get(name){return values[name];}},
     document:{createElement:()=>dialog=makeDialog(),body:{append(){}}},
     $:()=>undefined,esc:escape,S:{me:{id:'owner'},emps:[],route:'#/tasks'},SETTINGS:'#/settings',
-    settingsCanCreateBots:()=>allowed,settingsShow(){},catalogCards:x=>x.cards,
+    settingsCanCreateBots:()=>allowed,settingsShow(){},settingsFieldClear(){},settingsFieldError(){},catalogCards:x=>x.cards,
     get:()=>new Promise(resolve=>{resolveCatalog=resolve;}),
     post:async(url,body)=>{created.push({url,body});return url==='/v2/seats'?{id:'seat-1'}:{};},refresh:async()=>{},loadSettings:async()=>{},toast(){},settingsEditBot(){}
   });

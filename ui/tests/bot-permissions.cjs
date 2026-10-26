@@ -1,9 +1,9 @@
 // Offline regression for per-bot permissions and roles (docs/permissions.md). Fixtures only.
-//  - access: Settings > Bots shows an Access column and its editor saves the presets and a custom mix with
-//    the revision it read; the org panel's person icon hides the bots the caller may only see, keeps that
+//  - access: Settings > Bots shows an Access column and its editor holds the presets and a custom mix until Save
+//    bot, which saves them with the revision it read; the org panel's person icon hides the bots the caller may only see, keeps that
 //    with the account, and combines with the Recent sort; a bot page for someone who may only see or write
 //    to it shows no activity.
-//  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff; Settings > Computers has an
+//  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff with Save bot; Settings > Computers has an
 //    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's chat renders, and
 //    only their click confirms it.
 const {chromium} = require('playwright');
@@ -91,6 +91,13 @@ async function access(browser) {
   // One Edit button per row opens the bot editor, which holds access, who it works for and who owns it.
   const editor = page.locator('#bot-editor');
   const openEditor = async slug => { await page.evaluate(slug => settingsEditBot(slug), slug); await editor.locator(`[data-edit-access=${slug}]`).waitFor(); };
+  // Every row in the bot editor is held until Save bot: nothing is written before it, then it all saves.
+  const saveBot = async () => {
+    assert.equal(puts.length, 0, 'nothing saves before Save bot');
+    await editor.locator('button[type=submit]').click();
+    for (let i = 0; i < 100 && !puts.length; i++) await page.waitForTimeout(50);
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-pending]')?.hidden !== false);
+  };
   await openEditor('legal');
   assert.equal(await editor.locator('[data-access-summary]').innerText(), 'See: Everyone · Read: Legal · Write: Everyone');
   assert.match(await editor.locator('.sb-row').filter({has: page.locator('[data-edit-owners]')}).innerText(), /Works for/);
@@ -111,6 +118,7 @@ async function access(browser) {
   await dialog.locator('[data-access-pick=people][value=ben]').check();
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#access-editor form'));
+  await saveBot();
   const chosen = {everyone: false, people: ['ben'], teams: ['legal'], bots: []};
   assert.deepEqual(puts.shift(), ['legal', {see: chosen, read: chosen, write: chosen, revision: 4}]);
   await page.waitForFunction(() => /Legal, Ben · Read: Legal, Ben · Write: Legal, Ben/.test(document.querySelector('#bot-editor [data-access-summary]')?.textContent || ''));
@@ -124,6 +132,7 @@ async function access(browser) {
   assert.equal(await dialog.locator('.access-level').count(), 0, 'Open has nothing to choose');
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#access-editor form'));
+  await saveBot();
   assert.deepEqual(puts.shift(), ['legal', {see: EVERYONE, read: EVERYONE, write: EVERYONE, revision: 5}]);
 
   await page.waitForFunction(() => document.querySelector('#bot-editor [data-access-summary]')?.textContent === 'Open');
@@ -135,6 +144,7 @@ async function access(browser) {
   await dialog.locator('[data-access-pick=teams][value=sales]').check();
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#access-editor form'));
+  await saveBot();
   assert.deepEqual(puts.shift(), ['legal', {see: EVERYONE, read: {everyone: false, people: [], teams: ['sales'], bots: []},
     write: EVERYONE, revision: 6}]);
 
@@ -150,6 +160,7 @@ async function access(browser) {
   await dialog.locator('.access-level[data-access-levels=write] [data-access-pick=people][value=ben]').check();
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#access-editor form'));
+  await saveBot();
   assert.deepEqual(puts.shift(), ['ops', {see: EVERYONE, read: EVERYONE,
     write: {everyone: false, people: ['ben'], teams: [], bots: []}, revision: 1}]);
 
@@ -286,6 +297,13 @@ async function roles(browser) {
   await dialog.locator('input[value=ben]').check();
   await dialog.locator('[type=submit]').click();
   await page.waitForFunction(() => !document.querySelector('#bot-owners-editor form'));
+  const saveBot = async what => {
+    assert.deepEqual(posts, [], 'nothing saves before Save bot');
+    await page.locator('#bot-editor button[type=submit]').click();
+    for (let i = 0; i < 100 && !posts.some(post => post[0] === what); i++) await page.waitForTimeout(50);
+    assert.equal(posts.shift()[0], 'definition', 'Save bot saves the definition first');
+  };
+  await saveBot('co-owners');
   assert.deepEqual(posts.shift(), ['co-owners', {add: ['ben'], remove: []}]);
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
@@ -297,7 +315,8 @@ async function roles(browser) {
   await delivery.waitFor();
   assert.deepEqual(await delivery.locator('option').evaluateAll(os => os.map(o => [o.value, o.disabled])), [['', false], ['r1', true], ['r2', false]]);
   await delivery.selectOption('r2');
-  await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=groky]')?.disabled === false);
+  await saveBot('definition');
+  for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.shift(), ['definition', {app_delivery: {computer: 'r2', app: 'grok'}, expected_revision: 1}]);
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
@@ -306,7 +325,8 @@ async function roles(browser) {
   await theirs.waitFor();
   assert.deepEqual(await theirs.locator('option').evaluateAll(os => os.map(o => [o.value, o.selected])), [['', false], ['r9', true]]);
   await theirs.selectOption('');
-  await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-app-delivery=cara-grok]')?.disabled === false);
+  await saveBot('definition');
+  for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
   assert.deepEqual(posts.shift(), ['definition', {app_delivery: null, expected_revision: 1}]);
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();

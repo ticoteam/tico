@@ -4,15 +4,16 @@
 
 // What the bot editor shows for an existing bot beyond its definition: who may use it, who it works for and who
 // owns it (each opens its own dialog); its computer, where it compacts, its profile (what wakes it and which tasks it
-// takes) and, for a synced bot, the app it is delivered through (each applies as soon as it is picked); and its model, fallback and task model, whose
-// pickers hold a pick until Apply next to them, or until Save bot applies it (settingsEditorPendingChoice). A model
-// change, either way, goes through its transition dialog; a task model changes only what its tasks run on.
+// takes) and, for a synced bot, the app it is delivered through; and its model, fallback and task model. Every one of
+// them is held until Save bot, which saves them together (settingsEditBot `pending`, settingsEditorPendingChoice). A
+// model change or a move goes through its transition dialog first; a task model changes only what its tasks run on.
+const settingsOwnerChips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
 function settingsBotEditorRows(e) {
-  const chips = list => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
+  const chips = settingsOwnerChips;
   const manage = settingsCanManageBot(e);
   const change = (attr, what) => manage ? `<button class="ghost" type="button" ${attr}="${esc(e.name)}" aria-label="Change ${what} for ${esc(e.display_name)}">Change</button>` : '<span></span>';
   return `<div class="sb-row"><span>Access</span><span data-access-summary>${esc(accessSummary(e.access_policy))}</span>${change('data-edit-access', 'access')}</div>
-    <div class="sb-row"><span>Works for</span><div class="settings-owner-list">${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
+    <div class="sb-row"><span>Works for</span><div class="settings-owner-list" data-bot-users>${chips(e.users) || '<span class="muted">Nobody</span>'}</div>${change('data-edit-owners', 'who it works for')}</div>
     <div class="sb-row"><span>Owners</span><div class="settings-owner-list" data-bot-owners>${chips(e.bot_owners) || '<span class="muted">Its owner</span>'}</div>${change('data-edit-bot-owners', 'owners')}</div>
     ${manage ? `<div class="sb-row"><span>Mail sending</span><span class="muted" data-mail-summary="${esc(e.name)}">…</span>${change('data-edit-mail', 'mail sending')}</div>` : ''}
     ${profileRowHTML(e)}
@@ -24,6 +25,7 @@ function settingsBotEditorRows(e) {
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
+    ${settingsTaskParts(e)}
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
@@ -39,18 +41,10 @@ function settingsCompactRow(e) {
       ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
     </select><span></span></div>`;
 }
-async function settingsSetCompact(select) {
-  const slug = select.dataset.botCompact, e = S.emps.find(row => row.name === slug);
-  if (!e || select.value === select.dataset.current) return;
-  select.disabled = true;
-  try {
-    await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: Number(select.value), expected_revision: e.revision});
-    await loadSettings();
-    toast(`${e.display_name} compacts at ${select.selectedOptions[0]?.textContent || select.value}`);
-  } catch (error) {
-    select.value = select.dataset.current;
-    toast(error.message, true);
-  } finally { if (select.isConnected) select.disabled = false; }
+// The editor's held changes: each returns the save Save bot runs, given the bot's revision, answering the next one.
+function settingsCompactRun(select) {
+  const slug = select.dataset.botCompact, compact_at = Number(select.value);
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at, expected_revision: rev}))?.revision ?? rev + 1;
 }
 function settingsKeepTasksRow(e) {
   if (e.agent) return '';
@@ -60,18 +54,9 @@ function settingsKeepTasksRow(e) {
     aria-label="Keep N tasks going for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}><span></span></div>
     <div class="sb-sub muted">Blank: start assigned work whenever a turn is free. 0: off. Waiting work frees a place; reviews have no cap.</div>`;
 }
-async function settingsSetKeepTasks(input) {
-  const e = S.emps.find(row => row.name === input.dataset.botKeepTasks);
-  if (!e || input.disabled || input.value === input.dataset.current || !input.checkValidity()) return;
-  input.disabled = true;
-  try {
-    await post(`/v2/bots/${encodeURIComponent(e.name)}/keep-tasks-going`, {
-      keep_tasks_going: input.value === '' ? null : Number(input.value), expected_revision: e.revision});
-    await loadSettings();
-    input.dataset.current = input.value;
-    toast('Automatic task starts updated');
-  } catch (error) { input.value = input.dataset.current; toast(error.message, true); }
-  finally { if (input.isConnected) input.disabled = false; }
+function settingsKeepTasksRun(input) {
+  const slug = input.dataset.botKeepTasks, keep_tasks_going = input.value === '' ? null : Number(input.value);
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/keep-tasks-going`, {keep_tasks_going, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
 const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
@@ -102,21 +87,11 @@ function settingsAppDeliveryRow(e) {
       <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
     </select><span></span></div>`;
 }
-async function settingsSetAppDelivery(select) {
-  const slug = select.dataset.botAppDelivery, e = S.emps.find(row => row.name === slug);
-  if (!e || select.value === select.dataset.current) return;
-  const chosen = select.value, where = select.selectedOptions[0]?.textContent.split(' · ')[0] || 'that computer';
-  select.disabled = true;
-  try {
-    // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
-    await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
-      app_delivery: chosen ? {computer: chosen, app: select.dataset.app} : null, expected_revision: e.revision});
-    await loadSettings();
-    toast(chosen ? `${e.display_name} is delivered through the app on ${where}` : `${e.display_name} is back on the daily sync`);
-  } catch (error) {
-    select.value = select.dataset.current;
-    toast(error.message, true);
-  } finally { if (select.isConnected) select.disabled = false; }
+function settingsAppDeliveryRun(select) {
+  const slug = select.dataset.botAppDelivery, chosen = select.value, app = select.dataset.app;
+  // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
+  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
+    app_delivery: chosen ? {computer: chosen, app} : null, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The slug the server would pick for this name (clients/catalog.py slug_from_name), shown under Advanced.
 function slugFromName(name) {
@@ -189,7 +164,7 @@ function settingsEditBot(slug = '', inline = false) {
         <label class="bot-editor-check"><input type="checkbox" name="shared" ${e?.shared ? 'checked' : ''}><span>Allow branches<small>People can make their own branch of it, on their computer and subscription.</small></span></label>
         <label class="bot-editor-check"><input type="checkbox" name="temp" ${e?.temp ? 'checked' : ''}><span>Temp bot<small>For work expected to end.</small></span></label>
         ${editing ? settingsUpdateSubscriptions(e) : ''}
-        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Access, owners and computer save as soon as you change them. A model, fallback or task model pick applies with Apply or Save bot.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
+        ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Nothing here saves until you press Save bot. Then every change saves together.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
           ${settingsChoiceFields(currentModel)}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
@@ -204,16 +179,30 @@ function settingsEditBot(slug = '', inline = false) {
         </div></details>
       </div>
     </div>
-    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Remove bot</button>` : ''}</div></form>`;
+    ${editing ? '<p class="bot-editor-pending" data-bot-pending role="status" hidden></p>' : ''}
+    <div class="bot-editor-foot"><button class="primary" type="submit">${editing ? 'Save bot' : 'Add bot'}</button><button class="ghost" type="button" data-bot-close>Cancel</button><span class="muted" data-bot-status></span>${editing && !isBuiltInBot(e.name) ? `<span class="spacer"></span><select name="successor" aria-label="Hand its work to"><option value="">Hand its work to ${esc(settingsPersonName(e.operator))}</option>${S.emps.filter(row => row.name !== slug).map(row => `<option value="${esc(row.name)}">Hand its work to ${esc(row.display_name || row.name)}</option>`).join('')}</select>${['hermes', 'openclaw'].includes(e.agent?.harness) ? `<label class="bot-editor-check" title="Its agent stops either way; revoking makes it stop reporting in"><input type="checkbox" name="revoke_agent" checked> Revoke its credential</label>` : ''}<button class="ghost danger" type="button" data-bot-remove>Archive bot</button>` : ''}</div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-bot-status]');
   dialog.querySelectorAll('[data-bot-close]').forEach(button => button.onclick = closeEditor);
-  // The rows for who owns it, its model and its computer save on their own (on change, or Apply), so keep them
-  // fresh, and once one has changed the bot use the newer revision for Save.
-  let rev = e?.revision, touched = false;
-  const rows = dialog.querySelector('[data-bot-people]');
+  // Every row is held until Save bot (`pending`, and the model pickers' own pick), so a reload elsewhere redraws the
+  // rows only while nothing is waiting. An agent's credential buttons act at once and move the revision, so after one
+  // Save uses the newer revision.
+  let rev = e?.revision, touched = false, machinePick = null;
+  const rows = dialog.querySelector('[data-bot-people]'), pendingLine = dialog.querySelector('[data-bot-pending]');
+  const pending = new Map();   // key → {label, run: async revision => next revision}
+  const choiceKinds = ['model', 'fallback', 'task'];
+  const pendingNames = () => [...[...pending.values()].map(item => item.label), ...(machinePick ? ['computer'] : []),
+    ...choiceKinds.filter(kind => settingsEditorPendingChoice(rows, kind)).map(kind => SETTINGS_CHOICE_KINDS[kind].name.toLowerCase()),
+    ...settingsEditorTaskParts(rows).map(([, name]) => name)];
+  const paintPending = () => {
+    if (!pendingLine) return;
+    const names = pendingNames();
+    pendingLine.hidden = !names.length;
+    pendingLine.textContent = names.length ? `Not saved yet: ${names.join(', ')}. Save bot saves them together.` : '';
+  };
+  const stage = (key, label, run) => { if (run) pending.set(key, {label, run}); else pending.delete(key); paintPending(); };
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); void budgetMount(rows, slug); void profileMount(rows, slug); };
-    const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); paintPending(); };
+    const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
     const cleanup = () => {
@@ -224,38 +213,76 @@ function settingsEditBot(slug = '', inline = false) {
     if (inline && BOT?.slug === slug) { BOT.settingsCleanup?.(); BOT.settingsCleanup = () => document.removeEventListener('tico:settings-loaded', refresh); }
     else dialog.addEventListener('close', cleanup);
     rows.addEventListener('click', event => {
-      touched = true;
       const access = event.target.closest('[data-edit-access]'), owners = event.target.closest('[data-edit-owners]'), botOwners = event.target.closest('[data-edit-bot-owners]');
-      if (access) void settingsEditAccess(access.dataset.editAccess);
-      if (owners) settingsEditOwners(owners.dataset.editOwners);
-      if (botOwners) void settingsEditBotOwners(botOwners.dataset.editBotOwners);
+      if (access) void settingsEditAccess(access.dataset.editAccess, {stage: (run, policy) => {
+        const cell = rows.querySelector('[data-access-summary]'); if (cell) cell.textContent = accessSummary(policy);
+        stage('access', 'access', run);
+      }});
+      if (owners) settingsEditOwners(owners.dataset.editOwners, {stage: (run, people) => {
+        const cell = rows.querySelector('[data-bot-users]'); if (cell) cell.innerHTML = settingsOwnerChips(people) || '<span class="muted">Nobody</span>';
+        stage('owners', 'who it works for', run);
+      }});
+      if (botOwners) void settingsEditBotOwners(botOwners.dataset.editBotOwners, {stage: (run, people) => {
+        const cell = rows.querySelector('[data-bot-owners]'); if (cell) cell.innerHTML = settingsOwnerChips(people) || '<span class="muted">Its owner</span>';
+        stage('co-owners', 'owners', run);
+      }});
       const mail = event.target.closest('[data-edit-mail]');
-      if (mail) void settingsEditMail(mail.dataset.editMail, () => settingsMailSummary(rows, slug));
+      if (mail) void settingsEditMail(mail.dataset.editMail, null, {stage: (run, m) => {
+        const cell = rows.querySelector('[data-mail-summary]'); if (cell) cell.textContent = mailSettingText(m);
+        stage('mail', 'mail sending', run);
+      }});
       const credential = event.target.closest('[data-agent-credential]'), revoke = event.target.closest('[data-agent-revoke]'), pairing = event.target.closest('[data-agent-pair]');
+      if (credential || revoke || pairing) touched = true;
       if (pairing) void settingsAgentPair(pairing.dataset.agentPair);
       if (credential) void settingsAgentCredential(credential.dataset.agentCredential);
       if (revoke) void settingsAgentRevoke(revoke.dataset.agentRevoke);
     });
     rows.addEventListener('change', event => {
+      const changed = control => control.value !== (control.dataset.current || '');
       const machine = event.target.closest('[data-bot-machine]');
-      if (machine) { touched = true; void settingsMoveBot(machine); }
+      if (machine) {
+        const target = SETTINGS_DATA.machines.find(row => row.id === machine.value);
+        machinePick = changed(machine) && target ? {id: target.id, label: target.label} : null;
+      }
       const compact = event.target.closest('[data-bot-compact]');
-      if (compact) { touched = true; void settingsSetCompact(compact); }
+      if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const profile = event.target.closest('[data-bot-profile], [data-profile-key]');
-      if (profile) { touched = true; void profileChange(profile); }
+      if (profile) stage('profile', 'profile', profileStaged(profile));
       const keep = event.target.closest('[data-bot-keep-tasks]');
-      if (keep) { touched = true; void settingsSetKeepTasks(keep); }
+      if (keep) {
+        settingsFieldClear(keep);
+        if (!keep.checkValidity()) settingsFieldError(keep, keep.validationMessage || 'Enter a whole number from 0 to 1000, or leave it blank.');
+        stage('keep', 'keep tasks going', changed(keep) && keep.checkValidity() && settingsKeepTasksRun(keep));
+      }
+      if (event.target.matches('[data-task-effort]')) event.target.dataset.touched = '1';
       const delivery = event.target.closest('[data-bot-app-delivery]');
-      if (delivery) { touched = true; void settingsSetAppDelivery(delivery); }
+      if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
+      paintPending();
     });
+    // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
+    rows.addEventListener('tico:choice', event => {
+      const box = event.target.closest('[data-bot-choice][data-kind=task]'), select = rows.querySelector('[data-task-effort]');
+      if (!box?.picker?.valid() || !select) return;
+      const bot = S.emps.find(row => row.name === slug) || e, value = box.picker.value();
+      const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot, choice?.model || ''));
+      // Picking the task model back as it was shows its effort as it was, unless Task effort itself was changed.
+      const held = box.picker.changed() || select.dataset.touched ? select.value : select.dataset.current || '';
+      const effort = efforts.includes(held) ? held : choice?.effort || '';
+      settingsTaskEffortPaint(select, efforts, effort, !choice);
+      paintPending();
+    });
+    rows.addEventListener('input', () => paintPending());
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.js
   const remove = dialog.querySelector('[data-bot-remove]');
   if (remove) remove.onclick = async () => {
-    // Remove = archive (#535): off the chart, no routines or new work; open tasks go to the picked heir.
+    // Archive (#535): off the chart, no routines or new work; open tasks go to the picked heir. It asks first.
     const successor = form.elements.successor.value;
     const hermes = ['hermes', 'openclaw'].includes(e.agent?.harness);
-    remove.disabled = true; status.textContent = 'Removing…';
+    const heir = successor ? settingsBotName(successor) : settingsPersonName(e.operator);
+    if (!await settingsConfirm({title: `Archive ${e.display_name}?`, ok: 'Archive bot',
+      text: `Its open tasks go to ${heir}. It leaves the team chart and its routines stop. You can restore it later from Archived bots.`})) return;
+    remove.disabled = true; status.textContent = 'Archiving…';
     try {
       const done = await post(`/v2/bots/${encodeURIComponent(slug)}/archive`, {successor: successor || null, expected_revision: e.revision,
         ...(hermes ? {revoke_agent: !!form.elements.revoke_agent?.checked} : {})});
@@ -263,7 +290,7 @@ function settingsEditBot(slug = '', inline = false) {
       if (!inline) dialog.close();
       await loadSettings();
       if (inline) location.hash = '#/settings'; else settingsShow('bots');
-      toast(done.agent?.detail || `Removed ${e.display_name}`);
+      toast(done.agent?.detail || `Archived ${e.display_name}`);
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; remove.disabled = false; }
   };
   if (!editing) {
@@ -310,26 +337,36 @@ function settingsEditBot(slug = '', inline = false) {
   form.onsubmit = async event => {
     event.preventDefault();
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = 'Saving…';
-    let added = null;
+    let added = null, saved = false;
     try {
       if (editing) {
         const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
-        const task = settingsEditorPendingChoice(rows, 'task');
+        const task = settingsEditorPendingChoice(rows, 'task'), taskParts = settingsEditorTaskParts(rows);
         const unfinished = [model, fallback, task].find(pick => pick && !pick.ready);
-        if (unfinished) throw new Error(`${unfinished === model ? 'Model' : unfinished === fallback ? 'Fallback' : 'Task model'} change not applied: finish choosing it, or reset it.`);
-        // A model change starts a fresh session, so Save asks first, as Apply does; saying no saves nothing.
+        if (unfinished) throw new Error(`Nothing saved: finish choosing the ${unfinished === model ? 'model' : unfinished === fallback ? 'fallback' : 'task model'}, or reset it.`);
+        // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing.
         const bot = S.emps.find(row => row.name === slug) || e, target = model && settingsChoiceFromValue(model.value);
         if (model && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
-          throw new Error('Model change not applied: press Apply next to Model, or reset it.');
+          throw new Error('Nothing saved: the model change was not confirmed. Reset the model, or press Save bot again.');
+        const move = machinePick;
+        if (move && !await settingsConfirmTransition(bot, 'machine', move.label))
+          throw new Error('Nothing saved: the move was not confirmed. Pick the current computer again, or press Save bot again.');
         if (fallback) {
           rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
+          saved = true;
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
           fallback.box.dataset.current = fallback.box.querySelector('[data-choice-fields]').dataset.current = fallback.value;
         }
-        if (task) {
-          // Only the task model: the bot's own model, and so its sessions, stay as they are.
-          rev = await settingsSaveTaskModel(bot, task.value, rev, true);
-          task.box.dataset.current = task.box.querySelector('[data-choice-fields]').dataset.current = task.value;
+        if (task || taskParts.length) {
+          // The task model, Task effort and Task context length in one save, each part not changed kept as it is.
+          // The bot's own model, and so its sessions, stay as they are.
+          const change = Object.fromEntries(taskParts.map(([select]) => 'taskEffort' in select.dataset
+            ? ['effort', select.value] : ['compact_at', Number(select.value) || null]));
+          if (task) change.choice = task.value ? settingsChoiceFromValue(task.value) : null;
+          rev = await settingsSaveTaskModel(bot, change, rev, true);
+          saved = true;
+          if (task) task.box.dataset.current = task.box.querySelector('[data-choice-fields]').dataset.current = task.value;
+          taskParts.forEach(([select]) => { select.dataset.current = select.value; });
         }
         rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,
@@ -339,10 +376,26 @@ function settingsEditBot(slug = '', inline = false) {
           repo: form.elements.repo.value, thread_mode: form.elements.thread_mode.value,
           temp: form.elements.temp.checked, shared: form.elements.shared.checked, expected_revision: rev,
           ...settingsUpdateSubscriptionsChange(form, e)}))?.revision ?? rev;
-        // Last, since the transition holds the revision it started from; its own dialog shows the progress.
-        if (model) settingsWatchTransition((await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model',
-          model: target.model, effort: target.effort, harness: target.harness,
-          expected_generation: bot.machine?.generation || 0, expected_revision: rev})).id);
+        saved = true;
+        // The held rows, in the order they were changed; each one done leaves the list, so Save again never repeats it.
+        for (const [key, item] of pending) { rev = await item.run(rev); pending.delete(key); }
+        // Last, since a transition holds the revision it started from; its own dialog shows the progress. A model
+        // change applies at once, then the move starts from the bot as it is now (one change at a time per bot).
+        let transition = null;
+        if (model) {
+          transition = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model',
+            model: target.model, effort: target.effort, harness: target.harness,
+            expected_generation: bot.machine?.generation || 0, expected_revision: rev});
+          model.box.dataset.current = model.box.querySelector('[data-choice-fields]').dataset.current = model.value;
+        }
+        if (move) {
+          if (model) await loadSettings();
+          const now = S.emps.find(row => row.name === slug) || bot;
+          transition = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'machine', runner_id: move.id,
+            expected_generation: now.machine?.generation || 0, expected_revision: model ? now.revision : rev});
+          machinePick = null;
+        }
+        if (transition) settingsWatchTransition(transition.id);
       } else {
         const choice = settingsChoiceFromValue(form.elements.model_effort.value);
         if (!choice.harness || !choice.model || !choice.effort) throw new Error('Choose a harness, model and effort.');
@@ -364,8 +417,12 @@ function settingsEditBot(slug = '', inline = false) {
       }
       else if (!inline) settingsShow('bots');
       if (editing && BOT?.slug === slug) void botBranchesLoad(slug);   // Allow branches shows the picker without a reload
-      toast(editing ? `Updated ${form.elements.display_name.value}` : added?.note || `Added ${form.elements.display_name.value}`);
-    } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false; }
+      toast(editing ? 'Saved' : added?.note || `Added ${form.elements.display_name.value}`);
+    } catch (error) {
+      status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false;
+      // Part of it saved: the next Save starts from the bot as it is now, and sends only what is still waiting.
+      if (saved) { await loadSettings().catch(() => {}); rev = (S.emps.find(row => row.name === slug) || e).revision; paintPending(); }
+    }
   };
   if (!inline) {
     dialog.onclose = () => { if (!dialog.open) dialog.innerHTML = ''; };
@@ -380,7 +437,12 @@ function settingsEditorPendingChoice(rows, kind) {
   const value = box.picker.value();
   return {box, value, ready: box.picker.valid() && value !== (box.dataset.current || '')};
 }
-function settingsEditOwners(slug) {
+// Task effort and Task context length changed in the editor and not saved yet: [[select, name], ...].
+function settingsEditorTaskParts(rows) {
+  return [['[data-task-effort]', 'task effort'], ['[data-task-context]', 'task context length']]
+    .map(([selector, name]) => [rows?.querySelector(selector), name]).filter(([select]) => select && select.value !== (select.dataset.current || ''));
+}
+function settingsEditOwners(slug, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
   const dialog = botSettingsPanel('owner-picker', 'owner-picker', 'owner-picker-title') || $('#owner-picker');
   if (!e || !dialog) return;
@@ -388,17 +450,22 @@ function settingsEditOwners(slug) {
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="owner-picker-title">Who ${esc(e.display_name)} works for</h2><span class="spacer"></span><button class="ghost" type="button" data-owner-close aria-label="Close">✕</button></div>
     <div class="owner-picker-body">
       <div class="owner-options">${SETTINGS_DATA.people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${selected.has(person.id) ? 'checked' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
-      <div class="row"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-owner-close>Cancel</button><span id="owner-picker-status" class="muted"></span></div></div></form>`;
+      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-owner-close>Cancel</button><span id="owner-picker-status" class="muted"></span></div></div></form>`;
   dialog.querySelectorAll('[data-owner-close]').forEach(button => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async event => {
     event.preventDefault();
     const owners = [...dialog.querySelectorAll('input[name=owner]:checked')].map(input => input.value);
     const status = $('#owner-picker-status', dialog);
-    if (!owners.length) { status.innerHTML = '<span class="err">Choose at least one human.</span>'; return; }
+    if (!owners.length) { status.innerHTML = '<span class="err">Choose at least one person.</span>'; return; }
+    if (stage) {
+      stage(async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/owners`, {owners, expected_revision: rev}))?.revision ?? rev + 1,
+        owners.map(id => SETTINGS_DATA.people.find(person => person.id === id) || {id}));
+      settingsPanelClose(dialog); return;
+    }
     dialog.querySelectorAll('button,input').forEach(control => control.disabled = true); status.textContent = 'Saving…';
     try {
       await post(`/v2/bots/${encodeURIComponent(slug)}/owners`, {owners, expected_revision: e.revision});
-      settingsPanelClose(dialog); await loadSettings(); toast(`Updated who ${e.display_name} works for`);
+      settingsPanelClose(dialog); await loadSettings(); toast('Saved');
     } catch (error) {
       status.innerHTML = `<span class="err">${esc(error.message)}</span>`;
       dialog.querySelectorAll('button,input').forEach(control => control.disabled = false);
@@ -502,10 +569,12 @@ function settingsWatchTransition(id, origin = {}) {
     dialog.querySelector('[data-transition-close]')?.addEventListener('click', () => dialog.close());
     dialog.querySelector('[data-transition-done]')?.addEventListener('click', () => dialog.close());
     dialog.querySelector('[data-transition-force]')?.addEventListener('click', async button => {
-      if (!confirm(`Change without a prepared checkpoint? Raw conversation history stays in ${appName()}, but persistent session context will be lost.`)) return;
-      button.currentTarget.disabled = true;
+      const control = button.currentTarget;
+      if (!await settingsConfirm({title: 'Change without a checkpoint?', ok: 'Change without checkpoint',
+        text: `Raw conversation history stays in ${appName()}, but persistent session context will be lost.`})) return;
+      control.disabled = true;
       try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/apply-without-checkpoint`, {change_without_checkpoint:true}); await paint(); }
-      catch (error) {toast(error.message, true); button.currentTarget.disabled = false;}
+      catch (error) {toast(error.message, true); control.disabled = false;}
     });
     dialog.querySelector('[data-transition-cancel]')?.addEventListener('click', async button => {
       button.currentTarget.disabled = true;

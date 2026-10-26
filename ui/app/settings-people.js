@@ -1,4 +1,4 @@
-/* ui/app/settings-people.js — Settings > Humans and access
+/* ui/app/settings-people.js — Settings > People and access
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -16,6 +16,7 @@ const PEOPLE_RULES = [['assistant_direct', 'Assistant acts without asking'], ['a
   ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers'], ['support_access', 'Owners and admins may let Tico support in']];
 let PEOPLE_MODE = '';        // 'manual' or 'sync' picked on this page; '' follows the saved directory source
 let PEOPLE_ADDED = '';       // who was just let in, for the one-line identity proxy reminder
+let PEOPLE_INVITE_FAILED = null;   // {id, message}: added, but the invite did not go; shown on their row once
 function peopleDialog(title, body) {
   const d = $('#people-dialog');
   d.innerHTML = `<div class="tmodal-title">${esc(title)}</div><div class="tmodal-body">${body}</div>`;
@@ -35,7 +36,7 @@ function peopleMenu(p, view) {
   if (view?.account_password && !p.owner && p.id !== S.me?.id && p.email && p.can_sign_in)
     items.push('<button type="button" role="menuitem" data-person-act="password">Create password</button>');
   const check = (act, label, on) => `<button type="button" role="menuitemcheckbox" aria-checked="${on}" data-person-act="${act}"><span class="people-check" aria-hidden="true">${on ? '✓' : ''}</span>${label}</button>`;
-  if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add humans', !!p.add_people));
+  if (p.role === 'member') items.push(check('create_bots', 'Can add bots', !!p.create_bots), check('add_people', 'Can add people', !!p.add_people));
   if (owner && !p.owner && p.email && p.can_sign_in) items.push('<button type="button" role="menuitem" data-person-act="owner">Make owner</button>');
   if (owner && !p.owner && p.id !== S.me?.id) items.push('<button type="button" role="menuitem" class="danger-text" data-person-act="left">Mark as left</button>');
   if (owner && p.owner && p.id === S.me?.id) items.push('<button type="button" role="menuitem" data-person-act="email">Change my sign-in email</button>');
@@ -81,16 +82,17 @@ async function renderSettingsPeople() {
     const help = `${GH}/blob/main/docs/people.md#the-identity-proxy-must-agree`;
     el.innerHTML = `
       <section class="card people-join">
-        ${owner ? `<div class="people-mode" role="group" aria-label="How humans join">
+        ${owner ? `<div class="people-mode" role="group" aria-label="How people join">
           <button type="button" data-people-mode="manual" aria-pressed="${mode === 'manual'}">Add manually</button>
           <button type="button" data-people-mode="sync" aria-pressed="${mode === 'sync'}">Sync with directory</button></div>` : ''}
         ${mode === 'manual' ? `<form class="people-add" id="people-add" autocomplete="off" novalidate>
             <input name="email" type="text" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="Email" aria-label="Email">
             <input name="name" type="text" placeholder="Name (optional)" aria-label="Name">
-            <button class="primary" type="submit">Add</button></form>`
+            ${view?.invite_email ? '<button class="primary" type="submit" data-people-add-invite>Add and send invite</button><button class="ghost" type="submit">Add</button>'
+              : '<button class="primary" type="submit">Add</button>'}</form>`
           : owner ? '<div id="directory-sync"></div>'
           : `<p class="muted people-synced">Synced from ${esc(PEOPLE_SOURCE[view.directory] || view.directory)}</p>`}
-        <p class="people-note">${view?.invite_email ? 'No email is sent until you choose Send invite.' : 'No email is sent.'}${S.config?.local ? ` Only the owner can sign in locally. <a href="${GH}/blob/main/docs/install.md#add-a-domain-and-sign-in-later" target="_blank" rel="noopener noreferrer">Add a domain and sign-in</a> so humans can join.` : ''}</p>
+        <p class="people-note">${view?.invite_email ? 'Add and send invite emails them a sign-in link from Tico. Add sends no email.' : 'No email is sent.'}${S.config?.local ? ` Only the owner can sign in locally. <a href="${GH}/blob/main/docs/install.md#add-a-domain-and-sign-in-later" target="_blank" rel="noopener noreferrer">Add a domain and sign-in</a> so people can join.` : ''}</p>
         ${proxy && added ? `<p class="people-note" id="people-proxy-note">Also allow ${esc(added)} in <a href="${esc(help)}" target="_blank" rel="noopener noreferrer">${esc(proxy)}</a></p>` : ''}
         ${home ? `<label class="people-line">${peopleSwitch('id="people-domain"', view.domain_sign_in, !owner, `Anyone at ${home} has sign-in access`)}<span>Anyone at <b>${esc(home)}</b> ${S.config?.local ? 'has access when sign-in is configured' : 'can sign in'}</span></label>` : ''}
         ${extras.length ? `<div class="people-line people-extras"><span class="muted">Also allowed</span><ul class="allow-chips">${extras.map(x =>
@@ -98,8 +100,9 @@ async function renderSettingsPeople() {
       </section>
       <div id="people-from-setup"></div>
       <section class="card people-list-card">
-        <header><h2>Humans</h2><span class="muted tnum">${active.length}</span></header>
-        <div class="people-head" aria-hidden="true"><span>Human</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span></span></div>
+        <header><h2>People</h2><span class="muted tnum">${active.length}</span></header>
+        ${owner ? '' : settingsWhoCanHTML('roles')}
+        <div class="people-head" aria-hidden="true"><span>Person</span><span>Role</span><span>${S.config?.local ? 'Sign-in access' : 'Can sign in'}</span><span></span></div>
         <ul class="people-list">${active.map(p => peopleRow(p, view)).join('')}</ul>
         ${left.length ? `<details class="people-left"><summary>Left <span class="tnum">${left.length}</span></summary><ul class="people-list">${left.map(p => `<li class="people-row is-left" data-person="${esc(p.id)}">
           <div class="people-who">${personAvatar(p, 32)}<div class="people-id"><div class="people-name">${esc(p.name)}</div><div class="people-email">${esc(p.email || 'No email')}</div></div></div>
@@ -112,8 +115,20 @@ async function renderSettingsPeople() {
     if (owner) void peopleFromSetup($('#people-from-setup'));
     const person = id => view.people.find(p => p.id === id);
     const again = async message => { if (message) toast(message); await renderSettingsPeople(); };
-    const change = async (work, message) => {
-      try { await work(); await again(message); } catch (error) { toast(error.message, true); await renderSettingsPeople(); }
+    // A refusal stays as a red line under the control that was changed, found again once the list redraws.
+    const change = async (work, message = 'Saved', control) => {
+      const person = control?.closest?.('[data-person]')?.dataset.person;
+      const find = () => person ? $(`#set-people [data-person="${CSS.escape(person)}"]`)
+        : control?.id ? $(`#${CSS.escape(control.id)}`)
+        : control?.dataset?.rule ? $(`#set-people [data-rule="${CSS.escape(control.dataset.rule)}"]`)
+        : control?.dataset?.ruleDays ? $(`#set-people [data-rule-days="${CSS.escape(control.dataset.ruleDays)}"]`)
+        : control?.matches?.('.people-extras') ? $('#set-people .people-extras') : null;
+      try { await work(); await again(message); }
+      catch (error) {
+        await renderSettingsPeople();
+        const where = find();
+        if (where) settingsFieldError(where, error.message); else toast(error.message, true);
+      }
     };
     const allow = (people, domains) => put('/v2/access/allow', {allowed: people, allowed_domains: domains, expected_revision: view.revision});
     const confirmDialog = (title, text, label, work) => {
@@ -132,7 +147,7 @@ async function renderSettingsPeople() {
       if (want === mode) return;
       if (want === 'sync' || !view.directory) { PEOPLE_MODE = want; void renderSettingsPeople(); return; }
       // Leaving a saved sync turns it off; the people it added stay.
-      confirmDialog(`Stop syncing from ${PEOPLE_SOURCE[view.directory] || view.directory}?`, 'Synced humans stay.', 'Stop sync', async () => {
+      confirmDialog(`Stop syncing from ${PEOPLE_SOURCE[view.directory] || view.directory}?`, 'Synced people stay.', 'Stop sync', async () => {
         const d = await get('/v2/directory');
         await put('/v2/directory', {source: '', filter: d.filter, interval_minutes: d.interval_minutes,
           mass_leave_limit: d.mass_leave_limit, expected_revision: d.revision});
@@ -143,6 +158,8 @@ async function renderSettingsPeople() {
     if (add) add.onsubmit = async event => {
       event.preventDefault();
       const email = add.email.value.trim(), name = add.name.value.trim();
+      const invite = !!event.submitter?.matches('[data-people-add-invite]');
+      settingsFieldClear(add);
       if (!email) { add.email.focus(); return; }
       add.querySelectorAll('input,button').forEach(x => x.disabled = true);
       try {
@@ -150,39 +167,64 @@ async function renderSettingsPeople() {
         if (!/^[^@\s]+@/.test(email)) {
           const domain = email.replace(/^\*?@/, '').toLowerCase();
           await allow(view.allowed, [...view.allowed_domains, domain]);
-          PEOPLE_ADDED = domain; await again(S.config?.local ? `Added ${domain}. Add a domain and sign-in so humans can join. No email sent.` : `Anyone at ${domain} can sign in`);
+          PEOPLE_ADDED = domain; await again(S.config?.local ? `Added ${domain}. Add a domain and sign-in so people can join. No email sent.` : `Anyone at ${domain} can sign in`);
         } else {
-          await post('/v2/access/humans', {email, name});
-          PEOPLE_ADDED = 'them'; await again(`Added ${name || email}${S.config?.local ? '. Add a domain and sign-in so they can join. No email sent.' : '. No email sent.'}`);
+          const added = await post('/v2/access/humans', {email, name});
+          PEOPLE_ADDED = 'them';
+          // One click adds and invites. Added but not invited still added them: their row says why, and its … menu
+          // keeps Send invite to try again.
+          let sent = false;
+          if (invite && added?.person) {
+            try { await post(`/v2/access/humans/${encodeURIComponent(added.person)}/invite`, {}); sent = true; }
+            catch (error) { PEOPLE_INVITE_FAILED = {id: added.person, message: `Added, but the invite was not sent: ${error.message} Try Send invite in the … menu.`}; }
+          }
+          await again(sent ? `Added ${name || email} and sent the invite` : `Added ${name || email}${S.config?.local ? '. Add a domain and sign-in so they can join. No email sent.' : invite ? '' : '. No email sent.'}`);
           $('#people-add [name=email]')?.focus();
         }
       } catch (error) {
-        toast(error.message, true);
         add.querySelectorAll('input,button').forEach(x => x.disabled = false);
+        settingsFieldError(add, error.message);
       }
     };
+    if (PEOPLE_INVITE_FAILED) {
+      const failed = el.querySelector(`[data-person="${CSS.escape(PEOPLE_INVITE_FAILED.id)}"]`);
+      if (failed) settingsFieldError(failed, PEOPLE_INVITE_FAILED.message); else toast(PEOPLE_INVITE_FAILED.message, true);
+      PEOPLE_INVITE_FAILED = null;
+    }
     const domainSwitch = $('#people-domain');
-    if (domainSwitch) domainSwitch.onchange = () => change(async () => {
+    if (domainSwitch) domainSwitch.onchange = async () => {
       const on = domainSwitch.checked;
-      await allow(view.allowed, on ? [...view.allowed_domains, home] : view.allowed_domains.filter(d => d !== home));
-      PEOPLE_ADDED = on ? home : '';
-    }, S.config?.local ? 'Sign-in access saved. Only the owner can sign in locally.' : domainSwitch.checked ? `Anyone at ${home} can sign in` : `Only humans added here can sign in`);
-    el.querySelectorAll('[data-allow-remove]').forEach(button => button.onclick = () => {
-      const x = button.dataset.allowRemove;
-      void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`);
+      // Turning it off can lock people out, so it asks first.
+      if (!on && !await settingsConfirm({title: `Stop sign-in for everyone at ${home}?`, ok: 'Turn off',
+        text: `Only people added here keep signing in. Anyone else at ${home} can no longer sign in.`})) { domainSwitch.checked = true; return; }
+      void change(async () => {
+        await allow(view.allowed, on ? [...view.allowed_domains, home] : view.allowed_domains.filter(d => d !== home));
+        PEOPLE_ADDED = on ? home : '';
+      }, S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', domainSwitch);
+    };
+    el.querySelectorAll('[data-allow-remove]').forEach(button => button.onclick = async () => {
+      const x = button.dataset.allowRemove, domain = !x.includes('@');
+      if (!await settingsConfirm({title: `Remove ${x}?`, ok: 'Remove',
+        text: domain ? `People at ${x} who are not added here can no longer sign in.` : `${x} can no longer sign in.`})) return;
+      void change(() => allow(view.allowed.filter(e => e !== x), view.allowed_domains.filter(d => d !== x)), `Removed ${x}`, button.closest('.people-extras'));
     });
-    el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved'));
+    el.querySelectorAll('[data-rule]').forEach(box => box.onchange = () => change(() => put('/v2/access/rules', {[box.dataset.rule]: box.checked}), 'Saved', box));
     el.querySelectorAll('[data-rule-days]').forEach(box => box.onchange = () => {
       const days = Math.round(Number(box.value));
-      if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved');
+      if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
+      else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
     });
-    $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Bot limit saved');
+    $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
     el.querySelectorAll('.people-row').forEach(row => {
       const p = person(row.dataset.person), path = `/v2/access/humans/${encodeURIComponent(p.id)}`;
       const role = row.querySelector('[data-person-role]');
-      if (role) role.onchange = () => change(() => post(path, {role: role.value}), `${p.name} is now ${role.value === 'admin' ? 'an admin' : 'a member'}`);
+      if (role) role.onchange = () => change(() => post(path, {role: role.value}), 'Saved', role);
       const signIn = row.querySelector('[data-person-signin]');
-      if (signIn) signIn.onchange = () => change(() => post(path, {sign_in: signIn.checked}), S.config?.local ? `Sign-in access saved for ${p.name}. Only the owner can sign in locally.` : `${p.name} ${signIn.checked ? 'can' : 'can no longer'} sign in`);
+      if (signIn) signIn.onchange = async () => {
+        if (!signIn.checked && !await settingsConfirm({title: `Turn off sign-in for ${p.name}?`, ok: 'Turn off',
+          text: `${p.name} can no longer sign in until it is turned back on. Their tasks, bots and history stay.`})) { signIn.checked = true; return; }
+        void change(() => post(path, {sign_in: signIn.checked}), S.config?.local ? 'Saved. Only the owner can sign in locally.' : 'Saved', signIn);
+      };
       const more = row.querySelector('.people-more');
       if (more) more.onclick = () => {
         const menu = more.nextElementSibling, open = menu.hidden;
@@ -193,17 +235,17 @@ async function renderSettingsPeople() {
       row.querySelectorAll('[data-person-act]').forEach(button => button.onclick = () => {
         const act = button.dataset.personAct;
         peopleCloseMenus();
-        if (act === 'restore') void change(() => post(path, {left: false}), `${p.name} restored`);
-        else if (act === 'create_bots') void change(() => post(path, {create_bots: !p.create_bots}), `${p.name} ${p.create_bots ? 'can no longer' : 'can'} add bots`);
-        else if (act === 'add_people') void change(() => post(path, {add_people: !p.add_people}), `${p.name} ${p.add_people ? 'can no longer' : 'can'} add humans`);
+        if (act === 'restore') void change(() => post(path, {left: false}), `${p.name} restored`, row);
+        else if (act === 'create_bots') void change(() => post(path, {create_bots: !p.create_bots}), 'Saved', row);
+        else if (act === 'add_people') void change(() => post(path, {add_people: !p.add_people}), 'Saved', row);
         else if (act === 'left') confirmDialog(`Mark ${p.name} as left?`, 'Ends their sign-in and API tokens. Their history stays.', 'Mark as left',
           async () => { await post(`/v2/humans/${encodeURIComponent(p.id)}`, {left: true}); await again(`${p.name} marked as left`); });
         // Only a left person with no history (backend/people_remove.py); anyone else stays as left.
         else if (act === 'remove') confirmDialog(`Remove ${p.name}?`, "This can't be undone.", 'Remove',
           async () => { await writeRequest('DELETE', `/v2/humans/${encodeURIComponent(p.id)}`); await again(`${p.name} removed`); });
         else if (act === 'owner') peopleOwnerDialog(p, view);
-        else if (act === 'invite') void change(() => post(`${path}/invite`, {}), `Invite sent to ${p.email}`);
-        else if (act === 'password') void post(`${path}/password`, {}).then(peoplePasswordDialog, error => toast(error.message, true));
+        else if (act === 'invite') void change(() => post(`${path}/invite`, {}), `Invite sent to ${p.email}`, row);
+        else if (act === 'password') void post(`${path}/password`, {}).then(peoplePasswordDialog, error => settingsFieldError(row, error.message));
         else if (act === 'email') peopleOwnerEmailDialog(p, view);
       });
     });

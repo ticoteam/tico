@@ -1587,7 +1587,7 @@ mod tests {
         assert_eq!((claude.runtime.as_str(), caps.api_keys.as_str(), caps.profile_home.as_str()), ("claude", "computer", "HOME"));
         assert_eq!((caps.sign_in_status.check.as_str(), caps.sign_in_status.field.as_str(), caps.sign_in_status.timeout_s), ("json", "loggedIn", 30));
         assert!(caps.compaction && caps.repo_commands && caps.resume_after_interrupt && !caps.persistent_session);
-        assert!(!all["codex"].capabilities.resume_after_interrupt && all["codex"].capabilities.goal_runs_across_turns);
+        assert!(all["codex"].capabilities.resume_after_interrupt && all["codex"].capabilities.goal_runs_across_turns);
         // Steering is declared, never inferred from a name: only Claude Code and Codex take input mid-turn.
         let steers: Vec<&str> = all.iter().filter(|(_, m)| m.capabilities.steer).map(|(id, _)| id.as_str()).collect();
         assert_eq!(steers, vec!["claude-code", "codex"]);

@@ -65,10 +65,10 @@ def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path)
 
 def test_a_hidden_backlog_never_says_more_is_waiting():
     """The inbox's `more_*` flags count only items the caller could read: a tail it may not see stays unmentioned."""
-    from backend.app import INBOX_LIMIT, _newest_visible
+    from backend.app import INBOX_LIMIT, _first_visible
     readable = [{"id": i, "ok": True} for i in range(INBOX_LIMIT)]
     hidden = [{"id": -1, "ok": False}]
-    kept, more = _newest_visible(hidden + readable, lambda m: m["ok"])
+    kept, more = _first_visible(readable + hidden, lambda m: m["ok"])
     assert kept == readable and more is False
-    kept, more = _newest_visible([{"id": -2, "ok": True}] + hidden + readable, lambda m: m["ok"])
+    kept, more = _first_visible(readable + hidden + [{"id": -2, "ok": True}], lambda m: m["ok"])
     assert kept == readable and more is True

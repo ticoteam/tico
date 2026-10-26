@@ -41,8 +41,9 @@ profile_home = "CODEX_HOME"
 weekly_usage = "refresh"
 account = "app-server"
 mcp_transports = ["http"]
-# The app-server aborts the next turn on an interrupted thread at once, so a retry starts a fresh one.
-resume_after_interrupt = false
+# Checked against codex 0.163: a thread whose turn was interrupted takes the next turn, in the same app-server and
+# after a restart (thread/resume).
+resume_after_interrupt = true
 # A message for the running turn goes in with turn/steer.
 steer = true
 goal_runs_across_turns = true

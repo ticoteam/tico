@@ -1,6 +1,6 @@
 # Using Tico
 
-Short answers to common questions. Sign in at your team's Tico address with the email on its Humans roster. Ask your owner for the address.
+Short answers to common questions. Sign in at your team's Tico address with the email on its People roster. Ask your owner for the address.
 How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in the [Glossary](glossary.md); [Navigation](navigation.md) lists the current controls.
 
 ![Tasks in the demo team](images/tasks-desktop-light.png)
@@ -21,12 +21,11 @@ phone). All four are managed in **Settings > Bots**; they stay out of the team c
 Its name, the mark for the harness it runs on, up to three tool icons and its goal across the top, the chat below,
 and a rail down the right. By default the rail shows **Tasks**, **Updates**, **Files** and **Routines**, in that order.
 **Tasks** has four default tabs, each with a count:
-**Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (every open task the bot holds, of every type, newest first),
-**Blocked** (each task says who or what it waits on) and **Assigned to Others** (open tasks this bot asked someone else to do). An empty tab says so.
+**Needs You** (what the bot needs from you; it opens first while it has rows), **Doing** (tasks assigned to this bot with Status Open or Doing, newest first),
+**Blocked** (tasks assigned to this bot with Status Waiting, waiting on someone else, including an unnamed wait) and **Assigned to Others** (open tasks this bot asked someone else to do). An empty tab says so.
 A bot with just one tab shows its list without a tab bar. **Tasks** grows to 500 pixels at most and scrolls inside after that.
 
-The board icon beside **Tasks** opens the tasks board with this bot selected as owner. You can change the owner filter there.
-If you can only send this bot requests, you see neither the board icon nor the edit icon.
+The pencil opens sidebar edit mode for someone who may edit. If you can only send this bot requests, there is no edit icon.
 
 **Updates** shows the latest update (all of them behind the small icon), and a **Routines** row opens the routine to read or edit;
 a section with nothing in it is left out. **Info** holds its compact summary, Tools, goals and routines. **Instructions** shows its instructions and working notes, **History** holds updates, status changes and runs, and **Settings** edits its configuration directly, without an edit popup. On a phone, Chat and
@@ -37,9 +36,12 @@ If you manage the bot, you see a pencil at the top right of its rail. The bot ca
 
 1. Choose the pencil. The rail switches to edit mode with **Cancel** and **Done** at the top.
 2. Drag a section by its handle to move it, use its eye to hide or show it, and drag its bottom edge to set how tall it may grow (**Reset** goes back).
-3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and, for your own tabs, its conditions.
-   A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Waiting on**,
+3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and its conditions, including **Needs You**, **Doing** and **Blocked**. **Reset to default** restores each of those tabs’ conditions.
+   A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Needs**, **Waiting on**,
    **Created**, **Updated** or **Done within** a number of days, **Due** (overdue or within days) and **Label**.
+   **Needs You** defaults to **Needs: You** (assigned to you, or waiting on you) and also shows this bot’s approvals and questions for you.
+   The org chart number always counts everything the bot needs from you; changing a tab’s conditions does not change that number.
+   **Blocked** includes **Waiting on Someone else**, so its default does not repeat tasks waiting on you.
    **Me** and **Others** mean whoever is looking, and a tab only lists tasks that person may read. **Delete** removes the tab.
 4. Choose **Done** to save it all at once, or **Cancel** to drop the changes.
 
@@ -248,6 +250,13 @@ ordinary task states and needs a completion result. Close it with
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
 check can wake an idle bot after 30 minutes when no other work or Routine will move it.
 
+When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
+That reopening supersedes an earlier next-run choice. A later deferral, a stored resume condition,
+snooze or prerequisite still holds it. A run already carrying it finishes first; if a run picked it up
+and worked it after the reopening, the queued notice does not start duplicate work. Health shows
+`task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
+still apply, and only the requester, a person or BotOps may choose **Run now** early.
+
 The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
 
 - **Eligible**: the bot's next run carries it.
@@ -297,8 +306,8 @@ Ana can review all mailboxes; other humans see only mailboxes granted by the ros
 channel history is owner-only in this view.
 
 **How do I add a human or a bot?**
-A human: **Settings → Humans → Add manually** (an owner or admin), or sync them from the team's
-directory there; behind Cloudflare Access, also allow the address in its policy ([Humans](people.md)). A
+A human: **Settings → People → Add manually** (an owner or admin), or sync them from the team's
+directory there; behind Cloudflare Access, also allow the address in its policy ([People](people.md)). A
 bot: **Settings > Bots > Add from template**, or ask BotOps to build it. Open the bot and press **Set up** to finish its
 first conversation. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
 

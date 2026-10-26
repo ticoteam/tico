@@ -536,7 +536,7 @@ def tag_show(api, args):
 def tag_create(api, args):
     body = {k: args[k] for k in ("key", "label", "metadata", "markdown", "is_template", "owner") if args.get(k) is not None}
     path = "tags/" + quote(args["template_id"], safe="") + "/instances" if args.get("template_id") else "tags"
-    return api.post(path, body, key=_key(args))
+    return _as_person(api).post(path, body, key=_key(args))
 
 
 @tool("hub_tag_update", "Edit a tag's metadata, checklist, label or owner. Send its current version; stale edits are refused.",
@@ -545,7 +545,7 @@ def tag_create(api, args):
        "owner": _s("New owner; empty to clear")}, required=("id", "version"), writes=True)
 def tag_update(api, args):
     body = {k: args[k] for k in ("version", "label", "metadata", "markdown", "owner") if args.get(k) is not None}
-    return api.post("tags/" + quote(args["id"], safe=""), body, key=_key(args))
+    return _as_person(api).post("tags/" + quote(args["id"], safe=""), body, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- tasks
@@ -945,21 +945,21 @@ def task_type_create(api, args):
         body["bots"] = args["bots"]
     if args.get("default_visibility"):
         body["default_visibility"] = args["default_visibility"]
-    return api.post("task-types", body, key=_key(args))
+    return _as_person(api).post("task-types", body, key=_key(args))
 
 
 @tool("hub_task_type_update", "Edit a task type (movers only). Steps replace the full list; keep retained ids. "
       "A step with tasks cannot be removed.", {"id": _s("Type id or name"), "name": _s("Type name"),
       "steps": TASK_STEPS, "bots": TYPE_BOTS, "numbered": NUMBERED, "steps_only": STEPS_ONLY, "default_visibility": _s("New tasks only", enum=["public", "private"])}, required=("id",), writes=True)
 def task_type_update(api, args):
-    return api.post("task-types/" + args["id"], {k: args[k] for k in ("name", "steps", "bots", "numbered", "steps_only", "default_visibility") if k in args},
+    return _as_person(api).post("task-types/" + args["id"], {k: args[k] for k in ("name", "steps", "bots", "numbered", "steps_only", "default_visibility") if k in args},
                     key=_key(args))
 
 
 @tool("hub_task_type_delete", "Delete an unused task type (movers only). General stays built in.",
       {"id": _s("Type id or name")}, required=("id",), writes=True)
 def task_type_delete(api, args):
-    return api.post("task-types/" + args["id"] + "/delete", {}, key=_key(args))
+    return _as_person(api).post("task-types/" + args["id"] + "/delete", {}, key=_key(args))
 
 
 
@@ -2303,7 +2303,8 @@ def docs_links(api, args):
     return api.get("linked-docs")
 
 
-@tool("hub_task_close", "A human may close a task they can edit. A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
+@tool("hub_task_close", "A human may close a task they can edit (its requester or owner, a party to a task above it, "
+      "the person it waits on, or a person who moves tasks). A bot closes work it requested; a comment or work delegation does not grant acceptance authority. "
       "BotOps uses the requester's rights. Close accepts or cancels a task; report completed work with hub_task_update status done.",
       {"id": TASK_ID, "note": _s("Why it is closed"),
        "quiet": {"type": "boolean", "description": "Close without waking a bot"}, "on_behalf_of": ASKED},
@@ -2545,7 +2546,7 @@ def _delivery_path(delivery):
       {"name": _s("What it is for, e.g. Orders"), "id": _s("Optional id: lowercase letters, digits and dashes")},
       required=("name",), writes=True)
 def trigger_create(api, args):
-    return api.post("triggers", {"name": args["name"], "id": args.get("id") or ""}, key=_key(args))["trigger"]
+    return _as_person(api).post("triggers", {"name": args["name"], "id": args.get("id") or ""}, key=_key(args))["trigger"]
 
 
 @tool("hub_trigger_show", "One trigger: address without the secret, settings, 24-hour counts and its routines.",
@@ -2558,7 +2559,7 @@ def trigger_show(api, args):
       "verified; needs a signing secret, see hub_trigger_sign); `type_from` (a header name or a JSON pointer such as "
       "/type; empty uses the preset's default); `hourly` (1-600); `keep_days` (1-30: how long calls can be read and "
       "run again); `unheard` (log, or note: tell the maker, at most hourly, when no routine or rule acted). The owner, "
-      "whoever made it and BotOps.",
+      "whoever made it, and BotOps for one of them.",
       {**TRIGGER, "name": _s("New name"), "preset": {"type": "string", "enum": list(("none", "hmac", "github", "standard", "stripe", "slack"))},
        "type_from": _s("A header name or a JSON pointer starting with /; empty for the preset's default"),
        "hourly": {"type": "integer", "minimum": 1, "maximum": 600},
@@ -2567,31 +2568,33 @@ def trigger_show(api, args):
       required=("id",), writes=True)
 def trigger_update(api, args):
     body = {k: args[k] for k in ("name", "preset", "type_from", "hourly", "keep_days", "unheard") if args.get(k) is not None}
-    return api.post(f"triggers/{args['id']}", body, key=_key(args))["trigger"]
+    return _as_person(api).post(f"triggers/{args['id']}", body, key=_key(args))["trigger"]
 
 
 @tool("hub_trigger_rotate", "Give a trigger a new secret; the old address stops working at once. The new `url` is "
       "shown only now.", TRIGGER, required=("id",), writes=True)
 def trigger_rotate(api, args):
-    return api.post(f"triggers/{args['id']}/rotate", {}, key=_key(args))["trigger"]
+    return _as_person(api).post(f"triggers/{args['id']}/rotate", {}, key=_key(args))["trigger"]
 
 
 @tool("hub_trigger_sign", "Verify every call to a trigger. `preset`: hmac (GitHub's X-Hub-Signature-256 or X-Signature), "
       "github, standard (Standard Webhooks; the secret is whsec_ and base64) or stripe; the current preset, else hmac, "
-      "when empty. `secret` is the one the sender gave you; empty makes a new one, returned once. `off` stops checking.",
+      "when empty. `secret` is the one the sender gave you; empty makes a new one, returned once. `off` stops checking. "
+      "BotOps asked by a person can't pass a secret on: they type it in Settings > Webhooks > Incoming.",
       {**TRIGGER, "preset": {"type": "string", "enum": ["hmac", "github", "standard", "stripe", "slack"]},
        "secret": _s("The sender's signing secret, 16+ characters; empty makes one"),
        "off": {"type": "boolean", "description": "true stops checking signatures"}},
       required=("id",), writes=True)
 def trigger_sign(api, args):
-    body = {"secret": args.get("secret") or "", "preset": args.get("preset") or "", "off": bool(args.get("off"))}
-    return api.post(f"triggers/{args['id']}/signing", body, key=_key(args))["trigger"]
+    # Only the keys given: BotOps acting for a person is refused any body with a secret key in it, even an empty one.
+    body = {k: args[k] for k in ("secret", "preset") if args.get(k)} | ({"off": True} if args.get("off") else {})
+    return _as_person(api).post(f"triggers/{args['id']}/signing", body, key=_key(args))["trigger"]
 
 
 @tool("hub_trigger_delete", "Delete a trigger and the calls kept for it. Routines on it stay, silent, until a trigger "
       "with the same id is made again.", TRIGGER, required=("id",), writes=True)
 def trigger_delete(api, args):
-    return api.post(f"triggers/{args['id']}/delete", {}, key=_key(args))["trigger"]
+    return _as_person(api).post(f"triggers/{args['id']}/delete", {}, key=_key(args))["trigger"]
 
 
 @tool("hub_trigger_deliveries", "The latest 50 calls to a trigger, newest first: `delivery` id, type, outcome "
@@ -2618,7 +2621,7 @@ def trigger_delivery(api, args):
       {**TRIGGER, "since": {"type": "integer", "minimum": 1, "maximum": 720, "description": "Hours back (default 24)"}},
       required=("id",), writes=True)
 def trigger_recover(api, args):
-    return api.post(f"triggers/{args['id']}/recover", {"since_hours": args.get("since") or 24}, key=_key(args))["recover"]
+    return _as_person(api).post(f"triggers/{args['id']}/recover", {"since_hours": args.get("since") or 24}, key=_key(args))["recover"]
 
 
 @tool("hub_trigger_replay", "Run one stored call again: its routines and rules start as a new occurrence "
@@ -2626,7 +2629,7 @@ def trigger_recover(api, args):
       {**TRIGGER, "delivery": _s("The delivery id from hub_trigger_deliveries")},
       required=("id", "delivery"), writes=True)
 def trigger_replay(api, args):
-    return api.post(f"triggers/{args['id']}/deliveries/{_delivery_path(args['delivery'])}/replay", {}, key=_key(args))["replay"]
+    return _as_person(api).post(f"triggers/{args['id']}/deliveries/{_delivery_path(args['delivery'])}/replay", {}, key=_key(args))["replay"]
 TRIGGER = _s("The trigger id (`id` in hub_trigger_list)")
 
 
@@ -2636,27 +2639,27 @@ TRIGGER = _s("The trigger id (`id` in hub_trigger_list)")
       "own address keeps working. The server still checks signatures itself.",
       {"trigger": TRIGGER}, required=("trigger",), writes=True)
 def trigger_relay_create(api, args):
-    return api.post(f"triggers/{args['trigger']}/relay", {}, key=_key(args))["relay"]
+    return _as_person(api).post(f"triggers/{args['trigger']}/relay", {}, key=_key(args))["relay"]
 
 
 @tool("hub_trigger_relay_rotate", "Replace the secret of a trigger's Tico Gateway address; the old address stops at once. "
       "The new `address` is shown only now.", {"trigger": TRIGGER}, required=("trigger",), writes=True)
 def trigger_relay_rotate(api, args):
-    return api.post(f"triggers/{args['trigger']}/relay/rotate", {}, key=_key(args))["relay"]
+    return _as_person(api).post(f"triggers/{args['trigger']}/relay/rotate", {}, key=_key(args))["relay"]
 
 
 @tool("hub_trigger_relay_delete", "Remove a trigger's Tico Gateway address. The trigger and its own address stay. "
       "Deleting the trigger removes this address too.", {"trigger": TRIGGER}, required=("trigger",), writes=True)
 def trigger_relay_delete(api, args):
-    return api.post(f"triggers/{args['trigger']}/relay/delete", {}, key=_key(args))["relay"]
+    return _as_person(api).post(f"triggers/{args['trigger']}/relay/delete", {}, key=_key(args))["relay"]
 
 
 @tool("hub_relay_set", "Say whether a delivery to a trigger's Tico Gateway address starts a sleeping server (Sleep when idle). "
-      "The switch lives at the Gateway; a trigger's `relay.wake` shows it. People who manage the trigger, and BotOps.",
+      "The switch lives at the Gateway; a trigger's `relay.wake` shows it. People who manage the trigger, and BotOps for one of them.",
       {"trigger": TRIGGER, "wake": {"type": "boolean", "description": "Start the server on a delivery"}},
       required=("trigger", "wake"), writes=True)
 def relay_set(api, args):
-    return api.post(f"triggers/{args['trigger']}/relay/wake", {"wake": bool(args["wake"])}, key=_key(args))["relay"]
+    return _as_person(api).post(f"triggers/{args['trigger']}/relay/wake", {"wake": bool(args["wake"])}, key=_key(args))["relay"]
 
 
 @tool("hub_relay_status", "Webhooks through Tico Gateway: whether the Gateway key is connected (`key`: connected, none or "
@@ -2726,7 +2729,7 @@ def notice_list(api, args):
        "writer": _s("The Technical Writer's bot slug, or empty to find it by starter template")}, writes=True)
 def release_schedule(api, args):
     changes = {k: args[k] for k in ("on", "times", "bot", "writer") if args.get(k) is not None}
-    return api.patch("release-schedule", changes, key=_key(args)) if changes else api.get("release-schedule")
+    return _as_person(api).patch("release-schedule", changes, key=_key(args)) if changes else _as_person(api).get("release-schedule")
 
 
 @tool("hub_release_now", "Ask the Release Manager to cut a release of what is at Pending Release now, without waiting "
@@ -2735,14 +2738,16 @@ def release_schedule(api, args):
       "when nothing is pending or nobody was asked. A person's note asks even with nothing at Pending Release.",
       {"note": _s("Why now; goes in the Release Manager's task")}, writes=True)
 def release_now(api, args):
-    return api.post("release/now", {"note": args["note"]} if args.get("note") else {}, key=_key(args))
+    return _as_person(api).post("release/now", {"note": args["note"]} if args.get("note") else {}, key=_key(args))
 
 
 @tool("hub_routine_delete", "Delete a routine. Its history stays; an occurrence nobody has "
-      "claimed yet closes.", {"id": _s("Routine id")}, required=("id",), writes=True)
+      "claimed yet closes. BotOps acting for a person gets a Confirm card in their chat (`needs_confirm`) instead.",
+      {"id": _s("Routine id")}, required=("id",), writes=True)
 def routine_delete(api, args):
     bot = str(args["id"]).split(":", 1)[0]
-    return _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))["routine"]
+    answer = _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))
+    return answer if answer.get("needs_confirm") else answer["routine"]
 
 
 @tool("hub_routine_run", "Run a scheduled routine now, with your own rights or BotOps's requester rights.",
@@ -3074,6 +3079,72 @@ def api_call(api, args):
     return _as_person(api, args.get("on_behalf_of")).call(str(args["method"]).upper(), _api_path(args["path"]), args.get("body"), _key(args), args.get("query"))
 
 
+SETTING_TARGET = {"bot": _s("The bot's slug, for a setting set per bot"),
+                  "computer": _s("The computer's id or label, for a setting set per computer"),
+                  "person": _s("The person's id, for a setting set per person"),
+                  "id": _s("The id of the one thing it sets (a trigger, webhook, rule, routine, repository...)")}
+
+
+def _setting_query(args):
+    return {k: args[k] for k in ("bot", "computer", "person", "id") if args.get(k)}
+
+
+def _pointer(data, pointer):
+    for part in [p for p in str(pointer or "").split(".") if p]:
+        if isinstance(data, list) and part.isdigit() and int(part) < len(data):
+            data = data[int(part)]
+        elif isinstance(data, dict):
+            data = data.get(part)
+        else:
+            return None
+    return data
+
+
+@tool("hub_settings_find", "Find a control in Settings by its words: each one's `key`, plain `name`, `where` it sits in "
+      "Settings, who may change it, its `class` (direct: runs at once as the person; confirm: BotOps acting for a "
+      "person gets a Confirm card for them; person: only the person, in Settings; a `class_when` names the body that makes a direct one confirm or "
+      "person), the route and body it writes, and the `card` link. Then `hub_settings_show` or `hub_settings_set` with its key.",
+      {"words": _s("What the setting is about, e.g. sql, budget, release time")}, required=("words",))
+def settings_find(api, args):
+    return _as_person(api).get("settings/catalog", q=args["words"])["settings"]
+
+
+@tool("hub_settings_show", "One setting from `hub_settings_find`: its current `value` (read with your rights, or the "
+      "requester's for BotOps), who may change it, whether you may (`you_may`), its class and the card link.",
+      {"key": _s("The setting's key, e.g. team.rules.admin_sql"), **SETTING_TARGET}, required=("key",))
+def settings_show(api, args):
+    who = _as_person(api)
+    shown = who.get("settings/catalog/" + quote(args["key"], safe=""), **_setting_query(args))
+    read = shown.pop("read", None)
+    if read:
+        try:
+            shown["value"] = _pointer(who.get(read["path"]), read["pointer"])
+        except APIError as exc:
+            shown["value_error"] = str(exc)
+    return shown
+
+
+@tool("hub_settings_set", "Change one setting from `hub_settings_find`, as the person who asked (BotOps) or yourself. "
+      "direct: it changes and the answer has the new `value`; confirm, from BotOps: a Confirm card in the person's chat "
+      "with BotOps (`needs_confirm`), nothing changed yet; person: refused with the one-line reason and the card's "
+      "`link`. A refusal names who may change it.",
+      {"key": _s("The setting's key"), "value": {"description": "The new value: on/off, a number, text, a list or JSON, "
+       "as `hub_settings_show` says"}, **SETTING_TARGET}, required=("key", "value"), writes=True)
+def settings_set(api, args):
+    who = _as_person(api)
+    key = quote(args["key"], safe="")
+    planned = who.post("settings/catalog/" + key + "/plan", {"value": args["value"], **_setting_query(args)},
+                       key=_key(args, ":plan"))
+    if "run" not in planned:
+        return planned                      # the Confirm card
+    run = planned["run"]
+    who.call(run["method"], run["path"], run["body"], _key(args))
+    # The value read back after the change, where Settings shows one; else the value sent.
+    shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
+    return {"key": args["key"], "name": planned["setting"]["name"], "where": planned["setting"]["where"],
+            "value": shown["value"] if "value" in shown else planned["value"]}
+
+
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
       "takes it (the only computer, else the least busy that accepts it). Safe to repeat. A computer that does not take "
       "members' bots is a Confirm card for an admin.",
@@ -3290,7 +3361,9 @@ def webhook_options(fields):
             name, colon, value = text.partition(":")
             if not colon and not secret:
                 raise ValueError(f"--header is Name: value, not {text!r}")
-            headers.append({"name": name.strip(), "secret": secret, **({"value": value.strip()} if colon else {})})
+            # A plain header sends no `secret` key: BotOps' requests refuse any key named like a secret.
+            headers.append({"name": name.strip(), **({"secret": True} if secret else {}),
+                            **({"value": value.strip()} if colon else {})})
     if headers:
         fields["headers"] = headers
     if fields.pop("no_headers", False):
@@ -3562,7 +3635,7 @@ def bot_release(api, args):
 def team_budget(api, args):
     body = {field: int(args[name]) for field, name in (("turns_per_hour", "hour"), ("turns_per_day", "day"))
             if name in args and args[name] != "default"}
-    return api.post("settings/turn-budgets", body, key=_key(args)) if body else api.get("settings/turn-budgets")
+    return _as_person(api).post("settings/turn-budgets", body, key=_key(args)) if body else _as_person(api).get("settings/turn-budgets")
 
 
 @tool("hub_bot_model", "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
@@ -4069,7 +4142,7 @@ def health_monitor_report(api, args):
 @tool("hub_task_manager", "The Task Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
       "(\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check and open check task.", {})
 def task_manager_status(api, args):
-    return api.get("task-manager")
+    return _as_person(api).get("task-manager")
 
 
 @tool("hub_task_manager_set", "The Task Manager: switch its hourly report on or off, pick the schedule (business = hourly on "
@@ -4080,7 +4153,7 @@ def task_manager_status(api, args):
        "at": _s("HH:MM for the daily preset"),
        "bot": {"type": "string", "enum": ["on", "off"], "description": "Turn the Task Manager bot itself on or off"}}, writes=True)
 def task_manager_set(api, args):
-    out = {}
+    api, out = _as_person(api), {}
     if args.get("bot"):
         out["bot"] = api.post("task-manager/turn-" + args["bot"], {}, key=_key(args, ":bot"))
     body = {k: args[k] for k in ("on", "preset", "at") if args.get(k) is not None}
@@ -4094,17 +4167,17 @@ def task_manager_set(api, args):
 @tool("hub_task_manager_run", "The Task Manager: run the department check once now (the owner or an admin). It opens a check task "
       "per department only when there is something to look at; 409 while the report is off.", {}, writes=True)
 def task_manager_run(api, args):
-    return api.call("POST", "system-routines/task_manager_report/run", {}, _key(args))
+    return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
 @tool("hub_stall_triage", "Quiet task triage: before a stall check stays silent on a quiet task nothing has changed on, Tico "
       "Decide reads its last six messages and sets the wait they name, closes the task if it is finished, or lets one wake "
-      "through if it is stuck. Off by default; the owner or an admin switches it. Omit `on` to read the switch.",
+      "through if it is stuck. On by default; the owner or an admin switches it. Omit `on` to read the switch.",
       {"on": {"type": "boolean", "description": "true switches it on, false off; leave out to read"}}, writes=True)
 def stall_triage(api, args):
     if args.get("on") is None:
-        return {"job": next(job for job in api.get("system-routines")["jobs"] if job["key"] == "stall_triage")}
-    return api.call("PUT", "system-routines/stall_triage", {"on": bool(args["on"])}, _key(args))
+        return {"job": next(job for job in _as_person(api).get("system-routines")["jobs"] if job["key"] == "stall_triage")}
+    return _as_person(api).call("PUT", "system-routines/stall_triage", {"on": bool(args["on"])}, _key(args))
 
 
 # ----------------------------------------------------------------------------- approvals

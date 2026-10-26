@@ -166,9 +166,10 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
             .unwrap_or_default();
         lines.push(format!("Assigned task:\n{}", py_dumps(&Value::Object(task))));
         let task_model = crate::execute::session_key(attempt).starts_with("task:") && truthy(&attempt["config"]["task_model"]);
-        if (!resumed || task_model) && truthy(&full["checkpoint"]) {
+        if (!resumed || task_model || truthy(&attempt["_side_ran"])) && truthy(&full["checkpoint"]) {
             // A fresh thread has no past turns. A resumed task-model thread can also miss work completed by a
-            // fallback on another runtime; supply the current checkpoint without discarding its provider session.
+            // fallback on another runtime, and so can a thread a side session ran after; supply the current
+            // checkpoint without discarding its provider session.
             let at = if full.get("checkpoint_at").is_some() { py_str(&full["checkpoint_at"]) } else { "None".into() };
             lines.push(format!("Where this task stood after its last turn ({at}):\n{}", s(&full["checkpoint"])));
         }
@@ -195,10 +196,11 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
             None => all.clone(), // a cursor older than the page means all of it is new
         },
     };
-    // A fresh thread that replaces one grown too large (crate::rotate) is given the room since the old one's last
-    // turn, its own replies included, and has seen nothing older.
-    let rotated = truthy(&attempt["_rotated"]);
-    let pointer = if (!history.is_empty() && !rotated) || all.is_empty() {
+    // A new thread that replaces one that could not continue (crate::continuity) is given the room since the old one's
+    // last turn, its own replies included, and has seen nothing older. A resumed thread that a side session ran after
+    // is given the replies that session made.
+    let own_replies = truthy(&attempt["_replaced"]) || truthy(&attempt["_side_ran"]);
+    let pointer = if (!history.is_empty() && !own_replies) || all.is_empty() {
         String::new()
     } else {
         format!(" earlier messages are in {app}; `hub conversation show {conv_id}` reads them.")
@@ -209,7 +211,7 @@ pub fn replayed(attempt: &Value, names: &Names, after: Option<&str>, resumed: bo
     }
     let own = format!("bot:{bot}");
     for msg in &history {
-        if msg["id"] == message["id"] || (!rotated && s(&msg["from_actor"]) == own) {
+        if msg["id"] == message["id"] || (!own_replies && s(&msg["from_actor"]) == own) {
             continue;
         }
         lines.push(format!("{} [{}]: {}", speaker(msg), s(&msg["id"]), s(&msg["body"])));

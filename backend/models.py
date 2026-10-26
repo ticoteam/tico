@@ -251,7 +251,7 @@ class TaskUpdate(Contract):
 
 
 class TaskStepInput(Contract):
-    public_name: str | None = Field(default=None, min_length=1, max_length=200)
+    public_name: str | None = Field(default=None, max_length=200)      # "" keeps the step off public pages
     id: ID | None = None
     name: ID
     position: int | None = None
@@ -478,6 +478,12 @@ class GoalStatus(Contract):
     note: str = Field(default="", max_length=2000)
 
 
+class GoalReopen(Contract):
+    status: Literal["red", "yellow", "green", "auto"] | None = None
+    note: str = Field(default="", max_length=300)
+    undo: bool = False
+
+
 class GoalUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     body: str | None = Field(default=None, max_length=100_000)
@@ -576,6 +582,7 @@ class GoalProposalDecision(Contract):
     option: int | None = Field(default=None, ge=0, le=9)     # the option a recovery is confirmed with (its pick if none)
     # A strategy realignment, per goal on the card: keep (the default), retire, or the id of the bet it moves to.
     moves: dict[str, str] | None = Field(default=None, max_length=200)
+    target: KpiTarget | None = None      # an Add a KPI suggestion confirmed with the person's own target on the link
 
 
 # The company at the top of Goals (backend/company.py): only the fields sent change.
@@ -1704,9 +1711,18 @@ class BotKeepTasksGoing(Contract):
     expected_revision: int
 
 
+class BotTaskChoice(Contract):
+    """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
+    only the task effort or only the task context length (backend/task_models.py)."""
+    harness: ID | None = None
+    model: ID | None = None
+    effort: ID | None = None
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+
+
 class BotTaskModel(Contract):
-    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
-                                                 "null is the same as the bot")
+    task_model: BotTaskChoice | None = Field(None, description="Harness, model, effort and context length for the "
+                                             "bot's tasks; a missing model is the bot's own, and null clears all of it")
     expected_revision: int = Field(ge=1)
 
 
@@ -1723,14 +1739,15 @@ class BotWakePreset(Contract):
 class BotTaskCondition(Contract):
     """One row of a filter tab (backend/bot_task_tabs.py FIELDS): a task must match every row. A list value is "any
     of"; days are whole numbers. bot_task_tabs.condition checks each value against the field."""
-    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "created_within",
+    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "needs", "created_within",
                    "updated_within", "done_within", "due", "label"]
     value: int | str | list[str]
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): a built-in view, or a filter of rows that a task must
-    all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's filter, still accepted and stored as rows."""
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
+    filter, still accepted and stored as rows."""
     name: str = Field(min_length=1, max_length=40)
     builtin: Literal["needs", "active", "blocked", "done"] | None = None
     show_count: bool = True
@@ -2152,6 +2169,15 @@ class RunRotation(Contract):
     limit: int = Field(ge=0)   # the limit it reached, in the unit of `reason`
 
 
+class RunSession(Contract):
+    """Whether the run continued its provider session or started a new one, and why (runner-rs/src/sessions.rs).
+    `why` is one of backend/run_triggers.py SESSION_WHY for a runner of this release; a newer runner may send another,
+    short one, which is kept as it is."""
+    kind: Literal["resumed", "new"]
+    why: str | None = Field(default=None, max_length=60)
+    detail: str | None = Field(default=None, max_length=500)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2180,7 +2206,10 @@ class Completion(Contract):
     # other way. Counted in its `writes` (backend/run_triggers.py).
     pushes: list[RunPush] = Field(default_factory=list, max_length=50)
     # The run started a fresh provider session because the bot's last one had grown past its limit (token saving).
+    # Older runners only: sessions are not rotated for size any more, and a current runner sends `session` instead.
     rotated: RunRotation | None = None
+    # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
+    session: RunSession | None = None
 
 
 class Retry(Contract):
@@ -2268,6 +2297,16 @@ class ReleaseScheduleUpdate(Contract):
     times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
     bot: str | None = Field(default=None, max_length=100)
     writer: str | None = Field(default=None, max_length=100)
+
+
+class SettingsPlan(Contract):
+    """Set one settings catalogue entry (backend/settings_catalog.py): the value, and the bot, computer or person it is
+    for when the setting is set per one."""
+    value: Any = None
+    bot: str | None = Field(default=None, max_length=200)
+    computer: str | None = Field(default=None, max_length=200)
+    person: str | None = Field(default=None, max_length=200)
+    id: str | None = Field(default=None, max_length=200)
 
 
 class ReleaseNow(Contract):

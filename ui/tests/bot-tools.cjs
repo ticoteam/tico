@@ -76,7 +76,7 @@ async function open(browser, viewport, options = {}, data = {}) {
     if (p === '/api/v2/bots/cmo/limit/retry') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({cleared: 1}); }
     if (p === '/api/v2/bots/cmo/execution-review') return json({jobs: []});
     if (p === '/api/v2/bots/cmo/quarantine/clear') { cleared.push(p); status = {bot: 'cmo', state: 'idle', bot_state: 'active'}; return json({}); }
-    if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
+    if (p === '/api/v2/goals') return json({goals: data.goals || [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates/read') { read.push(...JSON.parse(route.request().postData()).ids); return json({}); }
     if (p === '/api/v2/updates') return json({updates: q.get('bot') ? updates : [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: q.get('owner') === 'cmo' ? TASKS : q.get('requester') === 'cmo' ? ASKED : []});
@@ -99,6 +99,42 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
+    // A long, real bot goal must not take the last fractional pixel from the name. Keep the production
+    // botGoalLoad/render path, the desktop Tasks rail, and the precise 1380px Chromium repro in both themes.
+    for (const scheme of ['light', 'dark']) {
+      const name = 'Head of Engineering';
+      const longGoal = 'Deliver dependable releases and keep every customer informed about important improvements across the whole team';
+      const {page, errors, context} = await open(browser, {width: 1380, height: 900}, {colorScheme: scheme}, {
+        bots: [{...bots[0], display_name: name}],
+        goals: [{id: 'g-engineering', title: longGoal, owner: 'bot:cmo', status: 'active', rank: 1}],
+      });
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-goal[data-status="set"] .bot-goal-title').waitFor();
+      await page.locator('#bot-tasks-h').waitFor();
+      assert.equal(await page.locator('#pane-tasks').isVisible(), true, scheme + ': Tasks rail is open');
+      assert.equal((await page.locator('#bot-goal .bot-goal-title').innerText()).trim(), longGoal, scheme + ': unchanged goal');
+      const header = await page.locator('.bot-ident h1').evaluate(el => {
+        // Measure the whole heading: the runtime mark sits inside it, and a fractional overflow ellipsizes the line.
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const text = el.firstChild.textContent;
+        return {text, contentWidth: range.getBoundingClientRect().width, boxWidth: el.getBoundingClientRect().width,
+                scroll: el.scrollWidth, client: el.clientWidth};
+      });
+      assert.equal(header.text, name, scheme + ': full bot name text');
+      assert(header.contentWidth <= header.boxWidth + 0.01 && header.scroll <= header.client,
+             `${scheme}: name and runtime mark fit without ellipsis (${header.contentWidth}px in ${header.boxWidth}px)`);
+      const layout = await page.evaluate(() => {
+        const top = document.querySelector('#bot-top').getBoundingClientRect();
+        const rail = document.querySelector('#pane-tasks').getBoundingClientRect();
+        return {topRight: top.right, railLeft: rail.left, railRight: rail.right, viewport: innerWidth};
+      });
+      assert(layout.topRight <= layout.railLeft + 1, scheme + ': toolbar stays left of the Tasks rail');
+      assert(layout.railRight <= layout.viewport + 1, scheme + ': Tasks rail stays within the viewport');
+      assert.deepEqual(errors, [], scheme + ': page errors');
+      await context.close();
+    }
+
     {
       const scheme = 'dark';
       const {page, errors, read, context} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme});

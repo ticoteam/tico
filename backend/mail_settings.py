@@ -31,7 +31,10 @@ MAX_TARGETS = 20
 
 
 def stored(c, bot):
-    row = c.execute("SELECT * FROM bot_mail_settings WHERE bot=?", (bot,)).fetchone()
+    return _stored(c.execute("SELECT * FROM bot_mail_settings WHERE bot=?", (bot,)).fetchone())
+
+
+def _stored(row):
     if not row:
         return None
     return {"outbound_send": bool(row["outbound_send"]), "forward_to": json.loads(row["forward_to_json"] or "[]"),
@@ -51,9 +54,11 @@ def requested(c, bot):
     """What bot.yaml asks, from the computer the bot is assigned to; None when it asks nothing or says nothing."""
     row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
-    if not row:
-        return None
-    report = ((readiness_document(row["readiness_json"]).get("bots") or {}).get(bot) or {}).get("mail_request")
+    return _requested(bot, readiness_document(row["readiness_json"])) if row else None
+
+
+def _requested(bot, document):
+    report = ((document.get("bots") or {}).get(bot) or {}).get("mail_request")
     if not isinstance(report, dict):
         return None
     return {"outbound_send": report.get("outbound_send") is True, "forward_to": _addresses(report.get("forward_to"))}
@@ -119,10 +124,16 @@ def update(c, auth, who, bot, body):
 
 def alerts(c):
     """[(bot, what it asks beyond the server value)] for every bot whose bot.yaml asks for more than a person approved."""
-    out = []
-    for row in c.execute("SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
+    out, saved, documents = [], {r["bot"]: r for r in c.execute("SELECT * FROM bot_mail_settings")}, {}
+    # One read of each table and one parse a computer, not three statements and a parse for every bot.
+    for row in c.execute("SELECT a.bot,r.id runner,r.readiness_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
-        extra = unapproved(stored(c, row["bot"]), requested(c, row["bot"]))
+        if row["runner"] is None:
+            continue
+        if row["runner"] not in documents:
+            documents[row["runner"]] = readiness_document(row["readiness_json"])
+        extra = unapproved(_stored(saved.get(row["bot"])), _requested(row["bot"], documents[row["runner"]]))
         if extra:
             out.append((row["bot"], extra))
     return out

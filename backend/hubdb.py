@@ -721,6 +721,18 @@ RUN_ROTATION_SCHEMA = """
 ALTER TABLE turns ADD COLUMN rotated TEXT;
 """
 
+# Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
+# `turns.session_why`; backend/run_triggers.py session), and the one-shot mark that makes a thread's next run compact
+# its session before it starts after a prompt too large to send (backend/run_backoff.py compact_first). Append to
+# preserve existing installations.
+RUN_SESSION_SCHEMA = """
+ALTER TABLE turns ADD COLUMN session_kind TEXT;
+ALTER TABLE turns ADD COLUMN session_why TEXT;
+CREATE TABLE IF NOT EXISTS compact_first(
+  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, marked TEXT NOT NULL, taken_by TEXT,
+  PRIMARY KEY(bot, conversation_id));
+"""
+
 # The CEO Bot's merged asks (backend/ceo_merge.py): each original item in a person's Needs you that one CEO Bot item
 # stands for, and what became of it; append to preserve existing installations.
 CEO_MERGES_SCHEMA = """
@@ -821,7 +833,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TRIGGERS_INCOMING_SCHEMA, HOOK_RELAY_SCHEMA,
               WEBHOOKS_SCHEMA, SLEEP_IDLE_SCHEMA,
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
-              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA]
+              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA]
 
 
 class Refused(Exception):
@@ -1180,6 +1192,8 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
     # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
     from .roadmap_flow import ensure as ensure_roadmap_types, migrate as migrate_roadmap_roles
+    from . import task_blocked
+    task_blocked.ensure(conn)
     migrate_roadmap_roles(conn)
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
@@ -1190,9 +1204,13 @@ def migrate(conn, adopt_legacy=False):
     roadmap_ready_step(conn)
     # Waiting and Won't do are no longer board steps (`_task_state`): move their tasks off, then delete them.
     retire_held_steps(conn)
+    task_blocked.ensure_steps(conn)
+    task_blocked.backfill(conn)
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
+    # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
+    conn.execute(UNREAD_INDEX)
     conn.execute("CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
     # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
@@ -1258,7 +1276,22 @@ def migrate(conn, adopt_legacy=False):
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
     message_links.ensure(conn)
+    clear_finished_close_times(conn)
     return len(MIGRATIONS)
+
+
+def clear_finished_close_times(conn):
+    """A done or declined task that kept the close time of an earlier close (a move out of closed left it before
+    task_update cleared it) never closes again: the close rule reads closed_at IS NULL. Clear it, on the record, once;
+    nothing writes such a row any more, so a later start finds none. Returns the ids it cleared."""
+    rows = _rows(conn.execute("SELECT id, closed_at, closed_by FROM tasks "
+                              "WHERE status IN ('done','declined') AND closed_at IS NOT NULL"))
+    for row in rows:
+        conn.execute("UPDATE tasks SET closed_at=NULL, closed_by=NULL WHERE id=?", (row["id"],))
+        for field in ("closed_at", "closed_by"):
+            if row[field] is not None:
+                _task_event(conn, row["id"], KEEPER, field, row[field], None, "It is no longer closed")
+    return [row["id"] for row in rows]
 
 
 def _row(row):
@@ -2336,7 +2369,7 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
 def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
-    not take (backend/profiles.py): none for a Responder, only review and QA subtasks for a Reviewer, only its
+    not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
     watcher's for a Monitor. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
@@ -2349,8 +2382,8 @@ def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
                "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
     if row:
         from . import profiles
-        found = profiles.refusal(row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
-                                 actor, title, parent, routine)
+        found = profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
+                                 actor, title, parent, routine, owner=target)
         if found:
             refuse(conn, actor, *found)
 
@@ -3276,7 +3309,11 @@ def _type_name(conn, actor, name, type_id=None):
 
 
 def _type_steps(conn, actor, type_id, steps):
-    existing = {row["id"]: row for row in (type_get(conn, type_id) or {}).get("steps", [])}
+    typ = type_get(conn, type_id) or {}
+    existing = {row["id"]: row for row in typ.get("steps", [])}
+    # A new step's public name is its name only on a type whose tasks are public by default; on a private one (the
+    # Product roadmap) an internal step name does not go public unless someone gives it a public name.
+    unnamed = "" if typ.get("default_visibility", "private") != "public" else None
     clean, names, ids = [], set(), set()
     for position, raw in enumerate(steps):
         name = str(raw.get("name") or "").strip()
@@ -3295,15 +3332,21 @@ def _type_steps(conn, actor, type_id, steps):
         clean.append({"id": ident, "type_id": type_id, "name": name,
                       "position": raw.get("position") if raw.get("position") is not None else position,
                       "status": status, "public_name": str(raw.get("public_name") if raw.get("public_name") is not None else
-                          existing.get(ident, {}).get("public_name", name))})
+                          existing.get(ident, {}).get("public_name", name if unnamed is None else unnamed)).strip()})
+    def in_use(ident):
+        return (_one(conn, "SELECT 1 FROM tasks WHERE step_id=? LIMIT 1", (ident,))
+                or _has_table(conn, "task_trash") and _one(conn,
+                    "SELECT 1 FROM task_trash WHERE purged_at IS NULL "
+                    "AND json_extract(rows_json,'$.rows.tasks[0].step_id')=? LIMIT 1", (ident,)))
+
     for row in clean:
         if (row["id"] in existing and row["status"] != existing[row["id"]]["status"]
-                and _one(conn, "SELECT 1 FROM tasks WHERE step_id=? LIMIT 1", (row["id"],))):
-            refuse(conn, actor, "in-use", "Move tasks off this step before changing its status, or create a new step")
+                and in_use(row["id"])):
+            refuse(conn, actor, "in-use", "Move tasks off this step before changing its status, including tasks in the trash, or create a new step")
     removed = set(existing) - ids
     for ident in removed:
-        if _one(conn, "SELECT id FROM tasks WHERE step_id=? LIMIT 1", (ident,)):
-            refuse(conn, actor, "in-use", "Move tasks off this step before deleting it")
+        if in_use(ident):
+            refuse(conn, actor, "in-use", "Move tasks off this step before deleting it, including tasks in the trash")
     for ident in removed:
         conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
     # Temporary names let retained steps swap names without dropping referenced rows.
@@ -3355,6 +3398,8 @@ def type_update(conn, actor, type_id, name=None, steps=None, mover=None, bots=No
         conn.execute("UPDATE task_types SET steps_only=? WHERE id=?", (int(bool(steps_only)), row["id"]))
     if steps is not None:
         _type_steps(conn, actor, row["id"], steps)
+        from .task_blocked import ensure_steps
+        ensure_steps(conn)
     if bots is not None:
         conn.execute("UPDATE task_types SET bots=? WHERE id=?", (_type_bots(conn, actor, bots), row["id"]))
     conn.execute("UPDATE task_types SET updated=? WHERE id=?", (now(), row["id"]))
@@ -3384,6 +3429,9 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
     if not typ:
         refuse(conn, actor, "not-found", "No such task type")
     effective = status if status is not None else row.get("status") or "open"
+    if (type is not None and typ['id'] != row.get('type_id') and row.get('blocked_kind') == 'gate'
+            and status is None and step is None):
+        effective = row.get('blocked_from_status') or effective
     current = next((s for s in typ["steps"] if s["id"] == row.get("step_id")), None)
     if step is not None:
         chosen = next((s for s in typ["steps"] if s["id"] == step), None)
@@ -3392,6 +3440,12 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
             refuse(conn, actor, "not-found", "No such step in this task type")
         if chosen:
             effective = chosen["status"]
+    elif effective == "waiting" and typ.get("role") == "engineering" and (blocked := next(
+            (s for s in typ["steps"] if s["name"] == "Blocked" and s["status"] == "waiting"), None)):
+        chosen = blocked
+    elif typ.get("role") == "engineering" and row.get("blocked_from_step") and effective in ("open", "doing") and (resume := next(
+            (s for s in typ["steps"] if s["id"] == row["blocked_from_step"]), None)):
+        chosen, effective = resume, resume["status"]
     elif current and current["status"] == effective:
         chosen = current
     elif typ.get("steps_only") and effective == "closed" and _closes_by_hand(actor):
@@ -3405,6 +3459,13 @@ def _task_state(conn, actor, row, status=None, type=None, step=None):
                       else next((s for s in typ["steps"] if s["status"] in ("open", "doing")), None))
         elif not chosen and effective == "declined":
             chosen = next((s for s in typ["steps"] if s["status"] == "closed"), None)
+    if row.get('blocked_since') and effective in ('open', 'doing', 'review', 'ready'):
+        from . import task_blocked, review_gate
+        held = task_blocked.wait(conn, row, include_manual=False)
+        if held or (step is None and effective in ('open', 'doing') and row.get('blocked_kind') == 'gate'
+                    and review_gate.problem(conn, row, row['owner'])):
+            effective = 'waiting'
+            chosen = next((s for s in typ['steps'] if s['name'] == 'Blocked' and s['status'] == 'waiting'), current)
     if effective not in TASK_STATUSES:
         refuse(conn, actor, "kind", f"A status is {'|'.join(TASK_STATUSES)}, not {effective}")
     # On a steps-only type a task is finished or brought back only by a step move: a bare close, decline,
@@ -3437,7 +3498,8 @@ def retire_held_steps(conn):
     way. Runs at every start; once nothing is left to move it only reads."""
     from .roadmap_flow import PRODUCT
     held = _rows(conn.execute("SELECT s.id,s.type_id,s.status FROM task_steps s JOIN task_types ty ON ty.id=s.type_id "
-                              "WHERE s.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?", (PRODUCT,)))
+                              "WHERE s.status IN ('waiting','declined') AND coalesce(ty.role,'')<>? "
+                              "AND NOT (ty.role='engineering' AND s.name='Blocked' AND s.status='waiting')", (PRODUCT,)))
     loose = _rows(conn.execute("SELECT t.id,t.type_id,t.status FROM tasks t JOIN task_types ty ON ty.id=t.type_id "
                                "WHERE t.step_id IS NULL AND t.status IN ('waiting','declined') AND coalesce(ty.role,'')<>?",
                                (PRODUCT,)))
@@ -3488,11 +3550,14 @@ def steps_only(conn, row):
     return [s["name"] for s in typ["steps"]] if typ.get("steps_only") else []
 
 
-def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
+def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=()):
     """Every task status write keeps its type and step consistent, including old runners. A task
     that enters a step joins its end; one that lands on a numbered type without a number gets one."""
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
     ts = now()
+    from .task_blocked import transition
+    transition(conn, row, effective, step_id, note, ts,
+               manual=step in (step_id, 'Blocked') and step is not None and effective == 'waiting' and actor == row.get('owner'))
     conn.execute("UPDATE tasks SET status=?,type_id=?,step_id=?,updated=? WHERE id=?",
                  (effective, type_id, step_id, ts, row["id"]))
     if row.get("type_id") != type_id:
@@ -3515,6 +3580,7 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
             for below in descendants(conn, row["id"]):
                 why = f"A task above it was {TASK_ENDED[effective]}"
                 drop_asked_waits(conn, below["id"], supersede_asks(conn, below["id"], why=why), why)
+            supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
     from .roadmap_flow import changed as roadmap_changed
@@ -3526,7 +3592,7 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
     if step_id and row.get("step_id") != step_id and row.get("status") is not None:
         # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
         from . import rules as wake_rule_engine
-        wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]))
+        wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
     return effective
 
 
@@ -3941,8 +4007,9 @@ def _unblock(conn, done_task, told=()):
                   "AND json_extract(refs_json,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
-            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
-                  refs={"blocker_done": done_task["id"]}, source=done_task["id"])
+            outcome = "was declined" if done_task["status"] == "declined" else "is finished"
+            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} {outcome}.",
+                  refs={"blocker_done": done_task["id"], "blocker_status": done_task["status"]}, source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):
@@ -3967,6 +4034,7 @@ def _answered(conn, actor, task_id, card, told=None):
     note = f"{who}: {said}" if said else f"{who}."
     if card["status"] != "done":
         TR.remove_blocker(conn, KEEPER, row["id"], card["id"], keeper_note=f"answered: {card['title']}")
+    row = task(conn, row["id"])
     if row["status"] == "waiting" and not waiting_for(conn, row):
         _set_status(conn, KEEPER, row, "open", note=note)
     conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
@@ -4420,14 +4488,16 @@ def _awaited_by(conn, row, who):
 def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
     """Wake the immediate parent whose subtasks are now all finished. `parent` names it when the
     task has just left it; `told` is a bot `_subtask_wake` already woke on it."""
-    if task_private(conn, row):
-        return
     terminal = ("done", "closed", "declined")
     first = parent or TR.parent_of(conn, row["id"])
     if previous in terminal or row["status"] not in terminal or not first:
         return
     parent = task(conn, first)
     if not parent or children_summary(conn, first)["open"]:
+        return
+    # A private subtask's end reaches the parent's owner when it reads the subtask (it filed it, or owns it). The
+    # notice names the subtask as its source, so nobody else on the parent who cannot read the subtask sees it.
+    if task_private(conn, row) and not task_private_readable(conn, parent["owner"], row):
         return
     # The owner finishing work in the parent's own session already knows; one finished in a session of
     # its own (a subtask the bot filed for itself) has to wake the parent's session.
@@ -4610,6 +4680,13 @@ def _marked_done(conn, actor, title, what="this"):
     return f"{who} marked {what} done: {title}"
 
 
+def _made_private(conn, actor, task_id):
+    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups."""
+    conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
+    _task_event(conn, task_id, actor, "private", 0, 1, "")
+    _private_followups(conn, task_id)
+
+
 def _private_followups(conn, task_id):
     """A task just made private: its thread narrows to its parties, delegations end, and nobody
     outside it is waited on."""
@@ -4692,7 +4769,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     from . import wake_rules
     wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
-    conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
+    if actor != KEEPER or ask:
+        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     if row["status"] == "waiting" and row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their
         # Needs you. The bot sets it waiting on them again if it still needs something.
@@ -5112,7 +5190,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True):
+                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5146,7 +5224,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
     if parent and review_gate.REVIEW.match(str(title).strip()):
-        review_gate.check(conn, actor, parent, review_prs, require_pr=True)
+        review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -5210,10 +5288,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         labels.append("qa")
     if labels and is_bot(actor) and not mover:
         _create_labels(conn, actor, labels)     # people, movers and the keeper as before
-    dup = _one(conn, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
-                     f"AND coalesce({TR.parent_sql()},'')=? "
-                     f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))})",
-               (requester, target, title, parent_id or "", *ACTIVE_STATUSES))
+    dup = _same_title(conn, "SELECT id,title FROM tasks WHERE requester=? AND owner=? "
+                            f"AND coalesce({TR.parent_sql()},'')=? "
+                            f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))}) ORDER BY created,id",
+                      (requester, target, parent_id or "", *ACTIVE_STATUSES), title)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -5327,11 +5405,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
     # rather than start a turn that finds nothing left to do (Dev 359).
     filed_in = RUN.get() if is_bot(target) and target == actor else ""
-    # A review, QA or Security child is a request to a reviewer: its own event, so a rule can wake reviewers apart
+    # A review, QA or Security request has its own event, so a rule can wake reviewers apart
     # from other assignments.
-    # Any other is an assignment, named so that rewording the notice never turns it into a note (`news` keeps it
-    # holdable: a task a bot files for itself still waits for the filing turn).
-    gate_child = {"wake": "review_request"} if parent and review_gate.GATE_CHILD.match(str(title).strip()) \
+    # Any other is an assignment, named so that rewording the notice never turns it into a note.
+    # Both events retain filed_in above: execution.filer_live holds a self-filed task independently of news/wake.
+    from . import profiles
+    gate_child = {"wake": "review_request"} if profiles.is_review_task(conn, task(conn, row["id"])) \
         else {"news": "assignment"}
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
           {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
@@ -5346,22 +5425,35 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     return {**made, "warnings": plain} if plain else made
 
 
+def title_key(title):
+    """What two task titles are compared by, for a duplicate: case-folded, trimmed, inner spaces collapsed. The
+    create and rename refusals, the Task Manager's duplicates and the stale review's twin all use it; the stored
+    title stays as typed. In Python, since SQLite's lower() folds ASCII only."""
+    return " ".join(str(title or "").split()).casefold()
+
+
+def _same_title(conn, sql, args, title):
+    """The first row `sql` reads (id, title) whose title is `title` by title_key, or None."""
+    key = title_key(title)
+    return next((r for r in _rows(conn.execute(sql, args)) if title_key(r["title"]) == key), None)
+
+
 def _retitle(conn, actor, row, title, owner, type_id):
     """A new title gets the checks a new task's title would, against the task as the update
-    leaves it: never empty; on a General task for a person, rule 7's title half; no live task
+    leaves it: never empty; on a General task for a person, rule 7's title half; no active task
     between the same requester and owner, under the same parent, already called that (task_create's
-    duplicate rule); for a bot on General, the plain-English check, whose warnings are returned to
-    be recorded once the title lands."""
+    duplicate rule: a finished one does not count); for a bot on General, the plain-English check,
+    whose warnings are returned to be recorded once the title lands."""
     target = resolve_actor(conn, owner) if owner is not None else row["owner"]
     parent = TR.parent_of(conn, row["id"])
     general = type_id == GENERAL_TYPE
     if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
     warnings = style_problems(conn, actor, lint_human_title(title)) if is_human(target) and general else []
-    dup = _one(conn, "SELECT id FROM tasks WHERE id<>? AND requester=? AND owner=? AND title=? "
-                     f"AND coalesce({TR.parent_sql()},'')=? "
-                     f"AND status IN ({','.join('?' * len(LIVE_STATUSES))})",
-               (row["id"], row["requester"], target, title, parent or "", *LIVE_STATUSES))
+    dup = _same_title(conn, "SELECT id,title FROM tasks WHERE id<>? AND requester=? AND owner=? "
+                            f"AND coalesce({TR.parent_sql()},'')=? "
+                            f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))}) ORDER BY created,id",
+                      (row["id"], row["requester"], target, parent or "", *ACTIVE_STATUSES), title)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -5377,7 +5469,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None):
+                verdict_head=None, review_reader=None, receipt_owner=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5407,10 +5499,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if not private and parent:
             if task_private(conn, parent):
                 refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
-    mine = actor in (row["owner"], row["requester"])
-    delegated = _one(conn, "SELECT message_id FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
-                     (task_id, actor, now()))
-    mine = (mine or bool(delegated) or task_ancestor_party(conn, actor, row) or type_bot_works(conn, actor, row)
+    # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment: nothing to record or wake.
+    if owner is not None and resolve_actor(conn, owner) == row["owner"]:
+        owner = None
+    mine = (_task_party(conn, actor, row) or type_bot_works(conn, actor, row)
             or task_manager_acts(conn, actor, row))
     if actor == TASK_MANAGER and actor not in (row["owner"], row["requester"]):
         # Its grant is narrow (task_manager_acts): status, step, note, waits and a reassignment, nothing else.
@@ -5431,6 +5523,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # The bot that manages the task's type may change its labels whatever the type's `bots` setting
     # (_label_writer decides which); nothing else on the task becomes its to change.
     mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and type_manager(conn, row) == actor_id(actor)
+    requested_status = status
     state_change = status is not None or type is not None or step is not None
     if state_change and actor != KEEPER:
         # A reviewer comments and gives a verdict; the Builder moves the ticket.
@@ -5454,26 +5547,41 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 or effective == "review" and (row["status"] != "review" or step_id != row.get("step_id"))):
             missing = unlinked_pushes(conn, task_id)
             if missing:
-                refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
+                try:
+                    refuse(conn, actor, "worktree_pr", "This task " + _unlinked_text(missing))
+                except Refused as exc:
+                    exc.task_hold = {"task": task_id, "reason": exc.detail, "kind": "worktree"}
+                    raise
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
             from . import review_gate
-            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note)
+            try:
+                review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, reader=review_reader,
+                                  receipt_owner=receipt_owner)
+            except Refused as exc:
+                # The move Tico retries once what refused it clears (backend/move_retry.py).
+                if getattr(exc, "review_gate", None):
+                    exc.review_gate["step"] = target_step["name"]
+                raise
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
     closing_step = status == "closed" and step is not None
     self_wait = []
+    if state_change and effective == 'waiting' and row.get('blocked_since') and (
+            requested_status not in (None, 'waiting') or step is not None and step_id != step and step != 'Blocked'):
+        self_wait.append('Task remains Blocked: ' + (row.get('blocked_reason') or 'a hold is still outstanding'))
     if closing_step:
-        _task_close_allowed(conn, actor, row, note)
+        _task_close_allowed(conn, actor, row, note, mover)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     # A close is the requester's or a person's decision; a bot's update that started before it (a late
-    # completion, or a late note over the close note) must not undo it. A person reopens a closed task;
-    # a requester bot reopens only what no person closed.
+    # completion, a late note over the close note, or a hand-off to a new owner) must not undo it. A person
+    # reopens a closed task; a requester bot reopens only what no person closed.
     closer = row.get("closed_by") or row["requester"]
     if (row["status"] == "closed" and is_bot(actor) and (actor != row["requester"] or is_human(closer))
-            and (status is not None and status != "closed" or note is not None and note != row.get("note"))):
+            and (status is not None and status != "closed" or note is not None and note != row.get("note")
+                 or owner is not None)):
         refuse(conn, actor, "close",
                f"{actor_id(closer)} closed this task, so it stays closed unless they reopen it; "
                "add anything new as a comment (hub task comment)")
@@ -5502,8 +5610,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                        "in a note, file the child task, blocker or approval first, name the person with --on, "
                        "or keep working")
             # A note naming what it waits on parks it, but a note wakes nobody (bots parked tasks "waiting on
-            # BotOps" that BotOps never heard of): the hint goes back with the write.
-            self_wait = [f"nothing this task waits on is recorded, so it goes back to open in "
+            # BotOps" that BotOps never heard of): the hint goes back with the write. The owner's own move to the
+            # Blocked step is a manual hold (the same rule as _set_status), which never reopens by itself.
+            durable = step is not None and step in (step_id, "Blocked") and actor == row["owner"]
+            self_wait = self_wait if durable else [f"nothing this task waits on is recorded, so it goes back to open in "
                          f"{STRANDED_GRACE_HOURS} hours: file a subtask for whoever must act (hub task create "
                          f"--parent {task_id} --owner <bot or person>), relate a blocker, name the person with --on, "
                          "or set --due for when to look again"]
@@ -5641,13 +5751,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    # A task keeps only the times of the state it is in: one moved out of closed loses its close time (the close
+    # rule reads closed_at IS NULL, so a done task that kept it would never close again), one out of done its done time.
     if status == "done":
         sets.append("done_at=:done_at")
         args["done_at"] = ts
-    elif status in ("open", "doing", "waiting", "review", "ready"):
-        for field in ("done_at", "closed_at", "closed_by"):
-            if row.get(field) is not None:
-                _task_event(conn, task_id, actor, field, row[field], None, note or "")
+    cleared = {"done": ("closed_at", "closed_by"), "declined": ("done_at", "closed_at", "closed_by")}.get(
+        status, ("done_at", "closed_at", "closed_by") if status in ACTIVE_STATUSES else ())
+    for field in cleared:
+        if row.get(field) is not None:
+            _task_event(conn, task_id, actor, field, row[field], None, note or "")
             sets.append(field + "=NULL")
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
@@ -5664,13 +5777,15 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     elif args.get("owner", row["owner"]) != row["owner"]:
         RT.turn_result(conn, actor, row, "overridden", event)
     if closing_step:
-        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step)
+        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
         _set_status(conn, actor, row, status, type, step, note or "")
     args["id"] = task_id
     args["updated"] = ts
     if sets:
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
+    if person and status == "waiting":
+        conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     if roles:
         # After the rest is saved, so who may be added is checked against the new owner and privacy;
         # the checks above already said this actor may change the task.
@@ -5712,6 +5827,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         after = task(conn, task_id)
     if owner is not None or private is not None or task_private(conn, after) != task_private(conn, row):
         conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
+    if task_private(conn, after) and not task_private(conn, row):
+        # A task under a private parent is private (task_relations.set_parent's rule on attach): every task below
+        # this one goes private with it, or a colleague could read a subtask of a parent they cannot see.
+        for below in descendants(conn, task_id):
+            if not task_private(conn, below):
+                _made_private(conn, actor, below["id"])
     # A bot that asked for `tasks` is always told and never woken for it, so there is nothing to
     # weigh: the news is free. Everyone else keeps the original rule, where the only way to
     # spare a bot the run was to withhold the notice.
@@ -5729,7 +5850,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     answered = set()
     if status in ("done", "declined") and row["status"] != status and not closing_step:
         answered = {tid for tid in TR.blocked_ids(conn, task_id) if _answered(conn, actor, tid, after, subtask_told)}
-    if status == "done":
+    if status in ("done", "declined"):
         if subtask_told:
             answered.add(TR.parent_of(conn, task_id))  # the result also satisfies this parent's blocker notice
         _unblock(conn, after, told=answered)
@@ -5951,6 +6072,22 @@ def _ask_in_subtask(conn, actor, row, person, ask):
     return card
 
 
+def supersede_ask_cards(conn, row, status):
+    """Retire generated asks whose work ended, keeping cards still needed by another live task."""
+    ended = {row["id"], *TR.descendant_ids(conn, row["id"])}
+    candidates = set(ended)
+    for tid in ended:
+        candidates.update(TR.blocker_ids(conn, tid))
+    for tid in candidates - {row["id"]}:
+        card = task(conn, tid)
+        if not card or card["status"] not in ACTIVE_STATUSES or not ask_card(conn, card):
+            continue
+        if any(blocked not in ended and (task(conn, blocked) or {}).get("status") in ACTIVE_STATUSES
+               for blocked in TR.blocked_ids(conn, tid)):
+            continue
+        task_close(conn, KEEPER, tid, note=f"Ask superseded: its task was {TASK_ENDED[status]}.", quiet=True)
+
+
 def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     """The person `hub task update --status waiting --on <person>` names, or "" to clear it.
 
@@ -5985,8 +6122,27 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     return person
 
 
-def _task_close_allowed(conn, actor, row, note):
+def _task_party(conn, actor, row):
+    """Whether `actor` is on the task as a change to it counts (task_update): its requester or owner, a delegate it
+    lent its rights to for now, or a party to a task above it."""
+    if actor in (row["owner"], row["requester"]):
+        return True
+    if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
+            (row["id"], actor, now())):
+        return True
+    return task_ancestor_party(conn, actor, row)
+
+
+def _task_close_allowed(conn, actor, row, note, mover=None):
     _task_private_writer(conn, actor, row)
+    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. The person it
+    # waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
+    # someone refused its status and note must not be able to end it.
+    if is_human(actor) and not _task_party(conn, actor, row) and row.get("waiting_on") != actor:
+        if not (can_move(conn, actor) if mover is None else mover):
+            refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
+                                         f"({actor_id(row['requester'])}), its owner, the person it waits on, "
+                                         "or a person who moves tasks")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
@@ -5998,13 +6154,14 @@ def _task_close_allowed(conn, actor, row, note):
 
 
 @private_task_write
-def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None):
-    """Rule 5. Closing is an explicit requester, human or keeper decision; work delegation is not acceptance."""
+def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None, mover=None):
+    """Rule 5. Closing is an explicit requester, keeper or decision of a person who can edit the task; work delegation
+    is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner)."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_close_allowed(conn, actor, row, note)
+    _task_close_allowed(conn, actor, row, note, mover)
     if row["status"] == "closed":
         if type is not None or step is not None:
             _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
@@ -6086,9 +6243,15 @@ def wait_detail(conn, row):
         open_ask = next((a for a in asks if a["id"] not in answered), None)
         if open_ask:
             return {"why": "an unanswered question", "on": open_ask["to_actor"]}
-    child = _one(conn, f"SELECT owner FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
-                       "ORDER BY created, id LIMIT 1", (row["id"],))
-    if child:
+    from . import profiles, review_gate
+    engineering = review_gate.engineering(conn, row)
+    children = _rows(conn.execute(f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
+                                  "ORDER BY created,id", (row["id"],)))
+    for child in children:
+        # Pipeline checks are work at the current step, not dependencies preventing it.
+        # An explicit blocked_by relation below still holds on any such child.
+        if engineering and is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
+            continue
         return {"why": "an open child task", "on": child["owner"]}
     blocker = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)
     if blocker:
@@ -6097,6 +6260,12 @@ def wait_detail(conn, row):
         return {"why": "an undecided approval", "on": "person"}
     if row.get("waiting_on"):
         return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
+    from .worktree_waits import for_task as worktree_waits
+    worktrees = worktree_waits(conn, row["id"])
+    if worktrees:
+        wait = worktrees[0]
+        return {"why": f"a worktree for {wait['repo']}" + (" to be ready" if wait["state"] == "reserved" else " to be available"),
+                "on": "external"}
     from .milestone_waits import pending as milestone_pending
     milestone = milestone_pending(conn, row["id"])
     if milestone:
@@ -6108,6 +6277,8 @@ def wait_detail(conn, row):
                        "WHERE lower(r.full_name)=lower(l.repo) AND r.reachable=1)) LIMIT 1", (row["id"],))
     if armed:
         return {"why": f"GitHub on {armed['title']}", "on": "external"}
+    if row.get("blocked_kind") == "manual":
+        return {"why": row.get("blocked_reason") or "an owner-declared hold", "on": None}
     return None
 
 
@@ -6125,7 +6296,10 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     at = at or now()
     cutoff = shift(at, hours=-grace_hours)
     moved = []
+    # A gate or worktree hold clears only through task_blocked reconciliation, which knows its real condition
+    # (fresh CI, no unlinked pushes); reopening one here would claim nothing is outstanding when something is.
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
+                                  "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
                                   "AND updated<=? ORDER BY updated", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
             if (waiting_for(conn, row) or not_yet_due(row, at)
@@ -6619,7 +6793,9 @@ def setup_hold(conn, actor, sender=None):
 
 
 def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
-    """Bot tasks nothing is going to move, with how long they have been quiet (minutes). A task whose bot is
+    """Bot tasks nothing is going to move, with how long they have been quiet (minutes). Private ones too: their
+    owner reads them, and a private parent whose subtasks finished would otherwise wait for nobody; their words go no
+    further (no diagnostic for BotOps, _no_diagnosis; no Decide read, stall_triage.inputs). A task whose bot is
     still in setup carries `held`: waking it would only queue another run that never starts. A task held only
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
     at = at or now()
@@ -6627,7 +6803,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
         "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
         "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-        "AND coalesce(t.private,1)=0 AND t.updated<?" +
+        "AND t.updated<?" +
         (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated",
         (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ()))))
     if not rows:
@@ -6847,6 +7023,9 @@ def _no_diagnosis(conn, row, count):
     finds nothing new, and a person cannot repair a bot's runs: neither is filed."""
     if _is_diagnostic(conn, row):
         return f"this diagnostic did not move after {count} wake-ups today"
+    if task_private(conn, row):
+        return (f"{actor_id(row['owner'])} did not move it after {count} wake-ups today, "
+                "and BotOps cannot read a private task")
     repair_bot = bot(conn, FLEET_MAINTAINER)
     if row["owner"] == bot_actor(FLEET_MAINTAINER):
         return f"BotOps's own task did not move after {count} wake-ups today, and BotOps cannot diagnose itself"
@@ -6856,9 +7035,52 @@ def _no_diagnosis(conn, row, count):
     return None
 
 
+# BotOps's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
+HELD_REVIEW_TITLE = "Review {bot}'s stopped runs held for a check"
+HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted runs"
+# The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
+# bot's slug too and the stall guard reads that first.
+HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
+
+
+def held_review_bot(conn, row):
+    """The bot a keeper-filed held-run review task is for while one of its runs is still held with no saved decision,
+    else None. This includes BotOps reviews and the operator review used when BotOps cannot read the run."""
+    prefix, suffix = HELD_REVIEW_TITLE.split("{bot}")
+    title = str(row["title"] or "")
+    if row["requester"] != KEEPER or not _has_table(conn, "jobs"):
+        return None
+    if title.startswith(prefix) and title.endswith(suffix) and len(title) > len(prefix) + len(suffix):
+        slug = title[len(prefix):-len(suffix)]
+    else:
+        owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
+        if not title.startswith(owner_prefix) or not title.endswith(owner_suffix):
+            return None
+        body = conn.execute("SELECT body FROM tasks WHERE id=?", (row["id"],)).fetchone()
+        named = re.search(r"^Bot: (\S+)\.$", str(body["body"] or "") if body else "", re.M)
+        if named:
+            slug = named.group(1)
+        else:
+            display_name = title[len(owner_prefix):-len(owner_suffix)]
+            bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
+            slug = bot["slug"] if bot else None
+        if not slug:
+            return None
+    held = conn.execute("SELECT 1 FROM jobs j WHERE j.bot=? AND j.state='uncertain' AND NOT EXISTS("
+                        "SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) LIMIT 1",
+                        (slug,)).fetchone()
+    return slug if held else None
+
+
 def _settle_undiagnosed(conn, row, cause):
     """Work the hub filed for itself closes with the cause; anyone else's task stays open and its requester is
-    told the cause, at most once a day while it stays stuck."""
+    told the cause, at most once a day while it stays stuck. A review of held runs stays open while a run it is for is
+    still held with no decision (held_review_bot)."""
+    if row["requester"] == KEEPER and held_review_bot(conn, row):
+        event(conn, KEEPER, "task.stall_escalated", row["id"],
+              {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause,
+               "kept_open": "runs still held"})
+        return
     if row["requester"] == KEEPER:
         task_close(conn, KEEPER, row["id"], f"Closed by the stall check: {cause}.", quiet=True)
     elif _actor_exists(conn, row["requester"]):
@@ -6951,6 +7173,8 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
     that reports it stuck to BotOps (_report_stuck), never to a person. Returns what it did."""
     from . import stall_triage, wake_rules
     at = at or now()
+    from .task_blocked import sweep as blocked_sweep
+    blocked_sweep(conn, at, task_ids=task_ids)
     woke, escalated, checked, stuck, held, retried_ids = [], [], [], [], [], []
     stalled = {row["id"]: row for row in stalled_tasks(conn, at, task_ids=task_ids, queued_here=queued_here)}
     spots = {row["id"]: row for row in spot_check_tasks(conn, at, task_ids=task_ids)}
@@ -7903,18 +8127,48 @@ def undelivered(conn, to_actor=None, limit=200):
     return out
 
 
-def inbox(conn, actor, at=None):
-    """What is waiting for me: unread or undelivered messages, and my open tasks."""
+# A message still waiting for its recipient: not yet delivered, or not yet read. The partial index repeats these terms
+# word for word, or SQLite does not use it (`inbox_pages`).
+UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
+UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(to_actor, created) WHERE " + UNREAD_TERMS
+UNREAD_PAGE_SQL = ("SELECT rowid AS _seq,* FROM messages WHERE to_actor=? AND " + UNREAD_TERMS +
+                   " AND (expires_at IS NULL OR expires_at > ?) AND created<=? AND (created<? OR rowid<?)"
+                   " ORDER BY created DESC, rowid DESC LIMIT ?")
+
+
+def inbox_pages(conn, actor, at=None, size=100):
+    """`actor`'s unread or undelivered messages, newest first, `size` at a time, each once. A bot that never marks
+    messages read holds thousands, and a reader that wants only the newest few stops paging: the rest are not read.
+    Each page carries on below the last (created, rowid) of the one before, so messages sent in the same instant are
+    neither repeated nor skipped. Read the pages in one snapshot."""
     at = at or now()
-    rows = _rows(conn.execute(
-        "SELECT * FROM messages WHERE to_actor=? AND (delivered_at IS NULL OR read_at IS NULL) "
-        "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL ORDER BY created", (actor, at)))
+    created, seq = "\uffff", 1 << 62                   # above every stored time and rowid: the first page is the newest
+    while True:
+        rows = _rows(conn.execute(UNREAD_PAGE_SQL, (actor, at, created, created, seq, size)))
+        if not rows:
+            return
+        created, seq = rows[-1]["created"], rows[-1]["_seq"]
+        for row in rows:
+            del row["_seq"]
+            row["refs"] = _json(row.get("refs_json"), {}) or {}
+        yield rows
+        if len(rows) < size:
+            return
+
+
+def mark_answered(conn, rows):
+    """Set each message's `answered_at`: when its ask was answered, or None."""
     answered = answers_to(conn, [r["id"] for r in rows if r.get("kind") == "ask"])
     for row in rows:
-        row["refs"] = _json(row.get("refs_json"), {}) or {}
         got = answered.get(row["id"])
         row["answered_at"] = got["created"] if got else None
-    return {"actor": actor, "messages": rows,
+    return rows
+
+
+def inbox(conn, actor, at=None):
+    """What is waiting for me: unread or undelivered messages, oldest first, and my open tasks."""
+    rows = [row for page in inbox_pages(conn, actor, at, size=500) for row in page][::-1]
+    return {"actor": actor, "messages": mark_answered(conn, rows),
             "tasks": tasks(conn, owner=actor, status=ACTIVE_STATUSES)}
 
 
@@ -7982,7 +8236,8 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     a board's: by step, then each task's place in it. `updated_since` is a stored timestamp.
     `tickets=False` leaves out the tasks on a numbered type. `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
-    read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both."""
+    read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
+    `limit=None` reads every match."""
     sql, args, where = "SELECT * FROM tasks", [], []
     if member:
         where.append(TRo.member_sql(role))
@@ -8045,7 +8300,7 @@ def tasks(conn, owner=None, requester=None, status=None, limit=500, lane=None, l
     else:
         raise ValueError("task order is queue, finished or step")
     rows = _rows(conn.execute(sql + f" ORDER BY {ordering} LIMIT ? OFFSET ?",
-                              (*args, max(1, int(limit)), max(0, int(offset)))))
+                              (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))))
     hydrate_task_tags(conn, rows)
     return rows
 
@@ -8186,7 +8441,7 @@ def needs_you(conn, who):
 
     A task on a numbered type is a ticket on that type's board, worked through there: it is on
     the list only while it carries a question for the person, and a declined one stays off its
-    requester's list."""
+    requester's list, as does a declined one on a steps-only type."""
     actor = who if actor_kind(who) else human_actor(who)
     pending = _rows(conn.execute("SELECT * FROM approvals WHERE decision IS NULL ORDER BY created"))
     at = now()
@@ -8198,7 +8453,8 @@ def needs_you(conn, who):
     # decision owed today: it counts here only when it carries a question for the person.
     # The same goes for a numbered type's tickets, a board of its own.
     # A snoozed task is nobody's to act on before its date (backend/task_snooze.py).
-    owned = [t for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, tickets=False, snoozed="hide")
+    # Every one: a person's list does not stop at a page of their tasks (the caller pages the items).
+    owned = [t for t in tasks(conn, owner=actor, status=ACTIVE_STATUSES, tickets=False, snoozed="hide", limit=None)
              if (t.get("lane") or "company") != "product"]
     seen = {t["id"] for t in owned}
     asked = [t for t in tasks_asked_of(conn, actor) if t["id"] not in seen and not TS.snoozed(t)]
@@ -8209,11 +8465,15 @@ def needs_you(conn, who):
     # What the CEO Bot merged into one item of its own is that item here, not each original (backend/ceo_merge.py).
     from . import ceo_merge
     merged = ceo_merge.hidden(conn, actor)
+    # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
+    # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
+    by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
     return {"actor": actor,
             "tasks": [t for t in asked + owned if t["id"] not in merged],
             "waiting": [t for t in waited if t["id"] not in merged],
             "approvals": pending,
-            "declined": tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide")}
+            "declined": [t for t in tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide",
+                                          limit=None) if (t.get("type_id") or GENERAL_TYPE) not in by_step]}
 
 
 def approval(conn, approval_id):

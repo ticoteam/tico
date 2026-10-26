@@ -94,6 +94,9 @@ became lenses; `hub strategy guides` and `GET /api/v2/strategy/guides` are depre
 bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
 `revision`, so two editors get a conflict (`409`), not a silent overwrite.
 
+If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
+A failed bet move also reloads the list; check the order before trying again.
+
 The CEO Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
 published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
@@ -127,8 +130,9 @@ strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strateg
 Setup starts with **What are you building** and **Your bets** ([Onboarding](onboarding.md#the-screens)):
 
 1. **What are you building.** An existing team pastes its website and one line; a new idea is described in a few
-   sentences. With a URL the server fetches home, about, pricing and customers right away, fills *Who we serve* and
-   *What we sell* marked **unconfirmed**, and proposes two or three bets the site implies, each with what it rules out.
+   sentences. With a URL the server fetches home, about, pricing and customers right away, fills the summary, the
+   vision and the four sections (each section marked **unconfirmed**), and proposes three bets the site implies, each
+   with what it rules out.
 2. **Your bets.** Claims to confirm or strike, not open questions. The page fills in on the right as the owner answers.
    To leave the step: one active bet with a rules-out and a wrong-if, and one line under *What we won't do*. Without a
    model provider, or when the research failed, it is the same fields as a plain form; when the research gave up it
@@ -146,17 +150,21 @@ polls it:
 | `state` | Meaning |
 |---|---|
 | `running` | `step` is `reading` (fetching pages) then `thinking` (the model call) |
-| `done` | `written` is `{sections, bets, revision}`: the sections filled, the proposed bet ids, the draft's new revision |
+| `done` | `written` is `{sections, fields, bets, revision}`: the sections filled, which of `summary` and `vision` were filled, the proposed bet ids, the draft's new revision |
 | `gave_up` | the owner wrote the draft meanwhile (`error.code` `edited`) or a newer job started (`superseded`); nothing was written and `found` holds what the research found, to offer by hand |
 | `failed` | `error.code` is the fetch code (`private_address`, `timeout` ...), the model's, `empty`, `interrupted` when the server restarted mid-run (or it ran 10 minutes; it then writes nothing), or `cleared` when setup's website and line were cleared |
 | `no_model` | no model provider: the step is a plain form |
 
 Every job also carries `url`, `text`, `pages` (`[{url, title}]` or `{url, error}`, never page text), `found`
-(`{serve, sell, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered) and `started`/`finished`;
+(`{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered)
+and `started`/`finished`;
 the last five jobs are kept. The fetch is the doc-link fetch's guard: http and https only, every address the name
 resolves to must be public, each redirect re-checked, at most four pages of 8,000 characters in 45 seconds, and no
 server credentials sent. The model call is the one-shot path the update writer uses (the Tico AI Gateway, else the
-team's own provider key); no runner or agent turn is involved. Sections are written only where empty, each starting
+team's own provider key); no runner or agent turn is involved. Its prompt and answer schema are
+`backend/strategy_prompt.py`, a file with no imports that Tico HQ's setup page keeps a pinned copy of, so both draft
+the same fields; it never invents a number (a price, count or share appears only when a page or the owner states it).
+The summary, vision and sections are written only where empty, each section starting
 `_Unconfirmed: drafted from acme.example._`; bets are added `proposed` with the suggested wrong-if as a text test
 due in 90 days. Nothing is published. There is no `hub` or MCP verb for it: it is a browser setup step.
 
@@ -173,6 +181,9 @@ The owner edits the draft and publishes with a note. **Publish** refuses, and th
 
 - at least one bet is active with a `rules_out` and a `wrong_if`, and
 - *What we won't do* is not empty.
+
+Changes only to a bet's market citations or the guide also enable **Publish** when these conditions hold.
+Saving the summary while a bet editor or publish form is open does not prevent you from submitting that form.
 
 Publishing snapshots every bet that is not retired, with its status, as version *n*, and opens a fresh draft copied
 from it. Then:
@@ -234,7 +245,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 
 | Route | Who | What it does |
 |---|---|---|
-| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, health_by_bet}`; `draft` only when `may_edit`; `goals_by_bet` lists only goals the caller may read; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
+| `GET /strategy` | any reader | `{draft, current, bets, label, label_one, may_edit, goals_by_bet, live_by_bet, health_by_bet}`; `draft` only when `may_edit`; `goals_by_bet` lists only goals the caller may read, at most 20 per bet; `live_by_bet` counts every one of those not done or dropped; `health_by_bet` is a colour from KPI-backed goals, `gray` otherwise; each section at most 4,000 characters |
 | `PUT /strategy/draft` | the owner only | partial merge of `{summary?, vision?, sections?}`; `""` clears a key; needs `revision`, answers `409` on a mismatch; summary and vision at most 400 characters |
 | `POST /strategy/publish` | the owner only | `{note, revision}`; refuses unless the [preconditions](#publishing) hold; answers the new version |
 | `GET /strategy/versions`, `/strategy/versions/{n}` | any reader | the list, newest first; one version |

@@ -14,6 +14,9 @@ optional strategy bet it serves (`bet_id`, shown as **Bet** in the goal editor n
 ([permissions](permissions.md)). A goal with no bet is shown as "not tied to a bet", a filter on the Strategy page, never a nag; a
 retired bet keeps its goals. A bet's health comes only from its goals that have a KPI: a goal without one leaves the bet gray.
 
+When the **Bet** picker shows **Retired or unpublished**, the goal's linked bet is not visible to you.
+Saving another field keeps that link. Choose **None** to remove it, or choose an active bet to replace it.
+
 **KPI.** A standalone record. A goal links to zero or more KPIs, one KPI can serve several goals, and not every goal has one.
 
 | Field | Meaning |
@@ -192,6 +195,10 @@ Only the owner writes the vision and publishes a version, on their own click. An
 or publishes, the CEO Bot included: it proposes, at every level ([Strategy](strategy.md#who-may-do-what)).
 `GET /api/v2/company` answers the strategy's vision, and `POST /api/v2/company` with a vision writes it into the
 strategy draft (the owner only), so there is one source. `/company/history` still answers for older clients.
+
+A [hub SQL](hub-sql.md) read of `company_profile.vision` returns the same team-visible vision.
+Before the first publication, that is the draft's vision. After publication, it is the latest published vision;
+an unpublished edit stays private. Publishing and server startup bring the SQL value into line on upgraded installs too.
 
 ### A goal's Why
 

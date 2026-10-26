@@ -456,7 +456,11 @@ Workspace admin console and no Google Cloud project of their own. It works for a
 Tico supplies the Google app ("Tico") and the consent screen. Google itself enforces what Tico may do: the grant belongs to
 the account that signed in and cannot reach anyone else in the Workspace.
 
-1. In Tico, the person opens **Settings > Inbox** and chooses **Connect Google**. Tico names the mailbox it will connect:
+![My Google account tab showing the demo’s unconnected Google account card](images/settings-stage1/settings-my-google-account.png)
+
+*Synthetic Acme example with Google not configured. Your personal Google connection is under My Google account.*
+
+1. In Tico, the person opens **Settings > My Google account** and chooses **Connect Google**. Tico names the mailbox it will connect:
    the one their message bot manages.
 2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. Nothing that writes or
    sends is asked for.
@@ -484,7 +488,7 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > Health says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Settings > Inbox revokes the grant at Google and deletes it from the computer that holds it.
+- **Disconnect** in Settings > My Google account revokes the grant at Google and deletes it from the computer that holds it.
   A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
   already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
   holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,

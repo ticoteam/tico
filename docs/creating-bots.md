@@ -31,6 +31,32 @@ Read this page when you are writing those instructions, tailoring what BotOps pr
 a bot up outside that flow. The wizard, the template folder format and the ways to add a bot later
 are in [Finish setup](onboarding.md).
 
+## Add a bot without a job description
+
+1. Open **Settings > Bots > Add bot**.
+2. Choose **From scratch**, **From a template** or **Existing agent**.
+3. Click **Continue**.
+
+You reach the bot editor, template choices or connection guide, respectively. You can leave the job description empty on these paths.
+For example, choose **From scratch** and enter **Support helper** as the role title to open its editor.
+
+**Recruit candidates** needs a role title and a job description. If either is missing, the form explains what to enter before continuing.
+
+## Save or archive a bot
+
+The bot editor stages changes until you click **Save bot**. A successful save shows **Saved**; a failed save explains why in the editor.
+
+To archive a bot, open **Settings > Bots**, edit the bot, choose who gets its open tasks, and click **Archive bot**.
+The confirmation names that person or bot and explains that the archived bot leaves the team chart and its routines stop.
+Click **Archive bot** to confirm, or **Cancel** to keep it unchanged. You can restore it later from **Archived bots**.
+Built-in bots cannot be archived.
+
+![Bot editor footer with Save bot, a successor picker and Archive bot](images/settings-stage1/settings-bot-editor-archive-bot.png)
+
+![Archive confirmation naming Account Executive as the recipient of the bot’s open tasks](images/settings-stage1/settings-archive-bot-confirm.png)
+
+*Synthetic Acme example. The confirmation names who gets the work; Cancel leaves the bot unchanged.*
+
 ## Edit Instructions
 
 Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
@@ -589,18 +615,21 @@ Levers set in **Settings → Bots**, not in the repository:
   and what its computer is signed in to.
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
-  the runtime refused). **None (fail)** is the default. A pick is saved with **Apply** next to it or with
-  **Save bot** ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
+  the runtime refused). **None (fail)** is the default. A pick is saved with
+  **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
-- **Task model**: a separate harness, model and effort for task sessions, initially **Same as bot**. Set it in the
-  editor with **Apply** or **Save bot**, or click **Tasks** beside the model in the bots list.
-  Chat keeps the bot's own model. See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
+- **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context
+  length for task sessions, each **Same as bot** until set. Set them in the editor and press **Save bot**, or click
+  **Tasks** beside the model in the bots list. A task effort and a task context length work without a task model.
+  Chat keeps the bot's own.
+  See [task models and warnings](harnesses.md#run-a-bots-tasks-on-another-model).
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
-  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session.
+  400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session. A bot's tasks can use another length
+  (**Task model**, **Task context length**).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and

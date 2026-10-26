@@ -127,7 +127,7 @@ hub trigger recover github --since 24
 ```
 
 `--since` is the hours to look back, 1 to 720 (24 by default). A call that passes now starts its routines and rules and keeps
-its own delivery id, so the sender's later retry of it is a duplicate. One that still fails stays as it was. The answer counts
+its own delivery id, so the sender's later retry of it is a duplicate. One that still fails stays as it was. With signing turned off, nothing is checked, so every refused call passes: recover only once the secret is right. The answer counts
 found, recovered, duplicate and still refused. Tico runs at most 200 a round; `more` says to run it again. Only a person who
 manages the webhook can do this.
 
@@ -148,7 +148,8 @@ call went to it. People who manage the webhook read the whole body.
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
-set or stop signing, run a call again and delete it. Deleting one removes its kept calls and leaves its routines in place, silent,
+set or stop signing, run a call again and delete it. BotOps manages every webhook only in its own runs: asked by a person, it has that
+person's rights, so a member can't change someone else's webhook through it. Deleting one removes its kept calls and leaves its routines in place, silent,
 until a webhook with the same id is added again. See [Permissions](permissions.md#incoming-webhooks).
 
 ### Starting work from a call

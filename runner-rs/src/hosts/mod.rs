@@ -641,6 +641,16 @@ impl Host {
         matches!(self, Host::Claude(_) | Host::Codex(_) | Host::Gemini(_) | Host::Pi(_))
     }
 
+    /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
+    /// new session in its place (Claude Code and Gemini find out only when the turn runs).
+    pub fn restored(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.restored(thread_id),
+            Host::Gemini(h) => h.restored(thread_id),
+            _ => false,
+        }
+    }
+
     /// The session a thread this host started runs as, once its harness confirmed it; None before, and on a host
     /// that does not confirm threads.
     pub fn confirmed(&self, thread_id: &str) -> Option<String> {

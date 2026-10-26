@@ -551,14 +551,19 @@ def change_params(conn, actor, size_id, changes):
 
 
 # ----------------------------------------------------------------------------- segments and the tree
-def _new_segment(conn, actor, name, summary="", evidence_ids=None, parent=None):
-    ev = evidence_ids
-    if not ev:
-        row, _events = MK.create_evidence(
-            conn, actor, evidence_key=MK.evidence_id(DEFINITION_EVIDENCE), source_kind="other",
-            our_read="A segment of the market as the team defined it (the market definition on the Spend view).")
-        ev = [row["id"]]
-    made, _events = MK.create_entity(conn, actor, type="segment", name=name, summary=summary, evidence_ids=ev)
+def definition_evidence(conn, actor):
+    """The one evidence row every segment the team defined stands on: the definition itself."""
+    row, _events = MK.create_evidence(
+        conn, actor, evidence_key=MK.evidence_id(DEFINITION_EVIDENCE), source_kind="other",
+        our_read="A segment of the market as the team defined it (the market definition on the Spend view).")
+    return row["id"]
+
+
+def _new_segment(conn, actor, name, summary="", evidence_ids=None, parent=None, entity_id=None, properties=None,
+                 force=False):
+    ev = evidence_ids or [definition_evidence(conn, actor)]
+    made, _events = MK.create_entity(conn, actor, type="segment", name=name, summary=summary, evidence_ids=ev,
+                                     entity_id=entity_id, properties=properties, force=force)
     if parent:
         MK.create_edge(conn, actor, src=made["id"], rel="member_of", dst=parent, evidence_ids=ev)
     return made

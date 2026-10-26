@@ -116,6 +116,8 @@ pub(crate) struct Thread {
     started: bool,
     fork_from: Option<String>,
     session_id: Option<String>,
+    /// The saved session was not on this computer and the thread restarted as a new one under the same id.
+    restored: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -514,17 +516,22 @@ impl ClaudeHost {
 
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None });
+        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, fork_from: None, session_id: None, restored: false });
         id
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
-        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, fork_from: None, session_id: None });
+        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, fork_from: None, session_id: None, restored: false });
         thread_id.into()
     }
 
     pub fn session_id(&self, thread_id: &str) -> String {
         self.inner().threads.get(thread_id).and_then(|t| t.session_id.clone()).unwrap_or_else(|| thread_id.to_string())
+    }
+
+    /// Whether the thread's saved session was not on this computer, so Claude began a new one under its id.
+    pub fn restored(&self, thread_id: &str) -> bool {
+        self.inner().threads.get(thread_id).is_some_and(|t| t.restored)
     }
 
     /// The session Claude said it runs `thread_id` as (its system init), once it has.
@@ -852,6 +859,7 @@ impl ClaudeHost {
                             t.started = false;
                             t.fork_from = None;
                             t.session_id = None;
+                            t.restored = true;
                             let t = t.clone();
                             self.launch(&tid, &t, effort.as_deref()).ok().map(|(c, s, r)| {
                                 inner.reaping = r;

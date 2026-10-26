@@ -148,6 +148,8 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
   const link = updated => ({kind: 'worktree', ref: 'wt-1', label: 'release-notes', updated});
   const settled = () => page.waitForFunction(() => !LIVE_SOON.has('tasks') && !LIVE_THROTTLE.get('tasks-bulk')?.timer, null, {timeout: t(5000)});   // a throttled draw still due would count below
   await send(() => true, block(15, 'tasks', {id: 't1', actor: 'bot:ops', task: task({title: 'Draft the final release notes', version: 4, links: [link('a')]})}));
+  // An empty queue can precede EventSource delivery; wait for the setup change before counting heartbeat draws.
+  await page.waitForFunction(() => TASKS_ST.tasks.find(x => x.id === 't1').links[0]?.updated === 'a', null, {timeout: t(5000)});
   await settled();
   // Only draws the event itself makes count: on a loaded machine a page read started earlier (types, labels) can
   // still land and draw the board for its own reason.

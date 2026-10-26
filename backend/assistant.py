@@ -405,11 +405,13 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
 _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/access/(limits|allow)"), ("PUT", r"/api/v2/usage/limits(/[^/]+)?"),
     ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
+    ("POST", r"/api/v2/routines/[^/]+/delete"),
     ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
     ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"), ("POST", r"/api/v2/system/update"),
     ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"), ("POST", r"/api/v2/support/tickets"),
     ("PUT", r"/api/v2/directory"), ("POST", r"/api/v2/directory/(sync|preview)"),
     ("POST", r"/api/v2/(slack|github/app)/disconnect"),
+    ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
 )]
 _SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
 
@@ -723,7 +725,29 @@ def runnable(c, method, path, body):
     return body
 
 
-def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None):
+def refuse_unrunnable(routes, method, path, body):
+    """Refuse a card's body the route itself would refuse, as a direct call is (422, field names and reasons, never the
+    value): a card keeps its body and shows it back, so a field the route has no place for (a key sent with a
+    providers change) would otherwise be stored and echoed. An unknown field is refused even where the model ignores
+    extras. A route that reads its own body has no model to check here; secret names are still checked by the caller."""
+    from fastapi.routing import APIRoute
+    from pydantic import BaseModel
+    route = next((r for r in routes or () if isinstance(r, APIRoute) and method in r.methods
+                  and r.path_regex.fullmatch(path or "")), None)
+    field = getattr(route, "body_field", None)
+    if field is None:
+        return
+    _, errors = field.validate(body, {}, loc=("body",))
+    model = field.field_info.annotation
+    if not errors and isinstance(model, type) and issubclass(model, BaseModel) and isinstance(body, dict):
+        known = {n for name, f in model.model_fields.items() for n in (name, f.alias) if n}
+        errors = [{"loc": ("body", k), "msg": "Extra inputs are not permitted"} for k in body if k not in known]
+    if errors:
+        raise Problem("validation", "; ".join(".".join(str(part) for part in e["loc"]) + ": " + e["msg"]
+                                              for e in errors), 422)
+
+
+def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
     The Assistant proposes what its turn may not do on its own; BotOps proposes what a person asked it for
@@ -748,6 +772,12 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         body = {"actions": [{**s, "body": runnable(c, s["method"], s["path"], s["body"])} for s in batch_steps(body)]}
     else:
         body = runnable(c, method, path, body)
+    if routes is not None:
+        refuse_unrunnable(routes, method, path, body)
+        # A bulk card's own model takes any step body: each step is checked against its own route, and one refused
+        # step refuses the whole card.
+        for s in body["actions"] if path == BATCH_PATH else ():
+            refuse_unrunnable(routes, s["method"], s["path"], s["body"])
     require_addressed(c, who, path, body)
     if who.via == "assistant" and not who.confirmed and approvals_in(path, body):
         require_named_approval(c, who, asked)
@@ -1013,6 +1043,18 @@ def _terms(arg):
         else:
             terms.append(w)
     return hint, terms
+
+
+# Cards whose answer carries a one-time value for the person who taps: the route and the fields shown to them.
+SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires", "operator")}
+
+
+def shown_once(response, fields):
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    return {k: payload.get(k) for k in fields} if isinstance(payload, dict) and payload.get(fields[0]) else None
 
 
 def outcome(response):
@@ -1564,7 +1606,7 @@ def install(app, store, auth, mutate, onboarding):
                               "sign-in, enrollment or this assistant)", 422)
             room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
-                                   request.headers.get("x-tico-on-behalf-of"))
+                                   request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
         return mutate(request, body, work)
 
     def expiring(c):
@@ -1650,6 +1692,7 @@ def install(app, store, auth, mutate, onboarding):
         if row is None:
             raise Problem("expired", "This proposal is more than a day old; ask again", 409)
         ok, result = False, {"status_code": 0, "error": "It did not finish; ask again"}
+        shown = None
         try:
             path = normalize_path(row["path"])
             if not valid_operation(row["method"], path, settings, row.get("proposer") or "assistant"):
@@ -1680,6 +1723,8 @@ def install(app, store, auth, mutate, onboarding):
                                           key="assistant-" + aid)
                 result = outcome(response)
                 ok = result["error"] is None
+                if ok and path in SHOWN_ONCE:
+                    shown = shown_once(response, SHOWN_ONCE[path])
         except Problem as exc:
             result = {"status_code": exc.status, "error": exc.detail[:300]}
         except httpx.HTTPError as exc:
@@ -1689,4 +1734,6 @@ def install(app, store, auth, mutate, onboarding):
                     else ("That did not go through: " + str(result["error"])[:300]))
             # Off the event loop; the thread finishes the write even if the client went away.
             out = await asyncio.to_thread(settle, aid, who, "done" if ok else "failed", result, note)
-        return out
+        # A one-time value (a computer's code) goes to the person who tapped, in this answer only: never stored on the
+        # card, in its result or in the chat, where the bot that proposed it could read it.
+        return {**out, "shown_once": shown} if shown else out

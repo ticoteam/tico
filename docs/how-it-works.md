@@ -51,7 +51,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
   request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester (or any human) closes it. Every
+  product lane). The owner marks it `done`; only the requester, a person who can edit it, or the person it waits on closes it. Every
   task has a comment thread, on the record with the author.
 - **Message** — one line in a conversation. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. A message sent while
   its bot answers in the same conversation goes into that turn when the harness can steer (`steer` in its manifest)
@@ -369,8 +369,9 @@ The bot's operator or BotOps checks what happened before choosing to resume or d
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
 failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage limit and holds the login until the reset it names. An
-error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) starts the bot's next run in a
-fresh provider session, as Clear does, instead of resuming the session into the same error.
+error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
+thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
+([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
@@ -482,7 +483,7 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA subtasks only; any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
@@ -509,7 +510,7 @@ a Responder with tasks, and a Doer whose runs for a week all did nothing.
 
 A human is normally the browser sign-in (Cloudflare Access). A **personal API token** is the
 same human from a script, a cron job or another computer, with no browser: any human (the owner may
-limit it to admins, Settings > Humans) opens **Connect an external agent** beside their email
+limit it to admins, Settings > People) opens **Connect an external agent** beside their email
 (or **Settings → Computers → API tokens**), gives the
 token a label and a life (90 days unless changed, a year at most), and copies it once; it is
 not shown again and only its hash is kept. Then:

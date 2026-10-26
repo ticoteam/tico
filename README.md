@@ -303,10 +303,10 @@ private GitHub repositories.
 
 ## Developer notes
 
-The suite is small on purpose. Run it locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). Write tests while you build if they help, then keep only the few that
-guard what matters most: security and privacy boundaries, data safety (migrations, backup, restore),
-the updater and release path, and core contracts (job claim and lease, task writes, chat, the API
-schema), plus one happy path per major feature. The default Python suite runs in about a minute on a laptop;
+Run the suite locally; GitHub Actions also runs the default suite on every pull request to main and every push to main (PR checks). There is no budget on how many tests it has: write as many as a change needs, as long as each
+guards a real failure: security and privacy boundaries, data safety (migrations, backup, restore),
+the updater and release path, core contracts (job claim and lease, task writes, chat, the API
+schema), regressions and edge cases that would lose or duplicate work. No tests of wording or docs. The default Python suite runs in about a minute on a laptop;
 tests that need real git, Docker or a server are marked `@pytest.mark.slow` and run with `-m slow` (and at release).
 
 ```bash

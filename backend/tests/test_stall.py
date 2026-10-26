@@ -308,7 +308,9 @@ def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_tim
             _later(c, hold["id"], column, 24)
         assert flagged(c, window, hold) == (False, False)
         if wait == "milestone":      # once it has woken the hold, the wait is no exemption
-            c.execute("UPDATE task_milestone_waits SET woke_at=? WHERE task_id=?", (H.now(), hold["id"]))
+            # Settle the real transition before aging it: clearing a hold now restores
+            # its previous state, which is activity too, and the wake must precede quiet time.
+            MW.happened(c, 'release_published', 'ticoteam/tico@v9.9.9')
             assert flagged(c, window, hold) == (True, True)
         elif wait != "resume":       # a passed date or snooze is no exemption
             _later(c, hold["id"], column, -1)

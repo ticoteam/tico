@@ -93,7 +93,7 @@ def run_kpi_asks(store, auth, at, failures=None):
     with SR.recording(store, "kpi_asks", failures, "goal_asks") as run:
         from . import goal_asks
         with store.transaction() as c:
-            found = goal_asks.sync(c, auth.owner_id(c), at)
+            found = goal_asks.sync(c, auth.owner_id(c), at, goal_asks.readers(c, auth))
         run.did(SR.words_of({"asked": (found or {}).get("created") or [],
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
 
@@ -346,6 +346,31 @@ class Scheduler:
         from . import quiet_work
         with locked("quiet_work") as c:
             quiet_work.due(c, stamp(at), failures)
+        from . import assigned_start
+        if not self.store.settings.rehearsal:
+            unstarted = []
+            try:
+                with self.store.read() as c:
+                    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                                      (assigned_start.CURSOR_KEY,)).fetchone()
+                    cursor = [H._json(saved[0], "") if saved else ""]
+                    unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
+                with locked("assigned_start_cursor") as c:
+                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                              (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
+            except Exception as exc:
+                failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
+            for task_id in unstarted:
+                with locked("assigned_start:" + task_id) as c:
+                    with isolated(c, "assigned_start", task_id, failures):
+                        assigned_start.sweep(c, stamp(at), [task_id])
+            from . import queue_refusals
+            with self.store.read() as c:
+                observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
+            for change in observations:
+                with locked("queue_refusals:" + change[0]) as c:
+                    with isolated(c, "queue_refusals", change[0], failures):
+                        queue_refusals.apply(c, change)
         # A milestone wait whose pull request merged or release was published, while the server was down or
         # before its wake was written, gets its one wake (backend/milestone_waits.py).
         from . import milestone_waits
@@ -578,6 +603,15 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import run_diagnostics
                     run_diagnostics.sweep(c, stamp(at))
+                # Holds include person and approval waits that deliberately
+                # never enter the stall candidate list. Reconcile them independently,
+                # with one short transaction per task so runner writes can progress.
+                from . import task_blocked
+                with self.store.read_transaction() as c:
+                    blocked_ids = task_blocked.candidates(c, stamp(at))
+                for task_id in blocked_ids:
+                    with locked('blocked_check:' + task_id) as c:
+                        task_blocked.sweep(c, stamp(at), task_ids=[task_id])
                 # Discover candidates in a WAL snapshot, then recheck one task under each
                 # short lock. Unrelated runner writes can progress between tasks.
                 with self.store.read_transaction() as c:
@@ -603,8 +637,17 @@ class Scheduler:
                         result = H.wake_stalled(c, stamp(at), task_ids=[task_id], queued_here=queued_here)
                         for key, values in result.items():
                             woke.setdefault(key, []).extend(values)
+                # Dev tickets long at a working step: a status from a quiet owner, the late ones to their manager.
+                aged = {}
+                try:
+                    from . import step_age
+                    with self.store.transaction() as c:
+                        aged = step_age.sweep(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"step_age": type(exc).__name__})
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
-                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}
+                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
+                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

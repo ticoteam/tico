@@ -378,8 +378,10 @@ def guarded(c, auth, who, inner, function, columns=None):
         "listen_judgments": "id IS NOT NULL" if listener else "item_id IN (SELECT id FROM listen_items)",
         # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
         # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
-        # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft: the owner's.
-        "registry_metadata": ("key!='roadmap_ip_secret'" + ("" if owner else " AND key!='strategy.draft_from'"))
+        # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
+        # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
+        "registry_metadata": ("key!='roadmap_ip_secret'" + ("" if owner else
+                                                           " AND key NOT IN ('strategy.draft_from','onboarding.company_file')"))
         if admin and not bot else "0",
         "events": f"({events}) AND " + event_gate,
         "refusals": "(" + ("1" if owner else mine if bot else f"actor={me}") + ") AND " +
