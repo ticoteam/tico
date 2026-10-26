@@ -1258,7 +1258,22 @@ def migrate(conn, adopt_legacy=False):
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
     message_links.ensure(conn)
+    clear_finished_close_times(conn)
     return len(MIGRATIONS)
+
+
+def clear_finished_close_times(conn):
+    """A done or declined task that kept the close time of an earlier close (a move out of closed left it before
+    task_update cleared it) never closes again: the close rule reads closed_at IS NULL. Clear it, on the record, once;
+    nothing writes such a row any more, so a later start finds none. Returns the ids it cleared."""
+    rows = _rows(conn.execute("SELECT id, closed_at, closed_by FROM tasks "
+                              "WHERE status IN ('done','declined') AND closed_at IS NOT NULL"))
+    for row in rows:
+        conn.execute("UPDATE tasks SET closed_at=NULL, closed_by=NULL WHERE id=?", (row["id"],))
+        for field in ("closed_at", "closed_by"):
+            if row[field] is not None:
+                _task_event(conn, row["id"], KEEPER, field, row[field], None, "It is no longer closed")
+    return [row["id"] for row in rows]
 
 
 def _row(row):
@@ -4420,14 +4435,16 @@ def _awaited_by(conn, row, who):
 def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
     """Wake the immediate parent whose subtasks are now all finished. `parent` names it when the
     task has just left it; `told` is a bot `_subtask_wake` already woke on it."""
-    if task_private(conn, row):
-        return
     terminal = ("done", "closed", "declined")
     first = parent or TR.parent_of(conn, row["id"])
     if previous in terminal or row["status"] not in terminal or not first:
         return
     parent = task(conn, first)
     if not parent or children_summary(conn, first)["open"]:
+        return
+    # A private subtask's end reaches the parent's owner when it reads the subtask (it filed it, or owns it). The
+    # notice names the subtask as its source, so nobody else on the parent who cannot read the subtask sees it.
+    if task_private(conn, row) and not task_private_readable(conn, parent["owner"], row):
         return
     # The owner finishing work in the parent's own session already knows; one finished in a session of
     # its own (a subtask the bot filed for itself) has to wake the parent's session.
@@ -4608,6 +4625,13 @@ def _marked_done(conn, actor, title, what="this"):
     from . import names
     who = names.lookup(conn, [actor]).get(actor) or actor_id(actor)
     return f"{who} marked {what} done: {title}"
+
+
+def _made_private(conn, actor, task_id):
+    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups."""
+    conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
+    _task_event(conn, task_id, actor, "private", 0, 1, "")
+    _private_followups(conn, task_id)
 
 
 def _private_followups(conn, task_id):
@@ -5348,10 +5372,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
 
 def _retitle(conn, actor, row, title, owner, type_id):
     """A new title gets the checks a new task's title would, against the task as the update
-    leaves it: never empty; on a General task for a person, rule 7's title half; no live task
+    leaves it: never empty; on a General task for a person, rule 7's title half; no active task
     between the same requester and owner, under the same parent, already called that (task_create's
-    duplicate rule); for a bot on General, the plain-English check, whose warnings are returned to
-    be recorded once the title lands."""
+    duplicate rule: a finished one does not count); for a bot on General, the plain-English check,
+    whose warnings are returned to be recorded once the title lands."""
     target = resolve_actor(conn, owner) if owner is not None else row["owner"]
     parent = TR.parent_of(conn, row["id"])
     general = type_id == GENERAL_TYPE
@@ -5360,8 +5384,8 @@ def _retitle(conn, actor, row, title, owner, type_id):
     warnings = style_problems(conn, actor, lint_human_title(title)) if is_human(target) and general else []
     dup = _one(conn, "SELECT id FROM tasks WHERE id<>? AND requester=? AND owner=? AND title=? "
                      f"AND coalesce({TR.parent_sql()},'')=? "
-                     f"AND status IN ({','.join('?' * len(LIVE_STATUSES))})",
-               (row["id"], row["requester"], target, title, parent or "", *LIVE_STATUSES))
+                     f"AND status IN ({','.join('?' * len(ACTIVE_STATUSES))})",
+               (row["id"], row["requester"], target, title, parent or "", *ACTIVE_STATUSES))
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
                   else f"{dup['id']} already asks {actor_id(target)} for this")
@@ -5407,10 +5431,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if not private and parent:
             if task_private(conn, parent):
                 refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
-    mine = actor in (row["owner"], row["requester"])
-    delegated = _one(conn, "SELECT message_id FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
-                     (task_id, actor, now()))
-    mine = (mine or bool(delegated) or task_ancestor_party(conn, actor, row) or type_bot_works(conn, actor, row)
+    # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment: nothing to record or wake.
+    if owner is not None and resolve_actor(conn, owner) == row["owner"]:
+        owner = None
+    mine = (_task_party(conn, actor, row) or type_bot_works(conn, actor, row)
             or task_manager_acts(conn, actor, row))
     if actor == TASK_MANAGER and actor not in (row["owner"], row["requester"]):
         # Its grant is narrow (task_manager_acts): status, step, note, waits and a reassignment, nothing else.
@@ -5465,15 +5489,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     closing_step = status == "closed" and step is not None
     self_wait = []
     if closing_step:
-        _task_close_allowed(conn, actor, row, note)
+        _task_close_allowed(conn, actor, row, note, mover)
     if waiting_on is not None:
         waiting_on = _waiting_person(conn, actor, row, waiting_on, status, owner, private)
     # A close is the requester's or a person's decision; a bot's update that started before it (a late
-    # completion, or a late note over the close note) must not undo it. A person reopens a closed task;
-    # a requester bot reopens only what no person closed.
+    # completion, a late note over the close note, or a hand-off to a new owner) must not undo it. A person
+    # reopens a closed task; a requester bot reopens only what no person closed.
     closer = row.get("closed_by") or row["requester"]
     if (row["status"] == "closed" and is_bot(actor) and (actor != row["requester"] or is_human(closer))
-            and (status is not None and status != "closed" or note is not None and note != row.get("note"))):
+            and (status is not None and status != "closed" or note is not None and note != row.get("note")
+                 or owner is not None)):
         refuse(conn, actor, "close",
                f"{actor_id(closer)} closed this task, so it stays closed unless they reopen it; "
                "add anything new as a comment (hub task comment)")
@@ -5641,13 +5666,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    # A task keeps only the times of the state it is in: one moved out of closed loses its close time (the close
+    # rule reads closed_at IS NULL, so a done task that kept it would never close again), one out of done its done time.
     if status == "done":
         sets.append("done_at=:done_at")
         args["done_at"] = ts
-    elif status in ("open", "doing", "waiting", "review", "ready"):
-        for field in ("done_at", "closed_at", "closed_by"):
-            if row.get(field) is not None:
-                _task_event(conn, task_id, actor, field, row[field], None, note or "")
+    cleared = {"done": ("closed_at", "closed_by"), "declined": ("done_at", "closed_at", "closed_by")}.get(
+        status, ("done_at", "closed_at", "closed_by") if status in ACTIVE_STATUSES else ())
+    for field in cleared:
+        if row.get(field) is not None:
+            _task_event(conn, task_id, actor, field, row[field], None, note or "")
             sets.append(field + "=NULL")
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
@@ -5664,7 +5692,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     elif args.get("owner", row["owner"]) != row["owner"]:
         RT.turn_result(conn, actor, row, "overridden", event)
     if closing_step:
-        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step)
+        task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
         _set_status(conn, actor, row, status, type, step, note or "")
     args["id"] = task_id
@@ -5712,6 +5740,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         after = task(conn, task_id)
     if owner is not None or private is not None or task_private(conn, after) != task_private(conn, row):
         conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
+    if task_private(conn, after) and not task_private(conn, row):
+        # A task under a private parent is private (task_relations.set_parent's rule on attach): every task below
+        # this one goes private with it, or a colleague could read a subtask of a parent they cannot see.
+        for below in descendants(conn, task_id):
+            if not task_private(conn, below):
+                _made_private(conn, actor, below["id"])
     # A bot that asked for `tasks` is always told and never woken for it, so there is nothing to
     # weigh: the news is free. Everyone else keeps the original rule, where the only way to
     # spare a bot the run was to withhold the notice.
@@ -5985,8 +6019,25 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     return person
 
 
-def _task_close_allowed(conn, actor, row, note):
+def _task_party(conn, actor, row):
+    """Whether `actor` is on the task as a change to it counts (task_update): its requester or owner, a delegate it
+    lent its rights to for now, or a party to a task above it."""
+    if actor in (row["owner"], row["requester"]):
+        return True
+    if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
+            (row["id"], actor, now())):
+        return True
+    return task_ancestor_party(conn, actor, row)
+
+
+def _task_close_allowed(conn, actor, row, note, mover=None):
     _task_private_writer(conn, actor, row)
+    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. Reading it is
+    # not enough: someone refused its status and note must not be able to end it.
+    if is_human(actor) and not _task_party(conn, actor, row):
+        if not (can_move(conn, actor) if mover is None else mover):
+            refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
+                                         f"({actor_id(row['requester'])}), its owner, or a person who moves tasks")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
@@ -5998,13 +6049,14 @@ def _task_close_allowed(conn, actor, row, note):
 
 
 @private_task_write
-def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None):
-    """Rule 5. Closing is an explicit requester, human or keeper decision; work delegation is not acceptance."""
+def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=None, mover=None):
+    """Rule 5. Closing is an explicit requester, keeper or decision of a person who can edit the task; work delegation
+    is not acceptance. `mover` says whether a person may move any task (the caller knows the environment owner)."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    _task_close_allowed(conn, actor, row, note)
+    _task_close_allowed(conn, actor, row, note, mover)
     if row["status"] == "closed":
         if type is not None or step is not None:
             _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")
@@ -6619,7 +6671,9 @@ def setup_hold(conn, actor, sender=None):
 
 
 def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
-    """Bot tasks nothing is going to move, with how long they have been quiet (minutes). A task whose bot is
+    """Bot tasks nothing is going to move, with how long they have been quiet (minutes). Private ones too: their
+    owner reads them, and a private parent whose subtasks finished would otherwise wait for nobody; their words go no
+    further (no diagnostic for BotOps, _no_diagnosis; no Decide read, stall_triage.inputs). A task whose bot is
     still in setup carries `held`: waking it would only queue another run that never starts. A task held only
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
     at = at or now()
@@ -6627,7 +6681,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
         "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
         "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
         "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
-        "AND coalesce(t.private,1)=0 AND t.updated<?" +
+        "AND t.updated<?" +
         (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated",
         (shift(at, seconds=-STALL_MINUTES * 60), *(task_ids or ()))))
     if not rows:
@@ -6847,6 +6901,9 @@ def _no_diagnosis(conn, row, count):
     finds nothing new, and a person cannot repair a bot's runs: neither is filed."""
     if _is_diagnostic(conn, row):
         return f"this diagnostic did not move after {count} wake-ups today"
+    if task_private(conn, row):
+        return (f"{actor_id(row['owner'])} did not move it after {count} wake-ups today, "
+                "and BotOps cannot read a private task")
     repair_bot = bot(conn, FLEET_MAINTAINER)
     if row["owner"] == bot_actor(FLEET_MAINTAINER):
         return f"BotOps's own task did not move after {count} wake-ups today, and BotOps cannot diagnose itself"

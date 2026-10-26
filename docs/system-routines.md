@@ -12,7 +12,7 @@ Open **Settings → Rules** (old `#/settings/routines` links land here too). The
 
 Search by name, trigger (**WHEN**), action (**THEN**), or department. For example, searching `done` finds **Close 24h after done** and built-ins that act on done tasks. Searching `close` finds actions that close tasks.
 
-Task rules are **Unreleased**. The built-in switches, schedules, and run records described here are already available.
+Task rules, the built-in switches, schedules and run records described here are all available.
 
 ## What each row shows
 
