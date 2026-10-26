@@ -1678,21 +1678,25 @@ def lint_person_ask(text):
 # happens then ("If yes, I'll ...", "Then ...", "I will ..."). The rest is the bot's context and goes under Details.
 # A sentence that answers the request ("If yes, ...") is the outcome over one that only opens like one ("Then the
 # runner failed."), wherever it comes after the request.
-LINT_IF_YES = re.compile(r"if (?:yes|so|not|no|approved|you (?:agree|approve|do|say yes))\b", re.I)
-LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|then\b|once\b"
+LINT_IF_YES = re.compile(r"if (?:yes|so|approved|you (?:agree|approve|do|say yes))\b", re.I)
+LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|if (?:not|no)\b|then\b|once\b"
                           r"|after (?:that|you|it)\b|i(?:'ll|\s+will|\s+can|\s+then)\b|we(?:'ll|\s+will)\b"
                           r"|th(?:at|is) (?:lets|unblocks|means)\b)", re.I)
+LINT_REQUEST = re.compile(r"\b(?:please|(?:need|want|would like) you to|you (?:must|should|need to|have to))\b", re.I)
 
 
 def _asks_for_something(sentence):
-    """A question, or a request that opens with a verb ("Approve ...", "Chris, please merge ...")."""
+    """A question, an indirect request, or an imperative clause, including one after a condition."""
     if sentence.rstrip("\"')] ").endswith("?"):
         return True
-    if LINT_OUTCOME.match(sentence):
-        return False
-    bare = re.sub(r"^please\s+", "", re.sub(r"^[A-Z][a-z'-]*,\s+", "", sentence), flags=re.I)
+    # An outcome opener does not make the rest of its sentence safe to discard: "Once approved, please sign ..."
+    # still asks for a second decision. Treat possible requests conservatively rather than silently losing them.
+    if LINT_REQUEST.search(sentence):
+        return True
+    clauses = [re.sub(r"^(?:(?:please|also|then)\s+)+", "", clause, flags=re.I)
+               for clause in re.split(r"[,;]\s*", sentence)]
     return any(re.split(r"[\s,;:]+", s.strip(), 1)[0].strip("\"'*_()").lower() in LINT_VERBS
-               for s in (sentence, bare))
+               for s in clauses)
 
 
 def person_ask_rewrite(text):

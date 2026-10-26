@@ -219,7 +219,8 @@ any other reference number. Without a plain ask the update is refused, saying wh
 refused only for its length or sentence count comes back with a rewrite: its one request and the sentence saying what
 happens after, which passes as it is. Retry once with it and put the rest in a comment (or, for a task given to a
 person, below it in the body), so nothing is lost. When no shorter wording keeps the same decision (it asks two
-things, asks nothing, or the request alone is too long or not plain), the refusal says exactly what to change instead;
+things, including indirect or conditional requests, asks nothing, or the request alone is too long or not plain),
+the refusal says exactly what to change instead;
 nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
 A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,

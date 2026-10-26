@@ -1053,6 +1053,42 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(H.person_ask_rewrite("Approve the merge of PR #1555? Then the runner failed three times. "
                                               "If yes, I will run the tests today."),
                          ("Approve the merge of PR #1555? If yes, I will run the tests today.", ""))
+        # A negative branch is context, not the outcome of granting the request.
+        self.assertEqual(H.person_ask_rewrite("Approve PR #1555 so QA can test it? If no, I will keep it parked. "
+                                              "The checks failed three times today and we still need to understand "
+                                              "what caused that. If yes, I will run the tests today."),
+                         ("Approve PR #1555 so QA can test it? If yes, I will run the tests today.", ""))
+
+    def test_shortening_keeps_indirect_and_conditional_requests(self):
+        task = H.task_create(self.conn, CMO, 'Get the decisions', 'All the original details.', CMO, private=False)
+        asks = [
+            "Can you check the vendor numbers before Friday? I need you to approve the $5,000 budget for the Acme "
+            "contract as well. The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I'll sign it.",
+            "Approve PR #1555 so QA can test it? Once approved, please also sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+            "Approve PR #1555 so QA can test it? Once approved, sign the vendor contract before Friday. "
+            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
+            "If yes, I will run the tests today.",
+        ]
+        before = H.task(self.conn, task['id'])
+        for ask in asks:
+            with self.assertRaises(H.Refused) as refused:
+                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
+            self.assertEqual(refused.exception.rule, 'lint')
+            self.assertIn('it asks 2 things', refused.exception.detail)
+            self.assertIn('ask any other separately', refused.exception.detail)
+            self.assertNotIn('Retry once with this ask', refused.exception.detail)
+            after = H.task(self.conn, task['id'])
+            self.assertEqual((after['version'], after['body'], after['status'], after['waiting_on']),
+                             (before['version'], before['body'], before['status'], before['waiting_on']))
+            self.assertEqual(TR.child_ids(self.conn, task['id']), [])
+        # A sole indirect request is preserved verbatim rather than disappearing as background context.
+        self.assertEqual(H.person_ask_rewrite("The vendor needs our answer today. I need you to approve the $5,000 "
+                                              "budget for Acme. If yes, I'll sign the contract. "
+                                              "The pricing offer ends tomorrow morning."),
+                         ("I need you to approve the $5,000 budget for Acme. If yes, I'll sign the contract.", ""))
 
     def test_an_ask_no_shorter_wording_keeps_gets_a_repair_and_nothing_is_sent(self):
         task = H.task_create(self.conn, CMO, 'Get the Settings change tested', 'All the runner notes.', CMO,
