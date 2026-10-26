@@ -148,7 +148,8 @@ call went to it. People who manage the webhook read the whole body.
 ### Who may do what
 
 Anyone, person or bot, can add a webhook. The owner, an admin, whoever added it and BotOps can replace its secret, change its settings,
-set or stop signing, run a call again and delete it. Deleting one removes its kept calls and leaves its routines in place, silent,
+set or stop signing, run a call again and delete it. BotOps manages every webhook only in its own runs: asked by a person, it has that
+person's rights, so a member can't change someone else's webhook through it. Deleting one removes its kept calls and leaves its routines in place, silent,
 until a webhook with the same id is added again. See [Permissions](permissions.md#incoming-webhooks).
 
 ### Starting work from a call

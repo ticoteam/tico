@@ -198,6 +198,17 @@ DO = _routes(
     ("POST", r"system/update(/check)?"),
     # Sleep when idle: an owner's or an admin's call, which the route checks.
     ("POST", r"sleep"),
+    # Incoming triggers and their Tico Gateway addresses: whoever manages the trigger (backend/triggers.py), never
+    # BotOps' own right to manage every trigger while it works for someone.
+    ("POST", r"triggers"), ("POST", rf"triggers/{_S}"), ("POST", rf"triggers/{_S}/(rotate|signing|recover|delete)"),
+    ("POST", rf"triggers/{_S}/deliveries/.+/replay"), ("POST", rf"triggers/{_S}/relay(/(rotate|wake|delete))?"),
+    # Task types and tags (movers, a tag's owner), the release schedule and Release now, the team's run budget and
+    # Tico's own jobs (an owner or an admin): each route checks the person.
+    ("POST", r"task-types"), ("POST", rf"task-types/{_S}(/delete)?"), ("DELETE", rf"task-types/{_S}"),
+    ("POST", r"tags"), ("POST", rf"tags/{_S}(/instances)?"),
+    ("PATCH", r"release-schedule"), ("POST", r"release/now"),
+    ("POST", r"settings/turn-budgets"),
+    ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
