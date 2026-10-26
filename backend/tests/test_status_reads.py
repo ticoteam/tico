@@ -48,6 +48,39 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     assert lines(api, fewer, primed=True)[1] == primed < lines(api, fewer, primed=False)[1] < plain
 
 
+def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch):
+    # A crashed bot offers its newest held run for review; with a stop on record, only that run's own held job.
+    # The clock is fixed, so jobs share a created time: the last one written is the newest, read one by one or together.
+    from backend.store import encode
+    machine = setup(api, monkeypatch, tasks=5)
+    first = claim(api, machine)
+    with api.app.state.store.transaction() as c:
+        jobs = [row[0] for row in c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY rowid")]
+        for job, bot, created, run, state, started in (
+                (jobs[0], "ops", "2026-10-24T11:00:00.000000Z", "old", "failed", True),
+                (jobs[1], "ops", H.now(), "tie-first", "failed", True),
+                (jobs[2], "ops", H.now(), "tie-last", "expired", False),
+                (jobs[3], "cpo", "2026-10-24T11:00:00.000000Z", "marked", "expired", True),
+                (jobs[4], "cpo", H.now(), "newer", "failed", True)):
+            c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
+                      "started,finished) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
+                      (run, job, bot, "hash-" + run, state, created, created if started else None, H.now(), first["id"]))
+            c.execute("UPDATE jobs SET bot=?,state='uncertain',created=?,attempt_id=? WHERE id=?", (bot, created, run, job))
+        c.execute("UPDATE attempts SET state='expired' WHERE id=?", (first["id"],))
+        c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('last-stop:cpo',?)",
+                  (encode({"attempt_id": "marked", "at": H.now()}),))
+        for slug in ("ops", "cpo"):
+            H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
+    each = lines(api, ["cpo", "ops"], primed=False)[0]
+    assert lines(api, ["cpo", "ops"], primed=True)[0] == each
+    ops, cpo = each["ops"]["last_stop"], each["cpo"]["last_stop"]
+    assert (ops["attempt_id"], ops["kind"], ops["action"]) == ("tie-last", "never_started", "review")
+    assert ops["reason"].startswith("Its computer refused the run before it started.")
+    assert (cpo["attempt_id"], cpo["kind"], cpo["action"]) == ("marked", "stopped", "review")
+    assert "lease ran out" in cpo["reason"]
+
+
 def busy(api, machine, first, count, live=1):
     """`count` more active bots on the test computer, each with open tasks, two questions to a person, a task for a
     person, private tasks and a stopped run on record; the first `live` of them running, every third one crashed."""

@@ -607,7 +607,8 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = "SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') ORDER BY created DESC LIMIT 1"
+LIVE_SQL = ("SELECT id,created FROM attempts WHERE bot=? AND state IN ('leased','running') "
+            "ORDER BY created DESC,rowid DESC LIMIT 1")
 
 
 def prime_status_lines(c, slugs):
@@ -630,7 +631,7 @@ def prime_status_lines(c, slugs):
             prime(c, statement, {(s,): found.get(s) for s in part})
         live = {}
         for row in c.execute(f"SELECT bot,id,created FROM attempts WHERE state IN ('leased','running') AND bot IN ({marks}) "
-                             "ORDER BY created", part):
+                             "ORDER BY created,rowid", part):
             live[row["bot"]] = row        # the newest run, as LIMIT 1 picks it
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
@@ -651,7 +652,7 @@ def prime_status_lines(c, slugs):
         prime(c, STOP_JOB_SQL, {(jid,): jobs.get(jid) for jid in job_ids})
         newest, newest_of = {}, {}
         for row in c.execute(f"SELECT id,attempt_id,bot FROM jobs WHERE state='uncertain' AND bot IN ({marks}) "
-                             "ORDER BY created", part):
+                             "ORDER BY created,rowid", part):
             newest[row["bot"]] = row                         # the newest, as ORDER BY created DESC LIMIT 1 picks it
             newest_of[(row["bot"], row["attempt_id"])] = row
         prime(c, HELD_SQL, {(s,): newest.get(s) for s in part})

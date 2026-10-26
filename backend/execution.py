@@ -330,9 +330,10 @@ LAST_STOP = "last-stop:"
 # many bots at once.
 STOP_ATTEMPT_SQL = "SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?"
 STOP_JOB_SQL = "SELECT state FROM jobs WHERE id=?"
-HELD_SQL = "SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' ORDER BY created DESC LIMIT 1"
+# Of jobs held at the same instant the last written wins (rowid), so the batched read picks the same one.
+HELD_SQL = "SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' ORDER BY created DESC,rowid DESC LIMIT 1"
 HELD_RUN_SQL = ("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' AND attempt_id=? "
-                "ORDER BY created DESC LIMIT 1")
+                "ORDER BY created DESC,rowid DESC LIMIT 1")
 HELD_ATTEMPT_SQL = "SELECT state,started,finished FROM attempts WHERE id=?"
 NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed."
 
