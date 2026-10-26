@@ -123,6 +123,10 @@ def test_a_step_move_reaches_a_lead_only_through_a_row_that_names_it(api):
 
 def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_else(api):
     with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM events WHERE action=?", (R.STEP_NOISE_DROPPED,))
+        # With no Release Manager yet the drop is not spent: it runs once one is named.
+        assert R.drop_step_noise(c) == 0
+        assert not c.execute("SELECT 1 FROM events WHERE action=?", (R.STEP_NOISE_DROPPED,)).fetchone()
         leads(c)
         task = H.task_create(c, "bot:boss", "Recruit an advisor", "x", "bot:cpo", lint=False)
         c.execute("DELETE FROM jobs")
@@ -133,7 +137,6 @@ def test_the_release_managers_held_step_notices_are_dropped_once_and_nothing_els
             H._wake(c, task, "bot:" + bot, f"{task['title']} entered Exploring.", refs)
         held = {r["id"]: (r["bot"], r["state"]) for r in c.execute("SELECT id,bot,state FROM jobs WHERE held=1")}
         assert sorted(b for b, _ in held.values()) == ["boss", "release-manager", "release-manager"]
-        c.execute("DELETE FROM events WHERE action=?", (R.STEP_NOISE_DROPPED,))   # this database's startup ran it
         assert R.drop_step_noise(c) == 1
         after = {r["id"]: (r["bot"], r["state"], json.loads(r["refs_json"])["news"]) for r in c.execute(
             "SELECT j.id,j.bot,j.state,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id")}

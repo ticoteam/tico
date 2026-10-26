@@ -1153,11 +1153,13 @@ def drop_step_noise(conn):
             return 0
         flow = _release_flow()
         manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
+        if not manager:   # not done yet: a Release Manager named later still has its old notices dropped
+            return 0
         dropped = conn.execute(
             "UPDATE jobs SET state='cancelled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
             "(SELECT id FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' "
-            "AND json_extract(refs_json,'$.wake_batch')='rule')", (manager,)).rowcount if manager else 0
-        H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager or "", {"jobs": dropped})
+            "AND json_extract(refs_json,'$.wake_batch')='rule')", (manager,)).rowcount
+        H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager, {"jobs": dropped})
         return dropped
     except sqlite3.OperationalError:
         return 0
