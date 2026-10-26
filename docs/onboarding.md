@@ -157,7 +157,7 @@ Both are for the owner and bot administrators, and neither is part of the stable
 The team builder has one **Suggestions from Tico HQ** toggle, and its setting covers every group you answer. It comes with a privacy link and the exact payload: group, answer,
 team description, customer type, software choice, catalog version and install ID (when counting is on and its notice has been shown). It is on by default and off (and disabled, with the
 reason) when the install may not ask HQ. The server asks Tico HQ (`POST <TICO_HQ_URL>/v1/recruit`, [Tico HQ](tico-hq.md)) only when the
-toggle is on **and** none of these is true: demo mode, `TICO_TELEMETRY=off`, `DO_NOT_TRACK` set, or the anonymous usage count switched off
+toggle is on **and** none of these is true: demo mode, `TICO_REHEARSAL=1`, `TICO_TELEMETRY=off`, `DO_NOT_TRACK` set to any value other than empty, `0`, `false` or `no`, or the anonymous usage count switched off
 in Settings (`hq.off_by` says which). It sends the group, the answer, three facts from "About the team" (`what`, at most 500
 characters; `sells_to`; `software`), the template version and, while the usage count is on and its notice has been shown, its install id; it waits at most 6 seconds and
 keeps only template ids that are this group's in its own templates. HQ answers template ids and a short why, never text a bot would
