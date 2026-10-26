@@ -120,10 +120,12 @@ async function navigation(browser) {
   }
   // Even if old navigation is still painted, losing a role cannot expose a restricted pane.
   await page.evaluate(() => { S.me.role = 'member'; S.me.bot_admin = false; });
-  for (const restricted of ['people', 'unknown-tab']) {
+  // A tab this person can't see opens General and says why; an unknown one opens General without the line.
+  for (const [restricted, denied] of [['people', true], ['unknown-tab', false]]) {
     await page.evaluate(tab => settingsShow(tab), restricted);
-    assert.equal(await page.locator('#settings-devices').isVisible(), true, `${restricted} safely falls back`);
-    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'devices');
+    assert.equal(await page.locator('#settings-general').isVisible(), true, `${restricted} safely falls back`);
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'general');
+    assert.equal(await page.locator('#settings-denied').isVisible(), denied, `${restricted}: the admins-only line`);
   }
   // History keeps Runs for everyone; Changes is the owner's. The old Runs page lands there.
   await page.evaluate(() => { settingsShow('runs'); settingsHistoryShow('changes'); });
@@ -157,7 +159,7 @@ async function computers(browser) {
   // An old link to Subscriptions opens Computers.
   await page.evaluate(() => settingsShow('bots'));
   await page.evaluate(() => { location.hash = '#/settings/subscriptions'; });
-  await page.waitForFunction(() => location.hash === '#/settings' && SETTINGS_TAB === 'devices');
+  await page.waitForFunction(() => location.hash === '#/settings/devices' && SETTINGS_TAB === 'devices');
   await page.locator('#set-machines .machine-name[data-computer-open=r1]').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   // One connection per AI tool, the computer's own login: the named subscriptions it still reports are not shown.

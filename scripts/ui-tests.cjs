@@ -220,7 +220,7 @@ function stoppedReport({pending, calls, stopped}) {
 async function main() {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['account-status', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'people-access', 'recruit-unit',
-                'settings-forms', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
+                'settings-forms', 'settings-no-dead-ends', 'settings-tasks', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs;
   let all = false;

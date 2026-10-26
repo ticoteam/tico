@@ -22,7 +22,7 @@ from . import visuals
 from . import app_delivery, login_holds, providers, runner_versions
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
-from . import auto_tasks, bot_stops, pipeline_stats
+from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
 from .execution import AWAKE_GAP, AWAKE_SETTLE, Execution, bump_bot_session_epoch, turns_here
 from pathlib import Path
 
@@ -293,6 +293,13 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
+    # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
+    reason = (detail or {}).get("reason") or "person_clear"
+    task_id = (detail or {}).get("task")
+    if not task_id:
+        room = c.execute("SELECT task_id FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+        task_id = room[0] if room else None
+    run_triggers.new_session(c, task_id, reason, actor)
 
 
 def default_bot(c, settings, botops="botops"):
@@ -513,15 +520,10 @@ def operation_issues(c, who, auth):
                            if queued else " Other work can continue.")
             # A stopped run is held so an automatic retry cannot repeat an outside action. It is
             # useful in Settings, but age alone never turns it into an interruption for a person.
-            from .execution import held_back, held_runs, isolation_refused, left_by_keeper
+            from .execution import held_back, held_runs, isolation_refused, left_by_keeper, stopped_rows, unreviewed
             runs = held_runs(c, who, auth, slug)
             named = "; ".join(f"\"{h['title']}\" (owner {h['owner_name']})" for h in runs)
             held_note = f" Held: {named}." if named else ""
-            # Needs you says only what stopped and what it holds up; the review card says what to do (Chris, Oct 22).
-            # Names stop at three and skip runs this reader may not read, so the rest are counted.
-            more = uncertain - len(runs)
-            what = (named + (f" and {more} more" if more > 0 else "") if named
-                    else "A run" if uncertain == 1 else f"{uncertain} runs")
             waiting, waiting_on = held_back(c, who, auth, slug)
             left = left_by_keeper(c, who, slug)
             if isolation_refused(c, who, auth, slug):
@@ -534,13 +536,49 @@ def operation_issues(c, who, auth):
             elif waiting or left:
                 # Work is stuck behind it (the claim's own fence), or the keeper settled the rest of its run and left
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
-                wakes = f"{waiting} queued request{' waits' if waiting == 1 else 's wait'}"
-                on = " on " + ", ".join(f"\"{t}\"" for t in waiting_on) if waiting_on else ""
-                behind = (f" {wakes}{on} until you decide." if waiting else
-                          " Tico can't safely decide it on its own.")
-                add("uncertain_work", f"{bot['display_name']} has {uncertain} stopped {noun} holding up work",
-                    f"{what} stopped partway.{behind} Choose Try again or Don't retry.",
-                    bot=slug, action="review", held_back=waiting, held_tasks=waiting_on)
+                # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
+                # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
+                rows, run_count = stopped_rows(c, who, auth, slug)
+                count = run_count or uncertain
+                can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
+                if not can_review:
+                    # Only the operator or BotOps may decide (reconcile_job): nobody else is handed the handles.
+                    rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
+                noun = "run" if count == 1 else "runs"
+                behind = (f"{waiting} queued request{' waits' if waiting == 1 else 's wait'} until you decide."
+                          if waiting else "Tico can't safely decide it on its own.")
+                causes = {row["cause"] for row in rows}
+                why = ""
+                # Only when every run is listed: a run past the first few may have stopped for another reason.
+                if rows and len(rows) == count and len(causes) == 1 and rows[0]["routine"]:
+                    cause, these = causes.pop(), "this run" if count == 1 else "these runs"
+                    stamps = sorted(H.parse_ts(row["at"]) for row in rows if row["at"])
+                    # One restart names its time; stops spread over a while (a busy evening) do not share one.
+                    at = (stamps[0].strftime("%H:%M") if stamps and len(stamps) == len(rows)
+                          and (stamps[-1] - stamps[0]).total_seconds() <= 600 else None)
+                    when = f" at {at} UTC" if at else ""
+                    why = {"interrupted": f"Its computer interrupted {these}{when}, usually for a restart or update",
+                           "quota": f"{these.capitalize()} stopped at a usage limit",
+                           "capacity": f"{these.capitalize()} stopped because the AI service was busy",
+                           "timeout": f"Its computer stopped answering during {these}"}[cause]
+                    why += ", not a bug. "
+                add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
+                    why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
+                    runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
+            elif (late := unreviewed(c, who, slug))[0]:
+                # Two hours with no decision: a person's now, on Health and in its operator's Needs you, whoever else
+                # was asked (Dev 543). Others who read the bot still see it on Health, not in their Needs you.
+                count, hours = late
+                them = "it" if count == 1 else "them"
+                newer = uncertain - count
+                more = f" {newer} more stopped since." if newer > 0 else ""
+                operator = auth.operator(c, who, slug)
+                add("uncertain_work", f"{bot['display_name']} has {count} stopped run{'' if count == 1 else 's'} "
+                    f"waiting {hours} h",
+                    f"Nobody has decided {them} yet. Tico paused only that request so it will not repeat a possible "
+                    f"outside action.{held_note}{more}{queued_note} Choose Try again or Don't retry.",
+                    bot=slug, severity="error" if operator else "warning", needs_person=operator, action="review",
+                    waiting_hours=hours)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "
@@ -1444,6 +1482,13 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     # against them see the same database.
     visible = auth.task_sql(c, who)
     raw = H.needs_you(c, who.actor)
+    from . import assigned_start
+    listed = {row['id'] for key in ('tasks', 'waiting', 'declined') for row in raw[key]}
+    for row in assigned_start.overdue(c, visible=visible, manager_actor=who.actor):
+        if (assigned_start.manager(c, row) == who.actor and row['id'] not in listed
+                and _readable(auth, c, who, row['id'])):
+            raw['tasks'].append({**row, 'assigned_not_started': True, 'title': 'Assigned, not started: ' + row['title'],
+                                 'note': assigned_start.description(c, row, auth.settings)})
     H.hydrate_task_tags(c, raw["tasks"] + raw["waiting"] + raw["declined"])
     from . import ask_deadlines, team_rules
     rules = team_rules.load(c)
@@ -1483,6 +1528,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                     "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
                                     else person_origin(c, row, visible, who.actor))}
             item["person_ask"], item["ask_missing"] = person_ask(row, item["kind"], who.actor, ask)
+            if row.get('assigned_not_started'):
+                item.update(assigned_not_started=True, note=row['note'])
             item["recommend"] = next((r for a in open_asks if (r := recommendation(a, who.actor))), None)
             if row["id"] in merged:
                 # The CEO Bot's merged item: the originals it stands for, which the Tasks page leaves out of Needs you.

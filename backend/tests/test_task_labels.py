@@ -85,7 +85,7 @@ def test_a_bot_labels_no_private_task_it_cannot_see_nor_a_ticket_it_does_not_man
     label(api, hidden["id"], ["qa"], cpo, expected=404)
     ticket = post(api, "tasks", {"owner": "cmo", "title": "Build exports", "body": "x", "type": "Engineering"})
     refused = label(api, ticket["id"], ["qa"], cpo, expected=403)["error"]
-    assert refused["code"] == "label" and "owns, asked for or whose type it manages" in refused["detail"]
+    assert refused["code"] == "label" and "whose party it manages or whose type it manages" in refused["detail"]
     ops = bot_token(api, "ops")
     assert label(api, ticket["id"], ["qa"], ops)["labels"] == ["qa"]      # the type's manager
     assert label(api, hidden["id"], ["qa"], ops)["labels"] == ["qa"]      # its own private task

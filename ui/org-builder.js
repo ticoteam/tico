@@ -195,7 +195,7 @@ function obPickHTML(state) {
     </div>`;
 }
 const obOffText = reason => ({demo: 'Off in the demo', DO_NOT_TRACK: 'Off: DO_NOT_TRACK is set', TICO_TELEMETRY: 'Off: TICO_TELEMETRY=off',
-                              setting: 'Off: the usage count is off in Settings'})[reason] || 'Off';
+                              TICO_REHEARSAL: 'Off: TICO_REHEARSAL=1 (rehearsal)', setting: 'Off: the usage count is off in Settings'})[reason] || 'Off';
 function obHqHTML(state) {
   const org = state.org, off = !org.hq.available;
   return `<label class="ob-hq${off ? ' off' : ''}"><input type="checkbox" role="switch" id="ob-hq" aria-describedby="ob-hq-payload" ${org.share && !off ? 'checked' : ''} ${off ? 'disabled' : ''}>

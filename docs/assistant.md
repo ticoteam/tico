@@ -65,7 +65,7 @@ writes to a bot is marked "via assistant", so BotOps never takes it for your req
 ids (`human:<id>`), never bare names, and a recipient that resolves to a human is not a bot. Everything else the server
 refuses (`403 confirm_required`) and the assistant must propose, including a message for another human, a note to a bot,
 a comment on a task another human is on, and running a task now. The owner may turn **Assistant acts without asking**
-off (Settings > Humans, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
+off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
 comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
 card again. An assistant run's credential works only while its lease is live.
 
@@ -127,7 +127,7 @@ What stays on:
   last 30 days with your words; **Undo** puts one back to waiting for you, as long as nothing has acted on it yet (an
   approval already spent stays, `422 consumed`). The requesting bot is told it was undone.
 - **The team can turn it off.** The owner's rule **People may let their Assistant decide their approvals** (Settings >
-  Humans, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
+  People, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
   **Assistant acts without asking** off, approving is a card again too.
 
 With the setting off, an approve the Assistant tries is refused with `403 approve_setting_off`, and it tells you in one
@@ -224,7 +224,7 @@ own session, not a personal token.
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"cancelled"\|"expired", "result": {...}}}` |
-| `POST /api/v2/assistant/actions/{id}/confirm` | Runs it as you. `{"action": {...}}` with the result of the operation. |
+| `POST /api/v2/assistant/actions/{id}/confirm` | Runs it as you. `{"action": {...}}` with the result of the operation. A card that makes a new computer's one-time code also answers `shown_once: {code, expires, operator}`, to you only: the code is not stored on the card or in the chat. |
 | `POST /api/v2/assistant/actions/{id}/cancel` | Drops it. |
 | `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals. |
 | `POST /api/v2/assistant/settings` `{"decides_approvals"}` | Your own session only (`403` for the Assistant, a bot or turning it on with a personal token). |

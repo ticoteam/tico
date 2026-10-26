@@ -85,7 +85,8 @@ before, with no ID and no flags.
 4. **The command line:** `docker compose exec server python -m backend.manage usage-count /data/hub.sqlite off`.
 
 Other controls: **Reset install ID** in Settings > General (or `... usage-count /data/hub.sqlite reset-id`) makes a new
-random ID, so the old one no longer connects to your install; do it when you clone a server. `TICO_UPDATE_CHECK=off`
+random ID, so the old one no longer connects to your install; do it when you clone a server.
+In the app, **Reset install ID** asks you to confirm first. **Cancel** keeps the current ID. `TICO_UPDATE_CHECK=off`
 stops the update check altogether, and with it the count. `TICO_HQ_URL` points the check at your own HQ.
 
 At each start of a release image, the server also asks GitHub which commit that release's tag names
@@ -104,7 +105,7 @@ More on why it is built this way: [docs/telemetry.md](docs/telemetry.md).
 ## Suggestions while you build your team chart
 
 When you set up Tico, the team chart step asks one short question per group ("What kind of sales do you do today?") and
-suggests bots for it. Each group card has a toggle, **Suggestions from Tico HQ**. While it is on, your
+suggests bots for it. The team chart builder has one toggle, **Suggestions from Tico HQ**, and its setting covers every group you answer. While it is on, your
 Tico server (never your browser) sends the group, your answer, team description, customer type, software choice,
 catalog version and, when counting is on and its notice has been shown, install ID to Tico HQ. The exact fields are listed below. HQ ranks the group's bot templates with a language
 model and says why each fits. While it is off, your own server ranks them locally and nothing is sent. If HQ does not answer
@@ -149,12 +150,13 @@ reason for each; your server keeps only ids that are in its own templates.
 
 ### When it is off
 
-The toggle starts on and you can switch it off on any group. It is off, and cannot be switched on, when any of these holds;
-the card says which:
+The toggle starts on and you can switch it off. It is off, and cannot be switched on, when any of these holds;
+the toggle says which:
 
 - the anonymous usage count is switched off in Settings;
 - `TICO_TELEMETRY=off` is set;
-- `DO_NOT_TRACK` is set (to anything but `0`);
+- `DO_NOT_TRACK` is set (to any value other than empty, `0`, `false` or `no`);
+- `TICO_REHEARSAL=1` is set (rehearsal mode);
 - Tico runs in demo mode.
 
 With it off, the suggestions come from `backend/recruit_rank.py` on your own server, and nothing about your answers leaves it.

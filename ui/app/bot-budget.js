@@ -27,7 +27,8 @@ function budgetSubHTML(slug, b) {
   const runs = `<span class="tnum" data-budget-runs>${budgetNumber(b.runs?.hour)} this hour · ${budgetNumber(b.runs?.day)} today</span>`;
   return held ? `<span class="sysr-note" data-budget-held>${esc(held)}</span>${botReleaseButton(slug, 'ghost')}` : runs;
 }
-async function budgetMount(rows, slug) {
+// In the bot editor (`stage`), a change is held until Save bot; anywhere else it saves when the box is left.
+async function budgetMount(rows, slug, stage) {
   const box = rows?.querySelector(`[data-bot-budget="${CSS.escape(slug)}"]`); if (!box) return;
   let b;
   try { b = await get(`/v2/bots/${encodeURIComponent(slug)}/budget`); } catch { return; }   // not a manager: no row
@@ -40,18 +41,39 @@ async function budgetMount(rows, slug) {
     box.querySelectorAll('input,button').forEach(el => { el.disabled = true; });
     try {
       const out = await post(`/v2/bots/${encodeURIComponent(slug)}/budget`, {...body, expected_revision: b.revision});
-      toast(out.released ? `${empName(slug)} released` : 'Run budget updated');
+      toast(out.released ? `${empName(slug)} released` : 'Saved');
       if (out.released) void v2Refresh();
       await loadSettings();      // the bot's revision moved; its rows redraw and read the budget again
-    } catch (error) { toast(error.message, true); void budgetMount(rows, slug); }
+    } catch (error) { await budgetMount(rows, slug); settingsFieldError(box, error.message); }
+  };
+  const held = body => stage('budget', 'runs', !body ? null : async rev => {
+    const out = await post(`/v2/bots/${encodeURIComponent(slug)}/budget`, {...body, expected_revision: rev});
+    if (out.released) void v2Refresh();
+    return out.revision ?? rev + 1;
+  });
+  const fields = () => {
+    const body = {};
+    box.querySelectorAll('[data-budget-key]').forEach(input => {
+      if (input.value !== input.dataset.current && input.checkValidity()) body[input.dataset.budgetKey] = input.value === '' ? null : Number(input.value);
+    });
+    return Object.keys(body).length ? body : null;
   };
   // Saved when the box is left, as Keep N tasks going, so a number is never saved half typed.
   box.onchange = ev => {
     const input = ev.target.closest('[data-budget-key]');
-    if (!input || input.value === input.dataset.current || !input.checkValidity()) return;
+    if (!input) return;
+    settingsFieldClear(box);
+    if (!input.checkValidity()) { settingsFieldError(box, input.validationMessage || 'Enter a whole number, or leave it blank.'); return; }
+    if (stage) { held(fields()); return; }
+    if (input.value === input.dataset.current) return;
     void save({[input.dataset.budgetKey]: input.value === '' ? null : Number(input.value)});
   };
-  box.onclick = ev => { if (ev.target.closest('[data-budget-team]')) void save({turns_per_hour: null, turns_per_day: null}); };
+  box.onclick = ev => {
+    if (!ev.target.closest('[data-budget-team]')) return;
+    if (!stage) { void save({turns_per_hour: null, turns_per_day: null}); return; }
+    box.querySelectorAll('[data-budget-key]').forEach(input => { input.value = ''; });
+    held({turns_per_hour: null, turns_per_day: null});
+  };
 }
 
 // The team defaults, for owners and admins, in Settings > Bots.
@@ -70,8 +92,7 @@ async function renderTeamBudgets() {
     const input = ev.target.closest('[data-team-budget]');
     if (!input || input.value === '' || input.value === input.dataset.current || !input.checkValidity()) return;
     input.disabled = true;
-    try { await post('/v2/settings/turn-budgets', {[input.dataset.teamBudget]: Number(input.value)}); toast('Run budget updated'); }
-    catch (error) { toast(error.message, true); }
-    void renderTeamBudgets();
+    try { await post('/v2/settings/turn-budgets', {[input.dataset.teamBudget]: Number(input.value)}); toast('Saved'); void renderTeamBudgets(); }
+    catch (error) { input.disabled = false; settingsFieldError(input, error.message); }
   };
 }

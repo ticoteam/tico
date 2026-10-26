@@ -97,6 +97,9 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
     const hidden = await card('p-hidden').innerText();
     assert.match(hidden, /Add the measure a measure you cannot see to Double organic signups/);
     assert.doesNotMatch(hidden, /What it counts is not written down yet|No data source/);
+    // Nobody adds a measure they may not read (the server refuses it): only no, and no target fields.
+    assert.deepEqual(await buttons('p-hidden'), ['No, leave it']);
+    assert.equal(await card('p-hidden').locator('details.kpi-prop-set').count(), 0);
     // The goal editor's target fields, folded away under "Set a target (optional)".
     const set = card('p-new').locator('details.kpi-prop-set');
     assert.equal(await set.locator('summary').innerText(), 'Set a target (optional)');

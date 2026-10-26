@@ -264,6 +264,12 @@ while a live run of the bot is on the same task (or the same chat, or the same t
 when that run ends. When the runner itself reported the run interrupted
 (it restarted), such a run resumes at once; when the same computer picks it up again it continues
 the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+A quarantine stops each running turn through the runner's normal Stop response, carrying
+`stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
+(or *until a person clears it*). Its jobs return to the queue until the quarantine lifts;
+the bot's activity says they will run again. A real lease loss still says the computer
+stopped answering. Later held runs are named on the bot's existing review task, and
+closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
@@ -369,8 +375,9 @@ The bot's operator or BotOps checks what happened before choosing to resume or d
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
 failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage limit and holds the login until the reset it names. An
-error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) starts the bot's next run in a
-fresh provider session, as Clear does, instead of resuming the session into the same error.
+error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
+thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
+([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
@@ -509,7 +516,7 @@ a Responder with tasks, and a Doer whose runs for a week all did nothing.
 
 A human is normally the browser sign-in (Cloudflare Access). A **personal API token** is the
 same human from a script, a cron job or another computer, with no browser: any human (the owner may
-limit it to admins, Settings > Humans) opens **Connect an external agent** beside their email
+limit it to admins, Settings > People) opens **Connect an external agent** beside their email
 (or **Settings → Computers → API tokens**), gives the
 token a label and a life (90 days unless changed, a year at most), and copies it once; it is
 not shown again and only its hash is kept. Then:

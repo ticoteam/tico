@@ -18,7 +18,7 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 [Your first result](install.md#your-first-result): Content Marketer drafts a post from a fictional brief, you review it and close the task.
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
-- [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [Humans](people.md).
+- [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [People](people.md).
 - [The sample company](sample-company.md): a made-up five-bot team to try Tico with.
 - [Choose and set up bots](creating-bots.md), with the full [Starter catalog](starter-bots.md).
 - [Connect tools](connect-tools.md) (including [a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico) and [hiring an external AI specialist](connect-tools.md#hire-an-external-ai-specialist)), [Credentials](credential-vault.md) and [Permissions](permissions.md).
@@ -36,7 +36,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Meetings](meetings.md), [Listening](listening.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
-- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [Humans](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your CEO Bot](ceo-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator

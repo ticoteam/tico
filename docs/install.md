@@ -101,8 +101,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
-   with **Needs setup** until you talk to them.
+4. **Create my team.** The four built-in bots are created automatically. Each other role you picked waits as a Recruiting seat;
+   recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to both Claude Code and Codex
    (ChatGPT through Codex). **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
    selected harness to be installed, then press **Sign in** beside it.
@@ -204,7 +204,7 @@ To let your humans in from anywhere, edit `.env` in the install directory and ru
 1. Point a domain at this computer and pick the front door: set `COMPOSE_PROFILES=caddy,updater` and `TICO_DOMAIN=tico.example.com`
    (or the Cloudflare tunnel; see below).
 2. Choose the sign-in: `TICO_AUTH_PROXY=oidc` with its issuer, client ID and secret, or `cloudflare` (see [Sign-in](#sign-in)).
-3. Add the others to the Humans list in the app; they sign in with the same account.
+3. Add the others in **Settings > People**; they sign in with the same account.
 
 Setting `TICO_DOMAIN` without `TICO_AUTH_PROXY` stops the server with a message that names the missing setting.
 The wizard below does all of this for you, on a fresh server.
@@ -378,7 +378,7 @@ plans and diagnostics, and stay in setup's 0600 private environment copy for ret
 excluded from public setup state and runner settings. An explicit nonempty environment value replaces its saved value.
 
 For an existing workspace with an Inbox key, a signed-in owner or admin can connect its Inbox to a company in the
-customer portal. In Settings > More > Email & Phone, open **Connect Inbox to Tico account/company** and follow the
+customer portal. In **Settings > More > Email & Phone**, open **Connect Inbox to Tico account/company** and follow the
 portal link to obtain a five-minute connection code. Paste it into the workspace, preview the company name and ID,
 then confirm sharing in both directions: existing workspace inboxes and messages join the company's shared Inbox,
 and the workspace's agents can read that shared Inbox. The key stays on the server; no agent receives it. A saved
@@ -968,7 +968,12 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now**, or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+Use **Update now** (Settings, or Health → Version for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+
+![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
+
+*Synthetic Acme example. The pictured v0.4.12 is a fictional newer-release answer used to show Update now; no update was installed.*
+
 Pulling an unchanged pinned tag does not upgrade Tico. See [Updates](updates.md) for manual updates, self-update and rollback.
 Data lives in named volumes and survives updates. Computers follow the server's release.
 

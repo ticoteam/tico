@@ -19,8 +19,10 @@ A failure that is a provider's usage limit takes the usage-limit hold instead (b
 provider wrapped it: `classify` reads the text of any failed run, so a runner that did not flag it (an older one)
 or an error that nests the limit inside another ("Prompt is too long - automatic compaction failed: You've hit
 your weekly limit - resets Oct 26, 8pm (UTC)") still waits for the reset the text names. A failure that says the
-session's prompt grew too large to send ("too many total text bytes", "Prompt is too long") starts the next run in a
-fresh provider session, as a person's Clear does, rather than resuming the same session into the same error.
+session's prompt grew too large to send ("too many total text bytes", "Prompt is too long") makes the next run on that
+thread compact its session first (`compact_first` in the config its claim hands out, once). Only a run that already
+had `compact_first` and failed the same way again (an older runner that ignores it, or a compaction that did not help)
+starts the next run in a fresh provider session, as a person's Clear does, with the reason `prompt_too_long_after_compact`.
 
 What does not count: a run a person stopped, a usage limit or a model at capacity (their own waits), a run that
 yielded or was handed back, and a run that failed after FAST seconds of work. Only a completed run resets the count.
@@ -131,12 +133,52 @@ def classify(c, aid, body, now=None):
     return None
 
 
-def fresh_session(c, settings, bot, conversation_id, aid):
+AFTER_COMPACT = "prompt_too_long_after_compact"
+
+
+def fresh_session(c, settings, bot, conversation_id, aid, task_id=None):
     """The bot's next run in this conversation starts a new provider session (views.clear_chat_session, the same
     mechanism as a person's Clear): its history is reloaded from Tico instead of resuming the session that no longer
-    fits."""
+    fits. The failed run says so, on itself and on its task."""
     from .views import clear_chat_session
-    clear_chat_session(c, settings, H.KEEPER, bot, conversation_id, {"reason": PROMPT_TOO_LONG, "attempt": aid})
+    clear_chat_session(c, settings, H.KEEPER, bot, conversation_id,
+                       {"reason": AFTER_COMPACT, "attempt": aid, "task": task_id, "bot": bot})
+    c.execute("UPDATE turns SET session_kind='new', session_why=? WHERE id=?", (AFTER_COMPACT, aid))
+
+
+def too_long(c, settings, row, conversation_id, aid):
+    """A run failed because its session's prompt was too large to send. A thread's first such failure marks it, and its
+    next claim carries `compact_first` once (`take_compact`): the runner compacts the session before it runs. A run
+    that already carried it and failed the same way again has a session compaction cannot save, so it starts anew."""
+    bot = row["bot"]
+    if c.execute("SELECT 1 FROM compact_first WHERE bot=? AND conversation_id=? AND taken_by=?",
+                 (bot, conversation_id, aid)).fetchone():
+        c.execute("DELETE FROM compact_first WHERE bot=? AND conversation_id=?", (bot, conversation_id))
+        turn = c.execute("SELECT task_id FROM turns WHERE id=?", (aid,)).fetchone()
+        fresh_session(c, settings, bot, conversation_id, aid, turn[0] if turn else None)
+        return
+    c.execute("INSERT INTO compact_first(bot,conversation_id,marked,taken_by) VALUES(?,?,?,NULL) "
+              "ON CONFLICT(bot,conversation_id) DO UPDATE SET marked=excluded.marked,taken_by=NULL",
+              (bot, conversation_id, H.now()))
+    H.event(c, H.KEEPER, "session.compact_first", conversation_id, {"bot": bot, "attempt": aid})
+
+
+def take_compact(c, bot, conversation_id, aid):
+    """Whether the claim of run `aid` carries `compact_first`: the thread is marked, and no run that took the mark is
+    still out. The mark is spent by the first claim that takes it; a run that ends without finishing (`compact_settle`)
+    or whose lease lapsed gives it back."""
+    return c.execute(
+        "UPDATE compact_first SET taken_by=? WHERE bot=? AND conversation_id=? AND (taken_by IS NULL OR taken_by NOT IN "
+        "(SELECT id FROM attempts WHERE state IN ('leased','running')))", (aid, bot, conversation_id)).rowcount > 0
+
+
+def compact_settle(c, aid, completed):
+    """The run that took a mark has ended: a completed run compacted and ran, so the mark is gone; any other end that
+    is not a prompt too large to send gives it back for the next claim."""
+    if completed:
+        c.execute("DELETE FROM compact_first WHERE taken_by=?", (aid,))
+    else:
+        c.execute("UPDATE compact_first SET taken_by=NULL WHERE taken_by=?", (aid,))
 
 
 # ---------------------------------------------------------------------------------------------------- the state

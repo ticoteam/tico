@@ -50,15 +50,15 @@ async function renderSettingsListening() {
   if (LISTEN_EDIT && LISTEN_EDIT !== 'new' && !editing) LISTEN_EDIT = null;
   el.innerHTML = `${data.destinations.length ? `<ul class="listen-list">${data.destinations.map(d => listenRowHTML(d, names, canEdit)).join('')}</ul>`
       : '<div class="empty">No destinations yet. Posts are saved and scored but go nowhere.</div>'}
-    ${canEdit ? (LISTEN_EDIT ? listenFormHTML(data, editing || {}) : '<div class="row"><button class="primary" type="button" data-listen-add>Add destination</button></div>') : ''}`;
+    ${canEdit ? (LISTEN_EDIT ? listenFormHTML(data, editing || {}) : '<div class="row"><button class="primary" type="button" data-listen-add>Add destination</button></div>') : settingsWhoCanHTML('where posts go')}`;
   el.querySelector('[data-listen-add]')?.addEventListener('click', () => { LISTEN_EDIT = 'new'; void renderSettingsListening(); });
   el.querySelector('[data-listen-cancel]')?.addEventListener('click', () => { LISTEN_EDIT = null; void renderSettingsListening(); });
   el.querySelectorAll('[data-listen-edit]').forEach(b => b.addEventListener('click', () => { LISTEN_EDIT = b.dataset.listenEdit; void renderSettingsListening(); }));
   el.querySelectorAll('[data-listen-remove]').forEach(b => b.addEventListener('click', async () => {
     const key = b.dataset.listenRemove;
-    if (!window.confirm(`Remove ${key}? Posts already in its inbox stay.`)) return;
-    try { await post(`/v2/listening/destinations/${encodeURIComponent(key)}/remove`, {}); LISTEN_EDIT = null; void renderSettingsListening(); }
-    catch (e) { toast(e.message, true); }
+    if (!await settingsConfirm({title: `Remove ${key}?`, ok: 'Remove', text: 'Posts already in its inbox stay.'})) return;
+    try { await post(`/v2/listening/destinations/${encodeURIComponent(key)}/remove`, {}); LISTEN_EDIT = null; toast('Removed'); void renderSettingsListening(); }
+    catch (e) { settingsFieldError(b.closest('li') || b, e.message); }
   }));
   const form = el.querySelector('[data-listen-form]');
   if (form) form.onsubmit = async ev => {
@@ -68,9 +68,10 @@ async function renderSettingsListening() {
       readers: [...f.readers.selectedOptions].map(o => o.value), what: f.what.value.trim()};
     if (f.unless_category.value) body.unless = {category: f.unless_category.value, threshold: Number(f.unless_threshold.value)};
     const key = f.key.value.trim().toLowerCase();
-    if (!key) { status.textContent = 'Name it.'; return; }
+    status.classList.remove('err');
+    if (!key) { status.classList.add('err'); status.textContent = 'Name it.'; return; }
     status.textContent = 'Saving…';
-    try { await put(`/v2/listening/destinations/${encodeURIComponent(key)}`, body); LISTEN_EDIT = null; void renderSettingsListening(); }
-    catch (e) { status.textContent = e.message; }
+    try { await put(`/v2/listening/destinations/${encodeURIComponent(key)}`, body); LISTEN_EDIT = null; toast('Saved'); void renderSettingsListening(); }
+    catch (e) { status.classList.add('err'); status.textContent = e.message; }
   };
 }

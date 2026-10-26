@@ -10,6 +10,14 @@ from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 
 
+
+@pytest.fixture(autouse=True)
+def private_tasks_have_an_unrelated_manager(api):
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+
+
 def task(api, *, requester="human:cara", owner="human:ben", private=True, title="Sensitive packet", **fields):
     with api.app.state.store.transaction() as c:
         return H.task_create(c, requester, title, "Confidential attachment and comment.", owner,

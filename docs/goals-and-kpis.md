@@ -304,9 +304,12 @@ Message bots such as Inbox Manager follow separately under **Message bots**.
 
 Tapping any line opens that owner's panel (a sheet at the bottom on a phone). It lists their goals: tap one to edit its
 words, what it supports and its colour (or **Let CEO Bot set it**). Under each goal are its KPIs, its latest
-check-in and **Add KPI**; tapping a KPI shows its history (a chart and the readings with their evidence), its definition
-and version, its owner, its targets and the CEO Bot's latest check-in, with a way back. **Add goal** and **Add KPI**
-(a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
+check-in, **Post update** and **Add KPI**. **Post update** (a check-in) is there for whoever may colour the goal: say in a
+sentence what is going on and, if you like, how it is going (on track, at risk or off track). On a goal no KPI judges, that
+answer sets its colour for three weeks; a colour a person set stays, as does the colour of a goal whose KPIs carry a target
+and a colour, and the update is kept as your words. Tapping a KPI shows its history (a chart and the readings with their
+evidence), its definition and version, its owner, its targets and the CEO Bot's latest check-in, with a way back.
+**Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. The
 [Strategy line](#the-company-section) sits above everything, each goal in a panel shows its
 [Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
@@ -321,7 +324,10 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 - Everyone signed in reads the strategy and its versions. Only the owner publishes one, on their own click
   ([Strategy](strategy.md#who-may-do-what)).
 - Team goals and team KPIs are visible to everyone signed in. A bot's goals and KPIs, and its automatic KPIs, are
-  visible to whoever may Read the bot.
+  visible to whoever may Read the bot. A goal shows its KPIs, and their numbers in its colour's reason, to everyone
+  who reads it, so a bot's KPI goes only on a goal that no one reads who may not read that bot (its own goals, say):
+  linking one elsewhere is refused, by hand or by saying yes to a suggestion, and so is handing such a goal to
+  someone else. A goal linked before this rule shows without that KPI to whoever may not read it.
 - A goal's owner, the owner of the goal it supports and anyone above the owner on the team chart set its colour, edit it and
   choose its KPIs and targets. The team owner may do all of it.
 - A KPI's owner (or anyone above them; the team owner for a team KPI) edits the KPI. Its readings are logged by that

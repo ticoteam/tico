@@ -57,19 +57,28 @@ def test_a_weekly_limit_wrapped_in_a_prompt_error_holds_until_its_reset_even_fro
     assert claim(api, machine) is None                                   # not 10,000 runs an hour: none until Oct 26
 
 
-def test_a_prompt_too_large_to_send_starts_a_fresh_session_and_five_fast_failures_hold_the_bot_until_released(
+def test_a_prompt_too_large_to_send_compacts_first_then_starts_a_fresh_session_and_five_fast_failures_hold_the_bot(
         api, monkeypatch):
     machine = setup(api, monkeypatch)
     now = "2026-10-24T12:00:00.000000Z"
     for fails in range(1, 6):
         attempt = claim(api, machine)
         assert attempt, f"run {fails} should have started"
+        if fails <= 2:      # the second run is the first one's thread again, told to compact first
+            assert bool(attempt["config"].get("compact_first")) == (fails == 2)
         done = fail(api, machine, attempt, TOO_BIG)
         assert done["outcome"] == "failed"
         with api.app.state.store.read() as c:
+            epoch = c.execute("SELECT epoch FROM session_epochs").fetchone()
             if fails == 1:
-                # The conversation's epoch moved: the next run starts a new provider session, as a Clear does.
-                assert c.execute("SELECT epoch FROM session_epochs").fetchone()["epoch"] == 1
+                # The thread is marked to compact first; its session is kept, not cleared.
+                assert epoch is None and c.execute("SELECT count(*) FROM compact_first").fetchone()[0] == 1
+            elif fails == 2:
+                # The run that compacted first failed the same way: now the next run starts a new provider session,
+                # as a Clear does, and the failed run says why.
+                assert epoch["epoch"] == 1 and c.execute("SELECT count(*) FROM compact_first").fetchone()[0] == 0
+                assert tuple(c.execute("SELECT session_kind,session_why FROM turns WHERE id=?",
+                                       (attempt["id"],)).fetchone()) == ("new", "prompt_too_long_after_compact")
             state = run_backoff.get(c, "ops")
         assert state["fails"] == fails and state["error_class"] == run_backoff.PROMPT_TOO_LONG
         if fails < 5:
@@ -107,6 +116,45 @@ def test_a_prompt_too_large_to_send_starts_a_fresh_session_and_five_fast_failure
     with api.app.state.store.read() as c:
         assert run_backoff.get(c, "ops")["fails"] == 0
         assert c.execute("SELECT status FROM tasks WHERE title LIKE '%failed runs in a row'").fetchone()["status"] == "closed"
+
+
+def test_compact_first_is_spent_by_the_run_that_takes_it_and_given_back_by_one_that_does_not_finish(api, monkeypatch):
+    machine = setup(api, monkeypatch)
+    fail(api, machine, claim(api, machine), TOO_BIG)
+    at(monkeypatch, api, "2026-10-24T12:01:00.000000Z")
+    ready(api, machine, ["ops"])
+    # A run that took the mark and failed for another reason did not compact: the next claim carries it again.
+    taken = claim(api, machine)
+    assert taken["config"]["compact_first"] is True
+    fail(api, machine, taken, "Connection reset by peer")
+    at(monkeypatch, api, "2026-10-24T12:02:00.000000Z")
+    ready(api, machine, ["ops"])
+    again = claim(api, machine)
+    assert again["config"]["compact_first"] is True
+    # A run that completes spent it, and the session was never cleared.
+    complete(api, machine, again)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM compact_first").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM session_epochs").fetchone()[0] == 0
+    ready(api, machine, ["ops"])
+    assert "compact_first" not in claim(api, machine)["config"]
+
+
+def test_a_new_session_after_a_prompt_too_large_to_send_is_in_the_tasks_history(api, monkeypatch):
+    machine = setup(api, monkeypatch, tasks=1)
+    first = claim(api, machine)
+    task = first["task"]["id"]
+    fail(api, machine, first, TOO_BIG)
+    at(monkeypatch, api, "2026-10-24T12:01:00.000000Z")
+    ready(api, machine, ["ops"])
+    second = claim(api, machine)
+    assert second["task"]["id"] == task and second["config"]["compact_first"] is True
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()[0] == 0
+    fail(api, machine, second, TOO_BIG)
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT field,new,note FROM task_events WHERE task_id=? AND field='session'", (task,)).fetchone()
+        assert tuple(row) == ("session", "new", "Started a new session: the old one was still too large to send after compacting")
 
 
 def hold_bot(api, machine, monkeypatch):

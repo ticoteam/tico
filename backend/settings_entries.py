@@ -307,8 +307,8 @@ ENTRIES = TEAM_RULES + [
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
 # changes them in Settings until it can, rather than BotOps changing them at once.
 NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
-               "storage.move", "people.person.delete", "owner.transfer", "me.tokens.revoke", "team.turn_levels",
-               "models.gateway.automatic", "models.gateway.remove", "bot.budget", "ceo.checks", "ceo.level",
+               "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
+               "bot.budget", "ceo.checks", "ceo.level",
                "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
                "webhooks.outgoing", "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
@@ -320,6 +320,7 @@ ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + 
 # goes: the entry that covers it.
 ALIASES = {
     ("POST", "{x}/invite"): "people.add",
+    ("POST", "access/humans/{x}/invite"): "people.add",
     ("POST", "{x}/password"): "people.add",
     ("POST", "{x}/{x}"): "webhooks.outgoing",
     ("POST", "runners/{x}/inbox-only"): "computer.inbox_only",

@@ -27,7 +27,7 @@ from . import people as P
 COLOURS = ("red", "yellow", "green")
 STATUSES = COLOURS + ("done", "dropped")
 AUTO_STATUSES = COLOURS + ("gray",)       # what the arithmetic may say; gray is no data
-LIVE = ("red", "yellow", "green")         # statuses a goal is still worked under; None is proposed
+LIVE = ("red", "yellow", "green")         # statuses a goal is still worked under; None is unscored
 COMPANY = "company"                       # the owner of a company goal
 GOAL_MANAGER = "goal-manager"             # the built-in bot that keeps the KPIs and sets the automatic colours
 AUTO_ACTOR = "bot:" + GOAL_MANAGER        # who an automatic status says set it
@@ -91,7 +91,7 @@ def history(conn, goal_id):
 
 def kpis(conn, goal_id):
     """The goal's KPIs: each one's fields and latest reading, its link with the target, and its status."""
-    return K.goal_views(conn, [goal_id])[goal_id]
+    return K.goal_views(conn, [goal_id], include_archived=True)[goal_id]
 
 
 def kpi(conn, kpi_id):
@@ -124,14 +124,17 @@ def proposals(conn, status="pending", goal_id=None, kpi_id=None):
     if kpi_id:
         where.append("kpi_id=?")
         args.append(kpi_id)
-    return [_proposal_view(r) for r in H._rows(conn.execute(
+    return [_proposal_view(r, conn) for r in H._rows(conn.execute(
         "SELECT * FROM goal_proposals" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY proposed_at", args))]
 
 
-def _proposal_view(row):
+def _proposal_view(row, conn=None):
     if row:
         row["payload"] = H._json(row.pop("payload_json"), {}) or {}
         row["result"] = H._json(row.pop("result_json"), None)
+        if conn is not None and row["kind"] in ("strategy_draft", "strategy_realign"):
+            from . import strategy
+            strategy.card_view(conn, row)
     return row
 
 
@@ -243,8 +246,8 @@ def _bet(conn, actor, bet_id):
 
 
 def create(conn, actor, title, owner, parent_id=None, body="", top=False, bet_id=None):
-    """A new goal. With a parent it is proposed: `status` is NULL until whoever owns the parent sets
-    its first colour. With none it is only unlinked."""
+    """A new goal starts uncoloured until its data supplies an automatic colour or a person sets one.
+    A parent links it to the goal it supports; with none it is simply unlinked."""
     H._writer(conn, actor)
     title = str(title or "").strip()
     if not title:
@@ -634,16 +637,20 @@ def score(conn, row, at=None):
         return fallback
     if views:
         return {"status": "gray", "basis": "kpis", "reason": views[0]["reason"]}
+    measures = K.goal_views(conn, [row["id"]], at, include_archived=True)[row["id"]]
+    if len(measures) == 1 and measures[0].get("archived_at"):
+        return {"status": "gray", "basis": "kpis",
+                "reason": f"Its only measure was archived on {K.day(measures[0]['archived_at'])}"}
     return {"status": "gray", "basis": "none", "reason": "No data yet: no KPI, check-in or task progress"}
 
 
 def apply_auto(conn, goal_id, at=None):
     """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a
-    visible suggestion when the arithmetic disagrees, never a change. Done, dropped and proposed goals
+    visible suggestion when the arithmetic disagrees, never a change. Done and dropped goals
     are left alone. Nothing at all while the owner has the CEO Bot's regular checks off (backend/ceo_bot.py `checks`):
     turning them back on works every colour out again. Returns what happened, or None."""
     row = goal(conn, goal_id)
-    if not row or row["status"] in ("done", "dropped") or (row["status"] is None and row["parent_id"]):
+    if not row or row["status"] in ("done", "dropped"):
         return None
     if not ceo_bot.checks(conn):
         return None
@@ -831,8 +838,9 @@ def card(conn, p, hidden, editor):
         out["changes"] = [{"label": CARD_FIELDS.get(k, k), "now": record.get(k) or "", "proposed": v}
                           for k, v in K.clean(dict(pl)).items()]
     elif kind == "goal_wording" and row:
+        # Every field yes writes (update writes any that is not None): an empty body clears the description.
         changes = [{"label": label, "now": row.get(k) or "", "proposed": pl[k]}
-                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k)]
+                   for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k) is not None]
         if pl.get("bet_id"):
             from . import strategy
             if editor:
@@ -888,7 +896,7 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
 
 
 def proposal(conn, proposal_id):
-    return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)))
+    return _proposal_view(H._one(conn, "SELECT * FROM goal_proposals WHERE id=?", (proposal_id,)), conn)
 
 
 def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None, target=None):
@@ -981,8 +989,10 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
     H.event(conn, actor, "goal.decide", proposal_id, {"decision": decision, "kind": row["kind"]})
     if row["kind"] == "strategy_realign":
         from . import strategy
+        # Confirmed with every goal kept (or closed since) changes nothing: it reads as the goals staying.
+        changed = decision == "confirm" and any(v in ("retired", "moved") for v in (result or {}).get("goals", {}).values())
         strategy.settle_card(conn, actor, proposal_id, "Resolved: the goals were realigned with the strategy."
-                             if decision == "confirm" else "Resolved: the goals stay as they are.")
+                             if changed else "Resolved: the goals stay as they are.")
     return proposal(conn, proposal_id)
 
 
