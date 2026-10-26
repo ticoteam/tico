@@ -1403,16 +1403,38 @@ def writing_refusal(rule, detail):
         r'write a concrete human decision|write the ask in the first line|\d+ words outside the quoted draft)', detail))
 
 
+def _review_wait_key(task, detail):
+    """Content-free identity of a gate wait; unknown legacy heads share one guard per ticket."""
+    if not task:
+        return None
+    receipt = re.match(r"Review refused: (?:missing|stale|failed|unrecognised) test receipt for \S+ current head (\w+)", detail)
+    ci = re.match(r"Review refused: CI (?:failing|pending) at head (\w+) on ", detail)
+    if receipt or ci:
+        head = (receipt or ci)[1]
+    elif (detail.startswith("Review refused: cannot verify the current head and CI for ") or
+          detail.startswith("Review refused: no linked PR") or detail == "Private task write refused"):
+        head = "unknown"
+    else:
+        return None
+    return hashlib.sha256(_dump([task, head]).encode()).hexdigest()
+
+
 def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=None):
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
-    a `label` refusal was about, which _escalate counts it by."""
+    a refusal was about, used to distinguish label windows and review-wait retry loops."""
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
         context = {"what": context.get("what")}
+    counting = {}
+    if PRIVATE_WRITE.get():
+        # Compare the refused operation, never the shared redacted audit text.
+        counting["repeat_key"] = hashlib.sha256(_dump([task] if task else [detail]).encode()).hexdigest()
+    if rule == "review_gate" and (key := _review_wait_key(task, detail)):
+        counting["review_wait"] = key
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
            "detail_json": _dump({"detail": recorded, **({"context": context} if context else {}),
-                                 **({"task": task} if task else {})}), "severity": severity}
+                                 **({"task": task} if task else {}), **counting}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
@@ -2041,8 +2063,19 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
     counted, last, total = [], {}, 0
+    review_seen, review_repeats = set(), 0
     for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY ts, id", (actor, since))):
+        facts = _json(refused["detail_json"], {}) or {}
+        if refused["rule"] == "review_gate" and (key := facts.get("review_wait") or
+                _review_wait_key(facts.get("task"), facts.get("detail", ""))):
+            # A gate saying "not yet" is ordinary progress. Only retrying that same ticket/head
+            # contributes to rule 8, and remains a repeat even if the receipt/CI words change.
+            if key in review_seen:
+                total += 1
+                review_repeats += 1
+            review_seen.add(key)
+            continue
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
@@ -2054,8 +2087,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
         if refused["rule"] != "target_inactive":
-            counted.append((refused["rule"], refused["detail_json"]))
-    count, distinct = len(counted), len(set(counted))
+            counted.append((refused["rule"], facts.get("repeat_key") or refused["detail_json"]))
+    count, distinct = len(counted) + review_repeats, len(set(counted))
     if rule == "target_inactive":
         # A sender retrying it in a loop still meets the day's backstop.
         if total >= QUARANTINE_TOTAL_AT:

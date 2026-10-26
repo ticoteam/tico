@@ -392,3 +392,30 @@ def test_incomplete_pr_paths_are_retried_without_losing_pending_default(api, mon
         detail = json.loads(c.execute("SELECT detail_json FROM task_links WHERE task_id=? AND kind='pr'", (task['id'],)).fetchone()[0])
         assert detail['qa_default_pending'] is True
         assert 'qa' not in H.task_labels(H.task(c, task['id']))
+
+
+def test_private_gate_retry_identity_survives_domain_rollback(api):
+    from backend import store
+    task = ticket(api, private=True)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,state) VALUES(?,?,'active')", (H.FLEET_MAINTAINER, 'BotOps'))
+    for i in range(H.QUARANTINE_AT + 1):
+        with api.app.state.store.transaction() as c:
+            c.execute('SAVEPOINT domain_write')
+            token = H.PRIVATE_WRITE.set(True)
+            try:
+                review_gate.reject(c, 'bot:cpo', task, 'receipt', HEAD, {'url': PR},
+                                   f'Review refused: missing test receipt for {PR} current head {HEAD}; newest receipt head: no receipt')
+            except H.Refused as exc:
+                exc.private = True  # private_task_write preserves this across the rollback boundary.
+                problem = store.refused(c, SimpleNamespace(actor='bot:cpo'), exc)
+                assert problem.code == 'review_gate'
+            finally:
+                H.PRIVATE_WRITE.reset(token)
+            assert H.bot(c, 'cpo')['state'] == ('active' if i < H.QUARANTINE_AT else 'quarantined')
+    with api.app.state.store.read() as c:
+        rows = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM refusals WHERE actor='bot:cpo' AND rule='review_gate'")]
+        assert len(rows) == H.QUARANTINE_AT + 1  # rolled-back originals are not counted twice.
+        assert all(r['detail'] == 'Private task write refused' for r in rows)
+        assert len({r['review_wait'] for r in rows}) == 1
+        assert H.quarantine_reason(c, 'cpo') == f'{H.QUARANTINE_AT} repeated refusals today'

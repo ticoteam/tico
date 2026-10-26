@@ -483,6 +483,110 @@ class Rule8Counting(HubCase):
         self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
+    def gate_wait(self, task, head, kind="missing", private=False):
+        detail = (f"Review refused: CI {kind} at head {head} on https://github.com/acme/app/pull/1: checks"
+                  if kind in ("failing", "pending") else
+                  f"Review refused: {kind} test receipt for https://github.com/acme/app/pull/1 current head {head}; newest receipt head: no receipt")
+        token = H.PRIVATE_WRITE.set(private)
+        try:
+            self.refused("review_gate", H.refuse, self.conn, CMO, "review_gate", detail, task=task)
+        finally:
+            H.PRIVATE_WRITE.reset(token)
+
+    def test_review_waits_on_new_tickets_or_heads_never_feed_either_limit(self):
+        for private in (False, True):
+            for i in range(2 * H.QUARANTINE_TOTAL_AT):
+                self.gate_wait(f"ticket-{private}-{i}" if i % 2 else f"same-ticket-{private}", f"{i:040x}",
+                               ("missing", "stale", "failed", "unrecognised", "failing", "pending")[i % 6], private)
+                self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+            self.assertEqual(self.reviewed("cmo"), 0)
+        self.assertEqual(len(H.refusals_for(self.conn, CMO)), 4 * H.QUARANTINE_TOTAL_AT)
+        # Exempt waits must not consume the remaining ordinary daily budget either.
+        for i in range(H.QUARANTINE_TOTAL_AT - 1):
+            self.refused("reach", H.refuse, self.conn, CMO, "reach", f"target-{i}")
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.refused("reach", H.refuse, self.conn, CMO, "reach", "final target")
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
+
+    def test_review_retry_loop_counts_same_ticket_and_head_despite_changed_words(self):
+        for i in range(H.QUARANTINE_AT):
+            self.gate_wait("same-ticket", "a" * 40, "missing" if i % 2 else "failing", private=bool(i % 2))
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.gate_wait("same-ticket", "a" * 40, "stale", private=True)
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_AT} repeated refusals today")
+
+    def test_private_refusals_compare_operation_instead_of_shared_redaction(self):
+        token = H.PRIVATE_WRITE.set(True)
+        try:
+            for i in range(H.QUARANTINE_AT + 2):
+                self.refused("identity", H.refuse, self.conn, CMO, "identity", f"private operation {i}")
+            for i in range(H.QUARANTINE_AT + 2):
+                self.refused("identity", H.refuse, self.conn, CMO, "identity", "same words", task=f"ticket-{i}")
+            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+            facts = [json.loads(r[0]) for r in self.conn.execute("SELECT detail_json FROM refusals")]
+            self.assertTrue(all(f["detail"] == "Private task write refused" for f in facts))
+            self.assertEqual(len({f["repeat_key"] for f in facts}), len(facts))
+            for _ in range(H.QUARANTINE_AT):
+                self.refused("identity", H.refuse, self.conn, CMO, "identity", "same words", task="ticket-0")
+            self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_AT} repeated refusals today")
+            event_text = " ".join(r[0] for r in self.conn.execute("SELECT detail_json FROM events"))
+            self.assertNotIn("private operation", event_text)
+        finally:
+            H.PRIVATE_WRITE.reset(token)
+
+    def test_unknown_review_gate_refusals_keep_the_existing_daily_backstop(self):
+        for i in range(H.QUARANTINE_TOTAL_AT):
+            self.refused("review_gate", H.refuse, self.conn, CMO, "review_gate", f"another policy refusal {i}", task="ticket")
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
+
+    def test_legacy_redacted_review_waits_on_different_private_tickets_are_distinct(self):
+        for i in range(H.QUARANTINE_TOTAL_AT + 2):
+            ts = H.now()
+            self.conn.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,?,?)",
+                              (H.new_id(), ts, CMO, "review_gate", json.dumps({"detail": "Private task write refused", "task": f"ticket-{i}"}), "normal"))
+            H._escalate(self.conn, CMO, "review_gate", "Private task write refused", "normal", ts)
+        self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.assertEqual(self.reviewed("cmo"), 0)
+        for _ in range(H.QUARANTINE_AT):
+            self.refused("review_gate", H.refuse, self.conn, CMO, "review_gate", "Private task write refused", task="ticket-0")
+        self.assertEqual(H.quarantine_reason(self.conn, "cmo"), f"{H.QUARANTINE_AT} repeated refusals today")
+
+    def test_legacy_mixed_day_replay_preserves_equality_without_live_team_data(self):
+        # Synthetic projection of a 30-refusal incident: task/head and ordinary-detail equality,
+        # order and private redaction retained; no real tasks, names, URLs or database copied.
+        trace = [
+            ("review_gate", 0, None, "unavailable"), ("review_gate", 1, None, "private"),
+            ("review_gate", 2, None, "private"), ("review_gate", 3, 0, "failing"),
+            ("review_gate", 4, 1, "unrecognised"), ("review_gate", 5, 2, "unrecognised"),
+            ("private", None, None, 0), ("review_gate", 6, 3, "unrecognised"),
+            ("review_gate", 3, 4, "unrecognised"), ("review_gate", 7, 5, "missing"),
+            ("review_gate", 8, 6, "unrecognised"), ("profile", None, None, 1),
+            ("review_gate", 9, 7, "failed"), ("review_gate", 10, 8, "unrecognised"),
+            ("review_gate", 11, 9, "unrecognised"), ("review_gate", 12, 10, "stale"),
+            ("review_gate", 10, 11, "failing"), ("kind", None, None, 2),
+            ("review_gate", 13, 12, "stale"), ("review_gate", 14, 13, "failing"),
+            ("review_gate", 15, None, "unlinked"), ("review_gate", 14, 14, "unrecognised"),
+            ("review_gate", 16, 15, "stale"), ("review_gate", 16, 15, "stale"),
+            ("defer", None, None, 3), ("review_gate", 17, None, "unlinked"),
+            ("kind", None, None, 2), ("private", None, None, 0),
+            ("self", None, None, 4), ("review_gate", 18, 16, "stale")]
+        for rule, ticket, head, kind in trace:
+            about = f"ticket-{ticket}" if ticket is not None else None
+            sha = f"{head:040x}" if head is not None else None
+            detail = ("Private task write refused" if kind == "private" else
+                      "Review refused: cannot verify the current head and CI for https://github.com/acme/app/pull/1" if kind == "unavailable" else
+                      "Review refused: no linked PR. Link the current PR before asking a reviewer." if kind == "unlinked" else
+                      f"Review refused: CI failing at head {sha} on https://github.com/acme/app/pull/1: checks" if kind == "failing" else
+                      f"Review refused: {kind} test receipt for https://github.com/acme/app/pull/1 current head {sha}; newest receipt head: no receipt" if rule == "review_gate" else
+                      f"ordinary refusal {kind}")
+            facts = {"detail": detail, **({"task": about} if about else {})}
+            ts = H.now()
+            self.conn.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,?,?)",
+                              (H.new_id(), ts, CMO, rule, json.dumps(facts), "normal"))
+            H._escalate(self.conn, CMO, rule, detail, "normal", ts)
+            self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM refusals WHERE actor=?", (CMO,)).fetchone()[0], 30)
+
     def test_a_quarantine_from_before_the_repeat_rule_still_cools_off(self):
         H.quarantine(self.conn, "cmo", "10 refused writes today")
         self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
