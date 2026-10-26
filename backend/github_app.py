@@ -353,7 +353,8 @@ class GitHubApp:
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
-            raise Problem("github_installations", "GitHub would not list the app's installations", 502)
+            raise Problem("github_installations", f"GitHub would not list the app's installations (HTTP {r.status_code})",
+                          502, extra={"github_status": r.status_code})
         found = next((i for i in r.json() if str((i.get("account") or {}).get("login", "")).lower() == row["org"].lower()), None)
         with self.store.transaction() as c:
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
@@ -501,7 +502,8 @@ class GitHubApp:
             raise Problem("github_app_key", "GitHub rejected the App's key (" + (said or "HTTP 401") + "). " + RECONNECT, 502)
         if r.status_code >= 300:
             raise Problem("github_token", f"GitHub would not issue an installation token (HTTP {r.status_code}"
-                          + (": " + said if said else "") + ")", 502)
+                          + (": " + said if said else "") + ")", 502,
+                          extra={"github_status": r.status_code})
         data = r.json()
         entry = {"token": data["token"], "expires_at": data["expires_at"], "exp": _iso(data["expires_at"])}
         with self.lock:

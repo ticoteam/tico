@@ -416,7 +416,10 @@ def refused(c, identity, exc):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422)
+    gate = getattr(exc, "review_gate", None) or {}
+    return Problem(exc.rule, exc.detail, 403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
+                   retryable=bool(gate.get("temporary")),
+                   extra={key: gate[key] for key in ("problem_code", "temporary", "devops", "upstream_status") if key in gate})
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two

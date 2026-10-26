@@ -1,9 +1,58 @@
 """Deterministic review handoff gate; runs before any step change or review child wake."""
 import json
 import re
+import time
 from urllib.parse import quote
 
+import httpx
+
 from . import test_receipts
+from .store import Problem
+
+ATTEMPTS = 2
+RETRY_BACKOFF = 0.15
+
+
+class SnapshotInvalid(ValueError):
+    """A collector validation error whose fixed text is safe to return."""
+
+
+DEVOPS_CAUSES = {"github_app_permissions", "github_repo_not_accessible", "github_app_key",
+                 "github_key_missing", "github_not_installed", "github_unavailable"}
+
+
+def github_failure(exc):
+    """Only known upstream outages are temporary; key errors can also have an HTTP 502 envelope."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, TimeoutError, ConnectionError)):
+        return {"problem_code": "github_unreachable", "why": "GitHub did not answer in time",
+                "temporary": True, "devops": False}
+    if isinstance(exc, Problem):
+        status = exc.extra.get("github_status")
+        if status is None and exc.code == "github_token":
+            found = re.search(r"HTTP (\d{3})\b", exc.detail)
+            status = int(found[1]) if found else exc.status
+        temporary = exc.code == "github_unreachable" or (
+            exc.code in ("github_token", "github_read", "github_installations")
+            and isinstance(status, int) and (status == 429 or 500 <= status <= 599))
+        return {"problem_code": exc.code,
+                "why": "GitHub did not answer in time" if exc.code == "github_unreachable" else exc.detail,
+                "temporary": temporary, "devops": not temporary and (exc.code in DEVOPS_CAUSES
+                    or exc.code == "github_installations" and status in (401, 403, 404)),
+                **({"upstream_status": status} if status is not None else {})}
+    return {"problem_code": "github_read", "why": "GitHub read failed: " + type(exc).__name__,
+            "temporary": False, "devops": False}
+
+
+def github_retry(call):
+    """A brief retry outside the write lock; never retry permanent access or configuration failures."""
+    for attempt in range(ATTEMPTS):
+        try:
+            return call()
+        except Exception as exc:
+            if attempt + 1 == ATTEMPTS or not github_failure(exc)["temporary"]:
+                raise
+            time.sleep(RETRY_BACKOFF)
+
 
 REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
 # A request to a reviewer, to QA or to Security: a subtask of the ticket, titled by what it asks.
@@ -110,18 +159,21 @@ def snapshot(service, prs):
         try:
             repo = pr.get("repo")
             if not repo or not pr.get("number"):
-                raise ValueError("unresolved PR")
-            try:
-                token, _ = service.mint([repo], {"pull_requests": "read", "checks": "read", "statuses": "read"})
-            except Exception:
-                raise ValueError("the GitHub App could not sign in for " + repo)
+                raise SnapshotInvalid("unresolved PR")
+            token, _ = github_retry(lambda: service.mint(
+                [repo], {"pull_requests": "read", "checks": "read", "statuses": "read"}))
             headers = {"Authorization": "Bearer " + token}
             base = f"/repos/{quote(repo, safe='/')}"
             def read(path, params=None):
-                response = service._call("GET", base + path, headers=headers, params=params)
-                if response.status_code != 200:
-                    raise ValueError(f"GitHub answered {response.status_code}")
-                return response.json()
+                def fetch():
+                    response = service._call("GET", base + path, headers=headers, params=params)
+                    status = response.status_code
+                    if status != 200:
+                        code = ("github_app_key" if status == 401 else "github_repo_not_accessible"
+                                if status in (403, 404) else "github_read")
+                        raise Problem(code, f"GitHub answered {status}", 502, extra={"github_status": status})
+                    return response.json()
+                return github_retry(fetch)
             data = read(f"/pulls/{pr['number']}")
             head = data["head"]["sha"]
             checks = {}
@@ -141,16 +193,15 @@ def snapshot(service, prs):
                     if len(rows) < 100:
                         break
                 else:
-                    raise ValueError("checks incomplete")
+                    raise SnapshotInvalid("checks incomplete")
             # Detect a push while collecting, rather than blessing a now-stale head.
             if read(f"/pulls/{pr['number']}")["head"]["sha"] != head:
-                raise ValueError("head changed during collection")
+                raise SnapshotInvalid("head changed during collection")
             out[pr["id"]] = {"head_sha": head, "checks": checks, "at": H.now()}
-        except ValueError as exc:
+        except SnapshotInvalid as exc:
             out[pr["id"]] = {"error": True, "why": str(exc)}
         except Exception as exc:
-            # Only the exception's type: a transport error's text can carry request details.
-            out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__}
+            out[pr["id"]] = {"error": True, **github_failure(exc)}
     return out
 
 
@@ -203,9 +254,12 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False):
         if changed or detail.get("error") or not test_receipts.SHA.fullmatch(head):
             why = (detail.get("why") or "GitHub read failed" if detail.get("error")
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
-            # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
-            reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
-                                                  "Retry the review move; if it repeats, refresh the PR link.")
+            cause = "[" + detail["problem_code"] + "] " if detail.get("problem_code") else ""
+            action = ("Temporary GitHub failure; Tico will retry this move." if detail.get("temporary")
+                      else "Retry the review move; if it repeats, refresh the PR link.")
+            reject(c, actor, row, "ci", head, pr,
+                   f"Review refused: cannot verify the current head and CI for {pr['url']} ({cause}{why}). {action}",
+                   problem=detail)
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
@@ -221,12 +275,14 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False):
             reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}, then retry the review move.")
 
 
-def reject(c, actor, row, kind, head, pr, text):
+def reject(c, actor, row, kind, head, pr, text, problem=None):
     from . import hubdb as H
     try:
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
-        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text}
+        exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text,
+                           **{key: problem[key] for key in ("problem_code", "temporary", "devops", "upstream_status")
+                              if problem is not None and key in problem}}
         raise
 
 
