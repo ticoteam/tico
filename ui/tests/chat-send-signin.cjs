@@ -12,13 +12,25 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
   const errors = [], posts = [], delivered = [];
   const reads = new Set(), readWaiters = new Set();
+  let navigating = false;
+  const readsDrained = () => { if (!reads.size) for (const done of [...readWaiters]) done(); };
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
     if (request.method() === 'GET' && path !== '/api/v2/events' && !path.endsWith('/watch')) reads.add(request);
+  });
+  // A read still out when the page loads a new document is cancelled with the old one, and Chromium reports neither
+  // requestfinished nor requestfailed for it: left counted, it held the next wait to its deadline ("Fixture reads did
+  // not settle"). A new document in the main frame (not a hash change) ends every read made before it.
+  page.on('framenavigated', frame => {
+    if (frame !== page.mainFrame() || !navigating) return;
+    navigating = false;
+    reads.clear();
+    readsDrained();
   });
   const readFinished = request => {
     reads.delete(request);
-    if (!reads.size) for (const done of [...readWaiters]) done();
+    readsDrained();
   };
   page.on('requestfinished', readFinished);
   page.on('requestfailed', readFinished);

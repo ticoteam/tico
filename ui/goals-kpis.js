@@ -139,18 +139,71 @@ function kpiTargetKinds(form) {
   form.elements.kind.onchange = sync; sync();
 }
 
-function kpiProposalLine(p) {
-  const what = {goal_wording: 'New wording', goal_kpi: 'Add a KPI', kpi_definition: 'New definition', kpi_target: 'New target', flag: 'Flag', goal_why: 'A Why', recovery: 'A recovery',
-    strategy_draft: 'Strategy change', strategy_realign: 'Goals after the strategy change'}[p.kind] || p.kind;
-  const pl = p.payload || {};
-  const detail = p.kind === 'goal_wording' ? (pl.title || pl.body || '')
-    : p.kind === 'kpi_definition' ? (pl.definition || pl.name || Object.keys(pl).join(', '))
-    : p.kind === 'kpi_target' ? (pl.kind === 'maintain' ? `range ${pl.min ?? ''}–${pl.max ?? ''}` : pl.kind === 'improve' ? `→ ${pl.target} by ${kpiDay(pl.deadline + 'T00:00:00Z')}` : 'no target')
-    : p.kind === 'goal_kpi' ? (pl.kpi?.name || 'existing KPI')
-    : p.kind === 'goal_why' ? (pl.why || '')
-    : p.kind === 'recovery' ? (pl.options?.[pl.pick || 0]?.label || '')
-    : `${pl.issue || ''}${pl.note ? ': ' + pl.note : ''}`;
-  return {what, detail, reason: p.reason || ''};
+// ---------------------------------------------------------------- suggestion cards
+// The yes / no row every suggestion card ends with, shared with the strategy cards: yes first, saying what it does, then
+// "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons.
+function propDoHtml(p, {yes, no = 'No, leave it', line = ''}) {
+  if (!p.may_decide) return '';
+  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}<button class="primary" type="button" data-decide="confirm" data-prop-yes>${esc(yes)}</button>${no ? `<button class="ghost" type="button" data-decide="reject">${esc(no)}</button>` : ''}</div>`;
+}
+// What a suggestion would change, as Now and Proposed: rows [{label, now, proposed}], a label only when there are
+// several. Long text is cut to four lines, with one "Show all" opening both.
+const PROP_NP_LONG = 280;
+function propNowProposedHtml(rows) {
+  if (!rows?.length) return '';
+  const text = v => String(v ?? '').trim();
+  const long = rows.some(r => [r.now, r.proposed].some(v => text(v).length > PROP_NP_LONG || text(v).split('\n').length > 4));
+  const cell = (k, v) => `<div class="prop-np-row"><span class="prop-np-k">${k}</span><span class="prop-np-v${text(v) ? '' : ' muted'}">${esc(text(v) || 'Empty')}</span></div>`;
+  return `<div class="prop-np${long ? ' prop-np-clamp' : ''}">${rows.map(r => `${rows.length > 1 && r.label ? `<div class="prop-np-label">${esc(r.label)}</div>` : ''}${cell('Now', r.now)}${cell('Proposed', r.proposed)}`).join('')}
+    ${long ? '<button class="linkish" type="button" data-np-all>Show all</button>' : ''}</div>`;
+}
+// What the CEO Bot noticed, by the flag's issue (backend/goals.py FLAGS).
+const PROP_FLAG = {vague: 'is worded too vaguely to tell when it is done', duplicate: 'looks like a duplicate of another goal', unmeasured: 'has nothing measuring it'};
+// A goal suggestion card (the payload's words, and `card`: what the server read to say it plainly, backend/goals.py
+// card): one line on what yes changes, what it would change, why, then the buttons named for what they do.
+function goalPropHtml(p, extra) {
+  const pl = p.payload || {}, c = p.card || {}, by = goalActorName(p.proposed_by);
+  const goal = `<b>${esc(c.goal_title || extra || 'this goal')}</b>`, kpiName = `<b>${esc(c.kpi_name || extra || 'this measure')}</b>`;
+  const why = `<span class="muted kpi-prop-why">${p.reason ? esc(p.reason) + ' · ' : ''}${esc(by)}</span>`;
+  let head, body = '', yes = 'Use this', no = 'No, leave it', more = '';
+  if (p.kind === 'goal_kpi') {
+    const m = c.measure || pl.kpi || {}, proposed = c.target_label || '';
+    head = `Add the measure <b>${esc(m.name || 'with no name')}</b> to ${goal}`;
+    // A measure the reader may not read (card `hidden`) says nothing about itself, not even that it lacks a source.
+    body = `${m.hidden ? '' : `<span class="kpi-prop-detail">${m.definition ? esc(m.definition) : '<span class="muted">What it counts is not written down yet</span>'}</span>`}
+      <span class="kpi-prop-target">${proposed ? `Target ${esc(proposed)}` : 'No target yet'}</span>
+      ${m.hidden || String(m.source_note || '').trim() ? '' : '<span class="kpi-prop-warn">No data source yet: it will show no numbers until one is set</span>'}`;
+    // The target fields of the goal editor, folded away: the card stays short, and blank leaves the measure with none.
+    const t = pl.target && pl.target.kind && pl.target.kind !== 'none' ? pl.target : {kind: m.direction === 'range' ? 'maintain' : 'improve'};
+    if (p.may_decide) more = `<details class="kpi-prop-set"${proposed ? ' data-proposed' : ''}><summary>${proposed ? 'Change the target' : 'Set a target (optional)'}</summary>
+      <form class="goal-form kpi-prop-tf" data-prop-target novalidate>${kpiTargetFields(t)}</form></details>`;
+    yes = 'Add measure';
+  } else if (p.kind === 'kpi_target') {
+    head = `New target for ${kpiName} on ${goal}`;
+    body = propNowProposedHtml([{now: c.now_label || 'No target', proposed: c.target_label || 'No target'}]);
+    yes = 'Use this target';
+  } else if (p.kind === 'kpi_definition') {
+    head = `New definition for ${kpiName}`;
+    body = propNowProposedHtml(c.changes || Object.entries(pl).map(([k, v]) => ({label: k, now: '', proposed: v})));
+    yes = 'Use new definition';
+  } else if (p.kind === 'goal_wording') {
+    head = `New wording for ${goal}`;
+    body = propNowProposedHtml(c.changes || [{label: 'Title', now: '', proposed: pl.title}, {label: 'Description', now: '', proposed: pl.body}].filter(r => r.proposed));
+    yes = 'Use new wording';
+  } else if (p.kind === 'flag') {
+    head = `<b>${esc(by)} noticed:</b> ${goal} ${esc(PROP_FLAG[pl.issue] || pl.issue || 'needs a look')}${pl.note ? `: ${esc(pl.note)}` : ''}`;
+    yes = 'Got it'; no = null;
+  } else if (p.kind === 'recovery') {
+    // Out of this card's scope: a recovery keeps its own words (recoveryHtml), here its pick on one line.
+    head = `<b>A recovery</b> for ${goal}: ${esc(pl.options?.[pl.pick || 0]?.label || '')}`;
+    yes = 'Approve'; no = 'Reject';
+  } else if (p.kind === 'goal_why') {
+    head = `<b>A Why</b> for ${goal}: ${esc(pl.why || '')}`;
+    yes = 'Accept'; no = 'Reject';
+  } else head = `<b>${esc(p.kind)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}`;
+  return `<li class="kpi-prop" data-proposal="${esc(p.id)}" data-prop-kind="${esc(p.kind)}"><div class="kpi-prop-main"><span class="kpi-prop-head">${head}</span>${body}
+    ${p.kind === 'flag' ? (p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : '') : why}${more}</div>
+    ${propDoHtml(p, {yes, no})}</li>`;
 }
 // ---------------------------------------------------------------- strategy proposals
 // The strategy's live bets, for the names a proposal leaves out (a retire is just {id, status}).
@@ -178,7 +231,7 @@ function strategyDraftPropHtml(p) {
       <span><b>${head}</b> <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
       ${rows.length ? `<ul class="strat-prop-list">${rows.join('')}</ul>` : ''}
       <span class="muted kpi-prop-why">${p.reason ? esc(p.reason) + ' · ' : ''}${esc(goalActorName(p.proposed_by))}</span></div>
-    ${p.may_decide ? `<div class="kpi-prop-do"><button class="primary" type="button" data-decide="confirm">Confirm</button><button class="ghost" type="button" data-decide="reject">Reject</button></div>` : ''}</li>`;
+    ${propDoHtml(p, {yes: 'Confirm', no: 'Reject'})}</li>`;
 }
 // The goals of bets a publish retired or rewrote (backend/strategy.py realign): per goal Keep, Retire or Move to one of
 // the active bets, confirmed together as `moves`.
@@ -192,17 +245,29 @@ function strategyRealignPropHtml(p) {
   return `<li class="kpi-prop strat-prop" data-proposal="${esc(p.id)}" data-realign><div class="kpi-prop-main">
       <span><b>Goals after the strategy change</b>${pl.n ? ` <span class="muted">· v${esc(pl.n)}</span>` : ''} <a class="strat-prop-open" href="${STRATEGY}">Open Strategy</a></span>
       <ul class="strat-realign">${goals}</ul></div>
-    ${p.may_decide ? `<div class="kpi-prop-do"><button class="primary" type="button" data-decide="confirm">Confirm</button><button class="ghost" type="button" data-decide="reject">Reject</button></div>` : ''}</li>`;
+    ${propDoHtml(p, {yes: 'Confirm', no: 'Reject'})}</li>`;
 }
 function proposalHtml(p, extra = '') {
   if (p.kind === 'strategy_draft') return strategyDraftPropHtml(p);
   if (p.kind === 'strategy_realign') return strategyRealignPropHtml(p);
-  const x = kpiProposalLine(p);
-  return `<li class="kpi-prop" data-proposal="${esc(p.id)}"><div class="kpi-prop-main"><span><b>${esc(x.what)}</b>${extra ? ` <span class="muted">· ${esc(extra)}</span>` : ''}</span><span class="kpi-prop-detail">${esc(x.detail)}</span>
-    ${x.reason ? `<span class="muted kpi-prop-why">${esc(x.reason)} · ${esc(goalActorName(p.proposed_by))}</span>` : `<span class="muted kpi-prop-why">${esc(goalActorName(p.proposed_by))}</span>`}</div>
-    ${p.may_decide ? `<div class="kpi-prop-do"><button class="primary" type="button" data-decide="confirm">Confirm</button><button class="ghost" type="button" data-decide="reject">Reject</button></div>` : ''}</li>`;
+  return goalPropHtml(p, extra);
+}
+// What the target fields on an Add a KPI card send: nothing when folded away or left blank (the suggestion's target
+// stands: none, or the one it proposed), else the fields as the goal editor sends them.
+function propTarget(li) {
+  const set = li.querySelector('.kpi-prop-set'), form = set?.querySelector('[data-prop-target]');
+  if (!set?.open || !form) return null;
+  const t = kpiTargetBody(form);
+  if (t.kind === 'none') return set.hasAttribute('data-proposed') ? t : null;
+  const filled = ['baseline', 'target', 'deadline', 'min', 'max'].some(k => t[k] != null && t[k] !== '');
+  return filled ? t : null;
 }
 function bindProposals(root, after) {
+  for (const li of root.querySelectorAll('[data-proposal]')) {
+    for (const b of li.querySelectorAll('[data-np-all]')) b.onclick = () => { b.closest('.prop-np').classList.remove('prop-np-clamp'); b.remove(); };
+    const form = li.querySelector('[data-prop-target]');
+    if (form) { kpiTargetKinds(form); form.onsubmit = ev => { ev.preventDefault(); li.querySelector('[data-prop-yes]')?.click(); }; }
+  }
   for (const li of root.querySelectorAll('[data-proposal]')) for (const b of li.querySelectorAll('[data-decide]')) b.onclick = async () => {
     b.disabled = true;
     // A recovery's Approve buttons carry their option: approving applies exactly that one.
@@ -210,6 +275,10 @@ function bindProposals(root, after) {
     // A realignment confirms every goal's choice at once: keep, retire, or the bet it moves to.
     if (li.hasAttribute('data-realign') && body.decision === 'confirm')
       body.moves = Object.fromEntries([...li.querySelectorAll('[data-realign-goal]')].map(sel => [sel.dataset.realignGoal, sel.value]));
+    if (li.dataset.propKind === 'goal_kpi' && body.decision === 'confirm') {
+      const target = propTarget(li);
+      if (target) body.target = target;
+    }
     try { await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); await after(); }
     catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; }
   };
@@ -722,6 +791,7 @@ function goalPanelHtml(state) {
   const goals = state.goals.filter(g => goalLive(g) && g.owner === actor).sort(goalRank);
   const may = goalMayEdit({owner: actor}, state.goals);
   const other = state.other.filter(k => k.owner === actor);
+  const finished = goalFinishedOf(state.goals, actor).length;
   const person = actor.startsWith('human:') ? (S.people || []).find(p => p.id === actor.slice(6)) : null;
   const standing = String(person?.goals || '').trim();
   const av = actor === GOAL_COMPANY ? `<span class="av gt-co-av" aria-hidden="true">${esc((String(info.name || 'C').trim()[0] || 'C').toUpperCase())}</span>` : info.avatar;
@@ -755,8 +825,8 @@ function goalPanelHtml(state) {
       <button class="ghost tmodal-x" type="button" data-gp-close aria-label="Close">✕</button></div>
     <div class="tmodal-body gp-body">
       ${goals.length || profile ? `<ul class="gp-goals">${goals.map(item).join('')}${profile}</ul>` : ''}
-      ${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}${history}
-      ${!goals.length && !profile && !other.length && !newGoal && !newKpi && !actions ? '<p class="muted">No goals.</p>' : ''}
+      ${finished ? '<div data-gp-finished></div>' : ''}${newGoal}${other.length ? `<h3 class="kpi-h">Other KPIs</h3>${kpiLinesHtml(other)}` : ''}${newKpi}${actions}${history}
+      ${!goals.length && !profile && !finished && !other.length && !newGoal && !newKpi && !actions ? '<p class="muted">No goals.</p>' : ''}
     </div>`;
 }
 function goalPanelRender(state) {
@@ -765,7 +835,9 @@ function goalPanelRender(state) {
   dlg.setAttribute('aria-label', goalOwnerInfo(P.owner).name);
   dlg.dataset.owner = P.owner;
   const scroll = dlg.querySelector('.gp-body')?.scrollTop || 0;
+  const toasts = [...dlg.querySelectorAll(':scope > .toast')];   // a toast shown in the panel (Undo) outlives a redraw
   dlg.innerHTML = goalPanelHtml(state);
+  dlg.append(...toasts);
   const body = dlg.querySelector('.gp-body');
   body.scrollTop = scroll;
   const redraw = () => goalPanelRender(state), reload = () => goalsReload(state);
@@ -791,6 +863,7 @@ function goalPanelRender(state) {
     try { await post('/v2/goals/' + encodeURIComponent(b.dataset.goalAuto) + '/status/auto', {}); await reload(); }
     catch (e) { toast(e.message || 'Could not hand the colour back', true); b.disabled = false; }
   };
+  goalFinishedMount(body.querySelector('[data-gp-finished]'), P.owner, state.goals, reload);
   bindKpiLines(body);
   bindProposals(body, reload);
   bindGoalWhy(state, body, reload);

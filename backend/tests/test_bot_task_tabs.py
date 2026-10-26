@@ -15,6 +15,10 @@ OTHERS = {"name": "Assigned to Others", "show_count": True, "conditions": [
 DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
            {"builtin": "active", "name": "Doing", "show_count": True},
            {"builtin": "blocked", "name": "Blocked", "show_count": True}, OTHERS]
+DEFAULT[0]['conditions'] = [{'field': 'needs', 'value': 'you'}]
+DEFAULT[1]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['open', 'doing']}]
+DEFAULT[2]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['waiting']},
+                            {'field': 'waiting_on', 'value': 'not_me'}]
 WIDGETS = [{"id": w, "hidden": False, "height": None} for w in ("tasks", "updates", "files", "routines")]
 PRODUCT = {"name": "product tasks", "show_count": True, "conditions": [{"field": "type", "value": ["general"]},
                                                                        {"field": "status", "value": ACTIVE}]}
@@ -54,7 +58,7 @@ def test_a_bot_starts_with_the_new_default_tabs_and_widgets(api):
 
 
 def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
-    layout = [DEFAULT[1], PRODUCT, {"builtin": "needs", "name": "For you", "show_count": False}]
+    layout = [DEFAULT[1], PRODUCT, {**DEFAULT[0], "name": "For you", "show_count": False}]
     widgets = [{"id": "files", "hidden": False, "height": 240}, {"id": "tasks", "hidden": False, "height": None},
                {"id": "updates", "hidden": True, "height": None}, {"id": "routines", "hidden": False, "height": None}]
     saved = save(api, "ops", layout, widgets=widgets)
@@ -127,13 +131,14 @@ def test_every_field_and_value_is_checked(api):
     refused([{"field": "assigned_to", "value": "human:zed"}], "Unknown person or bot: human:zed")
     refused([{"field": "assigned_to", "value": "ben"}], "Unknown person or bot: ben")
     refused([{"field": "asked_by", "value": "others"}], "Unknown person or bot: others")
-    refused([{"field": "waiting_on", "value": "someone"}], "Waiting on is any, person, bot or me")
+    refused([{"field": "waiting_on", "value": "someone"}], "Waiting on is any, person, bot, me or not_me")
+    refused([{"field": "needs", "value": "everyone"}], "Needs is you")
     refused([{"field": "created_within", "value": 0}], "number of days")
     refused([{"field": "done_within", "value": "3"}], "number of days")
     refused([{"field": "due", "value": "soon"}], "Due within")
     refused([{"field": "label", "value": " "}], "label is 1 to 60")
     refused([{"field": "status", "value": ACTIVE, "extra": 1}], "extra")
-    r = save(api, "ops", [{"builtin": "needs", "name": "x", "conditions": [{"field": "status", "value": "open"}]}],
+    r = save(api, "ops", [{"builtin": "done", "name": "x", "conditions": [{"field": "status", "value": "open"}]}],
              expected=422)
     assert "keeps its own filter" in json.dumps(r)
     put(api, "bots/ops/task-tabs", {"tabs": [PRODUCT], "widgets": [{"id": "chat"}]}, expected=422)
@@ -191,7 +196,7 @@ def test_a_filter_with_more_than_one_page_reaches_every_task(api, monkeypatch):
     for n in range(5):
         task(api, f"T{n}", "bot:ops", "human:ana", created=5 - n)
     save(api, "ops", [DEFAULT[0], {"name": "All", "conditions": [{"field": "assigned_to", "value": "this_bot"}]}])
-    first = get(api, "bots/ops/task-tabs/tasks", "ben-test")["tabs"][0]
+    first = get(api, "bots/ops/task-tabs/tasks?tab=c1", "ben-test")["tabs"][0]
     assert first["key"] == "c1" and first["count"] == 5 and len(first["ids"]) == 2 and first["next"]
     seen, page = list(first["ids"]), first
     while page["next"]:
@@ -259,3 +264,88 @@ def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
     # A client still sending that shape is stored as rows.
     saved = save(api, "ops", [{"name": "Old style", "types": [], "states": ["waiting"], "waiting_on": "bot"}])
     assert saved["tabs"][0]["conditions"] == layout["tabs"][2]["conditions"]
+
+
+def test_default_filters_are_disjoint_and_viewer_relative(api):
+    task(api, "Open", "bot:ops", "human:ana", status="open")
+    task(api, "Doing", "bot:ops", "human:ana", status="doing")
+    task(api, "Waits on bot", "bot:ops", "human:ana", status="waiting", waiting_on="bot:cpo")
+    task(api, "Waits on Ana", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
+    task(api, "Unspecified wait", "bot:ops", "human:ana", status="waiting", waiting_on=None)
+    task(api, "Review", "bot:ops", "human:ana", status="review")
+    task(api, "Viewer owns open", "human:ana", "bot:ops", status="open")
+    task(api, "Viewer owns finished", "human:ana", "bot:ops", status="done")
+    task(api, "Viewer owns unrelated", "human:ana", "bot:cpo", status="open")
+    seen = shown(api, "ops")
+    assert seen["Doing"] == (2, ["Doing", "Open"])
+    assert seen["Blocked"] == (2, ["Unspecified wait", "Waits on bot"])
+    assert seen["Needs You"] == (2, ["Viewer owns open", "Waits on Ana"])
+    assert shown(api, "ops", "ben-test")["Blocked"] == (3, ["Unspecified wait", "Waits on Ana", "Waits on bot"])
+
+
+def test_default_tab_edits_persist_and_empty_conditions_are_not_reset(api):
+    task(api, "Open", "bot:ops", "human:ana", status="open")
+    task(api, "Wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
+    changed = {**DEFAULT[2], "name": "Changed", "show_count": False,
+               "conditions": [{"field": "status", "value": ["open"]}]}
+    assert save(api, "ops", [changed])["tabs"] == [changed]
+    assert tabs(api, "ops")["tabs"] == [changed]
+    assert shown(api, "ops")["Changed"] == (1, ["Open"])
+    changed["conditions"] = []
+    assert save(api, "ops", [changed])["tabs"][0]["conditions"] == []
+    assert shown(api, "ops")["Changed"] == (2, ["Open", "Wait"])
+    assert save(api, "ops", [DEFAULT[2]])["tabs"] == [DEFAULT[2]]
+    assert shown(api, "ops")["Blocked"] == (0, [])
+
+
+def test_all_legacy_builtins_keep_order_names_counts_and_receive_default_conditions(api):
+    old = [{"builtin": key, "name": "Old " + key, "show_count": False} for key in ("blocked", "needs", "active", "done")]
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,updated,updated_by) VALUES('ops','',?,?,?)",
+                  (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
+    new = tabs(api, "ops")["tabs"]
+    assert [(t["builtin"], t["name"], t["show_count"]) for t in new] == [(t["builtin"], t["name"], False) for t in old]
+    for i, default in zip((1, 2, 0), DEFAULT):
+        assert new[i]["conditions"] == default["conditions"]
+    assert "conditions" not in new[3]
+    # An older client can still save its original shape.
+    assert save(api, "ops", old)["tabs"] == new
+
+
+def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_private_tasks(api, monkeypatch):
+    from backend import bot_task_tabs
+    monkeypatch.setattr(bot_task_tabs, "ROWS", 1)
+    older = task(api, "Older question", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana", created=5)
+    newer = task(api, "New wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana", created=1)
+    secret = task(api, "Private", "bot:ops", "human:ben", status="waiting", waiting_on="human:ana")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret,))
+    out = get(api, f"bots/ops/task-tabs/tasks?tab=needs&match_ids={older},{secret}")
+    [tab] = out["tabs"]
+    assert tab["ids"] == [newer] and tab["count"] == 2 and tab["next"]
+    assert tab["matched_ids"] == [older]
+    assert secret not in {t["id"] for t in out["tasks"]}
+
+
+def test_attention_counts_include_approvals_in_whole_list():
+    from backend import views
+    items = [{"kind": "task", "id": "owned", "owner": "human:ana", "requester": "bot:ops", "status": "open"},
+             {"kind": "waiting", "id": "wait", "owner": "bot:ops", "requester": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
+             {"kind": "approval", "id": "approval", "requested_by": "bot:ops"},
+             {"kind": "approval", "id": "other", "requested_by": "human:ben"}]
+    assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}
+
+
+def test_needs_condition_can_be_removed_changed_and_restored(api):
+    task(api, "Mine", "human:ana", "bot:ops", status="open")
+    task(api, "Wait on viewer", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
+    task(api, "Bot work", "bot:ops", "human:ana", status="doing")
+    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    changed = {**DEFAULT[0], "conditions": [{"field": "status", "value": ["doing"]}]}
+    save(api, "ops", [changed])
+    assert tabs(api, "ops")["tabs"] == [changed]
+    assert shown(api, "ops")["Needs You"] == (1, ["Bot work"])
+    save(api, "ops", [{**DEFAULT[0], "conditions": []}])
+    assert shown(api, "ops")["Needs You"] == (3, ["Bot work", "Mine", "Wait on viewer"])
+    save(api, "ops", [DEFAULT[0]])
+    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])

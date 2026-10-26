@@ -3,6 +3,9 @@ import json
 import re
 from urllib.parse import quote
 
+import httpx
+from jwt.exceptions import InvalidKeyError
+
 from . import test_receipts
 
 REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
@@ -95,6 +98,45 @@ def links(c, row):
             and p.get("state") not in ("merged", "closed", "shipped")]
 
 
+def mint_failure(exc, repo):
+    """Describe a failed token request without exposing exception text or response bodies."""
+    from .store import Problem
+    from .github_app import MISSING_KEY
+
+    status = None
+    code = None
+    auth = isinstance(exc, InvalidKeyError)
+    timeout = isinstance(exc, (TimeoutError, httpx.TimeoutException))
+    retryable = timeout
+    if isinstance(exc, Problem):
+        code = exc.code
+        # A transport failure has no GitHub HTTP response; 502 is Tico's own envelope status.
+        status = exc.extra.get("github_status", None if code == "github_unreachable" else exc.status)
+        auth = code in {"github_app_key", "github_key_missing", "github_not_installed", "github_not_connected",
+                        "github_app_permissions"}
+        auth |= code == "github_unavailable" and exc.detail in {
+            MISSING_KEY, "The stored GitHub App key could not be decrypted"}
+        timeout |= exc.extra.get("timed_out") is True
+        retryable |= exc.retryable
+    elif isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+    auth |= status in (401, 403)
+    retryable = not auth and (timeout or retryable or status in (408, 429)
+                             or isinstance(status, int) and 500 <= status < 600)
+    # Only fixed-format diagnostic fields are safe to include; never copy Problem.detail.
+    cause = []
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+        cause.append(code)
+    if isinstance(status, int) and 100 <= status < 600:
+        cause.append(f"HTTP {status}")
+    if timeout:
+        cause.append("timed out")
+    if not cause:
+        cause.append(type(exc).__name__)
+    action = "the GitHub App could not sign in" if auth else "GitHub token request failed"
+    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable)}
+
+
 def snapshot(service, prs):
     from . import hubdb as H
     """Read current PR heads and all checks outside the database write lock.
@@ -113,8 +155,9 @@ def snapshot(service, prs):
                 raise ValueError("unresolved PR")
             try:
                 token, _ = service.mint([repo], {"pull_requests": "read", "checks": "read", "statuses": "read"})
-            except Exception:
-                raise ValueError("the GitHub App could not sign in for " + repo)
+            except Exception as exc:
+                out[pr["id"]] = mint_failure(exc, repo)
+                continue
             headers = {"Authorization": "Bearer " + token}
             base = f"/repos/{quote(repo, safe='/')}"
             def read(path, params=None):
@@ -205,7 +248,8 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False):
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
             reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
-                                                  "Retry the review move; if it repeats, refresh the PR link.")
+                                                  "Retry the review move; if it repeats, refresh the PR link.",
+                   retryable=detail.get("retryable", False))
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
@@ -221,11 +265,12 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False):
             reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}, then retry the review move.")
 
 
-def reject(c, actor, row, kind, head, pr, text):
+def reject(c, actor, row, kind, head, pr, text, retryable=False):
     from . import hubdb as H
     try:
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
+        exc.retryable = retryable
         exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text}
         raise
 

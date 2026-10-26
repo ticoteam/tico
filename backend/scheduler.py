@@ -93,7 +93,7 @@ def run_kpi_asks(store, auth, at, failures=None):
     with SR.recording(store, "kpi_asks", failures, "goal_asks") as run:
         from . import goal_asks
         with store.transaction() as c:
-            found = goal_asks.sync(c, auth.owner_id(c), at)
+            found = goal_asks.sync(c, auth.owner_id(c), at, goal_asks.readers(c, auth))
         run.did(SR.words_of({"asked": (found or {}).get("created") or [],
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
 
@@ -603,8 +603,17 @@ class Scheduler:
                         result = H.wake_stalled(c, stamp(at), task_ids=[task_id], queued_here=queued_here)
                         for key, values in result.items():
                             woke.setdefault(key, []).extend(values)
+                # Dev tickets long at a working step: a status from a quiet owner, the late ones to their manager.
+                aged = {}
+                try:
+                    from . import step_age
+                    with self.store.transaction() as c:
+                        aged = step_age.sweep(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"step_age": type(exc).__name__})
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
-                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or []}
+                         "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
+                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

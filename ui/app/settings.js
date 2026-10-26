@@ -85,6 +85,12 @@ const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
 };
+// A card a link names (`#/settings/<tab>/<card>`, the settings catalogue's) on a tab that draws it later: scroll once it is there.
+const settingsRevealSoon = (selector, tries = 20) => {
+  if (!selector || SETTINGS_REVEAL !== selector) return;
+  if ($(selector)) { settingsReveal(selector); return; }
+  if (tries > 0) setTimeout(() => settingsRevealSoon(selector, tries - 1), 150);
+};
 // Owners and admins always; a member unless an admin switched create_bots off (the server decides, and counts the limit).
 const settingsCanCreateBots = () => S.me?.role === 'owner' || !!S.me?.bot_admin || S.me?.can_create_bots !== false;
 // The owner, an admin, one of the bot's owners, or someone it reports up to: what the server says (`can_manage`).
@@ -309,6 +315,7 @@ function settingsShow(tab) {
   if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
   const listeningPane = $('#settings-listening');
   if (listeningPane) { listeningPane.hidden = SETTINGS_TAB !== 'listening'; if (SETTINGS_TAB === 'listening' && !formBusy(listeningPane)) void renderSettingsListening(); }
+  settingsRevealSoon(SETTINGS_REVEAL);
 }
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
 // Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.
