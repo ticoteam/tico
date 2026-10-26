@@ -6965,9 +6965,44 @@ def _no_diagnosis(conn, row, count):
     return None
 
 
+# BotOps's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
+HELD_REVIEW_TITLE = "Review {bot}'s stopped runs held for a check"
+HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted runs"
+
+
+def held_review_bot(conn, row):
+    """The bot a keeper-filed held-run review task is for while one of its runs is still held with no saved decision,
+    else None. This includes BotOps reviews and the operator review used when BotOps cannot read the run."""
+    prefix, suffix = HELD_REVIEW_TITLE.split("{bot}")
+    title = str(row["title"] or "")
+    if row["requester"] != KEEPER or not _has_table(conn, "jobs"):
+        return None
+    if title.startswith(prefix) and title.endswith(suffix) and len(title) > len(prefix) + len(suffix):
+        slug = title[len(prefix):-len(suffix)]
+    else:
+        owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
+        if not title.startswith(owner_prefix) or not title.endswith(owner_suffix):
+            return None
+        display_name = title[len(owner_prefix):-len(owner_suffix)]
+        bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
+        slug = bot["slug"] if bot else None
+        if not slug:
+            return None
+    held = conn.execute("SELECT 1 FROM jobs j WHERE j.bot=? AND j.state='uncertain' AND NOT EXISTS("
+                        "SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) LIMIT 1",
+                        (slug,)).fetchone()
+    return slug if held else None
+
+
 def _settle_undiagnosed(conn, row, cause):
     """Work the hub filed for itself closes with the cause; anyone else's task stays open and its requester is
-    told the cause, at most once a day while it stays stuck."""
+    told the cause, at most once a day while it stays stuck. A review of held runs stays open while a run it is for is
+    still held with no decision (held_review_bot)."""
+    if row["requester"] == KEEPER and held_review_bot(conn, row):
+        event(conn, KEEPER, "task.stall_escalated", row["id"],
+              {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause,
+               "kept_open": "runs still held"})
+        return
     if row["requester"] == KEEPER:
         task_close(conn, KEEPER, row["id"], f"Closed by the stall check: {cause}.", quiet=True)
     elif _actor_exists(conn, row["requester"]):
