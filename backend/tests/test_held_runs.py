@@ -39,7 +39,7 @@ def backdate(api, task_id, minutes):
 
 
 @pytest.mark.parametrize('how', ['closed', 'done'])
-def test_a_held_run_whose_review_task_was_closed_gets_a_new_one_on_the_next_sweep(api, how):
+def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(api, how):
     """Acceptance 8. The hold used to be raised once per run: a closed review left the run with nobody on it."""
     machine, message, attempt = held(api)
     [first] = reviews(api)
@@ -53,27 +53,76 @@ def test_a_held_run_whose_review_task_was_closed_gets_a_new_one_on_the_next_swee
         else:
             H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    second = [r for r in reviews(api) if r['id'] != first['id']]
-    assert [r['status'] for r in second] == ['open']
-    assert 'used Bash' in second[0]['body'] and '1 of them was still held with no decision' in second[0]['body']
-    assert message['body'] not in second[0]['body']                # the request's words stay in their own chat
+    [second] = reviews(api)
+    assert second['id'] == first['id'] and second['status'] == 'open'
+    assert 'used Bash' in second['body']
+    assert message['body'] not in second['body']                # the request's words stay in their own chat
     # Decided: nothing is held, so a closed review stays closed.
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, second[0]['id'], 'Settled.', quiet=True)
-    backdate(api, second[0]['id'], 60)
+        H.task_close(c, H.KEEPER, second['id'], 'Settled.', quiet=True)
+    backdate(api, second['id'], 60)
     sweep(api)
-    assert len(reviews(api)) == 2
+    assert [r['status'] for r in reviews(api)] == ['closed']
 
 
-def test_a_review_closed_soon_after_it_was_filed_is_filed_again_on_the_next_sweep(api):
+def test_a_review_closed_soon_after_it_was_filed_reopens_on_the_next_sweep(api):
     machine, message, attempt = held(api)
     [first] = reviews(api)
     with api.app.state.store.transaction() as c:
         H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
     sweep(api)
-    assert [r['status'] for r in reviews(api)] == ['done', 'open']
+    assert [(r['id'], r['status']) for r in reviews(api)] == [(first['id'], 'open')]
+
+
+def held_again(api, machine):
+    """A second run of ops, on a task, stops partway after a shell call and is held."""
+    post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.'})
+    ready(api, machine, ['ops'])
+    attempt = claim(api, machine)
+    stop_partway(api, machine, attempt, 'held-again')
+    aged(api, attempt['id'])
+    sweep(api)
+    assert job_state(api, attempt['job_id']) == 'uncertain'
+    return attempt
+
+
+def naming(api, review_id, job_id):
+    """The review's comments that name `job_id`."""
+    with api.app.state.store.read() as c:
+        return [m for m in H.task_comments(c, review_id) if job_id in str(m.get('body') or '')]
+
+
+def test_a_run_held_while_a_review_is_open_is_named_on_that_review_once(api):
+    """Later held runs remain visible on the existing review without repeated comments."""
+    machine, message, first = held(api)
+    [review] = reviews(api)
+    assert first['job_id'] in review['body']
+    second = held_again(api, machine)
+    assert len(reviews(api)) == 1                                   # still the one open review
+    [comment] = naming(api, review['id'], second['job_id'])
+    assert comment['from_actor'] == H.KEEPER and 'used Bash' in comment['body']
+    assert first['job_id'] not in comment['body']                   # the first run is already in the body
+    sweep(api)
+    sweep(api)
+    assert len(naming(api, review['id'], second['job_id'])) == 1    # named once, not on every sweep
+    assert naming(api, review['id'], first['job_id']) == []
+
+
+def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_them(api):
+    machine, message, first = held(api)
+    second = held_again(api, machine)
+    [review] = reviews(api)
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, H.KEEPER, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.', quiet=True)
+    backdate(api, review['id'], 60)
+    sweep(api)
+    [again] = [r for r in reviews(api) if r['status'] == 'open']
+    assert again['id'] == review['id']
+    named = again['body'] + ' '.join(m['body'] for m in naming(api, again['id'], first['job_id'])
+                                     + naming(api, again['id'], second['job_id']))
+    assert first['job_id'] in named and second['job_id'] in named
 
 
 def capped(c, task):

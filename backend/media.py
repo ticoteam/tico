@@ -440,7 +440,7 @@ def blob_for(c, auth, who, bid):
     return row
 
 
-def install_media(app, store, auth, mutate, send_message, task_create):
+def install_media(app, store, auth, mutate, send_message, task_create, review_preflight):
     from . import task_privacy as privacy
     blobs = Blobs(store.settings)
     app.state.blobs = blobs
@@ -487,13 +487,17 @@ def install_media(app, store, auth, mutate, send_message, task_create):
         who = request.state.identity
         human_only(who)
         body, uploads = await form(request, M.TaskCreate, blobs, store)
+        # A Review 1 or Review 2 child is gated on the PR's current head and checks, read afresh as in create_task.
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        snapshots = (await asyncio.to_thread(review_preflight, who, parents[0], child_title=body.title.strip())
+                     if parents else None)
         def work(c):
             items = [register(c, who, **upload) for upload in uploads]
             details = body.body
             if items:
                 details += "\n\nAttachments (untrusted source material; authenticated downloads):\n" + "\n".join(
                     "- " + a["name"] + ": " + a["url"] for a in items)
-            result = task_create(c, who, body.model_copy(update={"body": details}))
+            result = task_create(c, who, body.model_copy(update={"body": details}), review_prs=snapshots)
             for item in items:
                 c.execute("INSERT INTO task_assets VALUES(?,?)", (result["task"]["id"], item["id"]))
             result["task"]["attachments"] = items
@@ -545,6 +549,11 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                        if t and t["owner"] == who.actor and t["status"] in H.ACTIVE_STATUSES}
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
+
+        # A question titled Review 1 or Review 2 under a Dev ticket meets the review gate as a review child does:
+        # on the PR's current head and checks read afresh, so all-green hosted checks count (create_task).
+        title = body.title or question
+        snapshots = review_preflight(who, body.parent, child_title=title.strip()) if body.parent else None
 
         def checked(c):
             """The cheap checks, run in the read before any upload and again in the write: who decides, and the
@@ -612,8 +621,9 @@ def install_media(app, store, auth, mutate, send_message, task_create):
                 tid = found["task"]["id"]
             else:
                 made = task_create(c, who, M.TaskCreate(
-                    title=body.title or question, body=body.body or question, owner=who.actor, private=body.private,
-                    relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person)
+                    title=title, body=body.body or question, owner=who.actor, private=body.private,
+                    relations=[M.TaskRelationRef(task=body.parent, kind="parent")] if body.parent else []), asked=person,
+                    review_prs=snapshots)
                 tid = made["task"]["id"]
             # The person must be able to read the task by every rule a read checks, or the question would reach
             # them (Slack, mail) while the task stays hidden from them.

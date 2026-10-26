@@ -124,6 +124,8 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 .verdict-chip{flex:none;display:inline-flex;gap:3px;align-items:baseline;font-size:var(--t-2xs);font-weight:600;line-height:14px;padding:0 4px;border-radius:7px;white-space:nowrap}
 .verdict-chip.ok{background:var(--ok-bg);color:var(--ok)}
 .verdict-chip.fail{background:var(--fail-bg);color:var(--fail)}
+.verdict-chip.waived{background:var(--wait-bg);color:var(--wait-ink)}
+.prop[data-prop-row="qa-waiver"] .prop-vwrap{flex-wrap:wrap;gap:4px 8px}
 .verdict-chip code{font:inherit;font-family:var(--mono);font-weight:400;opacity:.85}
 .pr-badge.waiting{background:var(--wait-bg);color:var(--wait-ink)}
 #pane-tasks .trow[data-task-version] :is(summary,.trow-head) .pr-badge{grid-area:pr}

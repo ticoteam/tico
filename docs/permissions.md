@@ -127,7 +127,7 @@ The CEO Bot's level, regular checks and name, and publishing a strategy version,
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
-([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
+([Recruiting a seat](onboarding.md#recruiting-a-seat)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
 ## Bots that create repositories

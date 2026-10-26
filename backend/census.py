@@ -91,7 +91,7 @@ class Census:
 
     # ------------------------------------------------------------------ whether
     def off_reason(self, c=None):
-        """Why nothing is sent: "demo", "TICO_TELEMETRY", "DO_NOT_TRACK", "setting", or "" when counting is on."""
+        """Why nothing is sent: "demo", "TICO_REHEARSAL", "TICO_TELEMETRY", "DO_NOT_TRACK", "setting", or "" when counting is on."""
         if self.settings.demo:
             return "demo"
         if self.settings.rehearsal:

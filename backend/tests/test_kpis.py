@@ -142,7 +142,7 @@ def test_a_goals_worst_kpi_sets_its_colour_and_reason_without_overriding_a_perso
     assert goal_of(api, goal["id"])["status"] == "green"
 
 
-def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(api):
+def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
     goal, kpi = goal_with_kpi(api)
     logged = log(api, kpi["id"], 52, evidence="https://bi.example/activation", note="September", period_end=H.now())
     with api.app.state.store.transaction() as c:
@@ -162,9 +162,18 @@ def test_archive_restore_preserves_kpi_history_and_hides_it_from_active_views(ap
     detail = get(api, f"kpis/{kpi['id']}")
     assert detail["readings"] == original["readings"]
     assert detail["definitions"] == original["definitions"]
-    assert detail["links"] == original["links"]
+    # The stored links and targets stay; each goal's derived colour now changes on archive.
+    stable = lambda links: [{k: v for k, v in link.items() if k != "goal_status"} for link in links]
+    assert stable(detail["links"]) == stable(original["links"])
     assert detail["readings"][0]["id"] == logged["id"]
-    assert all(row["id"] != kpi["id"] for row in goal_of(api, goal["id"])["kpis"])
+    line = next(row for row in goal_of(api, goal["id"])["kpis"] if row["id"] == kpi["id"])
+    assert line["archived_at"] == archived["archived_at"]
+    assert line["status"] is None and line["spark"] == []
+    assert line["reason"] == f"Archived {K.day(archived['archived_at'])}, not counting"
+    tree_goal = next(g for g in get(api, "goals/tree")["goals"] if g["id"] == goal["id"])
+    assert next(k for k in tree_goal["kpis"] if k["id"] == kpi["id"])["status"] is None
+    with api.app.state.store.read() as c:
+        assert K.goal_views(c, [goal["id"]])[goal["id"]] == []
     with api.app.state.store.read() as c:
         actions = [r["action"] for r in c.execute(
             "SELECT action FROM events WHERE target=? AND action LIKE 'kpi.%' ORDER BY ts", (kpi["id"],))]
@@ -307,3 +316,47 @@ def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
     assert conn.execute("SELECT count(*) FROM kpi_definitions").fetchone()[0] == 2
     hubdb.migrate(conn)                                                         # and it is safe to run again
     assert conn.execute("SELECT count(*) FROM goal_kpis").fetchone()[0] == 2
+
+
+def test_archive_restore_recomputes_every_linked_goal_with_its_own_target(api):
+    goal, kpi = goal_with_kpi(api, {"kind": "maintain", "min": 40, "max": 60})
+    other = post(api, "goals", {"title": "Second goal", "owner": "ana"})["goal"]
+    post(api, f"goals/{other['id']}/kpis", {"kpi_id": kpi["id"], "kind": "maintain", "min": 70})
+    log(api, kpi["id"], 50, period_end=H.now())
+    assert [goal_of(api, g["id"])["status"] for g in (goal, other)] == ["green", "red"]
+    links = get(api, f"kpis/{kpi['id']}")["links"]
+    archived = post(api, f"kpis/{kpi['id']}/archive", {})["kpi"]
+    reason = f"Its only measure was archived on {K.day(archived['archived_at'])}"
+    post(api, "goals/refresh", {})
+    for g in (goal, other):
+        current = goal_of(api, g["id"])
+        assert current["status"] == "gray" and current["status_note"] == reason
+        assert current["kpis"][0]["status"] is None
+    post(api, f"kpis/{kpi['id']}/restore", {}, token="cara-test", expected=403)
+    post(api, f"kpis/{kpi['id']}/restore", {})
+    assert get(api, f"kpis/{kpi['id']}")["links"] == links
+    assert [goal_of(api, g["id"])["status"] for g in (goal, other)] == ["green", "red"]
+    for g in (goal, other):
+        assert goal_of(api, g["id"])["kpis"][0]["archived_at"] is None
+
+
+def test_archived_kpis_do_not_change_remaining_measure_or_owner_fallback(api):
+    goal, removed = goal_with_kpi(api, {"kind": "maintain", "min": 40, "max": 60})
+    kept = post(api, "kpis", {"name": "Remaining", "goal_id": goal["id"],
+                              "kind": "maintain", "min": 40, "max": 60})["kpi"]
+    log(api, removed["id"], 100, period_end=H.now())
+    log(api, kept["id"], 50, period_end=H.now())
+    assert goal_of(api, goal["id"])["status"] == "red"
+    post(api, f"kpis/{removed['id']}/archive", {})
+    current = goal_of(api, goal["id"])
+    assert current["status"] == "green" and current["status_note"].startswith("Remaining")
+    post(api, f"kpis/{kept['id']}/archive", {})
+    assert "only measure" not in goal_of(api, goal["id"])["status_note"]
+    fallback, measure = goal_with_kpi(api, {"kind": "maintain", "min": 1})
+    post(api, f"goals/{fallback['id']}/checkins", {"body": "On track", "signal": "on_track"})
+    post(api, f"kpis/{measure['id']}/archive", {})
+    assert goal_of(api, fallback["id"])["status"] == "green"
+    post(api, f"goals/{goal['id']}/status", {"status": "yellow", "note": "Person's call"})
+    post(api, f"kpis/{removed['id']}/restore", {})
+    assert goal_of(api, goal["id"])["status_source"] == "person"
+    assert goal_of(api, goal["id"])["status"] == "yellow"

@@ -44,6 +44,7 @@
 @media (max-width:760px){
   .goal-fs{grid-template-columns:1fr}
   .goal-f input,.goal-f select{height:44px;font-size:16px}
+  .gp-signal-row label{min-height:44px}
   .goal-actions button{height:44px}
   .goal-actions .primary{flex:1}
 }
@@ -91,6 +92,7 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 @media (max-width:760px){.goal-why-prop{flex-direction:column;align-items:stretch}.goal-why-ed{flex-wrap:wrap}}
 .kpi-lines{list-style:none;margin:0 0 4px 19px;padding:0}
 .kpi-line{display:flex;align-items:center;gap:10px;min-height:32px;padding:3px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;font-size:var(--t-base);line-height:1.35}
+.kpi-archived-more{padding:3px 6px;font-size:var(--t-sm)}
 .kpi-line:hover,.need-row:hover{background:var(--surface2)}
 .kpi-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kpi-val{white-space:nowrap;font-size:var(--t-sm)}.kpi-off{color:var(--muted)}.kpi-q{font-size:var(--t-xs);color:var(--muted)}
@@ -126,6 +128,10 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gp-goals{list-style:none;margin:0;padding:0}
 .gp-goal{padding:8px 0;border-top:1px solid var(--line)}.gp-goal:first-child{border-top:0}
 .gp-goal>.goal-form{margin:4px 0 10px}
+.gp-goal>.gp-update{margin:6px 0 10px 19px}
+.gp-signal{border:0;margin:0;padding:0;min-width:0}.gp-signal legend{padding:0;margin-bottom:4px;font-size:var(--t-sm);color:var(--muted)}
+.gp-signal-row{display:flex;flex-wrap:wrap;gap:4px var(--s3)}.gp-signal-row label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}.gp-signal-row input{margin:0}
+.gp-update .gp-update-note,.gp-update .err{margin:0;font-size:var(--t-sm)}
 .gp-gline{display:flex;align-items:center;gap:10px;width:calc(100% + 12px);margin:0 -6px;padding:6px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer}
 .gp-gline:hover{background:var(--surface2)}
 .gp-goal .kpi-check,.gp-goal .kpi-props,.gp-goal>.linkish{margin-left:19px}

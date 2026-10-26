@@ -209,12 +209,14 @@ function rulesPaint() {
 async function rulesLoad() {
   const f = rulesFor(), scope = f.kind ? `&scope_kind=${f.kind}&scope_id=${encodeURIComponent(f.id)}` : '';
   let offset = 0, out = null;
-  for (let page = 0; page < 5; page++) {
+  while (true) {
     const data = await get(`/v2/rules?limit=200&offset=${offset}${scope}`);
     data.rules ||= [];
     if (!out) out = data; else out.rules.push(...data.rules);
     if (!data.more) break;
-    offset += 200;
+    const next = data.next_offset ?? offset + 200;
+    if (!(next > offset)) throw new Error('Could not read the complete rules list');
+    offset = next;
   }
   // A task's or bot's own listing has no built-ins, and the event words come from them; read them once.
   if (f.kind && !out.rules.some(r => r.scope_kind === 'builtin')) {
@@ -227,7 +229,7 @@ async function rulesLoad() {
 async function renderSettingsRules(force) {
   const el = $('#set-rules'); if (!el) return;
   const task = RULES_FOR, f = rulesFor();
-  if (RULES && el.dataset.rulesFor === task && !force && Date.now() - RULES_AT < 60000) { rulesPaint(); return; }
+  if (RULES && el.dataset.rulesFor === task && !force && Date.now() - RULES_AT < 60000) { rulesPaint(); void taskSettingsOpenEditor(); return; }
   RULES_AT = Date.now();
   if (f.kind === 'task' && !RULES_FOR_TITLE) get('/v2/tasks/' + encodeURIComponent(f.id)).then(t => {
     RULES_FOR_TITLE = (t.task || t).title || '';
@@ -242,8 +244,10 @@ async function renderSettingsRules(force) {
   if (RULES_BUSY.size || formBusy(el.querySelector('[data-rules-list]'))) return;
   rulesPaint();
   settingsReveal('#set-rules-card');
+  void taskSettingsOpenEditor();
 }
 function ruleReplace(rule) {
+  taskSettingsChanged();
   if (!RULES || !rule) return;
   const at = RULES.rules.findIndex(r => r.id === rule.id);
   // A write answers the row without its 7-day figures; keep the ones read last.
@@ -367,12 +371,14 @@ async function ruleEditor(rule, preset = null) {
   const sourceless = [...new Set([...(listing.sourceless_events || []), ...EVENT_TYPES.filter(t => t.sourceless).map(t => t.name)])];
   const isSrc = e => sourceless.includes(e);
   const srcScope = k => ['team', 'department', 'bot'].includes(k);
-  let kind = rule?.scope_kind || f.kind || scopes[0]?.[0] || 'task';
+  let kind = base.scope_kind || f.kind || scopes[0]?.[0] || 'task';
   if (!rule && isSrc(event0) && !srcScope(kind)) kind = scopes.find(([k]) => srcScope(k))?.[0] || kind;
   const params = base.params || {};
   // Until the form exists, the steps come from the rule's own scope (or the filtered one a new rule starts in).
-  let steps = () => ruleStepsFor(rule?.scope_kind || kind, rule?.scope_id ?? (kind === f.kind ? f.id : ''));
+  let steps = () => ruleStepsFor(rule?.scope_kind || kind, base.scope_id ?? (kind === f.kind ? f.id : ''));
   const message = ['*', ...(listing.events || [])];
+  const supportedMessageEvents = new Set(message);
+  const pendingTaskTrigger = e => e.startsWith('task.') && !supportedMessageEvents.has(e);
   if (!message.includes(event0) && !isSrc(event0)) message.push(event0);
   const events = message.map(e => opt(e, (RULE_FLOOR.has(e) ? 'Always: ' : '') + ruleEventWords(e), event0)).join('')
     + (sourceless.length ? `<optgroup label="No task">${sourceless.map(e => opt(e, cap(ruleEventWords(e)), event0)).join('')}</optgroup>` : '');
@@ -387,8 +393,9 @@ async function ruleEditor(rule, preset = null) {
   const data = params.data && Object.keys(params.data).length ? JSON.stringify(params.data, null, 2) : '';
   dialog.innerHTML = `<form class="task-rule-form" data-rule-form><header><h2>${rule ? 'Edit rule' : 'Add rule'}</h2><button type="button" class="ghost" data-close>Cancel</button></header>
     ${rule ? `<p class="muted">${esc(ruleScopeWords(rule))}</p>` : `<label>Scope<select name="scope_kind" data-rule-kind>${scopes.map(([k, v]) => opt(k, v, kind)).join('')}</select></label>
-    <div data-rule-target>${ruleTargetHTML(kind, kind === f.kind ? f.id : '')}</div>`}
+    <div data-rule-target>${ruleTargetHTML(kind, base.scope_id ?? (kind === f.kind ? f.id : ''))}</div>`}
     <label>WHEN<select name="event">${events}</select></label>
+    <p class="settings-cell-note" data-rule-pending-trigger hidden>This task trigger will be available in the next stage of Task settings. You can review this preset now; it cannot be saved yet.</p>
     <div class="wr-when" data-rule-when-msg>
       <label>From<select name="actor">${opt('', 'Anyone', first(when.actor))}${Object.entries(RULE_ACTORS).map(([k, v]) => opt(k, v, first(when.actor))).join('')}</select></label>
       <label>Bot's role<select name="role">${opt('', 'Any', first(when.role))}${Object.entries(RULE_ROLE_LABELS).map(([k, v]) => opt(k, v, first(when.role))).join('')}</select></label>
@@ -433,6 +440,9 @@ async function ruleEditor(rule, preset = null) {
   const scopeNow = () => rule ? rule.scope_kind : form.elements.scope_kind?.value || kind;
   // Only the fields that suit the event, outcome and action show.
   const shown = () => {
+    const pending = pendingTaskTrigger(form.elements.event.value);
+    dialog.querySelector('[data-rule-pending-trigger]').hidden = !pending;
+    form.querySelector('[type="submit"]').disabled = pending;
     const src = isSrc(form.elements.event.value);
     toggle(dialog.querySelector('[data-rule-when-msg]'), !src);
     toggle(dialog.querySelector('[data-rule-when-src]'), src);
@@ -479,7 +489,7 @@ async function ruleEditor(rule, preset = null) {
     dialog.querySelector('[data-rule-target]').onchange = restep;
     restep();
   }
-  const done = () => { dialog.close(); rulesPaint(); };
+  const done = () => { dialog.close(); rulesPaint(); toast('Saved'); };
   form.onsubmit = async ev => {
     ev.preventDefault(); const button = form.querySelector('[type="submit"]'); button.disabled = true; error.textContent = '';
     try {
@@ -508,6 +518,7 @@ async function ruleEditor(rule, preset = null) {
     del.disabled = true; error.textContent = '';
     try {
       await post('/v2/rules/' + encodeURIComponent(rule.id) + '/delete', {expected_revision: rule.revision});
+      taskSettingsChanged();
       RULES.rules = RULES.rules.filter(r => r.id !== rule.id); done();
     } catch (e) { error.textContent = e.message || 'Could not delete the rule'; del.disabled = false; }
   };
