@@ -243,6 +243,9 @@ def create_app(settings=None):
                 reconcile_worktree_prs(app.state.github_app)
                 # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
                 milestone_waits.recover(app.state.github_app)
+                # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
+                from . import move_retry
+                move_retry.tick(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
