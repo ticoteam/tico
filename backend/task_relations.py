@@ -258,13 +258,17 @@ OWN_SUBTASK_BLOCKER = (
 
 
 def own_subtask_warning(conn, task_id, other_id, kind):
-    """The warning for a relation that makes a task wait on its own subtask, or None. Such a block is allowed:
+    """The warning for a block within a task's own tree, or None. A child blocking its parent is allowed:
     a question for a person in a subtask blocks its task until they answer (hubdb._ask_in_subtask). But a
     subtask that waits for its parent to finish is never cleared, so the writer is told."""
     from_id, to_id, kind = normalize(str(task_id or "").strip(), str(other_id or "").strip(), kind)
-    if kind != "blocks" or not is_descendant(conn, to_id, from_id):
+    if kind != "blocks":
         return None
-    return OWN_SUBTASK_BLOCKER.format(blocker=from_id, task=to_id)
+    if is_descendant(conn, from_id, to_id):
+        return "A child task cannot wait for its own parent or ancestor to finish."
+    if is_descendant(conn, to_id, from_id):
+        return OWN_SUBTASK_BLOCKER.format(blocker=from_id, task=to_id)
+    return None
 
 
 def normalize(task_id, other_id, kind):
@@ -449,6 +453,9 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
             H.refuse(conn, actor, "private", "A task under a private parent stays private")
         if not mover and actor not in (target["owner"], target["requester"]) and not H.task_ancestor_party(conn, actor, target):
             H.refuse(conn, actor, "identity", "Re-parent under a task you own or requested")
+        above = {new, *ancestors(conn, new)}
+        if any(above.intersection(blocker_ids(conn, tid)) for tid in (child_id, *descendant_ids(conn, child_id))):
+            H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
     at = H.now()
     if old:
         _delete(conn, child_id, old, "parent")
@@ -484,6 +491,8 @@ def _check_blocker(conn, actor, row, blocker_id):
     if not block:
         H.refuse(conn, actor, "not-found", f"no task {blocker_id} to block on")
     H._task_private_writer(conn, actor, block)
+    if is_descendant(conn, blocker_id, row["id"]):
+        H.refuse(conn, actor, "kind", "A child task cannot be blocked by its own parent or ancestor")
     if H.task_private(conn, block) and (not H.task_private(conn, row) or not all(
             H.task_private_readable(conn, party, block) for party in (row["owner"], row["requester"]))
     ) and not H.subtask_flows_up(conn, block, row):

@@ -3311,14 +3311,20 @@ def _type_steps(conn, actor, type_id, steps):
                       "position": raw.get("position") if raw.get("position") is not None else position,
                       "status": status, "public_name": str(raw.get("public_name") if raw.get("public_name") is not None else
                           existing.get(ident, {}).get("public_name", name))})
+    def in_use(ident):
+        return (_one(conn, "SELECT 1 FROM tasks WHERE step_id=? LIMIT 1", (ident,))
+                or _has_table(conn, "task_trash") and _one(conn,
+                    "SELECT 1 FROM task_trash WHERE purged_at IS NULL "
+                    "AND json_extract(rows_json,'$.rows.tasks[0].step_id')=? LIMIT 1", (ident,)))
+
     for row in clean:
         if (row["id"] in existing and row["status"] != existing[row["id"]]["status"]
-                and _one(conn, "SELECT 1 FROM tasks WHERE step_id=? LIMIT 1", (row["id"],))):
-            refuse(conn, actor, "in-use", "Move tasks off this step before changing its status, or create a new step")
+                and in_use(row["id"])):
+            refuse(conn, actor, "in-use", "Move tasks off this step before changing its status, including tasks in the trash, or create a new step")
     removed = set(existing) - ids
     for ident in removed:
-        if _one(conn, "SELECT id FROM tasks WHERE step_id=? LIMIT 1", (ident,)):
-            refuse(conn, actor, "in-use", "Move tasks off this step before deleting it")
+        if in_use(ident):
+            refuse(conn, actor, "in-use", "Move tasks off this step before deleting it, including tasks in the trash")
     for ident in removed:
         conn.execute("DELETE FROM task_steps WHERE id=?", (ident,))
     # Temporary names let retained steps swap names without dropping referenced rows.
@@ -3503,7 +3509,7 @@ def steps_only(conn, row):
     return [s["name"] for s in typ["steps"]] if typ.get("steps_only") else []
 
 
-def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
+def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *, skip_step_wake=()):
     """Every task status write keeps its type and step consistent, including old runners. A task
     that enters a step joins its end; one that lands on a numbered type without a number gets one."""
     type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
@@ -3530,6 +3536,7 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
             for below in descendants(conn, row["id"]):
                 why = f"A task above it was {TASK_ENDED[effective]}"
                 drop_asked_waits(conn, below["id"], supersede_asks(conn, below["id"], why=why), why)
+            supersede_ask_cards(conn, row, effective)
             # ...and so is a yes it was waiting for: nothing will act on it now.
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
     from .roadmap_flow import changed as roadmap_changed
@@ -3541,7 +3548,7 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note=""):
     if step_id and row.get("step_id") != step_id and row.get("status") is not None:
         # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
         from . import rules as wake_rule_engine
-        wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]))
+        wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
     return effective
 
 
@@ -3956,8 +3963,9 @@ def _unblock(conn, done_task, told=()):
                   "AND json_extract(refs_json,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
-            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} is finished.",
-                  refs={"blocker_done": done_task["id"]}, source=done_task["id"])
+            outcome = "was declined" if done_task["status"] == "declined" else "is finished"
+            _wake(conn, row, row["owner"], f"Unblocked: {row['title']}\n{done_task['title']} {outcome}.",
+                  refs={"blocker_done": done_task["id"], "blocker_status": done_task["status"]}, source=done_task["id"])
 
 
 def _answered(conn, actor, task_id, card, told=None):
@@ -4716,7 +4724,8 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     from . import wake_rules
     wake_rules.own_comment(conn, msg, row)        # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
-    conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
+    if actor != KEEPER or ask:
+        conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
     if row["status"] == "waiting" and row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their
         # Needs you. The bot sets it waiting on them again if it still needs something.
@@ -5763,7 +5772,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     answered = set()
     if status in ("done", "declined") and row["status"] != status and not closing_step:
         answered = {tid for tid in TR.blocked_ids(conn, task_id) if _answered(conn, actor, tid, after, subtask_told)}
-    if status == "done":
+    if status in ("done", "declined"):
         if subtask_told:
             answered.add(TR.parent_of(conn, task_id))  # the result also satisfies this parent's blocker notice
         _unblock(conn, after, told=answered)
@@ -5985,6 +5994,22 @@ def _ask_in_subtask(conn, actor, row, person, ask):
     return card
 
 
+def supersede_ask_cards(conn, row, status):
+    """Retire generated asks whose work ended, keeping cards still needed by another live task."""
+    ended = {row["id"], *TR.descendant_ids(conn, row["id"])}
+    candidates = set(ended)
+    for tid in ended:
+        candidates.update(TR.blocker_ids(conn, tid))
+    for tid in candidates - {row["id"]}:
+        card = task(conn, tid)
+        if not card or card["status"] not in ACTIVE_STATUSES or not ask_card(conn, card):
+            continue
+        if any(blocked not in ended and (task(conn, blocked) or {}).get("status") in ACTIVE_STATUSES
+               for blocked in TR.blocked_ids(conn, tid)):
+            continue
+        task_close(conn, KEEPER, tid, note=f"Ask superseded: its task was {TASK_ENDED[status]}.", quiet=True)
+
+
 def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     """The person `hub task update --status waiting --on <person>` names, or "" to clear it.
 
@@ -6151,6 +6176,12 @@ def wait_detail(conn, row):
         return {"why": "an undecided approval", "on": "person"}
     if row.get("waiting_on"):
         return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
+    from .worktree_waits import for_task as worktree_waits
+    worktrees = worktree_waits(conn, row["id"])
+    if worktrees:
+        wait = worktrees[0]
+        return {"why": f"a worktree for {wait['repo']}" + (" to be ready" if wait["state"] == "reserved" else " to be available"),
+                "on": "external"}
     from .milestone_waits import pending as milestone_pending
     milestone = milestone_pending(conn, row["id"])
     if milestone:
