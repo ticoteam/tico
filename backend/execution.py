@@ -326,6 +326,14 @@ def settle_status(c, bot, state, focus, claimed=None, task_id=None, stop=None):
 
 # The run a bot's status line explains (last_stop) until the bot's next run settles.
 LAST_STOP = "last-stop:"
+# What last_stop reads of that run, its job and a crashed bot's held run; events.prime_status_lines reads them for
+# many bots at once.
+STOP_ATTEMPT_SQL = "SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?"
+STOP_JOB_SQL = "SELECT state FROM jobs WHERE id=?"
+HELD_SQL = "SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' ORDER BY created DESC LIMIT 1"
+HELD_RUN_SQL = ("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' AND attempt_id=? "
+                "ORDER BY created DESC LIMIT 1")
+HELD_ATTEMPT_SQL = "SELECT state,started,finished FROM attempts WHERE id=?"
 NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed."
 
 
@@ -338,19 +346,15 @@ def last_stop(c, bot, status):
     if state not in ("idle", "crashed"):
         return None
     from .repositories import metadata
+    from .read_cache import one
     mark = metadata(c, LAST_STOP + bot)
-    attempt = (c.execute("SELECT id,job_id,state,started,finished,final_text,stop_requested FROM attempts WHERE id=?",
-                         (mark["attempt_id"],)).fetchone() if mark.get("attempt_id") else None)
+    attempt = one(c, STOP_ATTEMPT_SQL, (mark["attempt_id"],)) if mark.get("attempt_id") else None
     at = (attempt["finished"] if attempt else None) or status.get("since")
     # An older held task must not replace the run that produced the current status.
-    held = (c.execute("SELECT id,attempt_id FROM jobs WHERE bot=? AND state='uncertain' "
-                      + ("AND attempt_id=? " if mark.get("attempt_id") else "")
-                      + "ORDER BY created DESC LIMIT 1",
-                      (bot, mark["attempt_id"]) if mark.get("attempt_id") else (bot,)).fetchone()
+    held = ((one(c, HELD_RUN_SQL, (bot, mark["attempt_id"])) if mark.get("attempt_id") else one(c, HELD_SQL, (bot,)))
             if state == "crashed" else None)
     if held:
-        run = (c.execute("SELECT state,started,finished FROM attempts WHERE id=?", (held["attempt_id"],)).fetchone()
-               if held["attempt_id"] else None)
+        run = one(c, HELD_ATTEMPT_SQL, (held["attempt_id"],)) if held["attempt_id"] else None
         unstarted = run is not None and not run["started"]
         focus = (status.get("focus") or "").rstrip(".")
         reason = ("Its computer refused the run before it started." if unstarted else
@@ -373,7 +377,7 @@ def last_stop(c, bot, status):
                 "attempt_id": attempt["id"], "reason": f"Its computer took this run {PRE_START_TRIES} times and never "
                 "started it.", "text": (attempt["final_text"] or "Last run couldn't start on its computer").rstrip(".") + "."}
     if attempt and not attempt["started"] and attempt["state"] == "expired":
-        job = c.execute("SELECT state FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()
+        job = one(c, STOP_JOB_SQL, (attempt["job_id"],))
         if not job or job["state"] != "queued":        # taken again, or no longer waiting: nothing to explain
             return None
         returned = (attempt["final_text"] or "").startswith(HANDED_BACK)
