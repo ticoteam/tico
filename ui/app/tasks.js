@@ -300,6 +300,15 @@ function taskRelChip(t) {
   const words = `${n} related task${n === 1 ? '' : 's'}`;
   return `<span class="bcard-rel tnum" role="img" aria-label="${esc(words)}" title="${esc(words)}"><svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 7l2-2M4.2 5.6L3 6.8a1.7 1.7 0 0 0 2.4 2.4L6.6 8M7.8 6.4L9 5.2A1.7 1.7 0 0 0 6.6 2.8L5.4 4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>${n}</span>`;
 }
+// A Dev ticket at a working step says how long it has been there; past four hours it turns amber, when its manager is
+// told (backend/step_age.py). Time spent waiting is not counted: the server restarts the clock when it comes back.
+const STEP_LATE_MS = 4 * 3600e3;
+function taskStepAge(t) {
+  const since = Date.parse(t?.step_since || ''); if (!since) return '';
+  const late = Date.now() - since >= STEP_LATE_MS, age = ageShort(t.step_since);
+  const words = `At ${t.step?.name || 'this step'} for ${age === 'now' ? 'under a minute' : age}${late ? ': over 4 hours' : ''}`;
+  return `<span class="bcard-step-age tnum${late ? ' late' : ''}" data-step-age title="${esc(words)}" aria-label="${esc(words)}">${esc(age)} in step</span>`;
+}
 // The same card the list's peek opens: a cover when the task has a picture, the title, its chips, a dot for an open
 // question, the owner's face and the age.
 function taskCard(it) {
@@ -309,7 +318,7 @@ function taskCard(it) {
   return tasksSigned(`<div class="bcard" data-task-key="${esc(it.key)}">${t ? taskBlockedStrip(it) + taskCoverHTML(t) : ''}
     <button class="bcard-open" type="button" data-open-task="${esc(it.key)}" title="${esc(t ? taskRowTip(t) : it.title)}" tabindex="-1">
       <span class="bcard-title">${esc(it.title)}</span></button>
-    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
+    <div class="bcard-foot">${chips ? `<span class="bcard-chips">${chips}</span>` : ''}${t ? taskWaitTag(t) + taskStepAge(t) : ''}<span class="spacer"></span>${t ? taskRelChip(t) : ''}${t ? taskAskDot(t) : ''}
       ${t && taskPropRights(t).edit
         ? `<button type="button" class="tl-face bcard-owner" data-card-owner="${esc(it.key)}" aria-haspopup="true" aria-label="${esc(`Owner: ${actorLabel(it.actor)}. Change`)}" title="${esc(actorLabel(it.actor))}">${actorFace(it.actor, 16)}</button>`
         : `<span class="tl-face" aria-hidden="true">${actorFace(it.actor, 16)}</span>`}

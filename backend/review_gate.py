@@ -3,13 +3,12 @@ import json
 import re
 from urllib.parse import quote
 
+import httpx
+from jwt.exceptions import InvalidKeyError
+
 from . import test_receipts
 
 REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
-# A request to a reviewer, to QA or to Security: a subtask of the ticket, titled by what it asks.
-GATE_CHILD = re.compile(r"^(?:Review [12]|QA|Security)(?:\b|:)", re.I)
-
-
 # The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not one: QA
 # sends a ticket back to QA Fixes and on to Pending Release and Done (docs/software-factory.md).
 REVIEWER_CHILD = re.compile(r"^(?:Review [12]|Security)(?:\b|:)", re.I)
@@ -95,6 +94,45 @@ def links(c, row):
             and p.get("state") not in ("merged", "closed", "shipped")]
 
 
+def mint_failure(exc, repo):
+    """Describe a failed token request without exposing exception text or response bodies."""
+    from .store import Problem
+    from .github_app import MISSING_KEY
+
+    status = None
+    code = None
+    auth = isinstance(exc, InvalidKeyError)
+    timeout = isinstance(exc, (TimeoutError, httpx.TimeoutException))
+    retryable = timeout
+    if isinstance(exc, Problem):
+        code = exc.code
+        # A transport failure has no GitHub HTTP response; 502 is Tico's own envelope status.
+        status = exc.extra.get("github_status", None if code == "github_unreachable" else exc.status)
+        auth = code in {"github_app_key", "github_key_missing", "github_not_installed", "github_not_connected",
+                        "github_app_permissions"}
+        auth |= code == "github_unavailable" and exc.detail in {
+            MISSING_KEY, "The stored GitHub App key could not be decrypted"}
+        timeout |= exc.extra.get("timed_out") is True
+        retryable |= exc.retryable
+    elif isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+    auth |= status in (401, 403)
+    retryable = not auth and (timeout or retryable or status in (408, 429)
+                             or isinstance(status, int) and 500 <= status < 600)
+    # Only fixed-format diagnostic fields are safe to include; never copy Problem.detail.
+    cause = []
+    if isinstance(code, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", code):
+        cause.append(code)
+    if isinstance(status, int) and 100 <= status < 600:
+        cause.append(f"HTTP {status}")
+    if timeout:
+        cause.append("timed out")
+    if not cause:
+        cause.append(type(exc).__name__)
+    action = "the GitHub App could not sign in" if auth else "GitHub token request failed"
+    return {"error": True, "why": f"{action} for {repo}: {'; '.join(cause)}", "retryable": bool(retryable)}
+
+
 def snapshot(service, prs):
     from . import hubdb as H
     """Read current PR heads and all checks outside the database write lock.
@@ -113,8 +151,9 @@ def snapshot(service, prs):
                 raise ValueError("unresolved PR")
             try:
                 token, _ = service.mint([repo], {"pull_requests": "read", "checks": "read", "statuses": "read"})
-            except Exception:
-                raise ValueError("the GitHub App could not sign in for " + repo)
+            except Exception as exc:
+                out[pr["id"]] = mint_failure(exc, repo)
+                continue
             headers = {"Authorization": "Bearer " + token}
             base = f"/repos/{quote(repo, safe='/')}"
             def read(path, params=None):
@@ -127,17 +166,24 @@ def snapshot(service, prs):
             checks = {}
             for endpoint, field in (("check-runs", "check_runs"), ("statuses", None)):
                 for page in range(1, 11):
-                    data = read(f"/commits/{head}/{endpoint}", {"per_page": 100, "page": page})
+                    # GitHub defaults to latest; all keeps a failed check attempt
+                    # visible even after a green rerun at the same commit.
+                    params = {"per_page": 100, "page": page, **({"filter": "all"} if field else {})}
+                    data = read(f"/commits/{head}/{endpoint}", params)
                     rows = data[field] if field else data
                     for check in rows:
                         name = check.get("name") or check.get("context") or "Checks"
-                        # The commit statuses API returns newest first; older statuses cannot overwrite it.
+                        result = check.get("conclusion") if field else check.get("state")
+                        # Keep the latest status, and any earlier failure. A
+                        # success update must not hide a same-head failed run.
                         if endpoint == "statuses" and "status:" + name in checks:
+                            if result in ("failure", "error"):
+                                checks["status:" + name + " (earlier failure)"] = "failing"
                             continue
                         key = ("check:" + name + (f" ({check['id']})" if check.get("id") else "")) if field else "status:" + name
-                        result = check.get("conclusion") if field else check.get("state")
                         failed = result in ("failure", "error", "timed_out", "cancelled", "canceled", "action_required", "startup_failure", "stale")
-                        checks[key] = "failing" if failed else "passing" if result in ("success", "neutral", "skipped") else "pending"
+                        checks[key] = ("failing" if failed else "passing" if result == "success"
+                                       else "skipped" if result in ("neutral", "skipped") else "pending")
                     if len(rows) < 100:
                         break
                 else:
@@ -154,11 +200,32 @@ def snapshot(service, prs):
     return out
 
 
-def evidence(c, row, actor):
+def receipt_author(c, row, actor, parents, owner_email):
+    """Additional receipt authors; this grants no task actions or visibility."""
+    from . import hubdb as H
+    from .auth import above
+    if not H.task_private_readable(c, actor, row):
+        return False
+    if H.is_bot(actor):
+        return H.is_bot(row["owner"]) and above(parents, H.actor_id(actor), H.actor_id(row["owner"]))
+    if H.is_human(actor) and (person := H.human(c, actor)):
+        return (H._task_party(c, actor, row) or H.can_move(c, actor)
+                or bool(owner_email and (person.get("email") or "").lower() == owner_email.lower()))
+    return False
+
+
+def evidence(c, row, actor, receipt_owner=None):
     from . import hubdb as H
     from . import task_privacy as privacy
+    from .read_cache import configs
+    if receipt_owner is None:
+        owner = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone()
+        receipt_owner = (H._json(owner[0], {}) or {}).get("email") if owner else None
+    author_cache = {}
+    parents = {r["bot"]: r["reports_to"] or "" for r in configs(c)}
     def collect(item):
         messages = []
+        authors = set()
         conv = H.conversation(c, item.get("conversation_id"))
         for raw in c.execute("SELECT * FROM messages WHERE conversation_id=? AND deleted_at IS NULL ORDER BY created,id",
                              (item.get("conversation_id"),)).fetchall():
@@ -168,7 +235,12 @@ def evidence(c, row, actor):
             if (privacy.message_readable(c, actor, m, current=True)
                     and privacy.message_readable(c, row["owner"], m, current=True)):
                 messages.append(m)
-        return {**item, "messages": messages}
+                author = m.get("from_actor")
+                if author not in author_cache:
+                    author_cache[author] = receipt_author(c, row, author, parents, receipt_owner)
+                if author_cache[author]:
+                    authors.add(author)
+        return {**item, "messages": messages, "receipt_authors": sorted(authors)}
     result = collect(row)
     result["children"] = []
     from . import task_relations as TR
@@ -180,17 +252,19 @@ def evidence(c, row, actor):
     return result
 
 
-def check(c, actor, row, snapshots=None, note=None, require_pr=False):
+def check(c, actor, row, snapshots=None, note=None, require_pr=False, receipt_owner=None):
     from . import hubdb as H
     if not engineering(c, row):
         return
+    writers = "The owner, a manager above the owner, or a person who may edit this ticket"
     prs = links(c, row)
     if not prs:
         if require_pr:
             reject(c, actor, row, "receipt", "unknown", {"url": "no linked PR"},
-                   "Review refused: no linked PR or test receipt. Link the current PR and post its passing test receipt before asking a reviewer.")
+                   "Review refused: no linked PR. Link the current PR before asking a reviewer. "
+                   "The owner or a person who may edit this ticket can link it.")
         return  # A board-only step move has no software reviewer to wake.
-    facts = evidence(c, row, actor)
+    facts = evidence(c, row, actor, receipt_owner)
     if note is not None:
         facts["note"] = note
         facts["updated"] = H.now()
@@ -205,27 +279,41 @@ def check(c, actor, row, snapshots=None, note=None, require_pr=False):
                    else "the PR link changed while GitHub was read" if changed else "no PR head recorded")
             # Every move reads GitHub afresh, so a transient failure clears on a plain retry.
             reject(c, actor, row, "ci", head, pr, f"Review refused: cannot verify the current head and CI for {pr['url']} ({why}). "
-                                                  "Retry the review move; if it repeats, refresh the PR link.")
+                                                  "Retry the review move. Anyone allowed to move this ticket can retry.",
+                   retryable=detail.get("retryable", False))
         failing = sorted(k.removeprefix("check:").removeprefix("status:") for k, v in (detail.get("checks") or {}).items() if v == "failing")
         if failing or snapshots is None and pr.get("checks") == "failing":
             names = ", ".join(failing) or "Checks (refresh the PR link for check names)"
-            reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. Fix the failing checks, then retry the review move.")
+            reject(c, actor, row, "ci", head, pr, f"Review refused: CI failing at head {head} on {pr['url']}: {names}. "
+                   "A failed GitHub check attempt still blocks after a passing rerun at the same head. "
+                   "Have the owner or another contributor fix the failure and push a new head, then retry the review move.")
     for pr in prs:
         detail = snapshots[pr["id"]] if snapshots is not None else (H._json(pr.get("detail_json"), {}) or {})
         head = detail["head_sha"]
+        checks = detail.get("checks") or {}
+        # Current all-green CI is stronger evidence than prose, but only from a fresh read: the webhook-built cache
+        # records skipped and neutral checks as passing, so it cannot tell a real pass from a skip.
+        if snapshots is not None and checks and "passing" in checks.values() and all(v in ("passing", "skipped") for v in checks.values()):
+            continue
         state, receipts = test_receipts.at_head(facts, head)
         if state != "passed":
             newest = next((r["head"] for r in reversed(receipts) if r["head"]), "no receipt")
-            action = ("Fix the recorded test failure and push a new head with a passing receipt" if state == "failed"
-                      else "Post a passing test receipt naming the current head on this ticket")
-            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}, then retry the review move.")
+            if state == "failed":
+                action = ("Have the owner or another contributor fix the recorded test failure and push a new head, "
+                          "then retry with passing CI or a passing receipt. A written same-head rerun cannot clear it; "
+                          "all-green GitHub checks can. " + writers + " can post the receipt.")
+            else:
+                action = ("Post a passing test receipt naming the current head on this ticket, then retry the review move. "
+                          + writers + " can post it.")
+            reject(c, actor, row, "receipt", head, pr, f"Review refused: {state} test receipt for {pr['url']} current head {head}; newest receipt head: {newest}. {action}")
 
 
-def reject(c, actor, row, kind, head, pr, text):
+def reject(c, actor, row, kind, head, pr, text, retryable=False):
     from . import hubdb as H
     try:
         H.refuse(c, actor, "review_gate", text, task=row["id"])
     except H.Refused as exc:
+        exc.retryable = retryable
         exc.review_gate = {"task": row["id"], "kind": kind, "head": head, "pr": pr["url"], "text": text}
         raise
 

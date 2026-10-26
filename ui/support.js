@@ -67,7 +67,7 @@
     plus: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M8 3v10M3 8h10"/></svg>',
   };
   // `selected`: the request in the chat ('' is a new one); `view`: the chat, or the list of Your requests.
-  let state = {enabled: null, tickets: [], unread: 0}, selected = '', view = 'chat', pop = null, timer, busyRefresh = null;
+  let state = {enabled: null, tickets: [], unread: 0}, selected = '', view = 'chat', pop = null, timer, busyRefresh = null, stateRevision = 0;
   let owner = '', toasted = 0, compose = null, drafts = new Map(), editor = null, opener = null, loading = null, sending = null;
   const when = iso => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString(undefined, {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}); };
   const short = iso => {
@@ -134,9 +134,12 @@
   async function refresh() {
     if (busyRefresh) return busyRefresh;
     busyRefresh = (async () => {
+      const revision = stateRevision;
       try {
         const data = await call('POST', '/support/tickets/refresh');
-        accept(data);
+        // A refresh started before a send/read/delete settled can return an older ticket list. Keep the local change;
+        // the next refresh will reconcile it with the server.
+        if (revision === stateRevision) accept(data);
         note(data.refresh_failed ? POLL_FAILED : '', !!data.refresh_failed);
       } catch (_) { note(POLL_FAILED, true); }      // what was loaded before stays on screen
       finally { busyRefresh = null; }
@@ -157,8 +160,11 @@
     const t = current();
     if (document.hidden || !isOpen() || view !== 'chat' || !t?.unread) return;
     // Reading follows opening a conversation (or having it open), not a background fetch.
+    const revision = stateRevision;
     try {
       const next = await call('POST', `/support/tickets/${encodeURIComponent(t.id)}/read`);
+      if (revision !== stateRevision) return;
+      stateRevision++;
       state.tickets = state.tickets.map(x => x.id === next.id ? next : x);
       state.unread = state.tickets.reduce((n, x) => n + (x.unread || 0), 0);
       toasted = state.unread; mark(); render();
@@ -435,6 +441,7 @@
         if (!thread) Object.assign(body, {email: sent.email, include_ids: sent.ids}, sent.ids && appVersion() ? {app_version: appVersion()} : {},
           sent.kind !== 'support' ? {kind: sent.kind} : {});
         const next = await call('POST', thread ? `/support/tickets/${encodeURIComponent(thread)}/messages` : '/support/tickets', body, key);
+        stateRevision++;
         state.tickets = [next, ...state.tickets.filter(t => t.id !== next.id)];
         // A draft that changed while this was on its way holds newer words: it stays, and stays on screen.
         if (drafts.get(thread) === d && d.key === key) { drafts.delete(thread); selected = next.id; view = 'chat'; }
@@ -635,6 +642,7 @@
       if (!id || !confirm('Delete this request and its diagnostics? Tico support will no longer see it. This cannot be undone.')) return;
       try {
         await call('DELETE', `/support/tickets/${encodeURIComponent(id)}`);
+        stateRevision++;
         state.tickets = state.tickets.filter(t => t.id !== id); drafts.delete(id);
         selected = latest()?.id || ''; render(); renderComposer(); say('Request deleted.');
       } catch (e) { say(e.message, true); }
@@ -703,9 +711,11 @@
   // Loads this person's requests and what a new one sends; a failure keeps what was loaded before.
   async function load() {
     const actor = typeof S === 'undefined' ? '' : S.me?.id;
-    if (owner !== actor) { if (owner) browserFailures.length = 0; owner = actor; drafts = new Map(); selected = ''; view = 'chat'; compose = null; state = {enabled: null, tickets: [], unread: 0}; }
+    if (owner !== actor) { stateRevision++; if (owner) browserFailures.length = 0; owner = actor; drafts = new Map(); selected = ''; view = 'chat'; compose = null; state = {enabled: null, tickets: [], unread: 0}; }
     try {
-      accept(await call('GET', '/support/tickets'));
+      const revision = stateRevision;
+      const data = await call('GET', '/support/tickets');
+      if (revision === stateRevision) accept(data);
       if (state.enabled) compose = await call('GET', '/support/compose');
       note('');
     } catch (e) { if (state.enabled === null) note(e.message, true); else note(POLL_FAILED, true); }
@@ -762,7 +772,8 @@
   window.addEventListener('focus', wake);
   window.addEventListener('load', () => setTimeout(async () => {
     if (typeof S === 'undefined' || !S.me || state.enabled !== null) return;
-    try { accept(await call('GET', '/support/tickets')); schedule(); } catch (_) { /* opening Support tries again */ }
+    const revision = stateRevision;
+    try { const data = await call('GET', '/support/tickets'); if (revision === stateRevision) accept(data); schedule(); } catch (_) { /* opening Support tries again */ }
   }, 3000));
   window.addEventListener('load', () => setTimeout(pollAccess, 1000));
 })();

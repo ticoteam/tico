@@ -130,7 +130,7 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     const bots = card.getByRole('link', {name: 'Bots'});
     assert.equal(await bots.getAttribute('href'), '#/settings');
     await bots.click();
-    await page.waitForFunction(() => location.hash === '#/settings' && SETTINGS_TAB === 'bots');
+    await page.waitForFunction(() => location.hash === '#/settings/bots' && SETTINGS_TAB === 'bots');
     assert.equal(await page.locator('#overview-hours-dialog[open]').count(), 0);
     assert.deepEqual(errors, []);
     console.log('overview-hours: ok');

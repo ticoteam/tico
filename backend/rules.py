@@ -149,7 +149,7 @@ EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in A
 # refs.wake spellings the writers use -> the event a rule names.
 WAKE_ALIASES = {"stalled": "stall", "stuck_retry": "stall", "stuck_cause": "stall", "occurrence": "routine",
                 "next-run": "next_run", "background-done": "background_done", "watcher-done": "watcher",
-                "held-messages": "backlog"}
+                "held-messages": "backlog", "step_status": "status_check"}
 # `trigger` (an incoming webhook's id) and `type` (its extracted type, a trailing * matches a prefix) are read only for
 # events without a task.
 WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type")
@@ -521,9 +521,10 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
     if PROFILE_RULES:
         profile = [{**r, "scope_kind": "bot", "scope_id": slug} for r in PROFILE_RULES.get(profile_of(conn, slug), ())
                    if r["event"] in (event, "*")]
-    if event in AWAITED_NAMES or event == "digest":
-        # What the bot waits on wakes it, and a digest is held news let go: a `*` row (a lead's batch-everything, a
-        # note-everything) does not reach either, only a row that names the event.
+    if event in AWAITED_NAMES or event in ("digest", "step_entered"):
+        # What the bot waits on wakes it, a digest is held news let go, and a step move is news only for a bot a row
+        # names: a `*` row (a lead's batch-everything, a note-everything) reaches none of them, only a row that names
+        # the event.
         rows = [r for r in rows if r["event"] != "*"]
         profile = [r for r in profile if r["event"] != "*"]
     if not rows and not profile:
@@ -1138,6 +1139,30 @@ def seed_dev(conn):
             H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(DEV_ROWS)})
     except sqlite3.OperationalError:
         return
+
+
+STEP_NOISE_DROPPED = "rules.step_noise_dropped"
+
+
+def drop_step_noise(conn):
+    """Once per install: cancel the Release Manager's queued step-entry notices a profile catch-all held for its digest
+    (before only a row naming `step_entered` could reach it, every task's step move did). Nothing else is touched: a
+    note, another bot's jobs, a job already let go, a notice a team's own step_entered row batched. Quietly does
+    nothing before the tables exist."""
+    try:
+        if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (STEP_NOISE_DROPPED,)).fetchone():
+            return 0
+        flow = _release_flow()
+        manager = flow.load(conn)["bot"] or flow.release_manager(conn)   # a paused one's jobs too
+        dropped = conn.execute(
+            "UPDATE jobs SET state='cancelled',held=0 WHERE bot=? AND state='queued' AND held=1 AND message_id IN "
+            "(SELECT id FROM messages WHERE json_extract(refs_json,'$.news')='step_entered' "
+            "AND json_extract(refs_json,'$.wake_batch')='rule' AND json_extract(refs_json,'$.rule')='profile_lead_digest')",
+            (manager,)).rowcount if manager else 0
+        H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager or "", {"jobs": dropped})
+        return dropped
+    except sqlite3.OperationalError:
+        return 0
 
 
 def step_entered(conn, actor, row, *, skip=()):

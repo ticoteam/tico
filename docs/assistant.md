@@ -65,7 +65,7 @@ writes to a bot is marked "via assistant", so BotOps never takes it for your req
 ids (`human:<id>`), never bare names, and a recipient that resolves to a human is not a bot. Everything else the server
 refuses (`403 confirm_required`) and the assistant must propose, including a message for another human, a note to a bot,
 a comment on a task another human is on, and running a task now. The owner may turn **Assistant acts without asking**
-off (Settings > Humans, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
+off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
 comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
 card again. An assistant run's credential works only while its lease is live.
 
@@ -127,7 +127,7 @@ What stays on:
   last 30 days with your words; **Undo** puts one back to waiting for you, as long as nothing has acted on it yet (an
   approval already spent stays, `422 consumed`). The requesting bot is told it was undone.
 - **The team can turn it off.** The owner's rule **People may let their Assistant decide their approvals** (Settings >
-  Humans, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
+  People, `PUT /api/v2/access/rules {"assistant_approvals": false}`), on by default, stops it for everyone at once. With
   **Assistant acts without asking** off, approving is a card again too.
 
 With the setting off, an approve the Assistant tries is refused with `403 approve_setting_off`, and it tells you in one

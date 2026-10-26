@@ -71,13 +71,30 @@ def overdue(c):
         "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
+def from_person(c, job_id):
+    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
+    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
+    and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
+    a rule's wake), or a bot's message, is not one, even when a person's act caused it. Two primary-key reads."""
+    return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                          "WHERE j.id=? AND m.from_actor LIKE 'human:%'", (job_id,)).fetchone())
+
+
+def person_queued(c, runner_id):
+    """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
+    return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot=x.bot AND j.state='queued' AND j.held=0 "
+                          "JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND m.from_actor LIKE 'human:%' "
+                          "LIMIT 1", (runner_id,)).fetchone())
+
+
 def reserve(c, attempt, settings=None):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
     from .performance import load_status
     aid, rid = attempt['id'], attempt['runner_id']
     if attempt['stop_requested']:
         return {"reserved": False, "stop": True}
-    if load_status(c, rid)['overloaded']:
+    person = from_person(c, attempt['job_id'])
+    if not person and load_status(c, rid)['overloaded']:
         waiting(c, aid, 'computer busy')
         return {"reserved": False, "waiting": "computer busy"}
     place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
@@ -96,7 +113,7 @@ def reserve(c, attempt, settings=None):
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
                       "AND p.wait_reason IN ('computer busy',?) AND (a.created,a.id)<(?,?) LIMIT 1",
                       (rid, H.now(), org_turns.REASON, attempt['created'], aid)).fetchone()
-    if sum(held(c, rid).values()) >= capacity or ahead:
+    if sum(held(c, rid).values()) >= capacity or (ahead and not person):
         waiting(c, aid, 'computer busy')
         return {"reserved": False, "waiting": "computer busy"}
     until = H.shift(H.now(), seconds=START_SECONDS)
@@ -105,8 +122,14 @@ def reserve(c, attempt, settings=None):
     return {"reserved": True, "start_until": until}
 
 
-def summary(c, runner_id, settings):
-    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks."""
+def summary(c, runner_id, settings, default=None):
+    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Read once per computer
+    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total)."""
+    from .read_cache import value
+    return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
+
+
+def _summary(c, runner_id, settings, default):
     from . import performance
     out = dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS)
     groups = {}
@@ -144,7 +167,8 @@ def summary(c, runner_id, settings):
                          (runner_id,)):
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         if not why and runner:
-            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready)
+            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
+                                       default=default)
             why = reasons.get(refused, 'pre-start requirements' if refused else '')
         if not why and overloaded:
             why = 'computer busy'

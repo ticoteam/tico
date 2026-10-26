@@ -53,7 +53,7 @@ file is ignored. A public install has no such file and needs none.
   only gets an answer; BotOps changes nothing for you from there.
 - `@Tico` in a channel; mention it again in the thread to continue.
 - Reply in a thread a bot already talks in; no mention needed.
-- Only humans on the roster (Humans) whose Slack email matches can wake a bot. Guests and Slack Connect
+- Only humans on the roster (Settings > People) whose Slack email matches can wake a bot. Guests and Slack Connect
   channels are refused.
 
 ## Troubleshooting
