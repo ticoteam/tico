@@ -7681,7 +7681,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     """
     if quiet_bots and (quiet or tasks_only(conn, target)):
         refs = {**(refs or {}), "quiet": True}
-    if (is_bot(target) and target == task_row.get("owner") and TS.snoozed(task_row)
+    if (False and is_bot(target) and target == task_row.get("owner") and TS.snoozed(task_row)
             and not (refs or {}).get("run_now") and (refs or {}).get("wake") != "snooze"):
         # Nobody plans to get to a snoozed task before its date: news about it waits for its bot's next run.
         # Anyone else (a requester bot handed it for review) hears as usual.
