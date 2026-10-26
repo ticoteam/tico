@@ -282,6 +282,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       await banner.waitFor();
       assert((await banner.innerText()).includes(why), 'shows Health explanation verbatim, escaped and in UTC');
       assert.equal(await page.locator('#bot-alert .bot-alert').getAttribute('title'), why);
+      assert.doesNotMatch(await page.locator('#bot-alert').innerText(), /review/);
       assert((await page.locator('#bot-quarantine').innerText()).includes(why));
       assert.doesNotMatch(await page.locator('#bot-quarantine h2').innerText(), /review/);
       assert.match(await banner.innerText(), /Your messages are saved and run when it's back/);
