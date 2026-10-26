@@ -456,13 +456,14 @@ changed it since. The same three are `hub_rule_suggestions`, `hub_rule_apply` an
 ## Snoozing a task
 
 **Snooze** sets a task aside until a date: it tells its bot or person that nobody plans to get to it
-before then. Its requester, its owner, anyone on it by role, or a mover snoozes it from the task's
+before then. Its requester, its owner, their managers, anyone on it by role, or a mover snoozes it from the task's
 **…** menu (Tomorrow, Next week, In two weeks, In a month, or a typed date), with
 `hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
 `snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
-When someone other than its requester snoozes a task, the requester is told.
+When someone other than its requester snoozes a task, the requester is told. A role holder's
+manager gains no snooze permission unless they also manage the owner or requester.
 
 Until that moment:
 
@@ -647,7 +648,8 @@ Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its r
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
 parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
 the parent's next turn resumes there. There is no requester delivery session on the completed
-subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
+subtask returns its result to the parent in the same way.
 A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
 requester hears when the parent itself finishes, so a manager's task → builder task → review
 subtask sends the review back to the builder, and the completed build back to the manager.

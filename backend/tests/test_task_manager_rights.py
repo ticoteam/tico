@@ -178,6 +178,49 @@ def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, mana
     assert result['comment']['from_actor'] == actor
 
 
+def test_manager_finishing_report_subtask_returns_result_to_parent_once(api, manager):
+    token, actor = manager
+    parent = make(api, owner='bot:cmo', requester='human:priya', private=False)
+    child = make(api, requester='bot:cmo', private=False, parent_id=parent['id'])
+    # Another open child keeps the generic all-children-finished wake from hiding a lost result.
+    make(api, requester='bot:cmo', private=False, parent_id=parent['id'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed'")
+
+    change(api, child, token, status='done', note='The packet is ready.')
+    with api.app.state.store.read() as c:
+        notices = c.execute(
+            "SELECT m.body,json_extract(m.refs_json,'$.task') AS parent_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot='cmo' AND j.state='queued' AND json_extract(m.refs_json,'$.subtask')=?",
+            (child['id'],)).fetchall()
+        assert len(notices) == 1 and notices[0]['parent_id'] == parent['id']
+        assert 'The packet is ready.' in notices[0]['body']
+        assert [e for e in H.task_history(c, child['id']) if e['field'] == 'status'][-1]['actor'] == actor
+    change(api, child, token, status='done', note='The packet is ready.')
+    with api.app.state.store.read() as c:
+        assert c.execute(
+            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot='cmo' AND j.state='queued' AND json_extract(m.refs_json,'$.subtask')=?",
+            (child['id'],)).fetchone()[0] == 1
+
+
+def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, manager):
+    token, _ = manager
+    report = bot_token(api, 'ops')
+    task = make(api, owner='bot:cmo', requester='human:priya', private=False)
+    with api.app.state.store.transaction() as c:
+        from backend.task_roles import set_roles
+        set_roles(c, 'human:priya', task['id'], {'reviewer': ['bot:ops']})
+    path = 'tasks/' + task['id']
+    post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token, expected=403)
+    snoozed = post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=report)
+    assert snoozed['snoozed_by'] == 'bot:ops'
+    post(api, path + '/unsnooze', {}, token=token, expected=403)
+    with api.app.state.store.read() as c:
+        assert H.task(c, task['id'])['snoozed_until'] == snoozed['snoozed_until']
+    assert post(api, path + '/unsnooze', {}, token=report)['snoozed_until'] is None
+
+
 def test_manager_run_now_and_waiting_person(api, manager):
     token, actor = manager
     bot_token(api, 'ops')  # report has a current assigned computer

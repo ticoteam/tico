@@ -836,8 +836,8 @@ class Auth:
         doing or its own chain of command:
 
         - itself, and the keeper (notices about its own tasks are written directly, not here)
-        - its manager, the bot named in `reports_to`: the org chart is what decides who directs
-          whom, and a manager that cannot assign its report is not a manager
+        - its direct bot manager named in `reports_to`; task comments and questions also
+          admit managers through the full org chain when they inherit a task party's rights
         - a bot holding an open task this bot requested — how a ticket gets a question back
         - a bot in a conversation this bot opened with it
 
