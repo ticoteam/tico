@@ -135,6 +135,9 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     runner, origin, attempt = setup_attempt(api)
     start(api, runner, attempt)
     finish(api, runner, attempt)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         hidden = H.task_create(c, H.KEEPER, "Nightly learnings", "Read the day's runs", "bot:ops", private=True)
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")

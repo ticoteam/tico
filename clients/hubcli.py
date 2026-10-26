@@ -66,6 +66,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            wait on a task, a PR merging or a release; one wake when it happens
     hub task snooze <id> --until DATE      set it aside until DATE: off the lists and quiet until then
     hub task unsnooze <id>                 bring a snoozed task back now
+    hub task waive-qa <id> --head SHA --reason "..."
+                                           a person waives a Dev ticket's In QA step for that exact head; a waiver,
+                                           never a QA pass (CI and both reviews on that head stay required)
     hub task attach <id> <file> [--name "..."]
                                            store a deliverable with the task; prints the link
     hub task list [--owner me|X] [--requester me] [--status open|doing|waiting|done] [--member me|X [--role R]]
@@ -1239,6 +1242,12 @@ def parser():
     s = task.add_parser("unsnooze", help="bring a snoozed task back now; its owner bot is woken once")
     s.add_argument("id")
     s.set_defaults(fn="task unsnooze")
+    s = task.add_parser("waive-qa", help="a person waives a Dev ticket's current In QA step for one exact pull "
+                        "request head, with a reason; recorded as a waiver, never as a QA pass")
+    s.add_argument("id")
+    s.add_argument("--head", required=True, help="the pull request's current head: the full 40-character sha")
+    s.add_argument("--reason", required=True, help="why QA is waived, in plain words")
+    s.set_defaults(fn="task waive-qa")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")

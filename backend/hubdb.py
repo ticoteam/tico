@@ -78,6 +78,7 @@ from pathlib import Path
 from .batch_work import isolated
 from . import idempotency_messages
 from . import task_relations as TR
+from .task_rights import represents as task_represents, participant as task_participant, mover as task_mover
 from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
@@ -2637,10 +2638,10 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
     from . import bot_to_bot
     # A delegated verdict belongs to the requesting task's session. Keep the original on the review,
     # quietly, and deliver once on the parent, including when the runner posts the review's final reply.
-    from .wake_rules import VERDICT
+    from .wake_rules import VERDICT_FIELDS
     result_task = (task(conn, _task_ref(refs.get("task")) or "")
                    if kind in ("say", "notice") and is_bot(actor) and is_bot(target)
-                   and not refs.get("quiet") and VERDICT.search(str(body or "")) else None)
+                   and not refs.get("quiet") and VERDICT_FIELDS.search(str(body or "")) else None)
     result_parent = (_subtask_result_parent(conn, result_task) if result_task and result_task["owner"] == actor
                      and result_task["requester"] == target else None)
     result_key = _subtask_result_key(conn, result_task, body) if result_parent and result_parent["owner"] == target else None
@@ -2654,8 +2655,6 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         refs.update(quiet=True, **{bot_to_bot.MARK: bot_to_bot.RULE})
     msg = _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s, check_cap=True,
                          decided=decided)
-    if result_task and result_parent:
-        record_verdict(conn, actor, result_task, text=body)
     if result_key:
         _deliver_subtask_result(conn, result_task, result_parent, body, result_key, source=msg["id"], resume_hint=True)
     if waits:
@@ -2926,6 +2925,12 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":conversation_id, :from_actor, :to_actor, :kind, :body, :refs_json, :in_reply_to, "
         ":created, :delivered_at, :read_at, :expires_at, :wait_s)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
+    # Notes, comments and runner final replies all pass here, including quiet ones
+    # and checks requested by a person. Only the check owner may supply its verdict.
+    if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
+        reviewed = task(conn, message_task_id({"refs": refs or {}}, conv) or "")
+        if reviewed and reviewed["owner"] == actor:
+            record_verdict(conn, actor, reviewed, text=body)
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
@@ -3122,7 +3127,7 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
-    """A private task is read by its requester and owner, and by its guest when it has one (task_reach)."""
+    """Private tasks admit their parties, bot parties’ org-chart managers and their one guest (task_reach)."""
     if not row:
         return False
     row = dict(row)
@@ -3133,6 +3138,10 @@ def task_private_readable(conn, actor, row):
         if not row:
             return False
     if actor in (row["owner"], row["requester"]):
+        return True
+    from .task_rights import private_subjects
+    inherited = private_subjects(conn, actor)
+    if any(row[k] in inherited for k in ("owner", "requester")):
         return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
@@ -3165,8 +3174,8 @@ def task_reach_refusal(conn, actor, row, person):
                 f"hand this to {actor_id(row['guest'])}, or ask a person on the task to make it company-visible")
     if not bot_only(row):
         return "Private task content stays with its requester and current owner"
-    if actor != row["owner"]:
-        return "Only the bot that owns a private task brings a person into it"
+    if not task_represents(conn, actor, row["owner"]):
+        return "Only the bot that owns a private task or its managers bring a person into it"
     for parent_id in TR.ancestors(conn, row["id"]):
         parent = task(conn, parent_id)
         if parent and task_private(conn, parent) and not bot_only(parent) and not task_private_readable(
@@ -3889,9 +3898,9 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     if not changed:
         return False
     slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
-    if actor not in (row["owner"], row["requester"]) and type_manager(conn, row) != slug:
+    if not task_participant(conn, actor, row) and type_manager(conn, row) != slug:
         refuse(conn, actor, "label",
-               f"{slug} changes labels only on a task it owns, asked for or whose type it manages; labels on "
+               f"{slug} changes labels only on a task it owns, asked for, whose party it manages or whose type it manages; labels on "
                f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
     settings = roadmap_settings(conn)
     public = [k for k in changed if k in settings["labels"]]
@@ -4327,10 +4336,11 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
     delegated = _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                      (row["id"], actor, now()))
-    if (not mover and actor not in (row["owner"], row["requester"]) and not delegated
+    mover = task_mover(conn, actor, row, mover)
+    if (not mover and not task_participant(conn, actor, row) and not delegated
             and not task_ancestor_party(conn, actor, row) and not type_bot_works(conn, actor, row)
             and not (kind is None and task_manager_acts(conn, actor, row))):     # relations only, never pull request links
-        refuse(conn, actor, "identity", "This task is not yours to change")
+        refuse(conn, actor, "identity", "Only the owner, requester, their managers, delegates or task movers change this task")
 
 
 @private_task_write
@@ -4370,7 +4380,7 @@ def task_ancestor_party(conn, actor, row):
         parent = task(conn, parent_id)
         if not parent:
             break
-        if actor in (parent["owner"], parent["requester"]):
+        if task_participant(conn, actor, parent):
             return True
     return False
 
@@ -4380,7 +4390,7 @@ def _task_parent(conn, actor, task_id, parent_id):
     if not parent:
         refuse(conn, actor, "not-found", f"no task {parent_id} to file this under")
     _task_private_writer(conn, actor, parent)
-    if (is_bot(actor) and actor not in (parent["owner"], parent["requester"])
+    if (is_bot(actor) and not task_participant(conn, actor, parent)
             and not type_bot_reads(conn, actor, parent) and not task_ancestor_party(conn, actor, parent)
             and not _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                          (parent["id"], actor, now()))):
@@ -4542,10 +4552,9 @@ def _subtask_result_parent(conn, row):
 def _subtask_result_key(conn, row, text):
     """The same gate verdict in a comment, Done note, final reply or the verdict fields is one delivery per review
     cycle: keyed by the verdict and the head it judged, however it was given, so a new verdict or head is news."""
-    from .wake_rules import VERDICT, VERDICT_FIELDS
-    if VERDICT.search(str(text or "")):
-        found = VERDICT_FIELDS.search(str(text))
-        verdict, head = found[1], found[2]
+    from .wake_rules import verdict_fields
+    if found := verdict_fields(text):
+        verdict, head = found
     elif row.get("verdict"):
         verdict, head = row["verdict"], row.get("verdict_head")
     else:
@@ -4560,21 +4569,33 @@ def _subtask_result_cycle(conn, row):
     return f"{reopened}:"
 
 
+def _check_cycle_start(conn, row):
+    """When a check's current cycle began (its last reopen, else "") and whether its stored verdict came after it."""
+    reopened = _one(conn, "SELECT rowid AS n, ts FROM task_events WHERE task_id=? AND field='status' "
+                          "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined') "
+                          "ORDER BY rowid DESC LIMIT 1", (row["id"],))
+    if not reopened:
+        return {"at": "", "current": bool(row.get("verdict"))}
+    given = conn.execute("SELECT coalesce(max(rowid),0) FROM task_events WHERE task_id=? AND field='verdict' "
+                         "AND new IS NOT NULL", (row["id"],)).fetchone()[0]
+    return {"at": reopened["ts"], "current": bool(row.get("verdict")) and given > reopened["n"]}
+
+
 VERDICTS = ("approve", "changes", "pass", "fail")
 HEAD_SHA = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def record_verdict(conn, actor, row, verdict=None, head=None, text=None):
-    """Set a review or QA child's `verdict` and `verdict_head`: from the flag, else from a `VERDICT:` line in `text`
-    (the prose keeps working and fills the field; the latest line wins, as a review of a new head replaces the last).
+    """Set a review or QA child's `verdict` and `verdict_head`: from the flag, else from a `VERDICT:` clause in `text`
+    (the prose keeps working and fills the field; the latest clause wins, as a review of a new head replaces the last).
     Only the child's own owner records one, and only on a subtask. Returns whether the fields changed."""
-    from .wake_rules import VERDICT_FIELDS
+    from .wake_rules import verdict_fields
     flagged = verdict is not None or head is not None
     if not flagged:
-        found = VERDICT_FIELDS.search(str(text or ""))
+        found = verdict_fields(text)
         if not found:
             return False
-        verdict, head = found[1], found[2]
+        verdict, head = found
     # A new verdict judged a head of its own: one given alone leaves the head unknown, a head given alone keeps the verdict.
     verdict = str(verdict).strip().lower() if verdict is not None else row.get("verdict")
     head = str(head).strip().lower() or None if head is not None else None
@@ -4629,12 +4650,13 @@ def _subtask_wake(conn, actor, row, previous, note=None, quiet=False):
     where a bot files what it is blocked on (docs/tasks.md), so its turn continues the parent's session
     (session_root). Returns the bot woken, else None; callers leave it out of their own notices on the subtask.
     A wake still queued for this subtask is not repeated. A quiet update leaves its note out, as on the subtask.
-    A bot finishing a delegated subtask or its own check returns the result the same way."""
+    A bot or its manager finishing a delegated subtask returns the result the same way;
+    a check still records its verdict only through its own owner."""
     terminal = ("done", "closed", "declined")
     check = is_bot(row["owner"]) and check_model(conn, row["id"], row["owner"][len("bot:"):])
     # Done or Declined carries a verdict; the bot closing its own check is a cancellation the parent need not hear.
     by_checker = bool(check and actor == row["owner"] and row["status"] in ("done", "declined"))
-    by_worker = is_bot(actor) and actor == row["owner"] and row["requester"] != actor
+    by_worker = is_bot(actor) and task_represents(conn, actor, row["owner"]) and row["requester"] != row["owner"]
     if not (is_human(actor) or by_checker or by_worker) or row["status"] not in terminal:
         return None
     parent = _subtask_result_parent(conn, row)
@@ -4719,7 +4741,9 @@ def bot_reads_task(conn, bot, row):
 
 
 def task_ask_recipient(conn, actor, row, ask):
-    target = ask.get("who") or (row["owner"] if actor == row["requester"] else row["requester"])
+    directing = actor == row["requester"] or (
+        actor not in (row["owner"], row["requester"]) and task_participant(conn, actor, row))
+    target = ask.get("who") or (row["owner"] if directing else row["requester"])
     target = resolve_actor(conn, target)
     if task_private(conn, row) and target not in (row["owner"], row["requester"]):
         refuse(conn, actor, "private", "Only the requester and assignee can receive private task questions")
@@ -4828,13 +4852,13 @@ def comment_wakes(conn, actor, row, text, *, mover=False):
     on that person; otherwise it is saved for the bot's next turn on the task."""
     if is_bot(actor):
         return not TS.snoozed(row)
-    if not (mover or actor in (row["owner"], row["requester"])):
+    if not (mover or task_participant(conn, actor, row)):
         return False
     if not any(is_bot(a) for a in (row["owner"], row["requester"], task_origin(conn, row))):
         return True
     if is_bot(row["owner"]):
         return True
-    if actor == row["owner"] and is_bot(row["requester"]):
+    if task_represents(conn, actor, row["owner"]) and is_bot(row["requester"]):
         return True
     if row.get("waiting_on") == actor:
         return True
@@ -5139,10 +5163,11 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
     if not asked or asked.get("deleted_at") or asked.get("kind") != "ask":
         refuse(conn, actor, "not-found", f"no question {message_id} on task {task_id}")
     asker, person = asked["from_actor"], asked["to_actor"]
-    if quote is None and actor != asker:
-        refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they withdraw it")
-    if quote is not None and actor != asker and not (is_bot(actor) and actor == row["owner"]) and not relay:
-        refuse(conn, actor, "identity", "only the question's asker or the task's owner bot records an answer given elsewhere")
+    if quote is None and not task_represents(conn, actor, asker):
+        refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they or their managers withdraw it")
+    if (quote is not None and not task_represents(conn, actor, asker)
+            and not (is_bot(row["owner"]) and task_represents(conn, actor, row["owner"])) and not relay):
+        refuse(conn, actor, "identity", "only the question's asker, the task's owner bot or their managers record an answer given elsewhere")
     if not _one(conn, f"SELECT 1 FROM messages m WHERE m.id=? AND {OPEN_ASK_SQL}", (message_id,)):
         refuse(conn, actor, "kind", "this question was already answered or withdrawn")
     ts = now()
@@ -5498,8 +5523,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         refuse(conn, actor, "not-found", f"no task {task_id}")
     _task_private_writer(conn, actor, row)
     if private is not None and bool(private) != task_private(conn, row):
-        if actor not in (row["owner"], row["requester"]):
-            refuse(conn, actor, "private", "Only the requester or assignee can change task privacy")
+        if not task_participant(conn, actor, row):
+            refuse(conn, actor, "private", "Only the requester, assignee or their managers can change task privacy")
         if not private and (actor != row["requester"] or not is_human(actor) or VIA.get()):
             refuse(conn, actor, "private", "Only the human requester can publish a private task")
         parent = task(conn, TR.parent_of(conn, task_id) or "")
@@ -5524,6 +5549,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                                             f"not {', '.join(beyond or ['size'])}")
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+    mover = task_mover(conn, actor, row, mover)
     labels_only = labels is not None and not clear_size and all(v is None for v in (
         status, note, owner, due, body, lane, rank, goal_id, type, step, step_rank, number, title, private,
         waiting_on, roles, visibility, public_title, public_summary, size, verdict, verdict_head))
@@ -5542,12 +5568,40 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                    f"your verdict (hub task done {check['id']} --verdict approve|changes --head <sha>); the Builder "
                    "moves the ticket.")
     if not mine and not mover and actor != KEEPER:
-        refuse(conn, actor, "identity", f"{task_id} is not yours to change")
+        refuse(conn, actor, "identity", f"{task_id} is changed by its owner, requester, their managers, delegates or task movers")
     type_id = row.get("type_id") or GENERAL_TYPE
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
         if status is not None or step is not None:
             status = effective
+        if effective == "done":
+            from . import profiles
+            from .wake_rules import verdict_fields
+            if profiles.is_check(conn, row):
+                supplied = verdict is not None or actor == row["owner"] and verdict_fields(note)
+                since = _check_cycle_start(conn, row)
+                if row.get("verdict") and not since["current"]:
+                    # A verdict from before the last reopen judged an earlier head; it does not finish this cycle.
+                    row = {**row, "verdict": None, "verdict_head": None}
+                if not (row.get("verdict") or supplied):
+                    # Older releases missed inline clauses. Recover only the owner's saved words from this
+                    # cycle, never a requester or another participant's verdict.
+                    sources = _rows(conn.execute(
+                        "SELECT ts AS at, new AS text FROM task_events WHERE task_id=? AND actor=? AND field='note' "
+                        "AND ts>? UNION ALL SELECT m.created AS at, m.body AS text FROM messages m "
+                        "LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.conversation_id=? "
+                        "AND m.from_actor=? AND m.kind IN ('say','notice') AND m.deleted_at IS NULL "
+                        f"AND m.created>? AND {MESSAGE_TASK_SQL}=? ORDER BY at DESC",
+                        (task_id, row["owner"], since["at"], row["conversation_id"], row["owner"], since["at"], task_id)))
+                    for source in sources:
+                        if verdict_fields(source["text"]):
+                            record_verdict(conn, row["owner"], row, text=source["text"])
+                            row = task(conn, task_id)
+                            break
+                if not (row.get("verdict") or supplied):
+                    refuse(conn, actor, "verdict",
+                           "Finish a review or QA check with --verdict approve|changes|pass|fail "
+                           "and --head <sha>, or record a VERDICT: clause in its note, comment or final reply")
         # A hand-off to a review step (from another review step too) or to done, with pushed work no pull request
         # carries, leaves an orphan worktree.
         if (effective == "done" and row["status"] != "done"
@@ -5586,18 +5640,26 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # completion, a late note over the close note, or a hand-off to a new owner) must not undo it. A person
     # reopens a closed task; a requester bot reopens only what no person closed.
     closer = row.get("closed_by") or row["requester"]
-    if (row["status"] == "closed" and is_bot(actor) and (actor != row["requester"] or is_human(closer))
+    if (row["status"] == "closed" and is_bot(actor)
+            and (not task_represents(conn, actor, row["requester"])
+                 or is_human(closer) and not task_represents(conn, actor, closer))
             and (status is not None and status != "closed" or note is not None and note != row.get("note")
                  or owner is not None)):
         refuse(conn, actor, "close",
                f"{actor_id(closer)} closed this task, so it stays closed unless they reopen it; "
                "add anything new as a comment (hub task comment)")
+    if (row["status"] == "closed" and is_human(actor) and status is not None and status != "closed" and not mover
+            and not _task_close_party(conn, actor, row)):
+        refuse(conn, actor, "close", f"Only someone who may close this task reopens it: its requester "
+                                     f"({actor_id(row['requester'])}), a person who owns it, their managers, "
+                                     "or a person who moves tasks")
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
         if status == "closed":
             refuse(conn, actor, "close", "close a task with task_close; the requester closes it")
-        if actor == row["owner"] and not is_human(actor) and status not in OWNER_STATUSES:
+        if (task_represents(conn, actor, row["owner"]) and is_bot(row["owner"])
+                and not is_human(actor) and status not in OWNER_STATUSES):
             refuse(conn, actor, "close",
                    f"the owner may set {'|'.join(OWNER_STATUSES)}, not {status}")
         if status == "ready" and is_bot(actor):
@@ -5628,7 +5690,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # stays the bot's, blocked on it, and is never itself a card in their Needs you. An open question to them on the
     # task (`hub task question`) is already that card, so the task waits on them as before.
     asked_in = None
-    if (waiting_on and is_bot(actor) and actor == row["owner"] and is_human(waiting_on)
+    if (waiting_on and is_bot(row["owner"]) and task_represents(conn, actor, row["owner"]) and is_human(waiting_on)
             and not any(a["to_actor"] == waiting_on for a in open_task_asks(conn, row))):
         said = str(note if note is not None else row.get("note") or "").strip()
         if said.startswith(BLOCKED_ON.format(name=person_name(conn, waiting_on), ask="")):
@@ -5639,7 +5701,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
     wanted = [k for k, v in (("lane", lane), ("number", number)) if v is not None]
-    if not is_bot(actor) and labels is not None:
+    if not is_bot(actor) and labels is not None and not any(
+            is_bot(row[k]) and task_represents(conn, actor, row[k]) for k in ("owner", "requester")):
         wanted.insert(1, "labels")  # a person who is not a mover changes no label, as before
     if wanted and not mover:
         refuse(conn, actor, "identity",
@@ -5769,8 +5832,16 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if row.get(field) is not None:
             _task_event(conn, task_id, actor, field, row[field], None, note or "")
             sets.append(field + "=NULL")
+    # A reopened check judges again; record any new verdict after the reopen event starts its cycle.
+    reopening = row["status"] in ("done", "closed", "declined") and status in ACTIVE_STATUSES
+    if reopening:
+        for field in ("verdict", "verdict_head"):
+            if row.get(field) is not None:
+                _task_event(conn, task_id, actor, field, row[field], None, note or "")
+        conn.execute("UPDATE tasks SET verdict=NULL, verdict_head=NULL WHERE id=?", (task_id,))
+        row = {**row, "verdict": None, "verdict_head": None}
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
-    verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
+    verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
     if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
             v is None for v in (visibility, public_title, public_summary, size)):
         return row
@@ -5787,6 +5858,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         task_close(conn, actor, task_id, note=note or "", quiet=quiet, type=type, step=step, mover=mover)
     elif state_change:
         _set_status(conn, actor, row, status, type, step, note or "")
+    if reopening:
+        verdict_set = record_verdict(conn, actor, row, verdict, verdict_head, note)
     args["id"] = task_id
     args["updated"] = ts
     if sets:
@@ -6106,8 +6179,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     if not value:
         return ""
     # The Needs-you item is the owner's ask: nobody else names who the owner waits on.
-    if actor != row["owner"] or not is_bot(actor):
-        refuse(conn, actor, "identity", "Only the bot that owns a task says who it waits on")
+    if not is_bot(row["owner"]) or not task_represents(conn, actor, row["owner"]):
+        refuse(conn, actor, "identity", "Only the bot that owns a task or its managers say who it waits on")
     if owner is not None and resolve_actor(conn, owner) != row["owner"]:
         refuse(conn, actor, "kind", "Hand the task over first; its new owner says who it waits on")
     if (status if status is not None else row["status"]) != "waiting":
@@ -6130,9 +6203,9 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
 
 def _task_party(conn, actor, row):
-    """Whether `actor` is on the task as a change to it counts (task_update): its requester or owner, a delegate it
+    """Whether `actor` is on the task as a change to it counts (task_update): its requester, owner or their managers, a delegate it
     lent its rights to for now, or a party to a task above it."""
-    if actor in (row["owner"], row["requester"]):
+    if task_participant(conn, actor, row):
         return True
     if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
             (row["id"], actor, now())):
@@ -6140,12 +6213,34 @@ def _task_party(conn, actor, row):
     return task_ancestor_party(conn, actor, row)
 
 
+def _task_close_party(conn, actor, row):
+    """_task_party for closing and reopening. A bot that owns a task does not close what another asked for, so its
+    managers inherit no close from it: they close through the requester, or a person who is a party here or above."""
+    def closes(party, requester):
+        return task_represents(conn, actor, party) and (requester or is_human(party))
+    if closes(row["requester"], True) or closes(row["owner"], False):
+        return True
+    if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
+            (row["id"], actor, now())):
+        return True
+    if not task_private_readable(conn, actor, row):
+        return False
+    for parent_id in TR.ancestors(conn, row["id"]):
+        parent = task(conn, parent_id)
+        if not parent:
+            break
+        if closes(parent["owner"], False) or closes(parent["requester"], False):
+            return True
+    return False
+
+
 def _task_close_allowed(conn, actor, row, note, mover=None):
     _task_private_writer(conn, actor, row)
-    # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. The person it
-    # waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
+    # A person closes a task they can edit, as task_update decides: on it (_task_close_party), or a mover. The person
+    # it waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
     # someone refused its status and note must not be able to end it.
-    if is_human(actor) and not _task_party(conn, actor, row) and row.get("waiting_on") != actor:
+    mover = task_mover(conn, actor, row, mover)
+    if is_human(actor) and not _task_close_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
             refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
                                          f"({actor_id(row['requester'])}), its owner, the person it waits on, "
@@ -6155,8 +6250,8 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
     if actor == TASK_MANAGER and actor != row["requester"] and not (note or "").strip():
         refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
-    if actor != row["requester"] and not is_human(actor) and actor != KEEPER and not shipped:
-        refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they close it")
+    if not task_represents(conn, actor, row["requester"]) and not is_human(actor) and actor != KEEPER and not shipped:
+        refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
 
@@ -6228,17 +6323,27 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     return after
 
 
-def waiting_for(conn, row):
+def waiting_for(conn, row, *, children=True):
     """What a task's owner is waiting for, in words, or None when there is nothing (`wait_detail`)."""
-    return (wait_detail(conn, row) or {}).get("why")
+    return (wait_detail(conn, row, children=children) or {}).get("why")
 
 
-def wait_detail(conn, row):
+def live_blocker(conn, task_id, *, children=True):
+    """The first unfinished task blocking this one; with `children=False`, the first that is not one of its subtasks."""
+    if children:
+        return TR.live_blocker(conn, task_id, ACTIVE_STATUSES)
+    own = {r[0] for r in conn.execute(TR.CHILD_IDS, (task_id,))}
+    return next((b["id"] for b in TR.live_blockers(conn, task_id, ACTIVE_STATUSES) if b["id"] not in own), None)
+
+
+def wait_detail(conn, row, *, children=True):
     """What a task's owner is waiting for, or None when there is nothing: {"why": words, "on": the actor it waits on, or
     None when no one actor holds it ("person" for an undecided approval, "external" for GitHub or a release)}.
 
     Something is: a question its owner asked about it that nobody has answered, an unfinished
     child, an unfinished blocker, an approval not yet decided, or a person it names (`waiting_on`).
+    `children=False` leaves out its open subtasks, as children and as blockers: what still holds a subtask's
+    result back from it (auto_tasks.waiting with `result`).
     """
     live = "('done','closed','declined')"
     asks = _rows(conn.execute(
@@ -6252,10 +6357,11 @@ def wait_detail(conn, row):
             return {"why": "an unanswered question", "on": open_ask["to_actor"]}
     from . import profiles, review_gate
     engineering = review_gate.engineering(conn, row)
-    children = _rows(conn.execute(f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
-                                  "ORDER BY created,id", (row["id"],)))
+    open_children = _rows(conn.execute(
+        f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
+        "ORDER BY created,id", (row["id"],))) if children else []
     check = None
-    for child in children:
+    for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
         # An explicit blocked_by relation below still holds on any such child.
         if engineering and is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
@@ -6266,7 +6372,7 @@ def wait_detail(conn, row):
                 return check
             continue
         return {"why": "an open child task", "on": child["owner"]}
-    blocker = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)
+    blocker = live_blocker(conn, row["id"], children=children)
     if blocker:
         return {"why": "an open blocker", "on": (_one(conn, "SELECT owner FROM tasks WHERE id=?", (blocker,)) or {}).get("owner")}
     if _one(conn, "SELECT 1 FROM approvals WHERE task_id=? AND decision IS NULL LIMIT 1", (row["id"],)):
@@ -6342,9 +6448,10 @@ def task_ask(conn, actor, task_id, body):
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    if actor != row["owner"]:
-        refuse(conn, actor, "identity", "only the task owner can ask its requester")
-    if actor == row["owner"]:
+    _task_private_writer(conn, actor, row)
+    if not task_represents(conn, actor, row["owner"]):
+        refuse(conn, actor, "identity", "only the task owner or its managers can ask its requester")
+    if task_represents(conn, actor, row["owner"]):
         unanswered = unanswered_ask(conn, row)
         if unanswered:
             refuse(conn, actor, "one-question",

@@ -232,7 +232,7 @@ class TaskUpdate(Contract):
     private: StrictBool | None = None
     version: int = Field(ge=1)
     title: str | None = Field(default=None, min_length=1, max_length=300)
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined", "closed"] | None = None
     note: str | None = Field(default=None, max_length=200_000)
     quiet: bool = False
     owner: ID | None = None
@@ -256,6 +256,14 @@ class TaskUpdate(Contract):
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def closed_status(self):
+        # Use the same permissions, version check and close/edit separation as close:true.
+        if self.status == "closed":
+            self.status = None
+            self.close = True
+        return self
 
 
 class TaskStepInput(Contract):
@@ -2276,6 +2284,14 @@ class BotGoLive(Contract):
 class TaskSnooze(Contract):
     # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
     until: str = Field(min_length=10, max_length=40)
+
+
+class TaskQaWaiver(Contract):
+    # A person waives a Dev ticket's In QA step for one exact pull request head, with a reason (backend/qa_waivers.py).
+    # Never a QA verdict; CI, both reviews and release approval stay required.
+    head: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
+    reason: str = Field(min_length=1, max_length=2000)
+    step: str | None = Field(default=None, max_length=200)    # the step to waive; only "In QA" is accepted
 
 
 class TaskDefer(Contract):

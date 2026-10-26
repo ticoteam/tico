@@ -80,7 +80,9 @@ def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
 
     literal = next(arg for arg in get_args(TaskUpdate.model_fields["status"].annotation)
                    if get_origin(arg) is Literal)
-    statuses = get_args(literal)
+    # HTTP accepts closed as close:true. CLI/MCP keep their dedicated close action.
+    assert "closed" in get_args(literal)
+    statuses = tuple(status for status in get_args(literal) if status != "closed")
     assert hubcli.TASK_UPDATE_STATUSES == statuses
     assert hubtools.TASK_UPDATE_STATUSES == tuple(status for status in statuses if status != "ready")
     schema = hubtools.BY_NAME["hub_task_update"]["inputSchema"]
@@ -242,6 +244,9 @@ def test_a_bot_puts_one_decision_to_a_person_in_one_call(api):
 
 def test_a_private_question_goes_to_any_person_and_only_they_and_the_bot_read_it(api):
     """`private: true` is a private task whose two parties are the bot and the person asked, whoever started the run."""
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     _, _, attempt = setup_attempt(api)          # Ana started this run; the question goes to Ben
     png = base64.b64encode(b"\x89PNG for ben").decode()
     ask = {"question": "Approve the Q3 bonus pool?", "on": "ben", "private": True,
