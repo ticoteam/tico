@@ -144,6 +144,8 @@ pub fn sign_in(assignments: &[Value]) -> (&'static str, String) {
 struct Thread {
     settings: Settings,
     started: bool,
+    /// The saved session was not on this computer and the thread restarted as a new one under the same id.
+    restored: bool,
 }
 
 #[derive(Default)]
@@ -211,13 +213,18 @@ impl GeminiHost {
 
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false });
+        self.inner().threads.insert(id.clone(), Thread { settings: settings.clone(), started: false, restored: false });
         id
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> String {
-        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true });
+        self.inner().threads.insert(thread_id.into(), Thread { settings: settings.clone(), started: true, restored: false });
         thread_id.into()
+    }
+
+    /// Whether the thread's saved session was not on this computer, so the CLI began a new one.
+    pub fn restored(&self, thread_id: &str) -> bool {
+        self.inner().threads.get(thread_id).is_some_and(|t| t.restored)
     }
 
     /// A thread this host started, once the CLI's `init` said its session is up (a resumed one counts as up).
@@ -384,6 +391,7 @@ impl GeminiHost {
                     match inner.threads.get_mut(&tid) {
                         Some(t) if up && t.started => {
                             t.started = false;
+                            t.restored = true;
                             let t = t.clone();
                             self.launch(&tid, &t).ok()
                         }
@@ -543,7 +551,7 @@ mod tests {
         let f = super::super::isolationtests::Fixture::new();
         let home = f.root.join("gemini/acme");
         let host = GeminiHost::new("acme", &home, f.argv(), mpsc::unbounded_channel().0);
-        let thread = Thread { settings: f.settings(), started: true };
+        let thread = Thread { settings: f.settings(), started: true, restored: false };
         super::super::isolationtests::prefix(&host.command("thread", &thread), &host.argv("thread", &thread));
         if !f.actual() { return; }
         std::fs::create_dir_all(home.join(".gemini")).unwrap();

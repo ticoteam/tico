@@ -138,8 +138,8 @@ The runner is a git checkout. When the server's release is newer, the runner:
    the start boundary prevents that turn from starting during the drain. A Git operation keeps its checkout lock
    until it finishes so the next runner does not inherit a lock. Turns already running have five minutes to finish,
    then are interrupted, their work and resumable session are saved, and they are queued to continue after the update.
-   A turn with no session to continue, because its harness cannot resume an interrupted turn
-   (`resume_after_interrupt = false`) or it was running on a fallback, is held for review like any other interrupt instead.
+   A turn with no session to continue, because it was running on a fallback (a side session is not kept), is held for
+   review like any other interrupt instead.
    Each handback appears in run history. Set `drain_timeout_seconds` in `runner.json` to change the five-minute active-turn
    limit; it does not cancel preparation in progress. Health still warns after 34 minutes without a completed restart;
    choosing a long drain does not extend that warning.

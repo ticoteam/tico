@@ -417,7 +417,7 @@ another bot's home; all turns use the original login in its own home.
 | `account` | Where the signed-in account (email, plan, organization) is read: `status-json` (the `sign_in_status` JSON's `email`, `subscriptionType`, `orgName`) or `app-server` (Codex app-server `account/read`, never with a token refresh). Credential files are never read | Account shown as unavailable |
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
-| `resume_after_interrupt` | An interrupted thread can be continued | `true`; `false` forgets it so a retry starts fresh |
+| `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |

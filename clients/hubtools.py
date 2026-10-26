@@ -2742,10 +2742,12 @@ def release_now(api, args):
 
 
 @tool("hub_routine_delete", "Delete a routine. Its history stays; an occurrence nobody has "
-      "claimed yet closes.", {"id": _s("Routine id")}, required=("id",), writes=True)
+      "claimed yet closes. BotOps acting for a person gets a Confirm card in their chat (`needs_confirm`) instead.",
+      {"id": _s("Routine id")}, required=("id",), writes=True)
 def routine_delete(api, args):
     bot = str(args["id"]).split(":", 1)[0]
-    return _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))["routine"]
+    answer = _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))
+    return answer if answer.get("needs_confirm") else answer["routine"]
 
 
 @tool("hub_routine_run", "Run a scheduled routine now, with your own rights or BotOps's requester rights.",

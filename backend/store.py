@@ -408,6 +408,9 @@ def refused(c, identity, exc):
     if getattr(exc, "review_gate", None):
         from . import review_gate
         review_gate.notify(c, identity.actor, exc.review_gate)
+        # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
+        from . import move_retry
+        move_retry.remember(c, identity.actor, exc.review_gate)
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
