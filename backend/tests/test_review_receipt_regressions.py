@@ -223,9 +223,22 @@ def test_repaired_prior_failures_and_headed_rerun_failures_after_1546(result, st
     (f'Tests at head {HEAD}: 9 passed. Lint: 1 failure at prior head, now fixed.', 'passed'),
     (f'Tests at head {HEAD}: 9 passed. No failures remain.', 'passed'),
     (f'Tests at head {HEAD}: 9 passed.\nBase at {OLD}: 2 failed', 'passed'),
+    # A test word inside a repair phrase is no test context, on the next line or the same one.
+    (f'Lint at head {HEAD}: passed.\n2 failing tests were fixed.', 'missing'),
+    (f'Deploy at head {HEAD}: success.\n2 failing tests were fixed.', 'missing'),
+    (f'Lint at head {HEAD}: passed. 2 failing tests were fixed.', 'missing'),
+    (f'Lint at head {HEAD}: passed after fixing 2 test failures.', 'missing'),
+    (f'Tests at head {HEAD}: 9 passed.\n2 failing tests were fixed.', 'passed'),
 ])
 def test_repaired_counts_give_no_test_context_and_word_counts_block(note, status):
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == status
+
+
+@pytest.mark.parametrize('first', ['Lint', 'Deploy'])
+def test_no_ci_review_refuses_lint_pass_followed_by_repaired_test_line(api, first):
+    task = ticket(api, f'{first} at head {HEAD}: passed.\n2 failing tests were fixed.')
+    response = move(api, task)
+    assert response.status_code == 422 and 'passing test receipt' in response.text, response.text
 
 
 def test_headed_failure_count_needs_no_test_word():

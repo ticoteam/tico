@@ -54,6 +54,12 @@ COUNTED_FAILURE = re.compile(
     rf"\b{_FAILURE}(?:\s+tests?)?\s*[:=]\s*[1-9][0-9]*\b", re.I)
 
 
+def _tested(text):
+    """A test word inside a repair phrase ("2 failing tests were fixed") says
+    nothing about this run, so it never makes a lint or deploy pass a receipt."""
+    return TEST.search(HISTORY.sub(lambda m: "" if re.search(rf"\b{_FIX}\b", m[0], re.I) else m[0], text))
+
+
 CONTINUATION = re.compile(
     rf"^\s*(?:[0-9]+|{_COUNT})\s+(?:(?:{_PAST}|test)\s+){{0,3}}"
     rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b{_COUNT}\s+(?:tests?\s+)?{_FAILURE}\b|"
@@ -68,7 +74,7 @@ def _recognise(line, test_context=False, failure_only=False):
     """
     match = HEAD.search(line)
     shas = list(SHA.finditer(line))
-    tested = test_context or TEST.search(line)
+    tested = test_context or _tested(line)
     if not tested and not failure_only:
         return None
     head = match[1].lower() if match else shas[0][0].lower() if len(shas) == 1 else None
@@ -114,7 +120,7 @@ def recognise_many(line):
                 clauses.append(part)
         for clause in clauses:
             counted = bool(SHA.search(clause) and COUNTED_FAILURE.search(clause))
-            if receipt := _recognise(clause, test_context=bool(TEST.search(sentence)), failure_only=counted):
+            if receipt := _recognise(clause, test_context=bool(_tested(sentence)), failure_only=counted):
                 found.append({**receipt, "text": line})
     return found
 
