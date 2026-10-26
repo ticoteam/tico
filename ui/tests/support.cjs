@@ -778,6 +778,28 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       failed: runAttemptHTML({run: 'r1', state: 'failed', reason: 'exit 2', try: 1, tries: 1}, true).includes('data-report-this'),
       done: runAttemptHTML({run: 'r2', state: 'completed', try: 1, tries: 1}, true).includes('data-report-this')}));
     assert.deepEqual(offered, {bad: true, ok: false, stuck: true, failed: true, done: false});
+    // A manager sees refused words in Health, but those private words never enter support diagnostics.
+    const quarantineVisit = await visit();
+    await quarantineVisit.page.waitForFunction(() => window.supportOn(true));
+    const refused = 'Private launch plan: move the acquisition budget';
+    await quarantineVisit.page.evaluate(words => {
+      document.querySelector('#main').insertAdjacentHTML('beforeend', '<ul id="held-fixture">' + hlStuckHtml([
+        {bot: 'ops', name: 'Ops', reason: 'quarantined', why: 'Quarantined for repeated refused writes (rule 8): '
+          + 'resumes by itself at 2030-10-27 00:55 UTC. Refused write (reach): ' + words}
+      ]) + '</ul>');
+    }, refused);
+    assert.match(await quarantineVisit.page.locator('#held-fixture').innerText(), new RegExp(refused));
+    await quarantineVisit.page.locator('#held-fixture [data-report-this]').click();
+    await quarantineVisit.page.locator('#support-pop[open] [data-report]').waitFor();
+    await quarantineVisit.page.locator('[data-compose] [name=message]').press('Enter');
+    await quarantineVisit.page.locator('.support-msg.you').waitFor();
+    const quarantineReport = JSON.parse(quarantineVisit.calls.find(c => c.startsWith('POST diagnostics/capture')).slice('POST diagnostics/capture '.length)).report;
+    assert.equal(quarantineReport.kind, 'stuck');
+    assert.equal(quarantineReport.ref, 'ops');
+    assert.equal(quarantineReport.group, 'stuck:quarantined');
+    assert.doesNotMatch(JSON.stringify(quarantineReport), /Private launch plan|acquisition budget|Refused write/);
+    assert.deepEqual(quarantineVisit.errors, []);
+    await quarantineVisit.ctx.close();
     // Report this on a red Health line, pressed on the page behind: the pop-up opens with it attached.
     await v.page.keyboard.press('Escape');
     await v.page.evaluate(() => document.querySelector('#main').insertAdjacentHTML('beforeend', reportThisHTML({kind: 'health', title: 'Computers: None online'})));

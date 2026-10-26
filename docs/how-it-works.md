@@ -297,8 +297,10 @@ and refused words, with credential values masked. It resumes by itself; a person
 A manual quarantine lasts until a person clears it and promises no automatic lift time. For a safety
 pause recorded before path mentions stopped pausing bots, what the check matched (a secrets path or another
 bot's folder, in the bot's own words). Anyone who manages the
-bot, wherever it runs, sees Resume bot beside the warning by its name and a Paused for review card under More with the
-refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
+bot, wherever it runs, sees Resume bot beside the warning by its name and a card under More. The card says
+Quarantined for repeated refused writes for an automatic pause, or Paused for review for a manual safety pause,
+and shows the explanation above. A manual safety pause also shows the refused text (credential values masked)
+and its task; one click releases that pause and the checks stay on.
 
 **A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
