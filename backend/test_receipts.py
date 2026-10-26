@@ -10,30 +10,38 @@ HEAD = re.compile(r"\bhead\s*[:=]?\s*`?([0-9a-f]{40})\b", re.I)
 TEST = re.compile(r"\b(tests?|pytest|cargo|browser|CI|receipt)\b", re.I)
 PASS = re.compile(r"\b(pass(?:ed)?|green|success(?:ful)?)\b", re.I)
 FAIL = re.compile(r"\b(fail(?:s|ing|ed|ures?)?|error(?:s|ed)?|timed?\s*out|timeouts?|cancelled|canceled)\b", re.I)
-ZERO = re.compile(r"\b(?:0|no)\s+(?:fail(?:s|ing|ed|ures?)?|error(?:s|ed)?)\b", re.I)
+ZERO = re.compile(r"\b(?:0|no)\s+(?:fail(?:s|ing|ed|ures?)?|error(?:s|ed)?)\b|"
+                  r"\b(?:fail(?:s|ing|ed|ures?)?|error(?:s|ed)?)\s*[:=]\s*(?:0|none)\b", re.I)
 PLAN = re.compile(r"\b(not run|pending|will|planned|0\s*pass(?:ed)?|(?:no|not|without)\s+(?:pass(?:ed)?|green|success))\b", re.I)
 REMOVED = ("deleted_at", "hidden_at", "superseded_at")
 # These describe a repair or history, not the outcome of the named run. Remove
 # only the phrase: a separate "2 failed" in the same receipt must still block.
 _FAILURE = r"(?:fail(?:s|ing|ed|ures?)?|errors?)"
 _FIX = r"(?:fix(?:ed|ing)|repair(?:ed|ing)|resolv(?:ed|ing)|correct(?:ed|ing))"
+# A failure placed on an earlier commit is not this head's result; an earlier
+# run at the same head is, so "run" is deliberately absent.
+_ELSEWHERE = (r"(?:(?:seen|found|reported|observed)\s+)?(?:at|on|from|in)\s+(?:the\s+)?"
+              r"(?:prior|previous|earlier|older|old|last)\s+(?:head|commit|push)\b")
 # A historical subject can still describe a failure that is happening now.
 CURRENT_FAILURE = re.compile(
-    rf"\b{_FAILURE}\s+(?:tests?\s+)?"
+    rf"\b{_FAILURE}\s+(?:tests?\s+)?(?:{_ELSEWHERE}\s+)?"
     rf"(?:(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}"
-    rf"{_FIX}\s*(?:[;,]\s*|but\s+))?"
+    rf"{_FIX}\s*(?:[;,]\s*)?(?:but\s+)?(?:(?:they|it|these|those|some|the\s+(?:test\s+)?{_FAILURE})\s+)?)?"
     r"(?:(?:is|are|has|have|been|now|still|keeps)\s+){0,4}"
-    r"(?:recurring|recurs|recurred|reoccurred|returned|persisting|persists|persistent|present|happening)\b", re.I)
+    r"(?:recurring|recurs|recurred|reoccurred|returned|persisting|persists|persistent|present|happening|"
+    r"(?:is|are|was|were|came|comes|coming)\s+back)\b", re.I)
 HISTORY = re.compile(
     rf"\b(?:earlier|previous|historical|old)\s+(?:test\s+)?{_FAILURE}\b|"
     rf"\b{_FIX}\s+(?:(?:the|a|an|earlier|previous|test|fixture|[0-9]+)\s+){{0,5}}{_FAILURE}\b|"
     rf"\b{_FAILURE}\s+(?:tests?\s+)?"
-    rf"(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}{_FIX}\b", re.I)
+    rf"(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}{_FIX}\b|"
+    rf"\b{_FAILURE}\s+{_ELSEWHERE}", re.I)
 
 
 CONTINUATION = re.compile(
     rf"^\s*[0-9]+\s+(?:(?:earlier|previous|historical|old|test)\s+){{0,3}}"
-    rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b[0-9]+\s+(?:tests?\s+)?{_FAILURE}\b", re.I)
+    rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b[0-9]+\s+(?:tests?\s+)?{_FAILURE}\b|"
+    rf"\b{_FAILURE}\s*[:=]?\s*[0-9]+\b", re.I)
 
 
 def _recognise(line, test_context=False):
@@ -82,7 +90,10 @@ def recognise_many(line):
             else:
                 clauses.append(part)
         for clause in clauses:
-            if receipt := _recognise(clause, test_context=bool(TEST.search(sentence))):
+            # A counted result sentence is part of a receipt line even when only
+            # an earlier sentence names the tests ("Re-run at head H: 2 failed").
+            context = TEST.search(sentence) or TEST.search(line) and CONTINUATION.search(sentence)
+            if receipt := _recognise(clause, test_context=bool(context)):
                 found.append({**receipt, "text": line})
     return found
 

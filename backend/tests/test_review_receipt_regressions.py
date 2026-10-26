@@ -162,17 +162,37 @@ def test_qa_repair_phrases_preserve_unresolved_and_recurring_failures(result, st
     ('9 passed; the earlier failure has not recurred', 'passed'),
     ('9 passed; the earlier failure is no longer persistent', 'passed'),
     (f'9 passed. Latest run: 2 failed at head {OLD}', 'passed'),
+    ('9 passed; 2 failures were fixed. Re-run failed: 2', 'failed'),
+    ('9 passed; 2 failures were fixed. Re-run failed: 0', 'passed'),
+    ('9 passed, failed: 0', 'passed'),
+    ('9 passed; 2 failures were fixed but they are back', 'failed'),
+    ('9 passed; 2 failures were fixed, but it is still present', 'failed'),
+    ('9 passed; 2 failures were fixed, back to green', 'passed'),
+    ('9 passed; 2 failures were fixed and are not back', 'passed'),
+    ('9 passed. The 2 failures seen at the prior head have been fixed.', 'passed'),
+    ('9 passed; the 2 failures at the previous head were fixed', 'passed'),
+    ('9 passed; the failures at the prior head are still present', 'failed'),
+    ('2 failed on the previous run; rerun 9 passed', 'failed'),
+    (f'9 passed. Re-run at head {HEAD}: 2 failed.', 'failed'),
+    (f'9 passed. Re-run at head {OLD}: 2 failed.', 'passed'),
 ])
 def test_qa_rerun_counts_and_recurrence_stay_with_their_head(result, status):
     note = f'Tests at head {HEAD}: {result}'
     assert test_receipts.at_head({'id': 't', 'note': note}, HEAD)[0] == status
 
 
-@pytest.mark.parametrize('tail', ['Re-run: 2 failed', 'Rerun: 2 failing', 'Latest run: 2 failed, 9 passed'])
+@pytest.mark.parametrize('tail', ['Re-run: 2 failed', 'Rerun: 2 failing', 'Latest run: 2 failed, 9 passed',
+                                  'Re-run failed: 2', f'Re-run at head {HEAD}: 2 failed.'])
 def test_no_ci_review_refuses_failed_rerun_after_repaired_count(api, tail):
     task = ticket(api, f'Tests at head {HEAD}: 9 passed; 2 failures were fixed. {tail}')
     response = move(api, task)
     assert response.status_code == 422 and 'failed test receipt' in response.text, response.text
+
+
+def test_no_ci_review_accepts_failures_fixed_at_the_prior_head(api):
+    task = ticket(api, f'Tests at head {HEAD}: 9 passed. The 2 failures seen at the prior head have been fixed.')
+    response = move(api, task)
+    assert response.status_code == 200, response.text
 
 
 def test_dev505_original_note_does_not_claim_a_current_failure():
