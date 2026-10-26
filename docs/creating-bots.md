@@ -31,6 +31,26 @@ Read this page when you are writing those instructions, tailoring what BotOps pr
 a bot up outside that flow. The wizard, the template folder format and the ways to add a bot later
 are in [Finish setup](onboarding.md).
 
+## Add a bot without a job description
+
+1. Open **Settings > Bots > Add bot**.
+2. Choose **From scratch**, **From a template** or **Existing agent**.
+3. Click **Continue**.
+
+You reach the bot editor, template choices or connection guide, respectively. You can leave the job description empty on these paths.
+For example, choose **From scratch** and enter **Support helper** as the role title to open its editor.
+
+**Recruit candidates** needs a role title and a job description. If either is missing, the form explains what to enter before continuing.
+
+## Save or archive a bot
+
+The bot editor stages changes until you click **Save bot**. A successful save shows **Saved**; a failed save explains why in the editor.
+
+To archive a bot, open **Settings > Bots**, edit the bot, choose who gets its open tasks, and click **Archive bot**.
+The confirmation names that person or bot and explains that the archived bot leaves the team chart and its routines stop.
+Click **Archive bot** to confirm, or **Cancel** to keep it unchanged. You can restore it later from **Archived bots**.
+Built-in bots cannot be archived.
+
 ## Edit Instructions
 
 Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.

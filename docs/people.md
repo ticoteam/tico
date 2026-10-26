@@ -1,4 +1,4 @@
-# Humans and access
+# People and access
 
 Who is on the team, who may sign in and who owns the environment are settings in the app, not
 files on the server. The owner manages them in **Settings > People**; nothing needs a restart.
@@ -12,6 +12,9 @@ everything. The full rules, including per-bot See, Read and Write, are in [permi
 ## Settings > People
 
 The page answers three things: how humans get here, who is here, and what each human may do.
+
+Turning off **Can sign in** or removing an allowed domain asks you to confirm first.
+Cancel keeps the current access. Sign-in switches show **Saved** on success; a refused change shows its reason under the control.
 
 - **How humans join.** Pick **Add manually** or **Sync with directory**. There is no separate mode setting: a saved directory
   source means Sync, none means manual. Going back to manual turns the sync off; the humans it added stay.

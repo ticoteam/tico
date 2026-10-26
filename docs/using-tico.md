@@ -1,6 +1,6 @@
 # Using Tico
 
-Short answers to common questions. Sign in at your team's Tico address with the email on its Humans roster. Ask your owner for the address.
+Short answers to common questions. Sign in at your team's Tico address with the email on its People roster. Ask your owner for the address.
 How the pieces fit is in [How Tico works](how-it-works.md). Words are defined in the [Glossary](glossary.md); [Navigation](navigation.md) lists the current controls.
 
 ![Tasks in the demo team](images/tasks-desktop-light.png)
@@ -307,7 +307,7 @@ channel history is owner-only in this view.
 
 **How do I add a human or a bot?**
 A human: **Settings → People → Add manually** (an owner or admin), or sync them from the team's
-directory there; behind Cloudflare Access, also allow the address in its policy ([Humans](people.md)). A
+directory there; behind Cloudflare Access, also allow the address in its policy ([People](people.md)). A
 bot: **Settings > Bots > Add from template**, or ask BotOps to build it. Open the bot and press **Set up** to finish its
 first conversation. See [Creating bots](creating-bots.md) for custom Instructions and manual setup.
 

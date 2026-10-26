@@ -263,7 +263,7 @@ Who may make and send is in [Permissions](permissions.md#outgoing-webhooks).
 
 ## Company inbound email and SMS
 
-Settings > More > Email & Phone opens Inbox's shared company message table (`#/settings/company-inbox`; existing
+**Settings > More > Email & Phone** opens the shared company message table (`#/settings/company-inbox`; existing
 `#/settings/email-phone` links still work). All current people, native
 bot runs and registered external agents can read it. Runner/service credentials and support
 sessions cannot. No read hides a message from another agent. Your connected Google inbox is separate.
