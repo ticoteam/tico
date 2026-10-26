@@ -41,7 +41,7 @@ def finish_carrier(api, machine, task, run):
 
 
 @pytest.mark.parametrize('refs', [{'wake': 'due'}, {'wake': 'snooze'}, {'wake': 'resume'},
-                                  {'trigger': 'pr_checks', 'wake': 'pr_checks'}])
+                                  {'trigger': 'pr_checks', 'wake': 'pr_checks_done'}])
 @pytest.mark.parametrize('delivered', [False, True])
 def test_actionable_notice_releases_stale_or_absent_carrier_once(api, refs, delivered):
     machine = task_bot(api, lanes=True)
@@ -123,7 +123,8 @@ def test_actionable_notice_preserves_real_gates(api, gate):
 
 
 @pytest.mark.parametrize('refs,quiet', [({'wake': 'due'}, True), ({'wake': 'update'}, False),
-                                         ({'trigger': 'pr_checks', 'wake': 'pr_review'}, False)])
+                                         ({'trigger': 'pr_checks', 'wake': 'pr_review'}, False),
+                                         ({'trigger': 'pr_checks'}, False)])
 def test_quiet_notice_does_not_release_deferral(api, refs, quiet):
     machine = task_bot(api, lanes=True)
     task = quiet_task(api)

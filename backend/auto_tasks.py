@@ -36,7 +36,7 @@ def actionable_notice(row, message):
     return bool(message and message.get('from_actor') == H.KEEPER and message.get('kind') == 'notice'
                 and message.get('to_actor') == row['owner'] and not refs.get('quiet')
                 and (refs.get('wake') in ('due', 'snooze', 'resume')
-                     or refs.get('trigger') == 'pr_checks' and refs.get('wake') != 'pr_review'))
+                     or refs.get('trigger') == 'pr_checks' and refs.get('wake') == 'pr_checks_done'))
 
 
 def carrier_held(c, row):
