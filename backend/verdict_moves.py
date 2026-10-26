@@ -142,7 +142,7 @@ def after_verdict(c, check):
     kind, verdict = kind_of(check), str(check.get("verdict") or "").lower()
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check["id"]) or ""))
     head = str(check.get("verdict_head") or "").lower()
-    if not kind or not verdict or not ticket or step_of(c, ticket) != CHECK_STEP[kind] or not at_head(c, ticket, head):
+    if kind not in CHECK_STEP or not verdict or not ticket or step_of(c, ticket) != CHECK_STEP[kind] or not at_head(c, ticket, head):
         return None
     name = CHECK_STEP[kind]
     # Verdicts are commonly written inside the checker turn's final tool call. The executed
@@ -181,7 +181,7 @@ def after_capture(c, check_id, head, attempt_id):
         return None
     ticket = _ticket(c, H.task(c, TR.parent_of(c, check_id) or ""))
     kind = kind_of(check)
-    if not kind or not ticket:
+    if kind not in CHECK_STEP or not ticket:
         return None
     verdict = str(check.get("verdict") or "").lower()
     marker = c.execute("SELECT rowid,new FROM task_events WHERE task_id=? AND field='verdict_wait' "

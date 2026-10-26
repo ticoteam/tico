@@ -25,7 +25,11 @@ def kind(row):
     if not found:
         return None
     words = found[1].split()
-    return "QA" if words[0].lower() == "qa" else f"Review {words[-1]}"
+    if words[0].lower() == "qa":
+        return "QA"
+    if words[0].lower() == "post":
+        return "Post Release QA"
+    return f"Review {words[-1]}"
 
 
 def _name(c, actor):

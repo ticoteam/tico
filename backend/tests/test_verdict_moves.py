@@ -5,7 +5,7 @@ from backend.tests.test_github import PR, _suite, api, hook, post, pr_event  # n
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
          ("Review 2", "review"), ("Review 2 Fixes", "doing"), ("In QA", "review"), ("QA Fixes", "doing"),
-         ("Pending Release", "review"), ("Done", "done")]
+         ("Pending Release", "review"), ("Post Release QA", "review"), ("Done", "done")]
 
 
 def receipt(api, task, head=HEAD):
@@ -106,6 +106,13 @@ def test_a_verdict_after_the_builder_moved_on_moves_nothing(api):
         H.task_update(c, "bot:cpo", task["id"], step="Review 2")
     verdict(api, review, "changes")
     assert step(api, task) == "Review 2", "the builder already moved it; Tico does not move it back"
+
+
+def test_post_release_qa_verdict_does_not_run_the_pre_release_step_mover(api):
+    task = ticket(api, step="Post Release QA")
+    review = check(api, task, title="Post Release QA: PR #412")
+    verdict(api, review, "pass")
+    assert step(api, task) == "Post Release QA", "Post Launch QA owns the parent ticket's disposition"
 
 
 def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):

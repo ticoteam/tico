@@ -51,13 +51,13 @@ def to(c, actor, task_id):
                              (actor, task_id)))
 
 
-def in_qa_ticket(c):
+def in_qa_ticket(c, check_title="QA: PR #412"):
     typ = H.type_create(c, H.KEEPER, "Dev tickets", [
         {"name": "In Progress", "status": "doing"}, {"name": "In QA", "status": "review"},
         {"name": "Done", "status": "done"}])
     c.execute("UPDATE task_types SET manager='cmo' WHERE id=?", (typ["id"],))
     ticket = H.task_create(c, "human:ana", "Show the run log", "Build it.", "bot:cpo", type=typ["id"], step="In QA")
-    check = H.task_create(c, "bot:cpo", "QA: PR #412", "Check the candidate.", "bot:qa", parent_id=ticket["id"])
+    check = H.task_create(c, "bot:cpo", check_title, "Check the candidate.", "bot:qa", parent_id=ticket["id"])
     return H.task(c, ticket["id"]), check
 
 
@@ -87,6 +87,16 @@ def test_waiting_qa_check_blocks_its_ticket_and_resumes_it(api):
         assert H.task(c, check["id"])["status"] != "waiting"
         row = H.task(c, ticket["id"])
         assert row["step_id"] == in_qa and row["status"] == "review" and row["blocked_since"] is None
+
+
+def test_waiting_post_release_qa_check_is_shown_as_blocked_on_its_ticket(api):
+    with api.app.state.store.transaction() as c:
+        ticket, check = in_qa_ticket(c, "Post Release QA: PR #412")
+        H.task_update(c, "bot:qa", check["id"], status="waiting", waiting_on="human:ana",
+                      note="Release runner is unavailable")
+        row = H.task(c, ticket["id"])
+        assert row["status"] == "waiting"
+        assert row["blocked_reason"] == "Post Release QA blocked: Release runner is unavailable, waiting on Ana"
 
 
 def test_check_its_bot_resumes_returns_the_ticket_and_a_new_hold_notifies_again(api):
