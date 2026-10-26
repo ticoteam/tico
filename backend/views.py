@@ -1620,7 +1620,9 @@ def needs_bots(items, me):
     counts = {}
     for it in items:
         actor = None
-        if it.get("kind") == "ask":
+        if it.get("kind") == "approval":
+            actor = it.get("requested_by") or it.get("requester")
+        elif it.get("kind") == "ask":
             actor = it.get("requester")
         elif it.get("kind") in ("task", "question", "waiting"):
             ask = it.get("ask") or {}
