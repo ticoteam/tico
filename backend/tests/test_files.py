@@ -101,9 +101,18 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
     def blob(c, fid):
         return c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()[0]
 
-    tasked, attached, poster, posted, messaged, trashed = add("hush", 6)[1:]
+    tasked, attached, poster, posted, framed, messaged, trashed, scoped, thumbed = add("hush", 9)[1:]
     with store.transaction() as c:
         c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], tasked))
+        # An archived file in the private task's scope keeps its blob and its version's thumbnail private.
+        c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,first_activity_at,last_activity_at,"
+                  "archived) VALUES('holder','ops',?,'holder','Holder','document','holder','2026','2026',1)",
+                  ("task:" + hidden["id"],))
+        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,thumb_blob_id,digest,size,name,mime,actor,"
+                  "created) VALUES('holder',1,?,?,'d',1,'holder.md','text/markdown','bot:ops','2026')",
+                  (blob(c, scoped), blob(c, thumbed)))
+        c.execute("INSERT INTO blob_media(blob_id,thumb_blob_id,media_state) VALUES(?,?,'ready')",
+                  (blob(c, tasked), blob(c, framed)))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], blob(c, attached)))
         c.execute("INSERT INTO task_assets(task_id,blob_id) VALUES(?,?)", (hidden["id"], blob(c, poster)))
         c.execute("INSERT INTO blob_media(blob_id,poster_blob_id,media_state) VALUES(?,?,'ready')",
@@ -136,8 +145,13 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
     whole = {who: response.json() for who, (response, _) in pages(100).items()}
     assert whole["cara-test"]["total"] == len(whole["cara-test"]["files"]) == 9 + 29
     assert "hush" not in api.get("/api/v2/bots/ops/files?limit=100", headers=headers("cara-test")).text
-    assert {tasked, attached, poster, posted, messaged} <= {f["id"] for f in whole["ben-test"]["files"]}
+    assert {tasked, attached, poster, posted, framed, messaged, scoped, thumbed} <= {f["id"] for f in whole["ben-test"]["files"]}
     assert trashed not in {f["id"] for page in whole.values() for f in page["files"]}
+    # Batches split at every other file decide the same: no blob's links are lost or crossed between batches.
+    chunks = H.chunks
+    monkeypatch.setattr(H, "chunks", lambda values, size=500: chunks(values, 2))
+    for who, response in whole.items():
+        assert api.get("/api/v2/bots/ops/files?limit=100", headers=headers(who)).json() == response, who
     # The same pages, every file decided alone with nothing read ahead, as before the reads were batched.
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
     for who, response in whole.items():
