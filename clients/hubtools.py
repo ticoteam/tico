@@ -580,6 +580,12 @@ def tag_update(api, args):
        "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
        "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
        "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
+       "blocker": {"type": "object", "additionalProperties": False, "required": ["repo", "status", "endpoint"],
+                   "properties": {"repo": {"type": "string"}, "status": {"type": "integer", "minimum": 100, "maximum": 599},
+                                  "endpoint": {"type": "string"}},
+                   "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint "
+                                  "(e.g. ticoteam/tico, 403, workflow_dispatch). An open ask about the same three "
+                                  "joins this task instead of a second ask; the reply says so"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -601,7 +607,7 @@ def task_create(api, args):
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
-    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+    for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -843,7 +849,8 @@ def task_question(api, args):
 
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
-      "Done stays Done, including tasks you requested for yourself; the requester closes with hub_task_close.",
+      "To reopen your done task, set doing or open; open requires a note and holds automatic starts for 60 minutes "
+      "unless a comment, new link or finished blocker changes it. The requester closes with hub_task_close.",
       {"id": TASK_ID,
        "private": {"type": "boolean", "description": "Tighten visibility; only the direct human requester can publish"},
        "visibility": _s("Roadmap publication", enum=["public", "private"]),
