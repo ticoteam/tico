@@ -1202,6 +1202,7 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
     issue = stopped_issue(api)
     assert issue['needs_person'] is True and issue['action'] == 'review' and not issue['held_back']
     assert issue['detail'].endswith("Tico can't safely decide it on its own.")
+    assert [r['title'] for r in issue['runs']] == ['A chat request']           # a chat, not an unreadable task
     assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']]
 
 

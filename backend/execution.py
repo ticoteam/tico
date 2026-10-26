@@ -544,12 +544,12 @@ def stop_cause(attempt):
 
 def stopped_rows(c, who, auth, bot, limit=5):
     """The bot's stopped runs that `who` may read, one row per run (a message folded into a run rides on its row),
-    oldest first, for Needs you: (rows, runs). A row has the task title (None for a chat or a task `who` may not
-    read), why it stopped, whether that is `routine`, whether Try again is the safe pick (`retry`, by the same rule as
-    the review card, retry_facts), when it stopped, and the jobs a decision settles. `runs` counts every readable run;
-    rows stop at `limit`."""
+    oldest first, for Needs you: (rows, runs). A row has the task title ("A chat request" outside a task, None for
+    a task `who` may not read), why it stopped, whether that is `routine`, whether Try again is the safe pick
+    (`retry`, by the same rule as the review card, retry_facts), when it stopped, and the jobs a decision settles.
+    `runs` counts every readable run; rows stop at `limit`."""
     rows, by_run = [], {}
-    for row, task, _ in _readable_held(c, who, auth, bot):
+    for row, task, seen in _readable_held(c, who, auth, bot):
         key = row["attempt_id"] or row["id"]
         job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
         if key in by_run:
@@ -563,8 +563,9 @@ def stopped_rows(c, who, auth, bot, limit=5):
                             (row["attempt_id"],)).fetchone() if row["attempt_id"] else None
         cause = stop_cause(attempt)
         facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
-        by_run[key] = {"title": task["title"] if task else None, "cause": cause, "why": STOP_WHY[cause],
-                       "routine": cause in ROUTINE_STOPS, "retry": bool(facts["safe"] and facts["starts"] <= 1),
+        by_run[key] = {"title": task["title"] if task else "A chat request" if seen else None,
+                       "cause": cause, "why": STOP_WHY[cause], "routine": cause in ROUTINE_STOPS,
+                       "retry": bool(facts["safe"] and facts["starts"] <= 1),
                        "at": attempt["finished"] if attempt else None,
                        "jobs": [{"id": job["id"], "attempt_id": job["attempt_id"]}]}
         rows.append(by_run[key])

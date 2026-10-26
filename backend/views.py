@@ -504,8 +504,8 @@ def operation_issues(c, who, auth):
                 # it: only a review lets it go, so this one is a person's now, not a later look (Dev 280).
                 # One short line per run, with its own Try again / Don't retry, instead of a paragraph of quoted
                 # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
-                rows, runs = stopped_rows(c, who, auth, slug)
-                count = runs or uncertain
+                rows, run_count = stopped_rows(c, who, auth, slug)
+                count = run_count or uncertain
                 noun = "run" if count == 1 else "runs"
                 behind = (f"{waiting} queued request{' waits' if waiting == 1 else 's wait'} until you decide."
                           if waiting else "Tico can't safely decide it on its own.")
