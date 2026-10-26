@@ -88,13 +88,18 @@ async function botGoalsCardLoad(slug) {
   const all = goals.some(g => g.id === live[0]?.id) ? goals : [...goals, ...live];
   host.innerHTML = live.map(g => `<div class="bot-goal-row">${goalEditorHtml(g, all)}</div>`).join('')
     + '<div class="bot-goal-row" id="bot-goal-adding" hidden></div>'
-    + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>');
+    + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>')
+    + '<div id="bot-goals-finished"></div>';
   for (const el of host.querySelectorAll('[data-goal-ed]')) {
     const g = live.find(x => x.id === el.dataset.goalEd);
     bindGoalEditor(el, g, () => botGoalsCardLoad(slug));
   }
   for (const a of host.querySelectorAll('[data-goal-go]'))
     a.onclick = ev => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); openGoal(a.dataset.goalGo); };
+  // Its done and dropped goals, under the live ones: "Finished (N)" (ui/app/goals.js).
+  const finished = await v2Get('/v2/goals?all=true&status=done,dropped&owner=' + encodeURIComponent('bot:' + slug));
+  if (!finished || BOT?.slug !== slug || !host.isConnected) return;
+  goalFinishedMount(host.querySelector('#bot-goals-finished'), 'bot:' + slug, [...all, ...(finished.goals || [])], () => goalsRefresh());
 }
 function botGoalAdd(slug) {
   const host = $('#bot-goal-adding');

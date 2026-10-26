@@ -482,6 +482,12 @@ class GoalStatus(Contract):
     note: str = Field(default="", max_length=2000)
 
 
+class GoalReopen(Contract):
+    status: Literal["red", "yellow", "green", "auto"] | None = None
+    note: str = Field(default="", max_length=300)
+    undo: bool = False
+
+
 class GoalUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     body: str | None = Field(default=None, max_length=100_000)

@@ -231,5 +231,6 @@ const toast = (msg, isErr, action, opts = {}) => {
     button.onclick = async () => { button.disabled = true; try { await action.run(); t.remove(); } catch (e) { toast(e.message, true); button.disabled = false; } };
     t.append(' ', button);
   }
-  document.body.appendChild(t); setTimeout(() => t.remove(), action ? 8000 : isErr ? 8000 : 3500);
+  // `host`: an open modal dialog, so a button on the toast is not behind it (the page outside a modal takes no clicks).
+  (opts.host?.isConnected ? opts.host : document.body).appendChild(t); setTimeout(() => t.remove(), action ? 8000 : isErr ? 8000 : 3500);
 };
