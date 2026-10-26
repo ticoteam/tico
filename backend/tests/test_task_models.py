@@ -80,7 +80,7 @@ def test_a_task_runs_on_the_task_model_while_chat_stays_on_the_bots_and_history_
     machine = ops_on_sonnet(api)
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"] == {"harness": "claude", "model": "claude-haiku-5-5", "reasoning_effort": "low",
-                                   "runtime": "claude"}
+                                   "runtime": "claude", "compact_at": None}
     assert get(api, "bots/ops")["task_model"]["model"] == "claude-haiku-5-5"
     task, turn = task_turn(api, machine)
     config = turn["config"]
@@ -145,17 +145,18 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     heartbeat(api, machine, grok="missing")
     task, turn = task_turn(api, machine)
     assert turn is not None, "never held for the task model"
-    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "high")
+    # The task effort is kept when the bot's own model takes it: low is one Sonnet takes, so it runs at low.
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "low")
     finish(api, machine, turn, {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude",
-                                "effort": "high"})
+                                "effort": "low"})
     ran = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]
     assert ran["task_model"]["source"] == "fallback"
-    assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 (high): task model grok-4.6 (low) "
-                                         "could not run (grok is not signed in on Test Mac)")
+    assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 at task effort low: task model "
+                                         "grok-4.6 (low) could not run (grok is not signed in on Test Mac)")
     with api.app.state.store.read() as c:
         events = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='task_model'",
                            (task["id"],)).fetchall()
-    assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (high)", ran["task_model"]["note"])]
+    assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (low)", ran["task_model"]["note"])]
     # Its next turn says the same once more on the run, not again on the task.
     post(api, f"tasks/{task['id']}/comments", {"text": "One more thing: sort by date."})
     again = claim(api, machine)
@@ -270,7 +271,7 @@ def test_a_task_model_its_computer_has_not_installed_falls_back_rather_than_wait
     assert saved["readiness"]["fix"] == "Install grok on Test Mac, or choose a model it already runs"
     task, turn = task_turn(api, machine)
     assert turn["config"]["task_model_fallback"] is True
-    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "high")
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-sonnet-5-5", "low")
     with api.app.state.store.read() as c:
         record = json.loads(c.execute("SELECT model_json FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0])
     assert record["source"] == "fallback" and record["why"] == "grok is not installed on Test Mac"
@@ -400,3 +401,121 @@ def test_write_stakes_count_only_grants_held_now_beyond_the_bots_own_repository(
                   "can": ["read", "write"]})
     with api.app.state.store.read() as c:
         assert [row["does"] for row in task_models.stakes(c, settings, "ops")] == ["can change acme/site"]
+
+
+def ops_on_grok(api):
+    """ops on Grok at low effort, on a computer signed in to Claude and Grok, as a bot whose own model lacks max."""
+    company(api, "anthropic", "xai")
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config.update(runtime="grok", harness="grok", model="grok-4.6", reasoning_effort="low")
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine)
+    return machine
+
+
+def test_task_effort_and_context_length_without_a_model_apply_to_tasks_and_not_to_chat(api):
+    machine = ops_on_sonnet(api)
+    post(api, "bots/ops/compact-at", {"compact_at": 400000, "expected_revision": revision(api)})
+    saved = set_task_model(api, {"effort": "max", "compact_at": 600000})
+    assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "max", "runtime": "",
+                                   "compact_at": 600000}
+    assert saved["readiness"] is None and saved["warning"] == ""
+    task, turn = task_turn(api, machine)
+    config = turn["config"]
+    assert (config["model"], config["reasoning_effort"], config["compact_at"]) == ("claude-sonnet-5-5", "max", 600000)
+    assert "task_model" not in config
+    finish(api, machine, turn, {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude",
+                                "effort": "max"})
+    ran = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]
+    assert ran["task_model"] == {"source": "task", "note": "Ran on the bot's model claude-sonnet-5-5 at task effort "
+                                                           "max, context 600k"}
+    assert ran["segments"][0]["effort"] == "max"
+    post(api, "messages", {"to": "ops", "text": "What are you on today?"})
+    chat = claim(api, machine)
+    assert chat["task"] is None
+    assert (chat["config"]["reasoning_effort"], chat["config"]["compact_at"]) == ("high", 400000)
+
+
+def test_a_task_model_carries_its_own_effort_and_context_length_and_chat_keeps_the_bots(api):
+    machine = ops_on_sonnet(api)
+    post(api, "bots/ops/compact-at", {"compact_at": 400000, "expected_revision": revision(api)})
+    set_task_model(api, {**HAIKU, "compact_at": 600000})
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"], turn["config"]["compact_at"]) == \
+        ("claude-haiku-5-5", "low", 600000)
+    finish(api, machine, turn, HAIKU_RAN)
+    assert get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"] == (
+        "Ran on the bot's task model claude-haiku-5-5 (low), context 600k")
+    post(api, "messages", {"to": "ops", "text": "What are you on today?"})
+    chat = claim(api, machine)
+    assert (chat["config"]["model"], chat["config"]["reasoning_effort"], chat["config"]["compact_at"]) == \
+        ("claude-sonnet-5-5", "high", 400000)
+
+
+def test_a_fallback_keeps_the_task_context_length_and_the_task_effort_the_bots_model_takes(api):
+    machine = ops_on_sonnet(api)
+    set_task_model(api, {"harness": "grok", "model": "grok-4.6", "effort": "low", "compact_at": 600000})
+    heartbeat(api, machine, grok="missing")
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"], turn["config"]["compact_at"]) == \
+        ("claude-sonnet-5-5", "low", 600000)
+    assert turn["config"]["task_model_fallback"] is True
+    finish(api, machine, turn, {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude",
+                                "effort": "low"})
+    assert get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"] == (
+        "Ran on the bot's model claude-sonnet-5-5 at task effort low, context 600k: task model grok-4.6 (low) could "
+        "not run (grok is not signed in on Test Mac)")
+
+
+def test_a_fallback_drops_a_task_effort_the_bots_own_model_does_not_take(api):
+    machine = ops_on_grok(api)
+    set_task_model(api, {**HAIKU, "effort": "max", "compact_at": 600000})
+    rust_heartbeat(api, machine, {"claude": {"installed": False, "authenticated": "missing"},
+                                  "grok": {"installed": True, "authenticated": "ready"}})
+    task, turn = task_turn(api, machine)
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"], turn["config"]["compact_at"]) == \
+        ("grok-4.6", "low", 600000)
+    finish(api, machine, turn, {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "effort": "low"})
+    note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
+    assert note.startswith("Ran on the bot's model grok-4.6 (low), context 600k: task model claude-haiku-5-5 (max)")
+    assert note.endswith("(task effort max is not one grok-4.6 takes)")
+
+
+def test_task_effort_and_context_length_set_and_clear_on_their_own(api):
+    ops_on_sonnet(api)
+    saved = set_task_model(api, {"effort": "max"})
+    assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "max", "runtime": "",
+                                   "compact_at": None}
+    cleared = set_task_model(api, {"compact_at": 600000})
+    assert cleared["task_model"] == {"harness": "", "model": "", "reasoning_effort": "", "runtime": "",
+                                     "compact_at": 600000}
+    assert set_task_model(api, {"compact_at": 600000}, expected=409)["error"]["code"] == "unchanged"
+    set_task_model(api, {"effort": "turbo"}, expected=422)
+    set_task_model(api, {"harness": "claude", "compact_at": 600000}, expected=422)
+    post(api, "bots/ops/task-model", {"task_model": {"compact_at": 150000}, "expected_revision": 1}, expected=409)
+    set_task_model(api, {**HAIKU, "compact_at": 1000000})
+    model_cleared = set_task_model(api, {"compact_at": 1000000})
+    assert get(api, "bots/ops")["task_model"] == {"harness": "", "model": "", "reasoning_effort": "",
+                                                  "runtime": "", "compact_at": 1000000}
+    assert model_cleared["task_model"]["model"] == ""
+    assert set_task_model(api, None)["task_model"] is None and get(api, "bots/ops")["task_model"] is None
+    # Undoing the last change puts back the effort-only record the change replaced, not a model named "".
+    history = [h for h in get(api, "settings/history")["changes"] if h["field"] == "task_model"]
+    post(api, f"settings/history/{history[0]['id']}/undo", {"expected_revision": revision(api)})
+    assert get(api, "bots/ops")["task_model"] == {"harness": "", "model": "", "reasoning_effort": "",
+                                                  "runtime": "", "compact_at": 1000000}
+
+
+def test_an_old_task_model_record_runs_on_its_model_as_before(api):
+    machine = ops_on_sonnet(api)
+    with api.app.state.store.transaction() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config["task_model"] = {"harness": "claude", "model": "claude-haiku-5-5", "reasoning_effort": "low",
+                                "runtime": "claude"}
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+    _, turn = task_turn(api, machine)
+    assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
+    assert "compact_at" not in turn["config"]

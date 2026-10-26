@@ -1711,9 +1711,18 @@ class BotKeepTasksGoing(Contract):
     expected_revision: int
 
 
+class BotTaskChoice(Contract):
+    """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
+    only the task effort or only the task context length (backend/task_models.py)."""
+    harness: ID | None = None
+    model: ID | None = None
+    effort: ID | None = None
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+
+
 class BotTaskModel(Contract):
-    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
-                                                 "null is the same as the bot")
+    task_model: BotTaskChoice | None = Field(None, description="Harness, model, effort and context length for the "
+                                             "bot's tasks; a missing model is the bot's own, and null clears all of it")
     expected_revision: int = Field(ge=1)
 
 
@@ -2160,6 +2169,15 @@ class RunRotation(Contract):
     limit: int = Field(ge=0)   # the limit it reached, in the unit of `reason`
 
 
+class RunSession(Contract):
+    """Whether the run continued its provider session or started a new one, and why (runner-rs/src/sessions.rs).
+    `why` is one of backend/run_triggers.py SESSION_WHY for a runner of this release; a newer runner may send another,
+    short one, which is kept as it is."""
+    kind: Literal["resumed", "new"]
+    why: str | None = Field(default=None, max_length=60)
+    detail: str | None = Field(default=None, max_length=500)
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2191,7 +2209,10 @@ class Completion(Contract):
     # other way. Counted in its `writes` (backend/run_triggers.py).
     pushes: list[RunPush] = Field(default_factory=list, max_length=50)
     # The run started a fresh provider session because the bot's last one had grown past its limit (token saving).
+    # Older runners only: sessions are not rotated for size any more, and a current runner sends `session` instead.
     rotated: RunRotation | None = None
+    # Whether the run resumed the thread's session or started a new one, and why (feature `run_session`).
+    session: RunSession | None = None
 
 
 class Retry(Contract):

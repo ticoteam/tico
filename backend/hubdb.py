@@ -721,6 +721,18 @@ RUN_ROTATION_SCHEMA = """
 ALTER TABLE turns ADD COLUMN rotated TEXT;
 """
 
+# Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
+# `turns.session_why`; backend/run_triggers.py session), and the one-shot mark that makes a thread's next run compact
+# its session before it starts after a prompt too large to send (backend/run_backoff.py compact_first). Append to
+# preserve existing installations.
+RUN_SESSION_SCHEMA = """
+ALTER TABLE turns ADD COLUMN session_kind TEXT;
+ALTER TABLE turns ADD COLUMN session_why TEXT;
+CREATE TABLE IF NOT EXISTS compact_first(
+  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, marked TEXT NOT NULL, taken_by TEXT,
+  PRIMARY KEY(bot, conversation_id));
+"""
+
 # The CEO Bot's merged asks (backend/ceo_merge.py): each original item in a person's Needs you that one CEO Bot item
 # stands for, and what became of it; append to preserve existing installations.
 CEO_MERGES_SCHEMA = """
@@ -821,7 +833,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               TRIGGERS_INCOMING_SCHEMA, HOOK_RELAY_SCHEMA,
               WEBHOOKS_SCHEMA, SLEEP_IDLE_SCHEMA,
               TICO_NOTICES_SCHEMA, WEBHOOKS_V2_SCHEMA, WEBHOOKS_V3_SCHEMA,
-              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA]
+              WEBHOOKS_V4_SCHEMA, WEBHOOKS_V5_SCHEMA, WEBHOOKS_V6_SCHEMA, RUN_SESSION_SCHEMA]
 
 
 class Refused(Exception):
@@ -5430,7 +5442,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, receipt_owner=None):
+                verdict_head=None, review_reader=None, receipt_owner=None):
     """Rule 5. The owner may set doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5511,7 +5523,14 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         target_step = _one(conn, "SELECT name FROM task_steps WHERE id=?", (step_id,))
         if target_step and target_step["name"] in ("Review 1", "Review 2") and step_id != row.get("step_id"):
             from . import review_gate
-            review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, receipt_owner=receipt_owner)
+            try:
+                review_gate.check(conn, actor, {**row, "type_id": type_id}, review_prs, note=note, reader=review_reader,
+                                  receipt_owner=receipt_owner)
+            except Refused as exc:
+                # The move Tico retries once what refused it clears (backend/move_retry.py).
+                if getattr(exc, "review_gate", None):
+                    exc.review_gate["step"] = target_step["name"]
+                raise
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
             status = None
@@ -6966,9 +6985,52 @@ def _no_diagnosis(conn, row, count):
     return None
 
 
+# BotOps's task to review a bot's stopped runs held for a check (execution._hand_to_maintainer).
+HELD_REVIEW_TITLE = "Review {bot}'s stopped runs held for a check"
+HELD_OPERATOR_REVIEW_TITLE = "Review {display_name}'s unresolved interrupted runs"
+# The operator review's title carries the bot's display name, which is neither unique nor fixed, so its body names the
+# bot's slug too and the stall guard reads that first.
+HELD_OPERATOR_REVIEW_BOT = "Bot: {slug}."
+
+
+def held_review_bot(conn, row):
+    """The bot a keeper-filed held-run review task is for while one of its runs is still held with no saved decision,
+    else None. This includes BotOps reviews and the operator review used when BotOps cannot read the run."""
+    prefix, suffix = HELD_REVIEW_TITLE.split("{bot}")
+    title = str(row["title"] or "")
+    if row["requester"] != KEEPER or not _has_table(conn, "jobs"):
+        return None
+    if title.startswith(prefix) and title.endswith(suffix) and len(title) > len(prefix) + len(suffix):
+        slug = title[len(prefix):-len(suffix)]
+    else:
+        owner_prefix, owner_suffix = "Review ", "'s unresolved interrupted runs"
+        if not title.startswith(owner_prefix) or not title.endswith(owner_suffix):
+            return None
+        body = conn.execute("SELECT body FROM tasks WHERE id=?", (row["id"],)).fetchone()
+        named = re.search(r"^Bot: (\S+)\.$", str(body["body"] or "") if body else "", re.M)
+        if named:
+            slug = named.group(1)
+        else:
+            display_name = title[len(owner_prefix):-len(owner_suffix)]
+            bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
+            slug = bot["slug"] if bot else None
+        if not slug:
+            return None
+    held = conn.execute("SELECT 1 FROM jobs j WHERE j.bot=? AND j.state='uncertain' AND NOT EXISTS("
+                        "SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) LIMIT 1",
+                        (slug,)).fetchone()
+    return slug if held else None
+
+
 def _settle_undiagnosed(conn, row, cause):
     """Work the hub filed for itself closes with the cause; anyone else's task stays open and its requester is
-    told the cause, at most once a day while it stays stuck."""
+    told the cause, at most once a day while it stays stuck. A review of held runs stays open while a run it is for is
+    still held with no decision (held_review_bot)."""
+    if row["requester"] == KEEPER and held_review_bot(conn, row):
+        event(conn, KEEPER, "task.stall_escalated", row["id"],
+              {"bot": actor_id(row["owner"]), "recovery_task": None, "owner": None, "cause": cause,
+               "kept_open": "runs still held"})
+        return
     if row["requester"] == KEEPER:
         task_close(conn, KEEPER, row["id"], f"Closed by the stall check: {cause}.", quiet=True)
     elif _actor_exists(conn, row["requester"]):

@@ -44,10 +44,13 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/turn-on') { state.turnedOn = (state.turnedOn || 0) + 1; return json({bot: 'coo', state: 'active', restored: true, placed: true}); }
     if (p === '/api/v2/assistant/actions/act1' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act2' && method === 'GET') return json({action: state.bulk});
+    if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
     if (act) {
-      const card = act[1] === 'act2' ? state.bulk : state.card;
+      const card = {act2: state.bulk, act3: state.enrol}[act[1]] || state.card;
       state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
+      // A new computer's code comes back to the person who tapped, in this answer only.
+      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires: new Date(Date.now() + 9e5).toISOString(), operator: 'ana'}});
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -64,8 +67,10 @@ function fixture() {
   state.bulk = {id: 'act2', summary: 'Close the three launch tasks', method: 'POST', path: '/api/v2/assistant/batch', status: 'pending', result: null,
     description: '3 task actions, on one Confirm', proposed_via: 'assistant', body: {actions: []},
     diff: ['Plan the launch', 'Book the venue', 'Draft the post'].map(t => ({field: `Change task “${t}” (2 fields)`, new: 'close: true, note: Done'}))};
+  state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
   state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
-    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk}, pending: []});
+    messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol}, pending: []});
   state.reply = () => {
     const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1));
     const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)', {fast: true});
@@ -162,6 +167,17 @@ function fixture() {
       assert.match(await page.locator('.asst-card[data-action="act2"]').innerText(), /1 of 3 did not go through/, tag + ': what failed is said');
       assert.deepEqual(state.decided, [['act1', 'confirm'], ['act2', 'confirm']], tag + ': one click for the group');
 
+      // A computer's one-time code shows only on the card, after the person's own tap.
+      state.messages.push(msg('m11', 'bot:botops', 'Needs your OK: Make a one-time code to add a computer', {action: 'act3'}));
+      await page.goto('https://tico-ui.test/#/updates');
+      await page.goto('https://tico-ui.test/#/assistant');
+      const enrol = page.locator('.asst-card[data-action="act3"]');
+      await enrol.waitFor();
+      assert.ok(!(await enrol.innerText()).includes('ONE-TIME-CODE-1234'), tag + ': no code before the tap');
+      await enrol.locator('[data-confirm]').click();
+      await page.locator('.asst-card[data-action="act3"] [data-shown-once]').waitFor();
+      assert.match(await page.locator('.asst-card[data-action="act3"] [data-shown-once] code').innerText(), /ONE-TIME-CODE-1234/, tag + ': the code is on the card');
+
       // It fits: no sideways scroll, the box and Send are on screen.
       const at = await box.boundingBox(), send = await page.locator('#chat-composer .p-send').boundingBox();
       assert.ok(at && at.x >= 0 && at.x + at.width <= viewport.width + 1 && at.y + at.height <= viewport.height, tag + ': the box is on screen');
@@ -205,7 +221,9 @@ function fixture() {
 
     // Off: the page says so, and only the owner is offered the switch.
     const state = fixture();
-    state.view = () => ({available: false, state: 'archived', bot: 'coo', name: 'Tico', can_turn_on: true, room_id: null,
+    state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+  state.view = () => ({available: false, state: 'archived', bot: 'coo', name: 'Tico', can_turn_on: true, room_id: null,
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     const {page} = await open(browser, {width: 1280, height: 900}, state);
     await page.goto('https://tico-ui.test/#/assistant');
@@ -217,7 +235,9 @@ function fixture() {
     await page.locator('[data-settings-tab="general"]').click();
     const strip = page.locator('[data-assistant-off]');
     await strip.waitFor();
-    state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Tico', can_turn_on: false, room_id: 'room1',
+    state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
+    result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
+  state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Tico', can_turn_on: false, room_id: 'room1',
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     await strip.locator('[data-turn-on]').click();
     await page.locator('[data-assistant-off]').waitFor({state: 'detached'});

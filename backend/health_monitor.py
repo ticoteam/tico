@@ -103,6 +103,7 @@ MEANING = {
     "server_cpu": f"The server averaged {SERVER_CPU:g}% CPU or more for an hour with under {QUIET_REQUESTS} requests.",
     "local_busy": "A process or container on a computer running Tico was busy in two hourly checks in a row while idle.",
     "run_hold": "Tico stopped a bot after five runs in a row failed within a minute of starting.",
+    "new_sessions": "A bot started more than 2 new sessions in a day because its old one was lost or would not continue.",
     "turn_budget": "Tico stopped a bot that started more runs in an hour or a day than its budget allows.",
     "reviewer_holds_tasks": "A bot with the Reviewer profile owns open tasks that are not review or QA requests.",
     "responder_has_tasks": "A bot with the Responder profile, which takes no tasks, has open tasks.",
@@ -540,6 +541,7 @@ def _bot_checks(c, settings=None):
                                     "the computer can make it again (docs/worktrees.md)."))
     out.extend(_quiet_work_checks(c))
     out.extend(_stop_checks(c))
+    out.extend(_session_checks(c))
     out.extend(_profile_checks(c))
     return out
 
@@ -595,6 +597,32 @@ def _stop_checks(c):
                             f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
                             f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
+    return out
+
+
+NEW_SESSIONS = 2             # new sessions in a day, for a lost or failed old one, above which a bot is a finding
+
+
+def _session_checks(c):
+    """A bot whose old session keeps being lost (backend/run_triggers.py SESSION_LOST): more than NEW_SESSIONS runs in
+    the last 24 h started a new one because the old was not found, would not resume or compact, was interrupted, or was
+    too large to send even after compacting. A first run, a person's Clear and a topic change do not count. One grouped
+    read of the last day's runs (`turns.started` is indexed)."""
+    from .run_triggers import SESSION_LOST
+    since = H.shift(H.now(), hours=-24)
+    marks = ",".join("?" * len(SESSION_LOST))
+    out = []
+    for r in c.execute(f"SELECT bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM turns "
+                       f"WHERE started>=? AND session_kind='new' AND session_why IN ({marks}) "
+                       f"GROUP BY bot HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
+        bot = r["bot"]
+        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        out.append(_finding(f"new_sessions:{bot}", "new_sessions", SETUP,
+                            f"{name} keeps losing its session: {r['n']} new ones in a day",
+                            f"{name} started {r['n']} new sessions in the last 24 hours because its old one could not be "
+                            f"continued ({r['why']}), so each run began without the last one's context.",
+                            f"BotOps: read {name}'s last runs for why its session is lost (the computer it runs on may have "
+                            "changed, its session files may be cleared, or its runs may be cut short)."))
     return out
 
 

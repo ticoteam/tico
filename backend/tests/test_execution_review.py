@@ -574,7 +574,8 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
     assert claim(api, machine) is None
     post(api, f"tasks/{task_id}/comments", {'text': 'Cite the new clause.'})         # waits behind the stopped run
     def held_for(token):
-        return ' '.join(i['detail'] for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
+        return ' '.join(i['detail'] + ' ' + ' '.join(str(r['title']) for r in i.get('runs', []))
+                        for i in get(api, 'operations', token=token)['issues'] if i['kind'] == 'uncertain_work')
     assert 'Counsel memo for Acme' in held_for('ben-test')          # control: Ben may read it
     assert stopped_issue(api, 'ben-test')['held_tasks'] == ['Counsel memo for Acme']
     real = Auth.bot_accesses
@@ -586,6 +587,12 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
     monkeypatch.setattr(Auth, 'bot_accesses', without_legal)
     assert 'Counsel memo for Acme' not in held_for('ben-test')
     assert stopped_issue(api, 'ben-test')['held_tasks'] == []
+    assert [r['title'] for r in stopped_issue(api, 'ben-test')['runs']] == [None]     # still a line, unnamed
+    # Ben is not ops' operator: no buttons, and no handles to decide with; Ana, who operates it, gets both.
+    ben = stopped_issue(api, 'ben-test')
+    assert ben['can_review'] is False and all('jobs' not in r for r in ben['runs'])
+    ana = stopped_issue(api, 'ana-test')
+    assert ana['can_review'] is True and [len(r['jobs']) for r in ana['runs']] == [1]
     assert 'Counsel memo for Acme' in held_for('ana-test')
 
 
@@ -673,7 +680,8 @@ def claim_at(api, monkeypatch, machine, at):
     return claim(api, machine)
 
 
-def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch):
+@pytest.mark.parametrize('continuation_acted', [False, True])
+def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch, continuation_acted):
     from backend import execution
     machine, message, attempt = setup_attempt(api)
     at = later()
@@ -685,16 +693,13 @@ def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, 
     following = claim_at(api, monkeypatch, machine, at(121))
     assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
     assert following['message']['body'].endswith(execution.CONTINUE_NOTE)
-    # The continuation's own model refuses it before it does anything: still a short hold, still that thread.
-    capacity_turn(api, monkeypatch, machine, following, at(180), acted=False, continues=False)
-    again = claim_at(api, monkeypatch, machine, at(301))
-    assert again['job_id'] == attempt['job_id'] and again['continue_thread'] == 'capacity-thread'
-    # At capacity again after it acted: held for review as before, once.
-    capacity_turn(api, monkeypatch, machine, again, at(360))
+    # A second capacity refusal exhausts the one continuation, whether or not it ran another tool.
+    capacity_turn(api, monkeypatch, machine, following, at(180), acted=continuation_acted,
+                  continues=continuation_acted)
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         assert execution.H.status(c, 'ops')['state'] == 'crashed'
-    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [again['id']]
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
     assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
@@ -1118,12 +1123,87 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
     assert issue['needs_person'] is True and issue['action'] == 'review' and issue['severity'] == 'error'
     assert issue['title'].endswith('has 1 stopped run holding up work')
     assert issue['held_back'] == 2 and issue['held_tasks'] == ['Archive the old bots']
-    assert issue['detail'] == ('"Archive the old bots" (owner ops) stopped partway. 2 queued requests wait on '
-                               '"Archive the old bots" until you decide. Choose Try again or Don\'t retry.')
+    # A lapsed lease is the computer's, not a bug: the card says so once, and names the run on its own line.
+    assert issue['detail'] == ('Its computer stopped answering during this run, not a bug. '
+                               '2 queued requests wait until you decide.')
+    assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
+                              'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
+                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}]}]
+    assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
     assert claim(api, machine)                             # reviewed: the waiting work runs
+
+
+def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is_not_a_bug(api, monkeypatch):
+    """Oct 26 (Chris): a computer restart held Builder (OpenAI)'s runs, and Needs you showed "6 stopped runs" as one
+    paragraph of quoted titles. A message folded into a run rides on its line (one choice settles both), the count is
+    of runs, and the interruption is named with its time so the person knows it is not a bug."""
+    from backend.store import H
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
+    task_id = task.get('task', task).get('id') or task['refs']['task']
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.'})
+    carried = post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']
+    assert len(carried) == 1
+    post(api, f"attempts/{attempt['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})   # waits behind the held run
+    ready(api, machine, ['ops'])
+    assert claim(api, machine) is None
+    with api.app.state.store.read() as c:
+        finished = c.execute("SELECT finished FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
+        jobs = [r[0] for r in c.execute("SELECT id FROM jobs WHERE attempt_id=? AND state='uncertain' ORDER BY created",
+                                        (attempt['id'],))]
+    assert len(jobs) == 2
+    issue = stopped_issue(api)
+    assert issue['title'].endswith('has 1 stopped run holding up work')
+    assert issue['detail'] == (f'Its computer interrupted this run at {H.parse_ts(finished):%H:%M} UTC, usually for a '
+                               'restart or update, not a bug. 1 queued request waits until you decide.')
+    [line] = issue['runs']
+    assert (line['title'], line['cause'], line['why'], line['routine']) == (
+        'Ship the receipts fix', 'interrupted', 'Interrupted on its computer', True)
+    assert sorted(j['id'] for j in line['jobs']) == sorted(jobs)
+    assert {j['attempt_id'] for j in line['jobs']} == {attempt['id']}
+    # A run past the listed ones may have stopped some other way: the shared "not a bug" line needs every run shown.
+    from backend import execution
+    listed = execution.stopped_rows
+    def one_more_run(*args, **kwargs):
+        rows, runs = listed(*args, **kwargs)
+        return rows, runs + 1
+    monkeypatch.setattr(execution, 'stopped_rows', one_more_run)
+    issue = stopped_issue(api)
+    assert issue['more_runs'] == 1 and issue['detail'] == '1 queued request waits until you decide.'
+    monkeypatch.setattr(execution, 'stopped_rows', listed)
+    for job in line['jobs']:
+        post(api, f"jobs/{job['id']}/reconcile", {'attempt_id': job['attempt_id'], 'decision': 'resume',
+             'note': 'Check what already happened, then continue.', 'acknowledge_uncertain_effects': True})
+    assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
+
+
+def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
+    """A Billing task's answer that says "quota" is not a usage limit; only the run's own fields say why it stopped."""
+    from backend.execution import ROUTINE_STOPS, stop_cause
+    def attempt(state='failed', stop=None, **result):
+        return {'state': state, 'stop_requested': stop, 'result_json': json.dumps(result)}
+    assert stop_cause(attempt(text='Billing: the quota page and the usage limit table are done')) == 'partway'
+    assert stop_cause(attempt(limited=True)) == 'quota'
+    assert stop_cause(attempt(primary_limited=True)) == 'partway'  # fell back to another model, then failed
+    assert stop_cause(attempt('interrupted', primary_limited=True)) == 'interrupted'
+    assert stop_cause(attempt(limit_source={'kind': 'capacity'})) == 'capacity'
+    assert stop_cause(attempt('interrupted')) == 'interrupted'
+    assert stop_cause(attempt('expired')) == 'timeout'
+    assert stop_cause(attempt('interrupted', stop='human:ana')) == 'stopped'
+    assert stop_cause(None) == 'partway'
+    assert {'stopped', 'partway'}.isdisjoint(ROUTINE_STOPS)
 
 
 def stop_partway(api, machine, attempt, thread):
@@ -1208,7 +1288,8 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
     assert carried == 'uncertain'                                       # the carried one: held, not safe to repeat
     issue = stopped_issue(api)
     assert issue['needs_person'] is True and issue['action'] == 'review' and not issue['held_back']
-    assert issue['detail'].endswith(" stopped partway. Tico can't safely decide it on its own. Choose Try again or Don't retry.")
+    assert issue['detail'].endswith("Tico can't safely decide it on its own.")
+    assert [r['title'] for r in issue['runs']] == ['A chat request']           # a chat, not an unreadable task
     assert [j['id'] for j in get(api, 'bots/ops/execution-review')['jobs']]
 
 

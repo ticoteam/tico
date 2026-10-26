@@ -18,7 +18,13 @@ Every run (`turns`, same id as its attempt) records three things, all in plain c
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 
 - `rotated`: `tokens` or `turns` when the run started a fresh provider session because the bot's last one had
-  grown past its limit (runner-rs/src/rotate.rs), reported with the result (`rotation`); NULL otherwise.
+  grown past its limit (`rotate_at`, `rotate_after_turns`), reported by older runners with the result (`rotation`);
+  NULL otherwise. Sessions are no longer rotated for size: auto-compaction is the only size limit.
+- `session_kind`, `session_why`: whether the run resumed its thread's session (`resumed`) or started a new one
+  (`new`), and why (SESSION_WHY), reported by the runner with the result (`session`); NULL from an older runner. A run
+  that failed because its prompt was too large to send even after compacting reads `new` / `prompt_too_long_after_compact`:
+  Tico cleared the session for the next run. A new session for a reason other than `none_saved` is also a line in
+  its task's history (field `session`).
 - `purpose`: a short stable label for the work (`review PR`, `answer person message`), so a week of runs can be
   grouped by what they were for. The place that writes a wake may name it (`stamp(..., purpose=)`); a run nobody
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
@@ -35,6 +41,7 @@ before it existed keep their rows as they were.
 `run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
 trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
+import re
 
 TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
             "background_done", "release_published", "other")
@@ -153,6 +160,53 @@ def rotation(conn, turn_id, rotated):
     if rotated is None:
         return 0
     return conn.execute("UPDATE turns SET rotated=? WHERE id=? AND finished IS NULL", (rotated.reason, turn_id)).rowcount
+
+
+# Why a run started a new session, in the words a task's history uses ("Started a new session: ..."). The first six are
+# the runner's (runner-rs/src/sessions.rs); the last three are Tico's own clears (views.clear_chat_session).
+SESSION_WHY = {
+    "none_saved": "there was no saved session to continue",
+    "not_found": "the old one wasn't on this computer",
+    "resume_failed": "the old one could not be continued",
+    "compact_failed": "the old one could not be compacted",
+    "interrupted": "the old one was interrupted before it was saved",
+    "fallback_side": "the run used a fallback model, which keeps a session of its own",
+    "prompt_too_long_after_compact": "the old one was still too large to send after compacting",
+    "topic_change": "the conversation moved to a new topic",
+    "person_clear": "a person cleared it",
+}
+# Reasons that make a new session a sign of trouble (Health): the old session was lost or would not continue. A first
+# run (`none_saved`), a person's Clear and a topic change are the normal ways to start one.
+SESSION_LOST = ("not_found", "resume_failed", "compact_failed", "interrupted", "prompt_too_long_after_compact")
+
+
+def session_words(why):
+    """The sentence a task's history gives a new session. An unknown reason (a newer runner's) is named as it came."""
+    if why in SESSION_WHY:
+        return f"Started a new session: {SESSION_WHY[why]}"
+    name = re.sub(r"[^a-z0-9_ -]", "", str(why or "").lower())[:40].strip()
+    return f"Started a new session ({name})" if name else "Started a new session"
+
+
+def new_session(c, task_id, why, actor=None):
+    """Say in the task's history that its session started anew, and why (field `session`). Nothing without a task."""
+    from .store import H
+    if task_id and c.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+        H._task_event(c, task_id, actor or H.KEEPER, "session", "", "new", session_words(why))
+
+
+def session(conn, turn_id, session):
+    """Record whether a run resumed its session or started a new one, while the run is open. A new session for any
+    reason but `none_saved` is also said in its task's history. A runner that reports none leaves the columns NULL."""
+    if session is None:
+        return 0
+    why = (session.why or "")[:60] or None
+    done = conn.execute("UPDATE turns SET session_kind=?, session_why=? WHERE id=? AND finished IS NULL",
+                        (session.kind, why, turn_id)).rowcount
+    if done and session.kind == "new" and why != "none_saved":
+        row = conn.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
+        new_session(conn, row[0] if row else None, why)
+    return done
 
 
 def result_outcome(before, after):

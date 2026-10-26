@@ -1023,7 +1023,10 @@ SCHEMAS = {
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
-                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s"},
+                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s",
+                                  "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
+                                                 "one-time value (a new computer's code): {code, expires, operator}, "
+                                                 "in this answer alone and never stored on the card"}},
                                  required=["action"]),
     # Goals and KPIs
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":

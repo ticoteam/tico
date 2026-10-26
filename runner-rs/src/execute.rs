@@ -120,11 +120,6 @@ impl Meter {
         }
     }
 
-    /// All the input the segment's requests read, cached reads included: what its thread re-reads (crate::rotate).
-    pub(crate) fn read(&self) -> i64 {
-        self.input
-    }
-
     /// Whether the segment used any tokens: one that used none is left out of the completion's usage.
     pub(crate) fn used(&self) -> bool {
         self.input != 0 || self.output != 0
@@ -147,14 +142,6 @@ impl Meter {
             m.insert("requests".into(), json!(requests));
         }
         Some(m)
-    }
-}
-
-/// That the turn left its thread for a fresh one, and why (`rotated`), for a server that takes it (`run_rotation`;
-/// an older one refuses the field, and a refused result would never arrive).
-fn rotation_field(completion: &mut Map<String, Value>, rotated: Option<&crate::rotate::Rotation>, feature: impl Fn(&str) -> bool) {
-    if let Some(r) = rotated.filter(|_| feature("run_rotation")) {
-        completion.insert("rotated".into(), r.report());
     }
 }
 
@@ -387,7 +374,8 @@ pub struct Fresh {
     pub conversation: String,
     pub runtime: String,
     pub aid: String,
-    /// The thread a rotation leaves.
+    /// The saved thread this new session replaces (one that could not be resumed or compacted), forgotten once the
+    /// new one is confirmed.
     pub left: Option<String>,
     /// The thread the turn's `started` named: the one the task had, when this server takes a later update
     /// (`thread_updates`), else the new one as before.
@@ -396,8 +384,23 @@ pub struct Fresh {
     pub confirmed: Mutex<Option<String>>,
 }
 
-/// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
-/// an older one has no such route).
+/// How long a saved thread's compaction may take before the turn gives it up for a new session.
+fn compact_timeout() -> Duration {
+    #[cfg(test)]
+    return Duration::from_secs(10);
+    #[cfg(not(test))]
+    Duration::from_secs(600)
+}
+
+/// Whether the server takes `session` in a turn's result (`run_session`; an older one refuses the field).
+fn serves_session(name: &str) -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::RUN_SESSION.with(|on| on.get()) {
+        return on && name == "run_session";
+    }
+    crate::follow::feature(name)
+}
+
 /// Whether the server takes `continues` and hands out `continue_thread` (backend/execution.py capacity_continuation).
 fn capacity_continue() -> bool {
     #[cfg(test)]
@@ -407,6 +410,8 @@ fn capacity_continue() -> bool {
     crate::follow::feature("capacity_continue")
 }
 
+/// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
+/// an older one has no such route).
 fn thread_updates() -> bool {
     #[cfg(test)]
     if let Some(on) = tests::THREAD_UPDATES.with(|on| on.get()) {
@@ -912,6 +917,10 @@ impl Runner {
             }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(bot, command, tx)));
         }
+        #[cfg(test)]
+        if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
+            return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
+        }
         if let Some(delivery) = crate::appdriver::delivery(config) {
             let app = crate::appdriver::label(&delivery.app);
             if !cfg!(target_os = "macos") {
@@ -1146,8 +1155,10 @@ impl Runner {
         let mut selected: Option<Profile> = None;
         let mut subscription_unavailable: Option<Value> = None;
         let mut fallback: Option<String> = None;
-        // The thread this turn left for a fresh one because it had grown too large, and why (crate::rotate).
-        let mut rotated: Option<crate::rotate::Rotation> = None;
+        // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
+        let mut session: Option<crate::continuity::Session> = None;
+        // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own.
+        let mut side_run = false;
         // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
         // went to its fallback instead when another bot's turn had it.
         let mut login_held: Option<crate::login_turns::Held> = None;
@@ -1308,32 +1319,20 @@ impl Runner {
                 }
             }
             // Task-model turns on another runtime are absent from the bot runtime's older thread. A server-marked
-            // task-model fallback always starts fresh, so prompt() supplies the latest task checkpoint instead.
-            let mut previous = if key.starts_with("task:") && truthy(config.get("task_model_fallback")) {
-                None
-            } else {
-                self.state.session(&bot, &conv, &session_runtime)?
-            };
+            // task-model fallback runs in a side session of its own, started from the task's checkpoint (prompt()
+            // supplies it), and never touches the thread this runtime saved: the turns that use that thread resume it.
+            side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
+            let previous = if side_run { None } else { self.state.session(&bot, &conv, &session_runtime)? };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
                 return Ok(()); // the fallback takes the turn below; this harness never starts
             }
-            // A thread grown past the bot's limit is left for a fresh one, told only what the room said since its
-            // last turn (crate::rotate). A command (/compact) is for the thread it names, so it keeps it.
+            // A saved thread that cannot be resumed or compacted is left for a new one, told only what the room said
+            // since its last turn. It is forgotten only once the new one is up and saved (Fresh): a turn that fails
+            // before then leaves it, so its retry starts from the same seed.
             let mut since: Option<String> = None;
             let mut left: Option<String> = None;
-            if let Some(prev) = previous.clone().filter(|_| !truthy(refs.get("command")) && continuing.is_empty()) {
-                if let Some(r) = crate::rotate::due(&config, self.state.session_size(&prev)?) {
-                    log(&format!("Tico runner: {bot}: {}", r.diagnostic()));
-                    let _ = self.state.append(&aid, "diagnostic", &json!({"text": r.diagnostic(), "rotated": r.report()}));
-                    since = self.state.cursor(&prev, None)?;
-                    // Forgotten only once the fresh thread is up and saved (Fresh): a turn that fails before then
-                    // leaves it, so its retry rotates again with the same seed and record.
-                    left = previous.take();
-                    rotated = Some(r);
-                }
-            }
             let (tx, rx) = self.attempt_events(&aid, redactor.clone());
             receivers.push((tx.clone(), rx));
             let rx = &mut receivers.last_mut().unwrap().1;
@@ -1381,20 +1380,52 @@ impl Runner {
                 background_wait: hosts::background_wait(&config),
             };
             let mut resumed = false;
-            if let Some(prev) = &previous {
-                if let Ok(t) = h.resume_thread(prev, &settings).await {
-                    thread = Some(t);
-                    resumed = true;
+            if side_run {
+                session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+            } else if let Some(prev) = &previous {
+                // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
+                // computer does not have, or a second refusal, gives it up.
+                match self.resume_saved(h, prev, &settings).await {
+                    Ok(t) => {
+                        thread = Some(t);
+                        resumed = true;
+                        session = Some(crate::continuity::Session::resumed());
+                    }
+                    Err((missing, error)) => {
+                        let why = if missing { crate::continuity::NOT_FOUND } else { crate::continuity::RESUME_FAILED };
+                        session = Some(crate::continuity::Session::new(why, Some(error)));
+                    }
                 }
+                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag).
+                if resumed && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                    let th = thread.clone().unwrap_or_default();
+                    match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
+                        Ok(()) => session = Some(crate::continuity::Session::compacted()),
+                        Err(error) => {
+                            resumed = false;
+                            thread = None;
+                            session = Some(crate::continuity::Session::new(crate::continuity::COMPACT_FAILED, Some(error)));
+                        }
+                    }
+                }
+                if !resumed {
+                    left = Some(prev.clone());
+                    since = self.state.cursor(prev, None)?;
+                }
+            } else {
+                session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
             }
             if thread.is_none() {
-                thread = Some(h.start_thread(&bot, &settings).await?);
+                // A capacity continuation must acknowledge its lost thread so the server holds it for review,
+                // without creating or saving a replacement session before that acknowledgement.
+                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
             }
             let th = thread.clone().unwrap();
+            self.note_session(&aid, &bot, session.as_ref());
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && continuing.is_empty() && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -1403,7 +1434,7 @@ impl Runner {
                 left: left.clone(),
                 confirmed: Mutex::new(None),
             });
-            if fresh.is_none() {
+            if fresh.is_none() && !side_run && (continuing.is_empty() || resumed) {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -1454,10 +1485,21 @@ impl Runner {
             let names = self.names().await;
             let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
-            attempt["_rotated"] = json!(rotated.is_some());
+            // A new session that replaces a saved one is given the room since the old one's last turn, its own replies
+            // included; a resumed one that a side session ran after is given them too, and the task's checkpoint.
+            let side_ran = resumed && self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1");
+            let after_interrupt = resumed && self.state.repo_rules(&crate::continuity::interrupted_key(&th), None)?.as_deref() == Some("1");
+            attempt["_replaced"] = json!(session.as_ref().is_some_and(|s| s.replaces()));
+            attempt["_side_ran"] = json!(side_ran);
             let mut prompt = crate::prompt::prompt(&attempt, &names, after.as_deref(), resumed);
-            if let Some(r) = &rotated {
-                prompt = format!("{prompt}\n\n{}", r.prompt_note(truthy(Some(&attempt["task"]["checkpoint"]))));
+            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])))) {
+                prompt = format!("{prompt}\n\n{note}");
+            }
+            if side_ran {
+                prompt = format!("{prompt}\n\n{}", crate::continuity::AFTER_SIDE);
+            }
+            if after_interrupt {
+                prompt = format!("{prompt}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
             if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
                 prompt = format!("{prompt}\n\n{line}");
@@ -1478,6 +1520,12 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
+            if side_ran || after_interrupt {
+                // Told once: this turn now holds what they said.
+                for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
+                    let _ = self.state.repo_rules(&key, Some("0"));
+                }
+            }
             if !digest.is_empty() {
                 self.state.repo_rules(&th, Some(&digest))?;
             }
@@ -1494,6 +1542,11 @@ impl Runner {
         // future, before a fallback can stop this host or settlement applies the interrupt-resume capability.
         if let (Some(h), Some(th)) = (&host, &thread) {
             let saved = h.session_id(th);
+            if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
+                // Claude Code and Gemini find out only when the turn runs that the saved session is not on this computer.
+                session = Some(crate::continuity::Session::new(crate::continuity::NOT_FOUND, None));
+                self.note_session(&aid, &bot, session.as_ref());
+            }
             let persisted = async {
                 if let Some(f) = fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
                     // The host can confirm while the drive is blocked or being cancelled for a drain.
@@ -1501,21 +1554,16 @@ impl Runner {
                         self.confirm_thread(f, &session).await?;
                     }
                 }
-                // A fresh session that never came up leaves the previous session in place.
-                if fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
+                // A fresh session that never came up leaves the previous session in place; a side session is never kept.
+                if !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
                     keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
-                    // Rotation counts completed turns only; an interrupted continuation still needs this thread.
-                    if ran.is_ok() && drove.outcome == "completed" {
-                        let read = segments.last().map_or(0, |s| s.meter.read());
-                        self.state.off(move |s| s.note_turn(&saved, read)).await?;
-                    }
                 }
                 Ok::<(), Fail>(())
             }.await;
             if let Err(e) = persisted {
                 if drove.outcome == "completed" {
                     // A local save failure cannot make completed work safe to execute a second time.
-                    self.diagnose(&aid, "Completed turn kept; local session or rotation state could not be saved. Inspect this computer's runner state before continuing.");
+                    self.diagnose(&aid, "Completed turn kept; local session state could not be saved. Inspect this computer's runner state before continuing.");
                 } else {
                     ran = Err(e.into());
                 }
@@ -1580,9 +1628,8 @@ impl Runner {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
             crate::harness_tools::turn_runtimes(&aid, &uses);
-            if let Some(th) = &thread {
-                let _ = drop_session(&self.state, &bot, &conv, &runtime, th).await;
-            }
+            // The primary's thread stays this conversation's: the fallback runs in a side session, from the task's
+            // checkpoint or what the prompt replays, and the next turn on the primary resumes its own.
             if let Some(h) = &host {
                 h.stop().await;
             }
@@ -1670,6 +1717,9 @@ impl Runner {
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
+                // Said once the fallback's host is up: a hop that cannot start has run nothing.
+                session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+                self.note_session(&aid, &bot, session.as_ref());
                 if busy.is_some() || held.is_some() {
                     // The primary never started (its login was busy, or held by the server), so this host
                     // acknowledges the turn instead, before it acts.
@@ -1750,15 +1800,12 @@ impl Runner {
             fallback = None;
             subscription_unavailable = None;
         }
-        // A host that aborts the next turn on an interrupted thread (`resume_after_interrupt = false`) loses its
-        // session below unless a native goal keeps it, so a retry starts a fresh thread.
-        // A turn the model's capacity stopped after it acted keeps its thread for the job's next turn to continue,
-        // where the server takes that (backend/execution.py capacity_continuation); it failed, it was not interrupted.
-        let continues = drove.continues && fallback.is_none() && capacity_continue();
-        let keeps_session = crate::harness_tools::caps(&runtime, "").resume_after_interrupt || goal.controlled || continues;
-        // A continuation resumes only the primary's kept session. A fallback's thread is never kept, whatever its
-        // harness can do, and the primary's was given up when the turn moved to it.
-        let resumable = keeps_session && fallback.is_none();
+        // A turn the model's capacity stopped after it acted continues its kept thread in the job's next turn, where the
+        // server takes that (backend/execution.py capacity_continuation): only the primary's, never a side session's.
+        let continues = drove.continues && fallback.is_none() && !side_run && capacity_continue();
+        // A continuation resumes only the primary's kept session. A fallback's thread is a side session, never kept,
+        // and the primary's does not hold what the fallback did, so an interrupted fallback turn is held for review.
+        let resumable = fallback.is_none() && !side_run;
         // An interrupted turn queued to continue (an update drain's cap, or the end of a shared login's grace) ran and
         // may have acted; when it cannot resume, a fresh thread could repeat that, so it is held for review like any
         // interrupt. A claim the drain returned before it started did nothing and still goes back in the queue.
@@ -1840,11 +1887,12 @@ impl Runner {
         if self.drain.returning(&aid) {
             let _ = self.state.append(&aid, "status", &json!({"waiting": ""}));
         }
-        if drove.outcome != "completed" && !keeps_session {
-            if let Some(th) = &thread {
-                // The session as it was kept above: Claude's runs under the id its init named, not the thread's.
-                let saved = host.as_ref().map_or_else(|| th.clone(), |h| h.session_id(th));
-                let _ = drop_session(&self.state, &bot, &conv, &runtime, &saved).await;
+        // What the next turn on the primary session is told: that this one was cut off, or that a side session ran.
+        if host.is_some() && (side_run || fallback.is_some() || drove.outcome == "interrupted") {
+            let kept = if side_run || fallback.is_some() { self.state.session(&bot, &conv, &session_runtime).ok().flatten() } else { thread.clone() };
+            if let Some(kept) = kept {
+                let key = if side_run || fallback.is_some() { crate::continuity::side_key(&kept) } else { crate::continuity::interrupted_key(&kept) };
+                let _ = self.state.repo_rules(&key, Some("1"));
             }
         }
         let mut reply = std::mem::take(&mut drove.reply);
@@ -1921,7 +1969,7 @@ impl Runner {
                 completion.insert("pushes".into(), json!(pushed));
             }
         }
-        rotation_field(&mut completion, rotated.as_ref(), crate::follow::feature);
+        crate::continuity::session_field(&mut completion, session.as_ref().filter(|_| host.is_some()), serves_session);
         let profile_used = selected.as_ref().filter(|_| host.is_some()).map(|p| p.name.clone());
         if let Some(name) = &profile_used {
             completion.insert("profile_used".into(), json!(name));
@@ -2087,6 +2135,83 @@ impl Runner {
         result
     }
 
+    /// Resumes the thread this computer saved. A host that refuses is asked once more after a short pause; one that
+    /// says the thread is not on this computer is not (Err: whether it is missing, and the host's words).
+    async fn resume_saved(&self, h: &Host, thread: &str, settings: &Settings) -> Result<String, (bool, String)> {
+        let mut last = String::new();
+        for attempt in 0..2 {
+            match h.resume_thread(thread, settings).await {
+                Ok(t) => return Ok(t),
+                Err(e) => {
+                    last = e.to_string();
+                    if crate::continuity::missing(&last) {
+                        return Err((true, last));
+                    }
+                }
+            }
+            if attempt == 0 {
+                tokio::time::sleep(crate::continuity::retry_pause()).await;
+                // A host that exited on the refusal is started again for the second ask.
+                if !h.alive() {
+                    if let Err(e) = h.start().await {
+                        return Err((false, format!("{last}; {e}")));
+                    }
+                }
+            }
+        }
+        Err((false, last))
+    }
+
+    /// Compacts the resumed thread before the turn runs on it (`compact_first`), and waits for the harness to say
+    /// it is done. Err with why not: a harness that cannot compact, or a compaction that failed or never ended.
+    #[allow(clippy::too_many_arguments)]
+    async fn compact_saved(
+        &self,
+        aid: &str,
+        h: &Host,
+        thread: &str,
+        effort: Option<&str>,
+        runtime: &str,
+        harness: &str,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<Value>,
+        mut meter: Option<&mut Meter>,
+    ) -> Result<(), String> {
+        if !crate::harness_tools::caps(runtime, harness).compaction {
+            return Err("this harness cannot compact a session".into());
+        }
+        let _ = self.state.append(aid, "diagnostic", &json!({"text": "Compacting the saved session before this turn (the last turn ran out of room)."}));
+        h.compact(thread, effort).await.map_err(|e| e.to_string())?;
+        let end = Instant::now() + compact_timeout();
+        loop {
+            let left = end.saturating_duration_since(Instant::now());
+            let Ok(Some(ev)) = tokio::time::timeout(left, rx.recv()).await else {
+                return Err("compaction did not finish in time".into());
+            };
+            if text_of(&ev["thread_id"]) != thread {
+                continue;
+            }
+            match text_of(&ev["kind"]).as_str() {
+                "tokens" => {
+                    if let Some(m) = meter.as_deref_mut() {
+                        m.add(&ev);
+                    }
+                }
+                "turn_completed" if ev["status"] == "interrupted" => return Err("compaction was interrupted".into()),
+                "turn_completed" => return Ok(()),
+                "turn_failed" => return Err(crate::continuity::trim(&text_of(&ev["error"]))),
+                _ => {}
+            }
+        }
+    }
+
+    /// The run's diagnostic for a session that is new for a reason worth saying, in its record and the runner's log.
+    fn note_session(&self, aid: &str, bot: &str, session: Option<&crate::continuity::Session>) {
+        if let Some((s, line)) = session.and_then(|s| s.diagnostic().map(|l| (s, l))) {
+            log(&format!("Tico runner: {bot}: {line}"));
+            let _ = self.state.append(aid, "diagnostic", &json!({"text": line, "session": s.report()}));
+        }
+    }
+
     /// The turn's first call: a goal control, a harness command, a task goal with the task's prompt, or the prompt.
     #[allow(clippy::too_many_arguments)]
     async fn start_turn(
@@ -2177,6 +2302,8 @@ mod tests {
         pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
     }
 
     struct RunControls;
@@ -2190,6 +2317,8 @@ mod tests {
             THREAD_UPDATES.with(|on| on.set(None));
             CAPACITY_CONTINUE.with(|on| on.set(None));
             HOST_CLAUDE.with(|claude| claude.set(false));
+            RUN_SESSION.with(|on| on.set(None));
+            HOST_CODEX.with(|env| env.borrow_mut().take());
             hosts::TEST_STARTS.with(|starts| starts.set(0));
         }
     }
@@ -2817,18 +2946,35 @@ for line in sys.stdin:
         assert_eq!(json!(replayed), fixture["events"], "{events:?}");
     }
 
+    /// One turn of `session_turns`: (message id, the message's refs, config merged over the bot's).
+    type Turn = (&'static str, Value, Value);
+
+    /// What `session_turns` saw.
+    struct Ran {
+        /// The session id each turn's command line named.
+        sessions: Vec<String>,
+        prompts: Vec<String>,
+        /// The result Tico got for each turn.
+        completions: Vec<Value>,
+        /// The thread saved for the bot after each turn.
+        saved: Vec<Option<String>>,
+        /// Every diagnostic text of each turn.
+        diagnostics: Vec<Vec<String>>,
+    }
+
     /// Turns on one session through a fake pi that reads 348 input tokens a turn (runner/tests/fixtures/pi), one per
-    /// (message id, refs) in `turns`, on a task's room or (`task` false) the bot's main chat: (session id of each
-    /// turn, prompt of each turn, the second turn's diagnostics).
-    async fn rotating_turns(rotate_at: i64, task: bool, turns: &[(&str, Value)]) -> (Vec<String>, Vec<String>, Vec<Value>) {
+    /// entry of `turns`, on a task's room or (`task` false) the bot's main chat; `serves` is whether the server says
+    /// it takes `session` in a result.
+    async fn session_turns(task: bool, serves: bool, turns: &[Turn]) -> Ran {
         let _controls = RunControls;
-        let dir = std::env::temp_dir().join(format!("tico-rotate-{}", uuid::Uuid::new_v4().simple()));
+        RUN_SESSION.with(|on| on.set(Some(serves)));
+        let dir = std::env::temp_dir().join(format!("tico-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
         let script = format!("n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'; cat > '{d}/prompt-'$n; cat '{f}'",
                              d = dir.display(), f = fixture.display());
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "pi".into()]));
-        let (url, _seen, server) = recording_server().await;
+        let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
@@ -2848,164 +2994,442 @@ for line in sys.stdin:
         } else {
             Value::Null
         };
-        for (n, (message, refs)) in turns.iter().enumerate() {
+        let mut saved = vec![];
+        for (n, (message, refs, extra)) in turns.iter().enumerate() {
             let body = history.as_array().unwrap().iter().find(|m| m["id"] == *message).map_or(json!("Next"), |m| m["body"].clone());
-            let attempt = json!({"id": format!("a-rotate-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
+            let mut config = json!({"runtime": "pi", "harness": "pi", "model": "kimi-k3"});
+            config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            let attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
                                  "lease_seconds": 120, "conversation": room, "task": task,
                                  "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
-                                 "history": history, "config": {"runtime": "pi", "harness": "pi", "model": "kimi-k3", "rotate_at": rotate_at}});
+                                 "history": history, "config": config});
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
+            saved.push(runner.state.with(|c| c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| r.get::<_, String>(0)).map(Some).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })).unwrap());
         }
         server.abort();
         let sessions = std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
             .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id").nth(1).unwrap_or_default().to_string()).collect();
         let prompts = (0..turns.len()).map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).unwrap_or_default()).collect();
-        let diagnostics = runner.state.with(|c| {
-            c.prepare("SELECT payload FROM events WHERE attempt_id='a-rotate-1' AND kind='diagnostic' ORDER BY seq")?
-                .query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()
-        }).unwrap().iter().map(|p| serde_json::from_str(p).unwrap()).collect();
+        let seen = seen.lock().unwrap().clone();
+        let completions = (0..turns.len()).map(|n| {
+            let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-session-{n}/complete"))).map(|(_, _, b)| b).collect();
+            assert_eq!(found.len(), 1, "turn {n}: {seen:?}");
+            found[0].clone()
+        }).collect();
+        let diagnostics = (0..turns.len()).map(|n| {
+            seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-session-{n}/events")))
+                .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
+                .filter(|e| e["kind"] == "diagnostic").map(|e| text_of(&e["payload"]["text"])).collect()
+        }).collect();
         std::fs::remove_dir_all(&dir).ok();
-        (sessions, prompts, diagnostics)
+        Ran { sessions, prompts, completions, saved, diagnostics }
+    }
+
+    fn session_of(completion: &Value) -> (String, Value, Value) {
+        let s = &completion["session"];
+        (text_of(&s["kind"]), s["why"].clone(), s["detail"].clone())
     }
 
     #[tokio::test]
-    async fn a_session_past_its_limit_starts_the_next_turn_fresh_with_the_tasks_checkpoint() {
-        let (sessions, prompts, diagnostics) = rotating_turns(300, true, &[("m1", json!({})), ("m4", json!({}))]).await;
-        assert_eq!(sessions.len(), 2, "{sessions:?}");
-        assert_ne!(sessions[0], sessions[1], "the second turn resumed the large session");
-        let fresh = &prompts[1];
-        assert!(fresh.contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{fresh}");
-        assert!(fresh.contains("[m3]: Release build 41 failed its smoke test."), "what was said since is missing: {fresh}");
-        assert!(!fresh.contains("[m1]"), "the fresh session is given only what came after the last turn: {fresh}");
-        assert!(fresh.contains("Fresh session:") && fresh.contains("348 input tokens"), "{fresh}");
-        let rotated: Vec<&Value> = diagnostics.iter().filter(|d| d.get("rotated").is_some()).collect();
-        assert_eq!(rotated.len(), 1, "{diagnostics:?}");
-        assert_eq!(rotated[0]["rotated"], json!({"reason": "tokens", "tokens": 348, "turns": 1, "limit": 300}));
+    async fn a_session_resumes_however_large_its_turns_were() {
+        // Every turn reads 348 input tokens, and the old size limits (rotate_at, rotate_after_turns) are in the
+        // config: nothing reads them, so the third turn is still on the first one's session.
+        let old = json!({"rotate_at": 1, "rotate_after_turns": 1});
+        let ran = session_turns(true, true, &[("m1", json!({}), old.clone()), ("m4", json!({}), old.clone()), ("m4", json!({}), old)]).await;
+        assert_eq!(ran.sessions.len(), 3, "{:?}", ran.sessions);
+        assert!(ran.sessions.iter().all(|s| *s == ran.sessions[0]), "a large session was left: {:?}", ran.sessions);
+        for n in [1, 2] {
+            assert!(!ran.prompts[n].contains("New session:") && !ran.prompts[n].contains("Where this task stood"), "{}", ran.prompts[n]);
+            assert!(ran.completions[n].get("rotated").is_none(), "{}", ran.completions[n]);
+            assert_eq!(session_of(&ran.completions[n]), ("resumed".to_string(), Value::Null, Value::Null));
+        }
+        assert_eq!(session_of(&ran.completions[0]), ("new".to_string(), json!("none_saved"), Value::Null));
+        assert!(!ran.diagnostics[0].iter().any(|d| d.contains("new session")), "a first session needs no diagnostic: {:?}", ran.diagnostics[0]);
+        // /compact is for the thread it names.
+        let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m5", json!({"command": "compact"}), json!({}))]).await;
+        assert_eq!(ran.sessions[0], ran.sessions[1], "/compact left its thread");
     }
 
     #[tokio::test]
-    async fn a_rotated_main_chat_sees_the_bots_own_last_reply() {
-        // No task, so no checkpoint: what the bot itself said last is all the fresh session has of its old one.
-        let (sessions, prompts, _) = rotating_turns(300, false, &[("m1", json!({})), ("m4", json!({}))]).await;
-        assert_ne!(sessions[0], sessions[1]);
-        let fresh = &prompts[1];
-        assert!(fresh.contains("[m2]: Here's the draft. Send it Friday?"), "the bot's own last reply is missing: {fresh}");
-        assert!(fresh.contains("hub conversation show c-main"), "no pointer to the older messages: {fresh}");
-        assert!(!fresh.contains("Where this task stood") && fresh.contains("only the conversation since your last turn"), "{fresh}");
+    async fn the_result_carries_the_session_only_for_a_server_that_takes_it() {
+        let ran = session_turns(false, false, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({}))]).await;
+        assert!(ran.completions.iter().all(|c| c.get("session").is_none()), "{:?}", ran.completions);
+        let ran = session_turns(false, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({}))]).await;
+        assert!(ran.completions.iter().all(|c| c.get("session").is_some()), "{:?}", ran.completions);
     }
 
     #[tokio::test]
-    async fn a_session_under_its_limit_resumes_and_compact_keeps_a_large_one() {
-        let (sessions, prompts, diagnostics) = rotating_turns(1000, true, &[("m1", json!({})), ("m4", json!({}))]).await;
-        assert_eq!(sessions.len(), 2, "{sessions:?}");
-        assert_eq!(sessions[0], sessions[1]);
-        assert!(!prompts[1].contains("Where this task stood") && !prompts[1].contains("Fresh session:"), "{}", prompts[1]);
-        assert!(!diagnostics.iter().any(|d| d.get("rotated").is_some()), "{diagnostics:?}");
-        // /compact is for the thread it names, however large.
-        let (sessions, _, diagnostics) = rotating_turns(300, true, &[("m1", json!({})), ("m5", json!({"command": "compact"}))]).await;
-        assert_eq!(sessions[0], sessions[1], "/compact left its thread");
-        assert!(!diagnostics.iter().any(|d| d.get("rotated").is_some()), "{diagnostics:?}");
+    async fn a_task_model_fallback_runs_aside_and_the_next_turn_resumes_the_primary_session() {
+        let fallback = json!({"task_model_fallback": true});
+        let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), fallback.clone()), ("m4", json!({}), fallback), ("m4", json!({}), json!({}))]).await;
+        let primary = &ran.sessions[0];
+        assert!(ran.sessions[1] != *primary && ran.sessions[2] != *primary && ran.sessions[1] != ran.sessions[2], "{:?}", ran.sessions);
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 4], "a fallback's thread replaced or forgot the primary's");
+        for n in [1, 2] {
+            assert_eq!(session_of(&ran.completions[n]), ("new".to_string(), json!("fallback_side"), Value::Null));
+            // Started from the checkpoint, as before.
+            assert!(ran.prompts[n].contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{}", ran.prompts[n]);
+            assert!(ran.diagnostics[n].iter().any(|d| d.contains("side session")), "{:?}", ran.diagnostics[n]);
+        }
+        assert_eq!(ran.sessions[3], *primary, "the next normal turn did not resume the primary session");
+        assert_eq!(session_of(&ran.completions[3]), ("resumed".to_string(), Value::Null, Value::Null));
+        // It is told a side session ran, given the checkpoint and the replies made since its own last turn.
+        let back = &ran.prompts[3];
+        assert!(back.contains(crate::continuity::AFTER_SIDE) && back.contains("Where this task stood") && back.contains("[m2]: Here's the draft"), "{back}");
     }
 
-    /// Turns of one task's session on a fake Claude (`claude`) or pi, each `(mode, rotate_at)`: `up` answers as a
-    /// session that came up (348 input tokens read), `down` exits before its session does. (Each turn's thread id,
-    /// as its command line named it; the thread saved here after each turn; every request Tico got.)
-    async fn confirming_turns(claude: bool, updates: bool, turns: &[(&str, i64)]) -> (Vec<String>, Vec<Option<String>>, Vec<(String, String, Value)>) {
+    /// Turns through a fake Claude process that answers every prompt, one per entry of `turns` (each is the config
+    /// merged over a Claude bot whose host is the fake): (the session id of each process's command line, the
+    /// prompt each process read, the result Tico got for each turn).
+    async fn claude_turns(turns: &[Value]) -> (Vec<String>, Vec<String>, Vec<Value>) {
         let _controls = RunControls;
-        let dir = std::env::temp_dir().join(format!("tico-confirm-{}", uuid::Uuid::new_v4().simple()));
+        RUN_SESSION.with(|on| on.set(Some(true)));
+        let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
-        let modes: String = turns.iter().map(|(mode, _)| format!("{mode}\n")).collect();
-        std::fs::write(dir.join("modes"), modes).unwrap();
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
-        // The thread a command line names: Claude's --session-id or --resume, pi's --session-id.
         let script = format!(
             "case \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\n\
              n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'\n\
-             if [ {claude} = 1 ]; then IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n; else cat > '{d}/prompt-'$n; fi\n\
-             mode=$(sed -n \"$((n+1))p\" '{d}/modes'); [ \"$mode\" = up ] || {{ echo 'model endpoint unreachable' >&2; exit 1; }}\n\
+             IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n\n\
              id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
-             if [ {claude} = 1 ]; then\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
-             echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Watching.\"}}]}}}}'\n\
-             echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Watching.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
-             cat >/dev/null\n\
-             else cat '{f}'; fi\n",
-            d = dir.display(), f = fixture.display(), claude = if claude { 1 } else { 0 });
+             echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
+             echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
+             cat >/dev/null\n", d = dir.display());
         HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "fake".into()]));
-        HOST_CLAUDE.with(|on| on.set(claude));
-        THREAD_UPDATES.with(|on| on.set(Some(updates)));
+        HOST_CLAUDE.with(|on| on.set(true));
         let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
         let config = crate::config::Config::load(&path).unwrap();
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Arc::new(Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap()));
-        let (runtime, model) = if claude { ("claude", "claude-opus-5-5") } else { ("pi", "kimi-k3") };
-        let mut saved = vec![];
-        for (n, (_, rotate_at)) in turns.iter().enumerate() {
-            let attempt = json!({"id": format!("a-confirm-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
-                                 "lease_seconds": 120, "conversation": {"id": "c-watch", "kind": "task"},
-                                 "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example"},
-                                 "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
-                                 "history": [], "config": {"runtime": runtime, "harness": runtime, "model": model, "rotate_at": rotate_at}});
+        for (n, extra) in turns.iter().enumerate() {
+            let mut config = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot"});
+            config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            let attempt = json!({"id": format!("a-claude-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+                                 "conversation": {"id": "c1", "kind": "chat"},
+                                 "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
+                                 "history": [], "config": config});
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
-            saved.push(runner.state.with(|c| c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| r.get::<_, String>(0)).map(Some).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })).unwrap());
         }
         server.abort();
         let threads = std::fs::read_to_string(dir.join("args.log")).unwrap().lines()
             .map(|l| l.split_whitespace().skip_while(|a| *a != "--session-id" && *a != "--resume").nth(1).unwrap_or_default().to_string()).collect();
+        let prompts = (0..).map(|n| dir.join(format!("prompt-{n}"))).take_while(|p| p.exists()).map(|p| std::fs::read_to_string(p).unwrap()).collect();
         let seen = seen.lock().unwrap().clone();
+        let completions = (0..turns.len()).map(|n| {
+            let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-claude-{n}/complete"))).map(|(_, _, b)| b).collect();
+            found.first().map_or(Value::Null, |b| (*b).clone())
+        }).collect();
         std::fs::remove_dir_all(&dir).ok();
-        (threads, saved, seen)
-    }
-
-    /// The thread_id of each `started`, and the body of each `thread` update, Tico got for run `aid`.
-    fn told(seen: &[(String, String, Value)], aid: &str) -> (Vec<Value>, Vec<Value>) {
-        let of = |route: &str| seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/{aid}/{route}"))).map(|(_, _, b)| b.clone()).collect::<Vec<_>>();
-        (of("started").iter().map(|b| b["thread_id"].clone()).collect(), of("thread"))
+        (threads, prompts, completions)
     }
 
     #[tokio::test]
-    async fn a_rotation_whose_session_never_comes_up_keeps_the_old_thread_here_and_on_the_task() {
-        for claude in [true, false] {
-            // The second turn leaves its large thread, and its new session dies before it starts. The third, with the
-            // limit raised, finds the old thread again and resumes it.
-            let (threads, saved, seen) = confirming_turns(claude, true, &[("up", 300), ("down", 300), ("up", 1000)]).await;
-            let old = threads[0].clone();
-            assert_ne!(threads[1], old, "the second turn did not rotate (claude {claude})");
-            assert_eq!(saved, vec![Some(old.clone()); 3], "the old thread was lost (claude {claude}): {threads:?}");
-            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(old)], vec![]), "Tico was told of a session that never came up (claude {claude})");
-            assert_eq!(threads[2], old, "the next turn did not resume the old thread (claude {claude})");
-            assert_eq!(told(&seen, "a-confirm-2"), (vec![json!(old)], vec![]));
+    async fn a_fallback_hop_leaves_the_primarys_saved_session_for_its_next_turn() {
+        // Turn 2's own login is held, so its fallback harness runs it in a session of its own; turn 3 is back on the
+        // primary's.
+        let pi = json!({"runtime": "pi", "harness": "pi"});
+        let hop = json!({"runtime": "pi", "harness": "pi", "fallback": {"harness": "claude", "model": "synthetic-fallback"}, "primary_held": "2099-01-01T00:00:00Z"});
+        let (threads, prompts, completions) = claude_turns(&[pi.clone(), hop, pi]).await;
+        assert_eq!(threads.len(), 3, "{threads:?}");
+        assert!(threads[1] != threads[0], "the fallback shared the primary's session: {threads:?}");
+        assert_eq!(threads[2], threads[0], "the next normal turn did not resume the primary session: {threads:?}");
+        assert_eq!(session_of(&completions[1]), ("new".to_string(), json!("fallback_side"), Value::Null));
+        assert_eq!(completions[1]["fallback"], "claude");
+        assert_eq!(session_of(&completions[2]), ("resumed".to_string(), Value::Null, Value::Null));
+        assert!(prompts[2].contains(crate::continuity::AFTER_SIDE), "{}", prompts[2]);
+    }
+
+    #[tokio::test]
+    async fn compact_first_compacts_the_resumed_session_and_then_runs_the_turn() {
+        let (threads, prompts, completions) = claude_turns(&[json!({}), json!({"compact_first": true}), json!({})]).await;
+        // Turn 2 is two processes on the first session: /compact, then the turn itself.
+        assert_eq!(threads.len(), 4, "{threads:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        assert!(prompts[1].contains("/compact") && !prompts[1].contains("Question 1"), "{}", prompts[1]);
+        assert!(prompts[2].contains("Question 1") && !prompts[2].contains("/compact"), "{}", prompts[2]);
+        assert_eq!(session_of(&completions[1]), ("resumed".to_string(), json!("compacted"), Value::Null));
+        // One-shot: the next claim does not carry the flag.
+        assert_eq!(session_of(&completions[2]), ("resumed".to_string(), Value::Null, Value::Null));
+        assert!(!prompts[3].contains("/compact"));
+    }
+
+    #[tokio::test]
+    async fn a_harness_that_cannot_compact_starts_a_new_session_when_asked_to() {
+        // Pi declares no compaction: the saved session is left, the new one is told what the room said since.
+        let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({"compact_first": true}))]).await;
+        assert_ne!(ran.sessions[0], ran.sessions[1]);
+        assert_eq!(session_of(&ran.completions[1]), ("new".to_string(), json!("compact_failed"), json!("this harness cannot compact a session")));
+        assert!(ran.diagnostics[1].iter().any(|d| d.contains("could not be compacted")), "{:?}", ran.diagnostics[1]);
+        assert!(ran.prompts[1].contains("New session:") && ran.prompts[1].contains("could not be compacted"), "{}", ran.prompts[1]);
+        assert!(ran.prompts[1].contains("Where this task stood") && ran.prompts[1].contains("[m3]: Release build 41 failed its smoke test."), "{}", ran.prompts[1]);
+        assert!(!ran.prompts[1].contains("[m1]"), "only what came after the last turn: {}", ran.prompts[1]);
+    }
+
+    /// A Codex app server stand-in, controlled by `mode.json` in its directory (`resume`: ok | missing | refuse |
+    /// refuse_once; `compact`: ok | fail; `turn`: ok | die), logging each call to `calls.jsonl`.
+    const FAKE_CODEX: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+D = os.path.dirname(os.path.abspath(__file__))
+def say(m): print(json.dumps(m), flush=True)
+def mode():
+    try: return json.load(open(os.path.join(D, "mode.json")))
+    except Exception: return {}
+def count(name):
+    p = os.path.join(D, name)
+    n = (int(open(p).read()) if os.path.exists(p) else 0) + 1
+    open(p, "w").write(str(n))
+    return n
+for line in sys.stdin:
+    msg = json.loads(line)
+    method, params, m = msg.get("method"), msg.get("params", {}), mode()
+    if method is None or "id" not in msg:
+        continue
+    with open(os.path.join(D, "calls.jsonl"), "a") as f:
+        f.write(json.dumps({"method": method, "params": params}) + "\n")
+    i = msg["id"]
+    if method == "thread/start":
+        say({"id": i, "result": {"thread": {"id": "th-%d" % count("threads")}}})
+    elif method == "thread/resume":
+        how = m.get("resume", "ok")
+        once = os.path.join(D, "refused")
+        if how == "missing":
+            say({"id": i, "error": {"code": -32600, "message": "no rollout found for thread id " + params["threadId"]}})
+        elif how == "refuse" or (how == "refuse_once" and not os.path.exists(once)):
+            open(once, "w").write("1")
+            say({"id": i, "error": {"code": -32603, "message": "app server busy"}})
+        else:
+            say({"id": i, "result": {"thread": {"id": params["threadId"]}}})
+    elif method == "turn/start":
+        if m.get("turn") == "die":
+            os._exit(1)
+        t, tid = "t%d" % count("turns"), params["threadId"]
+        say({"id": i, "result": {"turn": {"id": t}}})
+        say({"method": "turn/started", "params": {"threadId": tid, "turn": {"id": t}}})
+        if m.get("turn") == "capacity":
+            item = {"type": "commandExecution", "id": "cmd" + t, "command": "git status", "status": "completed", "exitCode": 0}
+            say({"method": "item/started", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "failed", "error": {"message": "Selected model is at capacity"}}}})
+            continue
+        say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": {"type": "agentMessage", "id": "i" + t, "text": "Done.", "phase": "final_answer"}}})
+        say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "completed"}}})
+    elif method == "thread/compact/start":
+        tid = params["threadId"]
+        say({"id": i, "result": {}})
+        if m.get("compact") == "fail":
+            say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": "c1", "status": "failed", "error": {"message": "compaction failed: context too large"}}}})
+        else:
+            say({"method": "item/completed", "params": {"threadId": tid, "turnId": "c1", "item": {"type": "contextCompaction", "id": "ic"}}})
+            say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": "c1", "status": "completed"}}})
+    else:
+        say({"id": i, "result": {}})
+"#;
+
+    /// Turns on one task's session through `FAKE_CODEX`.
+    struct CodexRig {
+        runner: Arc<Runner>,
+        dir: PathBuf,
+        seen: Arc<Mutex<Vec<(String, String, Value)>>>,
+        server: tokio::task::JoinHandle<()>,
+        _controls: RunControls,
+    }
+
+    impl CodexRig {
+        async fn new() -> CodexRig {
+            use std::os::unix::fs::PermissionsExt;
+            let controls = RunControls;
+            RUN_SESSION.with(|on| on.set(Some(true)));
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "codex-session");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            let program = dir.join("codex");
+            std::fs::write(&program, FAKE_CODEX).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let env: Env = [("PATH".to_string(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default()))].into_iter().collect();
+            HOST_CODEX.with(|e| *e.borrow_mut() = Some(env));
+            CodexRig { runner, dir, seen, server, _controls: controls }
+        }
+
+        /// One task turn (`n`, from 0) with the fake in `mode`; the config is merged over the bot's. The result Tico got.
+        async fn turn(&self, n: usize, mode: Value, extra: Value) -> Value {
+            self.turn_continuing(n, mode, extra, None).await
+        }
+
+        async fn turn_continuing(&self, n: usize, mode: Value, extra: Value, continuing: Option<&str>) -> Value {
+            std::fs::write(self.dir.join("mode.json"), mode.to_string()).unwrap();
+            let mut config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"});
+            config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+            let mut attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+                                 "conversation": {"id": "c-watch", "kind": "task"},
+                                 "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
+                                          "checkpoint": "Build 40 green; waiting on build 41.", "checkpoint_at": "2026-10-22T08:00:00Z"},
+                                 "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
+                                 "history": [], "config": config});
+            if let Some(thread) = continuing {
+                attempt["continue_thread"] = json!(thread);
+            }
+            tokio::time::timeout(Duration::from_secs(60), self.runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
+            let seen = self.seen.lock().unwrap().clone();
+            let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-codex-{n}/complete"))).map(|(_, _, b)| b).collect();
+            assert_eq!(found.len(), 1, "{seen:?}");
+            found[0].clone()
+        }
+
+        /// The calls the fake got, in order.
+        fn calls(&self) -> Vec<Value> {
+            std::fs::read_to_string(self.dir.join("calls.jsonl")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        }
+
+        fn methods(&self) -> Vec<String> {
+            self.calls().iter().map(|c| text_of(&c["method"])).filter(|m| m.starts_with("thread/") || m == "turn/start").collect()
+        }
+
+        fn saved(&self) -> Option<String> {
+            self.runner.state.with(|c| c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| r.get::<_, String>(0)).map(Some).or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })).unwrap()
+        }
+
+        fn diagnostics(&self, n: usize) -> Vec<String> {
+            self.seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-codex-{n}/events")))
+                .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
+                .filter(|e| e["kind"] == "diagnostic").map(|e| text_of(&e["payload"]["text"])).collect()
+        }
+
+        fn prompt(&self, n: usize) -> String {
+            let turns: Vec<Value> = self.calls().into_iter().filter(|c| c["method"] == "turn/start").collect();
+            text_of(&turns[n]["params"]["input"][0]["text"])
+        }
+    }
+
+    impl Drop for CodexRig {
+        fn drop(&mut self) {
+            self.server.abort();
+            std::fs::remove_dir_all(&self.dir).ok();
         }
     }
 
     #[tokio::test]
-    async fn a_rotation_keeps_its_new_thread_once_the_session_is_up_and_tells_tico() {
-        for claude in [true, false] {
-            let (threads, saved, seen) = confirming_turns(claude, true, &[("up", 300), ("up", 300)]).await;
-            let (old, new) = (threads[0].clone(), threads[1].clone());
-            assert_ne!(old, new);
-            assert_eq!(saved, vec![Some(old.clone()), Some(new.clone())], "claude {claude}");
-            // Started on the thread the task had; the new one once its session said it was up, after the start.
-            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(old)], vec![json!({"thread_id": new})]), "claude {claude}");
-            let at = |route: &str| seen.iter().position(|(_, p, _)| p.ends_with(&format!("/attempts/a-confirm-1/{route}"))).unwrap();
-            assert!(at("started") < at("thread"));
-            // A server without the update route is told the new thread at the start, as before.
-            let (threads, saved, seen) = confirming_turns(claude, false, &[("up", 300), ("up", 300)]).await;
-            assert_eq!(saved[1].as_ref(), Some(&threads[1]));
-            assert_eq!(told(&seen, "a-confirm-1"), (vec![json!(threads[1])], vec![]), "claude {claude}");
+    async fn a_codex_capacity_continuation_resumes_the_thread_that_ran_tools() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let done = rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        assert_eq!(done["outcome"], "failed", "{done}");
+        assert_eq!(done["continues"], true, "{done}");
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({}), Some(&first)).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        assert_eq!(rig.methods(), ["thread/start", "turn/start", "thread/resume", "turn/start"]);
+        let turns: Vec<Value> = rig.calls().into_iter().filter(|c| c["method"] == "turn/start").collect();
+        assert!(turns.iter().all(|c| c["params"]["threadId"] == first));
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_replaces_a_missing_or_refused_thread() {
+        for mode in ["missing", "refuse"] {
+            let rig = CodexRig::new().await;
+            CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+            rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+            let first = rig.saved().unwrap();
+            let done = rig.turn_continuing(1, json!({"resume": mode}), json!({}), Some(&first)).await;
+            assert_eq!(done["outcome"], "interrupted", "{done}");
+            assert_ne!(done["continues"], true, "{done}");
+            assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+            assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "turn/start").count(), 1);
         }
     }
 
-    #[test]
-    fn the_result_says_it_rotated_only_to_a_server_that_takes_it() {
-        let r = crate::rotate::Rotation { why: "tokens", tokens: 612_000, turns: 4, limit: 400_000 };
-        let mut sent = Map::new();
-        rotation_field(&mut sent, Some(&r), |_| false);
-        assert!(sent.is_empty());
-        rotation_field(&mut sent, Some(&r), |name| name == "run_rotation");
-        assert_eq!(sent["rotated"], r.report());
+    #[tokio::test]
+    async fn a_refused_resume_is_asked_again_once_and_a_second_refusal_starts_a_new_session() {
+        let rig = CodexRig::new().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let first = rig.saved().unwrap();
+        // Refused once: the second ask resumes, and nothing new starts.
+        let done = rig.turn(1, json!({"resume": "refuse_once"}), json!({})).await;
+        assert_eq!(session_of(&done), ("resumed".to_string(), Value::Null, Value::Null));
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        assert_eq!(rig.methods().iter().filter(|m| *m == "thread/resume").count(), 2);
+        assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
+        // Refused twice: a new session, with why, seeded from the checkpoint and the room since the old one.
+        let before = rig.methods().iter().filter(|m| *m == "thread/resume").count();
+        let done = rig.turn(2, json!({"resume": "refuse"}), json!({})).await;
+        let (kind, why, detail) = session_of(&done);
+        assert_eq!((kind.as_str(), &why), ("new", &json!("resume_failed")));
+        assert!(text_of(&detail).contains("app server busy"), "{detail}");
+        assert_eq!(rig.methods().iter().filter(|m| *m == "thread/resume").count() - before, 2, "asked once more, no more");
+        assert_ne!(rig.saved().unwrap(), first, "the new session replaced the old one once it was up");
+        assert!(rig.diagnostics(2).iter().any(|d| d.contains("could not be resumed") && d.contains("app server busy")), "{:?}", rig.diagnostics(2));
+        let prompt = rig.prompt(rig.calls().iter().filter(|c| c["method"] == "turn/start").count() - 1);
+        assert!(prompt.contains("New session:") && prompt.contains("Where this task stood"), "{prompt}");
+    }
+
+    #[tokio::test]
+    async fn a_thread_missing_on_this_computer_starts_a_new_session_at_once() {
+        let rig = CodexRig::new().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let first = rig.saved().unwrap();
+        let done = rig.turn(1, json!({"resume": "missing"}), json!({})).await;
+        assert_eq!(session_of(&done).1, json!("not_found"));
+        assert_eq!(session_of(&done).0, "new");
+        assert_eq!(rig.methods().iter().filter(|m| *m == "thread/resume").count(), 1, "a missing thread is not asked for twice");
+        assert_ne!(rig.saved().unwrap(), first);
+        assert!(rig.diagnostics(1).iter().any(|d| d.contains("not on this computer")), "{:?}", rig.diagnostics(1));
+        // The first turn on a task has nothing to resume, and says nothing more than that.
+        assert!(rig.diagnostics(0).iter().all(|d| !d.contains("new session")), "{:?}", rig.diagnostics(0));
+    }
+
+    #[tokio::test]
+    async fn a_session_whose_last_turn_was_cut_off_resumes_and_is_told_to_check_what_it_did() {
+        let rig = CodexRig::new().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let first = rig.saved().unwrap();
+        // What the end of an interrupted turn (a restart's drain, a Stop) leaves behind.
+        rig.runner.state.repo_rules(&crate::continuity::interrupted_key(&first), Some("1")).unwrap();
+        let done = rig.turn(1, json!({}), json!({})).await;
+        assert_eq!(session_of(&done), ("resumed".to_string(), Value::Null, Value::Null));
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        assert!(rig.prompt(1).contains(crate::continuity::AFTER_INTERRUPT), "{}", rig.prompt(1));
+        // Told once.
+        rig.turn(2, json!({}), json!({})).await;
+        assert!(!rig.prompt(2).contains(crate::continuity::AFTER_INTERRUPT), "{}", rig.prompt(2));
+    }
+
+    #[tokio::test]
+    async fn a_replacement_session_that_never_comes_up_leaves_the_old_one_saved() {
+        let rig = CodexRig::new().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let first = rig.saved().unwrap();
+        // The new session's app server dies before its turn starts: the old thread is still this task's.
+        let _ = tokio::time::timeout(Duration::from_secs(60), rig.turn(1, json!({"resume": "missing", "turn": "die"}), json!({}))).await;
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()), "a session that never came up replaced the saved one");
+        let done = rig.turn(2, json!({}), json!({})).await;
+        assert_eq!(session_of(&done), ("resumed".to_string(), Value::Null, Value::Null));
+    }
+
+    #[tokio::test]
+    async fn compact_first_compacts_a_codex_thread_before_its_turn_and_a_failed_compaction_starts_a_new_session() {
+        let rig = CodexRig::new().await;
+        rig.turn(0, json!({}), json!({})).await;
+        let first = rig.saved().unwrap();
+        let done = rig.turn(1, json!({}), json!({"compact_first": true})).await;
+        assert_eq!(session_of(&done), ("resumed".to_string(), json!("compacted"), Value::Null));
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        let methods = rig.methods();
+        let at = |m: &str| methods.iter().rposition(|x| x == m).unwrap();
+        assert!(at("thread/resume") < at("thread/compact/start") && at("thread/compact/start") < at("turn/start"), "{methods:?}");
+        // A compaction that fails leaves the thread for a new session, which says why.
+        let done = rig.turn(2, json!({"compact": "fail"}), json!({"compact_first": true})).await;
+        let (kind, why, detail) = session_of(&done);
+        assert_eq!((kind.as_str(), &why), ("new", &json!("compact_failed")));
+        assert!(text_of(&detail).contains("context too large"), "{detail}");
+        assert_ne!(rig.saved().unwrap(), first);
+        assert!(rig.diagnostics(2).iter().any(|d| d.contains("could not be compacted")), "{:?}", rig.diagnostics(2));
+        // And the claim after it carries no flag: an ordinary resume.
+        let done = rig.turn(3, json!({"compact": "fail"}), json!({})).await;
+        assert_eq!(session_of(&done), ("resumed".to_string(), Value::Null, Value::Null));
     }
 
     #[test]
@@ -3430,7 +3854,6 @@ for line in sys.stdin:
         let _controls = RunControls;
         for (failure, trigger) in [
             ("session", "CREATE TRIGGER fail_completed BEFORE INSERT ON sessions WHEN NEW.thread = 'canonical-acme-session' BEGIN SELECT RAISE(FAIL, 'synthetic completed session save failure'); END;"),
-            ("rotation", "CREATE TRIGGER fail_completed BEFORE INSERT ON session_sizes BEGIN SELECT RAISE(FAIL, 'synthetic rotation accounting failure'); END;"),
         ] {
             let (url, seen, server) = recording_server().await;
             let (runner, dir) = drain_runner_on(&url, 300).await;
@@ -3484,14 +3907,8 @@ print(json.dumps({'type':'result','subtype':'success','result':'Acme completed o
     }
 
     #[tokio::test]
-    async fn drain_cap_holds_a_turn_for_review_when_its_harness_cannot_resume_an_interrupt() {
-        // Codex's capabilities (`resume_after_interrupt = false`) on the synthetic Claude process.
-        capped_execute(false, "codex", false).await;
-    }
-
-    #[tokio::test]
-    async fn drain_cap_holds_a_fallback_turn_for_review_since_its_thread_is_never_kept() {
-        // Both harnesses resume after an interrupt; only the fallback's unsaved thread makes it unresumable.
+    async fn drain_cap_holds_a_fallback_turn_for_review_since_its_side_session_is_never_kept() {
+        // Both harnesses resume after an interrupt; only the fallback's side session makes it unresumable.
         capped_execute(false, "pi", true).await;
     }
 
@@ -3549,8 +3966,8 @@ else:
         held_inputs.notify_waiters();
         assert!(result.is_ok(), "active host outlived the outer drain cap: {:?}", seen.lock().unwrap());
         result.unwrap().unwrap();
-        if runtime != "claude" || fallback {
-            // No session the continuation could resume is kept, so it would start a fresh thread after the turn acted.
+        if fallback {
+            // A side session is not kept, so a continuation would start a fresh thread after the turn acted.
             let completions: Vec<Value> = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with("/attempts/a-active/complete")).map(|(_, _, b)| b.clone()).collect();
             assert_eq!(completions.len(), 1, "{completions:?}");
             assert_eq!(completions[0]["outcome"], "interrupted");
@@ -3568,7 +3985,6 @@ else:
         assert_eq!(posted(&seen, "/attempts/a-active/complete"), 1);
         if !fail_save {
             assert_eq!(runner.state.session("ops", "bot", "claude").unwrap().as_deref(), Some("canonical-acme-session"));
-            assert_eq!(runner.state.session_size("canonical-acme-session").unwrap(), None, "a drain interruption must not count as a completed turn for rotation");
         }
         assert!(posted(&seen, "/attempts/a-active/renew") > 0, "test did not exercise the lease renewer");
         tokio::time::sleep(Duration::from_millis(50)).await; // settle any HTTP request already in flight
@@ -3599,7 +4015,6 @@ else:
         assert_eq!(args.len(), 2);
         let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert!(resumed.windows(2).any(|pair| pair == ["--resume", "canonical-acme-session"]), "{args:?}");
-        assert_eq!(runner.state.session_size("canonical-acme-session").unwrap().map(|(turns, _)| turns), Some(1), "only the completed continuation counts toward rotation");
         server.abort();
         std::fs::remove_dir_all(dir).ok();
     }
@@ -3633,8 +4048,8 @@ else:
     }
 
     fn capacity_attempt(id: &str, continue_thread: Option<&str>) -> Value {
-        // Codex's capabilities (`resume_after_interrupt = false`) on the synthetic Claude process, with a fallback
-        // ready: neither may take a turn whose thread already acted.
+        // Codex's configuration on the synthetic Claude process, with a fallback ready: no fallback may take a turn
+        // whose thread already acted.
         let mut attempt = json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
                                  "conversation": {"id": "c1"}, "message": {"refs": {}},
                                  "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "bot",
@@ -3664,17 +4079,16 @@ else:
             let done = completion(&seen, "a-cap");
             assert_eq!(done["outcome"], "failed", "{done:?}");
             assert_ne!(done["limited"], true, "a turn that acted is not a limit a fallback or a replay may retry: {done:?}");
-            let kept = runner.state.session("ops", "bot", "codex").unwrap();
+            // The primary's thread is kept whatever the server takes: a person resuming the held run continues it.
+            assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("capacity-session"));
             if !server_takes_it {
-                // An older server holds it for review as before: nothing would continue the thread, so none is kept.
+                // An older server holds it for review as before: the runner does not ask it to continue.
                 assert_ne!(done["continues"], true, "{done:?}");
-                assert_eq!(kept, None);
                 server.abort();
                 std::fs::remove_dir_all(dir).ok();
                 continue;
             }
             assert_eq!(done["continues"], true, "{done:?}");
-            assert_eq!(kept.as_deref(), Some("capacity-session"), "the thread that acted is kept for its continuation");
             // The server queues the job again and, after the capacity hold, hands it out naming that thread.
             tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-next", Some("capacity-session")))).await.expect("the continuation ends").unwrap();
             assert_eq!(completion(&seen, "a-next")["outcome"], "completed");

@@ -306,8 +306,11 @@ that says its model is at capacity or overloaded for now ("Selected model is at 
 20s", `overloaded_error`) has not spent the login's quota: that login is held two minutes, the streak does not grow,
 a fallback can still take the run, and the bot's line and Health say *temporary model capacity*, a check or task
 model's turn included; a quota hold already in force keeps its own end. Only a refusal before the bot sent a message
-or used a tool is a run that did nothing: one that came after the run had acted is never replayed or handed to a
-fallback, and waits for review as *uncertain*. A quota or billing refusal ("Quota exceeded. Check your plan and
+or used a tool is a run that did nothing. After the run acted, a runner that kept its thread queues one continuation
+on that same thread after the two-minute hold, with a note to carry on without repeating completed work. It never
+hands that continuation to a fallback or a fresh thread. If the thread cannot resume, or the continuation hits
+capacity again, the run waits for review as *uncertain*. Older runners that cannot keep the thread hold it for
+review immediately. A quota or billing refusal ("Quota exceeded. Check your plan and
 billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on
 that computer and not held itself runs there at once, and the runner never tries the held login (the run's note says
@@ -369,8 +372,9 @@ The bot's operator or BotOps checks what happened before choosing to resume or d
 **A provider limit inside another error.** Tico reads the text of every failed run itself, so an older computer that did not flag the
 limit is treated the same as a current one: a provider limit named anywhere in an error (*Prompt is too long · automatic compaction
 failed: You've hit your weekly limit · resets Oct 26, 8pm (UTC)*) is a usage limit and holds the login until the reset it names. An
-error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) starts the bot's next run in a
-fresh provider session, as Clear does, instead of resuming the session into the same error.
+error that says the session grew too large to send (*too many total text bytes*, *Prompt is too long*) makes the next run on that
+thread compact its session first; if that run fails the same way, the next one starts in a fresh provider session, as Clear does
+([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Failed runs wait, then stop.** A run that fails within 60 seconds of starting did no work and will fail the same way again. The bot
 waits before its next run, 15 seconds after the first such failure, doubling each time up to 8 hours; a run that completes normally
