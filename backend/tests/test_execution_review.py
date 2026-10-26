@@ -1115,7 +1115,8 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
         return {'state': state, 'stop_requested': stop, 'result_json': json.dumps(result)}
     assert stop_cause(attempt(text='Billing: the quota page and the usage limit table are done')) == 'partway'
     assert stop_cause(attempt(limited=True)) == 'quota'
-    assert stop_cause(attempt(primary_limited=True)) == 'quota'
+    assert stop_cause(attempt(primary_limited=True)) == 'partway'  # fell back to another model, then failed
+    assert stop_cause(attempt('interrupted', primary_limited=True)) == 'interrupted'
     assert stop_cause(attempt(limit_source={'kind': 'capacity'})) == 'capacity'
     assert stop_cause(attempt('interrupted')) == 'interrupted'
     assert stop_cause(attempt('expired')) == 'timeout'

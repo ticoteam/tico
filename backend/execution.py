@@ -481,7 +481,8 @@ def owner_name(c, actor):
 
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
-    under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read is left out."""
+    under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
+    task None and readable False, so it is counted without its title."""
     fence = auth.task_sql(c, who)
     for row in c.execute("SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
@@ -535,7 +536,8 @@ def stop_cause(attempt):
     source = result.get("limit_source") if isinstance(result.get("limit_source"), dict) else {}
     if source.get("kind") == "capacity":
         return "capacity"
-    if source or result.get("limited") or result.get("primary_limited"):
+    # `primary_limited` alone means the run fell back to another model and carried on, so its state says why it stopped.
+    if source or result.get("limited"):
         return "quota"
     # A runner reports `interrupted` when its computer restarts or drains under a run, or the harness ends the turn
     # early, so the row says interrupted, not restarted; a lapsed lease is a computer that stopped reporting (asleep,

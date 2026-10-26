@@ -515,7 +515,8 @@ def operation_issues(c, who, auth):
                           if waiting else "Tico can't safely decide it on its own.")
                 causes = {row["cause"] for row in rows}
                 why = ""
-                if rows and len(causes) == 1 and rows[0]["routine"]:
+                # Only when every run is listed: a run past the first few may have stopped for another reason.
+    if rows and len(rows) == count and len(causes) == 1 and rows[0]["routine"]:
                     cause, these = causes.pop(), "this run" if count == 1 else "these runs"
                     stamps = sorted(H.parse_ts(row["at"]) for row in rows if row["at"])
                     # One restart names its time; stops spread over a while (a busy evening) do not share one.
