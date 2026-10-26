@@ -318,6 +318,7 @@ async function open(browser, viewport, colorScheme, server) {
       // A default tab uses exactly its edited conditions after Done and reload; Reset restores its full default.
       await rail.locator('#bot-sidebar-edit').click();
       await pill('Blocked').click();
+      await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
       assert.equal(await dialog.locator('[data-cond-value="2"]').inputValue(), 'not_me');
       await dialog.locator('[data-cond-remove="2"]').click();
@@ -332,11 +333,13 @@ async function open(browser, viewport, colorScheme, server) {
       assert.deepEqual(await rail.locator('#t-blocked .trow .ttl').allInnerTexts(), ['Plan the import page']);
       await rail.locator('#bot-sidebar-edit').click();
       await pill('Blocked').click();
+      await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
       await dialog.getByRole('button', {name: 'Reset to default'}).click();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
       await dialog.getByRole('button', {name: 'Save'}).click();
       await pill('Needs You').click();
+      await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'waiting_on');
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'me');
       assert.ok((await dialog.innerText()).includes('approvals and questions for you'));
