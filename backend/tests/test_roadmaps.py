@@ -1130,3 +1130,8 @@ def test_a_new_step_on_a_private_by_default_type_has_no_public_name_until_given_
     open_type = post(api, 'task-types', {'name': 'Changelog', 'default_visibility': 'public',
                                          'steps': [{'name': 'Drafted', 'status': 'open'}]})['type']
     assert open_type['steps'][0]['public_name'] == 'Drafted'
+    # A save that flips the type's default and adds a step names the step by the default it saves.
+    keep = [{k: s[k] for k in ('id', 'name', 'position', 'status', 'public_name')} for s in open_type['steps']]
+    hidden = post(api, f"task-types/{open_type['id']}", {'default_visibility': 'private',
+                                                       'steps': keep + [{'name': 'Legal review', 'status': 'review'}]})['type']
+    assert {s['name']: s['public_name'] for s in hidden['steps']} == {'Drafted': 'Drafted', 'Legal review': ''}
