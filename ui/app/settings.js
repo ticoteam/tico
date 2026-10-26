@@ -242,6 +242,7 @@ function pageSettings() {
       <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
+      <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
@@ -331,7 +332,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
+  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); }
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
@@ -539,6 +540,7 @@ async function loadSettings() {
       issues: operations.issues || [], history, limits,
       schedulerEnabled: operations.scheduler_enabled, loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
+    if (TASK_SETTINGS && !formBusy($('#set-task-settings'))) taskSettingsPaint();
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();

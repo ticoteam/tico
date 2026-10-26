@@ -922,8 +922,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--check-model", metavar="RUNTIME[:MODEL]", nargs="?", const="auto",
                    help="run this subtask of yours on another model, in its own session (e.g. grok, codex:gpt-6.1-sol); "
-                        "with no value (put the flag after the parent id), the company's check model from a provider other "
-                        "than the parent's authors")
+                        "with no value (put the flag after the parent id), the company's check model, from a provider other "
+                        "than the parent's authors when one can run it")
     s.add_argument("--role", dest="check_role", choices=("review", "check"),
                    help="with --check-model: what the other model is asked for (default check)")
     s.set_defaults(fn="task child create")
@@ -951,6 +951,9 @@ def parser():
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
     s.add_argument("--qa", choices=["yes", "no"], help="explicit QA override")
     s.add_argument("--qa-not-checkable-live", action="store_true", default=None)
+    s.add_argument("--blocker", nargs=3, metavar=("REPO", "STATUS", "ENDPOINT"),
+                   help="what refused, for a task to DevOps or a person: e.g. ticoteam/tico 403 workflow_dispatch. "
+                        "An open ask about the same three joins this task instead of a second ask")
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (hub goal list); optional")

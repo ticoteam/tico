@@ -580,6 +580,12 @@ def tag_update(api, args):
        "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
        "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
        "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
+       "blocker": {"type": "object", "additionalProperties": False, "required": ["repo", "status", "endpoint"],
+                   "properties": {"repo": {"type": "string"}, "status": {"type": "integer", "minimum": 100, "maximum": 599},
+                                  "endpoint": {"type": "string"}},
+                   "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint "
+                                  "(e.g. ticoteam/tico, 403, workflow_dispatch). An open ask about the same three "
+                                  "joins this task instead of a second ask; the reply says so"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -601,7 +607,7 @@ def task_create(api, args):
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
-    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+    for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -621,7 +627,7 @@ def task_create(api, args):
       {"parent": TASK_ID, "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
        "title": _s("What to do"), "body": _s("Details", default=""),
        "check_model": _s("A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
-                         "the company's check model from a provider other than the parent's author"),
+                         "the company's check model, from a provider other than the parent's author when one can run it"),
        "check_role": {"type": "string", "enum": ["review", "check"],
                       "description": "With check_model: a review of work, or a check of a claim (default check)"}},
       required=("parent", "title"), writes=True)

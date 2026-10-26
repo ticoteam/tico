@@ -30,7 +30,42 @@ def review(c, row, *, parent_id=None):
     return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
 
 
-def next_run_held(c, row):
+def actionable_notice(row, message):
+    """Only owner-directed work notices release quiet carriage; informational news stays quiet."""
+    refs = (message or {}).get('refs') or {}
+    return bool(message and message.get('from_actor') == H.KEEPER and message.get('kind') == 'notice'
+                and message.get('to_actor') == row['owner'] and not refs.get('quiet')
+                and (refs.get('wake') in ('due', 'snooze', 'resume')
+                     or refs.get('trigger') == 'pr_checks' and refs.get('wake') == 'pr_checks_done'))
+
+
+def carrier_held(c, row):
+    """A carried task cannot be released around its live, queued or interrupted run."""
+    if not row.get('carried_by'):
+        return False
+    carrier = c.execute("SELECT a.state,j.state job_state FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                        "WHERE a.id=?", (row['carried_by'],)).fetchone()
+    return bool(carrier and (carrier['state'] in ('leased', 'running') or
+                            carrier['job_state'] in ('queued', 'leased', 'running', 'uncertain')))
+
+
+def notice_releases(c, row, message):
+    """An actionable notice starts its own work only after the previous carrier has let go."""
+    if not row.get('next_run') or row['status'] != 'open' or row.get('resume_json'):
+        return False
+    if not actionable_notice(row, message):
+        return False
+    if carrier_held(c, row):
+        return False
+    # A task may have moved lanes or have a run of its own without a carried_by marker.
+    if c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id LEFT JOIN jobs j ON j.id=a.job_id "
+                 "WHERE a.bot=? AND t.task_id=? AND (a.state IN ('leased','running') OR j.state='uncertain') "
+                 "LIMIT 1", (H.actor_id(row['owner']), row['id'])).fetchone():
+        return False
+    return True
+
+
+def next_run_held(c, row, *, message=None):
     """A real next-run deferral holds; a task reopened from Waiting has work of its own again.
 
     Read the transition so already-queued Open notices recover too. A later quiet-work decision,
@@ -38,8 +73,10 @@ def next_run_held(c, row):
     """
     if not row.get('next_run'):
         return False
-    if row.get('resume_json') or row['status'] != 'open':
+    if row.get('resume_json') or row['status'] != 'open' or carrier_held(c, row):
         return True
+    if actionable_notice(row, message):
+        return not notice_releases(c, row, message)
     move = c.execute("SELECT rowid,ts,old,new FROM task_events WHERE task_id=? AND field='status' "
                      "ORDER BY rowid DESC LIMIT 1", (row['id'],)).fetchone()
     if not move or (move['old'], move['new']) != ('waiting', 'open'):
@@ -98,7 +135,7 @@ def counts(c, bot, who=None, tasks=None):
     return {'going': going, 'waiting': queued}
 
 
-def refusal(c, row, config, woken=False, result=False):
+def refusal(c, row, config, woken=False, result=False, *, message=None):
     """Why this open task is not started now, or None. `woken` is a start a wake rule already decided (a claimed job,
     or the attempt it becomes): the profile's `pulls` only limits what Tico starts by itself, so it does not veto
     that, while waits, the off switch and the task cap still do. `result`: the job is a subtask's result, which a
@@ -110,7 +147,7 @@ def refusal(c, row, config, woken=False, result=False):
         return None
     if waiting(c, row, starting=True, include_next_run=False):
         return 'task_wait'
-    if next_run_held(c, row):
+    if next_run_held(c, row, message=message):
         return 'task_next_run'
     from . import profiles
     if not woken and (why := profiles.pull_refusal(c, row, config)):
@@ -182,12 +219,14 @@ def enqueue(c, row):
                    {'auto_start': True}, trigger='other')
 
 
-def started(c, row):
+def started(c, row, *, message=None):
     if not startable(c, row):
         return row
-    if row.get('next_run') and not next_run_held(c, row):
+    if row.get('next_run') and not next_run_held(c, row, message=message):
         c.execute('UPDATE tasks SET next_run=0,carried_by=NULL WHERE id=?', (row['id'],))
-        H._task_event(c, row['id'], H.KEEPER, 'next_run', '1', '0', 'reopened from waiting')
+        H._task_event(c, row['id'], H.KEEPER, 'next_run', '1', '0',
+                      'actionable notice released stale carriage' if notice_releases(c, row, message)
+                      else 'reopened from waiting')
     steps = H.type_get(c, row['type_id'])['steps']
     step = next((s['id'] for s in steps if s['name'] == 'In Progress' and s['status'] == 'doing'), None)
     H._set_status(c, H.KEEPER, row, status='doing', step=step, note='Automatic start on a free turn')

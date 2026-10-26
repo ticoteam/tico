@@ -1085,6 +1085,7 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
+        value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
         # Most list rows have no hold or accumulated clock; omit empty optional fields.
@@ -3476,6 +3477,18 @@ def create_app(settings=None):
                        or parent and H.task_private(c, parent))
         if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
+        from . import blocker_asks
+        blocker_key, joins, asked_of = None, None, owner
+        if body.blocker:
+            try:
+                blocker_key = blocker_asks.key(body.blocker.model_dump())
+            except ValueError as exc:
+                raise Problem("blocker", str(exc), 422)
+            if who.role == "bot" and not private and owner != who.actor:
+                # The same blocker already asked about: this task waits on that ask instead of reaching its owner.
+                joins = blocker_asks.open_ask(c, blocker_key, owner, parent_id)
+            if joins:
+                owner, check, unchecked = who.actor, None, None
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
@@ -3516,8 +3529,9 @@ def create_app(settings=None):
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
-                            qa_not_checkable_live=body.qa_not_checkable_live)
+                            qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        joined = blocker_asks.record(c, who.actor, row, blocker_key, joins, asked_of) if blocker_key else None
         if check:
             # A check is its owner's (check_models.of): one asked for is filed by its owner (check_choice), and a
             # reviewer's default comes from its own setting.
@@ -3561,9 +3575,10 @@ def create_app(settings=None):
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
         note = " ".join(filter(None, (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),
-                                      own_subtask)))
+                                      own_subtask, joined)))
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
+                **({"joined": {"task": joins["id"], "title": joins["title"], "owner": joins["owner"]}} if joins else {}),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
