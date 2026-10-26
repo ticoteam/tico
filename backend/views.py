@@ -506,6 +506,10 @@ def operation_issues(c, who, auth):
                 # titles (Chris, Oct 26): the detail says only why they stopped and what waits; the rows name them.
                 rows, run_count = stopped_rows(c, who, auth, slug)
                 count = run_count or uncertain
+                can_review = who.actor == "bot:botops" or auth.operator(c, who, slug)
+                if not can_review:
+                    # Only the operator or BotOps may decide (reconcile_job): nobody else is handed the handles.
+                    rows = [{k: v for k, v in row.items() if k != "jobs"} for row in rows]
                 noun = "run" if count == 1 else "runs"
                 behind = (f"{waiting} queued request{' waits' if waiting == 1 else 's wait'} until you decide."
                           if waiting else "Tico can't safely decide it on its own.")
@@ -517,15 +521,15 @@ def operation_issues(c, who, auth):
                     # One restart names its time; stops spread over a while (a busy evening) do not share one.
                     at = (stamps[0].strftime("%H:%M") if stamps and len(stamps) == len(rows)
                           and (stamps[-1] - stamps[0]).total_seconds() <= 600 else None)
-                    why = {"restart": f"Its computer restarted{f' at {at} UTC' if at else ''} and cut off {these}",
+                    when = f" at {at} UTC" if at else ""
+                    why = {"interrupted": f"Its computer interrupted {these}{when}, usually for a restart or update",
                            "quota": f"{these.capitalize()} stopped at a usage limit",
                            "capacity": f"{these.capitalize()} stopped because the AI service was busy",
                            "timeout": f"Its computer stopped answering during {these}"}[cause]
                     why += ", not a bug. "
                 add("uncertain_work", f"{bot['display_name']} has {count} stopped {noun} holding up work",
                     why + behind, bot=slug, action="review", held_back=waiting, held_tasks=waiting_on,
-                    runs=rows, more_runs=max(0, count - len(rows)),
-                    can_review=who.actor == "bot:botops" or auth.operator(c, who, slug))
+                    runs=rows, more_runs=max(0, count - len(rows)), can_review=can_review)
             else:
                 add("uncertain_work", f"{bot['display_name']} saved {uncertain} stopped {noun} for later",
                     "The bot stopped before returning an answer. Tico paused only that request so it "

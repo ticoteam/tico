@@ -18,10 +18,12 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     page.on('pageerror', e => errors.push(e.message));
     // Oct 26 (Chris): six stopped runs read as one paragraph of quoted titles beside a button as tall as the card.
     // Now one line per run, each with its own two buttons; a message folded into a run rides on its row.
-    const stoppedRun = (title, retry, jobs) => ({title, cause: 'restart', why: 'Computer restarted', routine: true, retry,
+    const stoppedRun = (title, retry, jobs) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
+      routine: true, retry,
       at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, attempt_id: `a-${jobs[0]}`}))});
     const holding = {kind: 'uncertain_work', title: 'Builder has 2 stopped runs holding up work', bot: 'builder',
-      detail: 'Its computer restarted at 05:39 UTC and cut off these runs, not a bug. 3 queued requests wait until you decide.',
+      detail: 'Its computer interrupted these runs at 05:39 UTC, usually for a restart or update, not a bug. ' +
+        '3 queued requests wait until you decide.',
       severity: 'error', needs_person: true, action: 'review', held_back: 3, held_tasks: ['Dev 268'], can_review: true,
       runs: [stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
         stoppedRun('Billing 3/5', true, ['r2'])], more_runs: 1};
@@ -88,7 +90,8 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const lines = panel.locator('.stopped-line');
     assert.equal(await lines.count(), 2);
     assert.equal(await lines.nth(0).locator('.stopped-name').innerText(), 'Review move demands a typed test receipt even when GitHub is green');
-    assert.equal(await lines.nth(0).locator('.stopped-why').innerText(), 'Computer restarted');   // the card's line says not a bug
+    // The card's own line says it is not a bug, so the row does not repeat it.
+    assert.equal(await lines.nth(0).locator('.stopped-why').innerText(), 'Interrupted on its computer');
     // The safe pick leads, by the review card's rule: a run that may have acted puts Don't retry first.
     assert.deepEqual(await lines.nth(0).locator('button').allInnerTexts(), ['Don’t retry', 'Try again']);
     assert.deepEqual(await lines.nth(1).locator('button').allInnerTexts(), ['Try again', 'Don’t retry']);

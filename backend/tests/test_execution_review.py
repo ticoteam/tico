@@ -588,6 +588,11 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
     assert 'Counsel memo for Acme' not in held_for('ben-test')
     assert stopped_issue(api, 'ben-test')['held_tasks'] == []
     assert [r['title'] for r in stopped_issue(api, 'ben-test')['runs']] == [None]     # still a line, unnamed
+    # Ben is not ops' operator: no buttons, and no handles to decide with; Ana, who operates it, gets both.
+    ben = stopped_issue(api, 'ben-test')
+    assert ben['can_review'] is False and all('jobs' not in r for r in ben['runs'])
+    ana = stopped_issue(api, 'ana-test')
+    assert ana['can_review'] is True and [len(r['jobs']) for r in ana['runs']] == [1]
     assert 'Counsel memo for Acme' in held_for('ana-test')
 
 
@@ -1063,7 +1068,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
 def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is_not_a_bug(api):
     """Oct 26 (Chris): a computer restart held Builder (OpenAI)'s runs, and Needs you showed "6 stopped runs" as one
     paragraph of quoted titles. A message folded into a run rides on its line (one choice settles both), the count is
-    of runs, and the restart is named with its time so the person knows it is not a bug."""
+    of runs, and the interruption is named with its time so the person knows it is not a bug."""
     from backend.store import H
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
@@ -1090,11 +1095,11 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     assert len(jobs) == 2
     issue = stopped_issue(api)
     assert issue['title'].endswith('has 1 stopped run holding up work')
-    assert issue['detail'] == (f'Its computer restarted at {H.parse_ts(finished):%H:%M} UTC and cut off this run, '
-                               'not a bug. 1 queued request waits until you decide.')
+    assert issue['detail'] == (f'Its computer interrupted this run at {H.parse_ts(finished):%H:%M} UTC, usually for a '
+                               'restart or update, not a bug. 1 queued request waits until you decide.')
     [line] = issue['runs']
     assert (line['title'], line['cause'], line['why'], line['routine']) == (
-        'Ship the receipts fix', 'restart', 'Computer restarted', True)
+        'Ship the receipts fix', 'interrupted', 'Interrupted on its computer', True)
     assert sorted(j['id'] for j in line['jobs']) == sorted(jobs)
     assert {j['attempt_id'] for j in line['jobs']} == {attempt['id']}
     for job in line['jobs']:
@@ -1112,7 +1117,7 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
     assert stop_cause(attempt(limited=True)) == 'quota'
     assert stop_cause(attempt(primary_limited=True)) == 'quota'
     assert stop_cause(attempt(limit_source={'kind': 'capacity'})) == 'capacity'
-    assert stop_cause(attempt('interrupted')) == 'restart'
+    assert stop_cause(attempt('interrupted')) == 'interrupted'
     assert stop_cause(attempt('expired')) == 'timeout'
     assert stop_cause(attempt('interrupted', stop='human:ana')) == 'stopped'
     assert stop_cause(None) == 'partway'

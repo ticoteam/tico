@@ -513,11 +513,11 @@ def held_runs(c, who, auth, bot, limit=3):
 
 
 # Why a held run stopped, in the words of one Needs you row (stopped_rows). Only a person's Stop and a plain stop are
-# not `routine`: a restart, a usage limit, a busy AI service or a computer that stopped answering is the computer's or
-# the provider's, so the person is told it is not a bug (Chris, Oct 26).
-STOP_WHY = {"restart": "Computer restarted", "quota": "Usage limit", "capacity": "AI service busy",
+# not `routine`: an interruption (a restart, update or drain), a usage limit, a busy AI service or a computer that
+# stopped answering is the computer's or the provider's, so the person is told it is not a bug (Chris, Oct 26).
+STOP_WHY = {"interrupted": "Interrupted on its computer", "quota": "Usage limit", "capacity": "AI service busy",
             "timeout": "Computer stopped answering", "stopped": "Stopped by a person", "partway": "Stopped partway"}
-ROUTINE_STOPS = frozenset({"restart", "quota", "capacity", "timeout"})
+ROUTINE_STOPS = frozenset({"interrupted", "quota", "capacity", "timeout"})
 
 
 def stop_cause(attempt):
@@ -537,9 +537,10 @@ def stop_cause(attempt):
         return "capacity"
     if source or result.get("limited") or result.get("primary_limited"):
         return "quota"
-    # A runner reports `interrupted` when its computer restarts or drains under a run; a lapsed lease is a computer
-    # that stopped reporting (asleep, offline or too busy).
-    return {"interrupted": "restart", "expired": "timeout"}.get(attempt["state"], "partway")
+    # A runner reports `interrupted` when its computer restarts or drains under a run, or the harness ends the turn
+    # early, so the row says interrupted, not restarted; a lapsed lease is a computer that stopped reporting (asleep,
+    # offline or too busy).
+    return {"interrupted": "interrupted", "expired": "timeout"}.get(attempt["state"], "partway")
 
 
 def stopped_rows(c, who, auth, bot, limit=5):
