@@ -145,6 +145,10 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("listKpis", "get", "/api/v2/kpis", params={"include_archived": "true"})
     call("updateKpi", "post", "/api/v2/kpis/" + kpi["id"], json={"definition": "Accounts that finish setup"})
     call("archiveKpi", "post", "/api/v2/kpis/%s/archive" % kpi["id"], json={})
+    archived_goal = call("getGoal", "get", "/api/v2/goals/" + goal["id"])["goal"]
+    archived_measure = next(k for k in archived_goal["kpis"] if k["id"] == kpi["id"])
+    assert conforms(archived_measure, document["components"]["schemas"]["Kpi"], document) is None
+    assert archived_measure["status"] is None and archived_measure["freshness"] == "archived"
     call("restoreKpi", "post", "/api/v2/kpis/%s/restore" % kpi["id"], json={})
     other = call("createKpi", "post", "/api/v2/kpis", json={"name": "NPS", "direction": "range"})["kpi"]
     call("linkGoalKpi", "post", "/api/v2/goals/%s/kpis" % goal["id"], json={"kpi_id": other["id"], "kind": "maintain", "min": 30})

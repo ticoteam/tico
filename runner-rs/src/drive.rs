@@ -152,7 +152,12 @@ impl Runner {
 
         while !complete {
             if d.flags.stopped.load(Ordering::SeqCst) {
-                goal.failure = Some("Stopped by a person".into());
+                // A quarantine's Stop says why (Dev 573): the turn ends with that reason, never read as a lost computer.
+                let reason = d.flags.stop_reason.lock().unwrap().clone();
+                if let Some(why) = &reason {
+                    let _ = self.state.append(aid, "diagnostic", &json!({"end_reason": why}));
+                }
+                goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 let _ = host.interrupt(thread, &turn).await;
                 return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, retryable: false, turn, yielded: false });
             }
@@ -304,6 +309,10 @@ impl Runner {
                 }
                 if kind == "turn_completed" {
                     outcome = if event["status"] == "interrupted" { "interrupted".into() } else { "completed".into() };
+                    if outcome == "interrupted" {
+                        // This is a host's acknowledged end, unlike losing its connection or timing out.
+                        self.state.append(aid, "diagnostic", &json!({"interruption_complete": true}))?;
+                    }
                     // A turn that gave the login up ends here, between a native goal's turns too; a goal that runs
                     // across turns is not continued once the lease is lost.
                     complete = yielding.is_some() || salvage.is_some() || !(goal_running && across_turns && outcome == "completed");
@@ -456,6 +465,12 @@ mod tests {
     /// A hub that has let this attempt's lease go: renewals, inputs and goal reads are refused as stale, while
     /// events and the result are still taken (backend/execution.py `attempt` with `active=False` / `final=True`).
     async fn lapsed_hub() -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_renewing(None).await
+    }
+
+    /// `lapsed_hub`, or with `stop_reason` a hub that answers each renewal with a Stop and that reason, the way it
+    /// answers for a quarantined bot's turn (Dev 573); its inputs and goal reads are then answered too.
+    async fn hub_renewing(stop_reason: Option<&'static str>) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -488,7 +503,11 @@ mod tests {
                     let path = text.lines().next().unwrap_or_default().split_whitespace().nth(1).unwrap_or_default().to_string();
                     let body: Value = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
-                    let (status, answer) = if ["/renew", "/inputs", "/goal"].iter().any(|p| path.ends_with(p)) || path.contains("/inputs/") {
+                    let (status, answer) = if let Some(why) = stop_reason.filter(|_| path.ends_with("/renew")) {
+                        ("200 OK", json!({"lease_until": "x", "lease_seconds": 90, "stop": true, "stop_reason": why}))
+                    } else if stop_reason.is_some() && (path.ends_with("/inputs") || path.ends_with("/goal")) {
+                        ("200 OK", json!({"messages": []}))
+                    } else if ["/renew", "/inputs", "/goal"].iter().any(|p| path.ends_with(p)) || path.contains("/inputs/") {
                         ("409 Conflict", json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}))
                     } else {
                         ("200 OK", json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}))
@@ -514,7 +533,7 @@ mod tests {
     }
 
     fn flags(lost: bool) -> Flags {
-        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(lost), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now()) }
     }
 
@@ -546,6 +565,26 @@ mod tests {
             .await
             .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[tokio::test]
+    async fn only_an_acknowledged_interruption_records_the_terminal_recovery_receipt() {
+        for status in ["interrupted", "completed"] {
+            let (url, sent) = lapsed_hub().await;
+            let (runner, dir) = runner_at(&url);
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
+            tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": status})).unwrap();
+            let drove = drive_turn(&runner, &host, &mut rx, &flags(true), "th-1").await.unwrap();
+            assert_eq!(drove.outcome, status);
+            let events: Vec<Value> = sent.lock().unwrap().iter().filter_map(|request| {
+                let (path, body) = request.split_once(' ')?;
+                path.ends_with("/events").then(|| serde_json::from_str::<Value>(body).unwrap())
+            }).flat_map(|body| body["events"].as_array().cloned().unwrap_or_default()).collect();
+            assert_eq!(events.iter().any(|e| e["kind"] == "diagnostic" && e["payload"]["interruption_complete"] == true),
+                       status == "interrupted", "{events:?}");
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 
     #[tokio::test]
@@ -637,6 +676,35 @@ mod tests {
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
         assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
         assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
+        drop(tx);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_renewal_answered_with_a_quarantine_stop_ends_the_turn_with_that_reason_not_as_lost() {
+        // Dev 573: the hub answers a quarantined bot's renewal with a Stop and its reason, instead of the stale lease
+        // that read as a lost computer, waited out SALVAGE and lapsed the attempt.
+        let why = "Quarantined: 10 refusals today, resumes about 10:05 UTC";
+        let (url, seen) = hub_renewing(Some(why)).await;
+        let (runner, dir) = runner_at(&url);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        tx.send(json!({"kind": "delta", "thread_id": "th-q", "turn_id": "turn-1", "text": "Acme's renewal"})).unwrap();
+        let f = Arc::new(flags(false));
+        let renewer = crate::lease::spawn(&runner.client, "acme-late".into(), f.clone(), Duration::from_millis(20));
+        let began = Instant::now();
+        let (drove, _, goal) = drive_with(&runner, &host, &mut rx, &f, "th-q", "claude", None, BTreeMap::new()).await;
+        renewer.abort();
+        let drove = drove.unwrap_or_else(|e| panic!("ended as a failure: {}", e.text));
+        assert_eq!(drove.outcome, "interrupted", "stopped, the way a person's Stop ends a turn");
+        assert!(!f.lost.load(Ordering::SeqCst), "never the lost-lease path");
+        assert!(began.elapsed() < SALVAGE, "ended on the stop, not after the salvage window: {:?}", began.elapsed());
+        assert_eq!(goal.failure.as_deref(), Some(why));
+        let reasons: Vec<Value> = runner.state.pending("acme-late").unwrap().iter().map(|e| e["payload"]["end_reason"].clone()).filter(|r| !r.is_null()).collect();
+        assert_eq!(reasons, vec![json!(why)], "the end reason is the quarantine's, never a lost computer");
+        assert!(seen.lock().unwrap().iter().any(|p| p.contains("/renew ")));
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
     }

@@ -1436,14 +1436,17 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
     """Built-ins first (on the first page of an unfiltered or built-in listing), then the table rows the viewer may
     see, each with its 7-day run count and no-op rate and whether the viewer may change it. Paged and byte-capped:
     `more` says another page waits, at `next_offset`."""
+    from . import task_settings
     limit = max(1, min(int(limit or 200), MAX_ROWS))
     counts = usage(c, who.actor)
     items = []
     if scope_kind in (None, "builtin") and not offset and not scope_id:
-        items = [_with_usage({**r, "can_change": False}, counts) for r in BUILTINS if event in (None, r["event"])]
+        items = [task_settings.describe_rule(_with_usage({**r, "can_change": False}, counts))
+                 for r in BUILTINS if event in (None, r["event"])]
     more = False
     if scope_kind == "bot" and scope_id and not offset:
-        items += [_with_usage(r, counts) for r in profile_listing(c, scope_id) if event in (None, r["event"])]
+        items += [task_settings.describe_rule(_with_usage(r, counts))
+                  for r in profile_listing(c, scope_id) if event in (None, r["event"])]
     if scope_kind != "builtin":
         sql, args = "SELECT * FROM rules WHERE 1=1", []
         for column, value in (("scope_kind", scope_kind), ("scope_id", scope_id), ("event", event)):
@@ -1459,13 +1462,13 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
                 more, next_offset = True, offset + n
                 break
             if _visible(c, who, row):
-                item = _with_usage({**view(row), "can_change": can_change(
-                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts)
+                item = task_settings.describe_rule(_with_usage({**view(row), "can_change": can_change(
+                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts))
                 items.append(item)
                 spent += len(json.dumps(item))
         else:
             next_offset = offset + min(len(rows), limit)
-    out = {"rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
+    out = {"task_builtins": task_settings.builtins(c), "rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
            "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS)}
     if more:
         out["next_offset"] = next_offset

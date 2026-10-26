@@ -45,7 +45,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
     jobs.writer[0].attempt.final_text = '';
     jobs.writer[0].output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
+    // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
     const health = {audience: 'owner', attention: 0, checks: [], computers: [], waiting: [], slow: [], failures: [],
+      stuck: [{bot: 'builder', name: 'Builder', reason: 'uncertain', why: 'An interrupted run waits for review in Runs',
+        queued: 0, dead: 3, held: 1, oldest: '2026-10-26T05:39:09Z', computer: 'Studio Mac'}],
       checked: new Date().toISOString()};
     await page.route('**/*', route => {
       const p = new URL(route.request().url()).pathname;
@@ -184,6 +187,9 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await note.waitFor({timeout: t(5000)});
     assert.equal(await note.innerText(), 'Review stopped runs');
     assert.equal(await page.locator('#hl-page .hl-notes [data-execution-review="builder"]').count(), 0);
+    const stuck = await page.locator('#hl-page [data-stuck="builder"] .muted').innerText();
+    assert.match(stuck, /3 behind an interrupted run · 1 held on purpose$/);
+    assert.doesNotMatch(stuck, /queued/, 'nothing that can start is called queued');
     await note.click();
     await page.locator('dialog.stopped-runs-dialog h2', {hasText: 'Stopped runs'}).waitFor({timeout: t(5000)});
     // A run that only read is safe to try again, so that button leads.

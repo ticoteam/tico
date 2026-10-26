@@ -10,6 +10,7 @@
         "kind": "tool",
         "parent_id": null,
         "summary": "timeout",
+        "outside_actions": [],
         "tool": "Bash",
         "status": "started",
         "item_id": "toolu_01WFM3BjypCnbEbfdbBRoqN8"

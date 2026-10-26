@@ -48,7 +48,7 @@ async function settingsRecruitFlow(seed = {}) {
     const score=c=>(draft.template&&c.template===draft.template?100:0)+(c.required?-100:0)+(c.summary||'').toLowerCase().split(/\W+/).filter(w=>terms.has(w)).length;
     const candidates=cards.filter(c=>c.template!=='inbox'&&!c.required).slice().sort((a,b)=>score(b)-score(a)).slice(0,6);
     status.textContent='Catalog pitches from this Tico. Your brief stays on this computer.';
-    results.innerHTML=candidates.map(c=>`<article class="cat-card"><h3>${esc(c.name)}</h3><p class="cat-summary">${esc(c.summary||'')}</p>${c.owns?.length?`<p class="muted">Owns: ${esc(c.owns.join('; '))}</p>`:''}<button class="primary" type="button" data-recruit-create="${esc(c.slug)}">Choose & create ${esc(c.name)}</button></article>`).join('')+'<p class="muted">Want an external service? Review provider setup separately.</p><a href="https://agents.tico.dev/#bots" target="_blank" rel="noopener noreferrer">Browse third-party options ↗</a>';
+    results.innerHTML=candidates.map(c=>`<article class="cat-card"><h3>${esc(c.name)}</h3><p class="cat-summary">${esc(c.summary||'')}</p>${c.owns?.length?`<p class="muted">Owns: ${esc(c.owns.join('; '))}</p>`:''}<button class="primary" type="button" data-recruit-create="${esc(c.slug)}">Choose & create ${esc(c.name)}</button></article>`).join('')+'<p class="muted">Want an external service? Review provider setup separately.</p><a href="https://linkedbots.ai/" target="_blank" rel="noopener noreferrer">Browse third-party options ↗</a>';
     results.querySelectorAll('[data-recruit-create]').forEach(b=>b.onclick=async()=>{
       if(creating||!S.me?.id||!settingsCanCreateBots())return;
       const card=cards.find(c=>c.slug===b.dataset.recruitCreate);if(!card)return;

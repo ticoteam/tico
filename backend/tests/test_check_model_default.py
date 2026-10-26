@@ -1,6 +1,5 @@
 """The company's check model as the default (backend/check_models.py `auto`, `review_default`): a check named with no
 model, and a review handed to a bot set to `review_model: check`, run on another provider than the work's author."""
-import json
 
 from backend.store import encode
 from backend.tests.test_api import assign, claim, get, post  # noqa: F401
@@ -52,13 +51,16 @@ def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):
                                 "check_model": "auto", "relations": [{"task": parent["id"], "kind": "parent"}]},
                  turn["token"])
     assert tuple(check_row(api, later["id"]))[:2] == ("cursor", "cursor-auto")
-    # With only the author's provider on, it is refused rather than run there.
+    # With only the author's provider on, it runs there rather than leaving the review unfiled, and says why.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
                   (encode({"revision": 2, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
-    refused = post(api, "tasks", {"owner": "ops", "title": "Check it again", "body": "Read the PR.", "check_model": "auto",
-                                  "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"], expected=422)
-    assert "other than Anthropic" in json.dumps(refused)
+    alone = post(api, "tasks", {"owner": "ops", "title": "Check it again", "body": "Read the PR.", "check_model": "auto",
+                                "relations": [{"task": parent["id"], "kind": "parent"}]}, turn["token"])
+    assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
+    with api.app.state.store.read() as c:
+        why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
+    assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why
 
 
 def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says_which(api):
@@ -117,14 +119,14 @@ def test_a_review_for_a_bot_set_to_review_on_the_check_model_runs_there_and_says
     after = post(api, "tasks", {"owner": "cpo", "title": "Review PR 702", "body": "https://github.com/ticoteam/tico/pull/702",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
     assert check_row(api, after["id"]) is None, "turned off, its reviews run on its own model again"
-    # Set again, with only the author's provider on: filed on its own model, and the history says why.
+    # Set again, with only the author's provider on: still reviewed on the check model, and the history says why.
     review_model("check")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
                   (encode({"revision": 9, "enabled": ["anthropic"], "runtime": "claude", "model": "claude-sonnet-5-5"}),))
     alone = post(api, "tasks", {"owner": "cpo", "title": "Review PR 703", "body": "https://github.com/ticoteam/tico/pull/703",
                                 "relations": [{"task": parent["id"], "kind": "parent"}]})
-    assert check_row(api, alone["id"]) is None
+    assert tuple(check_row(api, alone["id"]))[:2] == ("claude", "claude-sonnet-5-5")
     with api.app.state.store.read() as c:
         why = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='check_model'", (alone["id"],)).fetchone()
-    assert why and "other than Anthropic" in why[0], why
+    assert why and "other than Anthropic" in why[0] and "author's own" in why[0], why
