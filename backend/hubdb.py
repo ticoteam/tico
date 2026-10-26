@@ -1193,6 +1193,8 @@ def migrate(conn, adopt_legacy=False):
     # A person's open asks, read on every Needs-you load (loose_asks_to).
     conn.execute("CREATE INDEX IF NOT EXISTS messages_open_asks_to ON messages(to_actor, created) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
+    # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
+    conn.execute(UNREAD_INDEX)
     conn.execute("CREATE INDEX IF NOT EXISTS messages_pending_conversation ON messages(conversation_id) "
                  "WHERE kind='ask' AND answered_by IS NULL AND deleted_at IS NULL")
     # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
@@ -7962,18 +7964,48 @@ def undelivered(conn, to_actor=None, limit=200):
     return out
 
 
-def inbox(conn, actor, at=None):
-    """What is waiting for me: unread or undelivered messages, and my open tasks."""
+# A message still waiting for its recipient: not yet delivered, or not yet read. The partial index repeats these terms
+# word for word, or SQLite does not use it (`inbox_pages`).
+UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
+UNREAD_INDEX = "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(to_actor, created) WHERE " + UNREAD_TERMS
+UNREAD_PAGE_SQL = ("SELECT rowid AS _seq,* FROM messages WHERE to_actor=? AND " + UNREAD_TERMS +
+                   " AND (expires_at IS NULL OR expires_at > ?) AND created<=? AND (created<? OR rowid<?)"
+                   " ORDER BY created DESC, rowid DESC LIMIT ?")
+
+
+def inbox_pages(conn, actor, at=None, size=100):
+    """`actor`'s unread or undelivered messages, newest first, `size` at a time, each once. A bot that never marks
+    messages read holds thousands, and a reader that wants only the newest few stops paging: the rest are not read.
+    Each page carries on below the last (created, rowid) of the one before, so messages sent in the same instant are
+    neither repeated nor skipped. Read the pages in one snapshot."""
     at = at or now()
-    rows = _rows(conn.execute(
-        "SELECT * FROM messages WHERE to_actor=? AND (delivered_at IS NULL OR read_at IS NULL) "
-        "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL ORDER BY created", (actor, at)))
+    created, seq = "\uffff", 1 << 62                   # above every stored time and rowid: the first page is the newest
+    while True:
+        rows = _rows(conn.execute(UNREAD_PAGE_SQL, (actor, at, created, created, seq, size)))
+        if not rows:
+            return
+        created, seq = rows[-1]["created"], rows[-1]["_seq"]
+        for row in rows:
+            del row["_seq"]
+            row["refs"] = _json(row.get("refs_json"), {}) or {}
+        yield rows
+        if len(rows) < size:
+            return
+
+
+def mark_answered(conn, rows):
+    """Set each message's `answered_at`: when its ask was answered, or None."""
     answered = answers_to(conn, [r["id"] for r in rows if r.get("kind") == "ask"])
     for row in rows:
-        row["refs"] = _json(row.get("refs_json"), {}) or {}
         got = answered.get(row["id"])
         row["answered_at"] = got["created"] if got else None
-    return {"actor": actor, "messages": rows,
+    return rows
+
+
+def inbox(conn, actor, at=None):
+    """What is waiting for me: unread or undelivered messages, oldest first, and my open tasks."""
+    rows = [row for page in inbox_pages(conn, actor, at, size=500) for row in page][::-1]
+    return {"actor": actor, "messages": mark_answered(conn, rows),
             "tasks": tasks(conn, owner=actor, status=ACTIVE_STATUSES)}
 
 
