@@ -144,6 +144,11 @@ def wanted(conn, owner_id, at=None, reads=None):
         org = org or _org(conn)
         who = _person(conn, decides, owner_id, org)
         if who:
+            # A private task still exposes its title and body to its owner. Do not file a proposal
+            # naming a bot-owned goal or KPI for a person who cannot read that bot.
+            if any(H.is_bot(r["owner"]) and not _may_read(reads, who, r["owner"])
+                   for r in (goal, record) if r):
+                continue
             item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
                     "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
             used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None

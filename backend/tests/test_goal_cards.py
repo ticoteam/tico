@@ -204,6 +204,22 @@ def test_needs_you_does_not_name_a_hidden_goal_when_the_reader_can_edit_its_kpi(
     assert secret["id"] not in proposal_ids and "Close all NDAs by Q4" not in str(needs_you)
 
 
+def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_bot(api):
+    goal_manager(api, level=2)
+    hidden = post(api, "goals", {"title": "Close all NDAs by Q4", "owner": "bot:cpo", "top": True})["goal"]
+    proposal = propose(api, "goal_wording", {"title": "Close all NDAs this month"}, hidden["id"])
+    # CPO's nearest person is Ben. He is a regular member and cannot read CPO's records.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='cpo'")
+        from backend import goal_asks as GA
+        assert GA._person(c, "bot:cpo", api.app.state.auth.owner_id(c), GA._org(c)) == "human:ben"
+        # Model the per-person Read grant: the assigned person has no Read on CPO.
+        GA.sync(c, api.app.state.auth.owner_id(c), reads=lambda person, owner: False)
+
+    assert not [task for task in asks(api) if task["ref"] == proposal["id"]]
+    assert "Close all NDAs by Q4" not in str(asks(api))
+
+
 def sync_reading(api):
     """The CEO Bot's pass as the app runs it: told whose measures each person may read."""
     from backend import goal_asks as GA
