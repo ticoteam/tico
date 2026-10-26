@@ -62,7 +62,7 @@ def capture_attempt(c, turn_id):
     """Freeze the actual check attempt and its ticket-head provenance after this run's usage is recorded."""
     turn = c.execute("SELECT task_id FROM turns WHERE id=?", (turn_id,)).fetchone()
     check = H.task(c, turn["task_id"]) if turn and turn["task_id"] else None
-    if not check or not kind_of(check):
+    if not check or not CHECK_TITLE.match(str(check.get("title") or "").strip()):
         return None
     finished_owner = check.get("owner")
     from . import task_relations as TR
@@ -481,6 +481,9 @@ def reroute_existing(c, ticket, check, head, attempt_id, reason):
     check = H.task(c, check["id"] if isinstance(check, dict) else check)
     found = pool(c, ticket.get("step_id")) if ticket else None
     head = str(head or "").lower()
+    if not found:
+        return None
+    step, slugs, limit = found
     if (not ticket or not check or not found or not head or str(check.get("verdict_head") or "").lower() != head
             or check.get("status") != "done" or TR_parent(c, check["id"]) != ticket["id"]):
         return None
@@ -501,7 +504,6 @@ def reroute_existing(c, ticket, check, head, attempt_id, reason):
     prior_event = H._json(previous[0], {}) if previous else {}
     if prior_event.get("attempt_id") == attempt_id:
         return prior_event
-    step, slugs, limit = found
     title = str(check.get("title") or "")
     prior = H.actor_id(check.get("owner") or "")
     free, why = ranked(c, ticket, step, slugs, limit, exclude=(prior,))
@@ -512,8 +514,6 @@ def reroute_existing(c, ticket, check, head, attempt_id, reason):
         try:
             previous_verdict = str(check.get("verdict") or "")
             previous_head = str(check.get("verdict_head") or "")
-            c.execute("UPDATE tasks SET verdict=NULL,verdict_head=NULL WHERE id=? AND verdict=? AND verdict_head=?",
-                      (check["id"], previous_verdict, previous_head))
             H._task_event(c, check["id"], H.KEEPER, "verdict_rerouted", previous_verdict,
                           json.dumps({"head": previous_head, "attempt_id": attempt_id}, sort_keys=True), reason)
             moved = H.task_update(c, ticket["owner"], check["id"], owner="bot:" + slug, status="open",
@@ -570,8 +570,13 @@ def _take(c, wait, only=None):
     for slug in free:
         # Taken before the request is filed, so the one-check-per-head rule does not see its own wait.
         c.execute("UPDATE check_waits SET state='filed',updated=? WHERE id=?", (H.now(), wait["id"]))
-        child = _file(c, ticket, step, slug, wait["title"], heads, None,
-                      "it finished a check and took the next waiting one" if only else _why(c, slug))
+        child = H.task(c, wait.get("child_id")) if wait.get("child_id") else None
+        if child and TR_parent(c, child["id"]) == ticket["id"]:
+            child = H.task_update(c, ticket["owner"], child["id"], owner="bot:" + slug, status="open",
+                                  note="Tico routed this waiting check to the first available reviewer.")
+        else:
+            child = _file(c, ticket, step, slug, wait["title"], heads, None,
+                          "it finished a check and took the next waiting one" if only else _why(c, slug))
         if child:
             c.execute("UPDATE check_waits SET child_id=? WHERE id=?", (child["id"], wait["id"]))
             return child

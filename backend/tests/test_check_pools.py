@@ -113,7 +113,7 @@ def test_pool_candidate_model_details_show_configured_and_actual_families(api):
     assert candidates["reviewer-xai"]["runtime"] is None
     assert candidates["pr-reviewer-sol"]["configured"]["provider"] == "OpenAI"
     assert candidates["pr-reviewer-sol"]["runtime"]["provider"] == "Anthropic"
-    assert "Claude Opus" in candidates["pr-reviewer-sol"]["runtime"]["model"]
+    assert "opus 5.5" in candidates["pr-reviewer-sol"]["runtime"]["model"]
 
 
 def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(api):
@@ -159,7 +159,7 @@ def test_same_family_fallback_verdict_reopens_the_same_check_for_an_independent_
         active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
         active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
     assert rerouted["id"] == check["id"] and rerouted["owner"] == "bot:rev-b"
-    assert rerouted["status"] == "open" and rerouted["verdict"] == "approve"
+    assert rerouted["status"] == "open" and rerouted["verdict"] == "approve" and rerouted["verdict_head"] == HEAD
     assert [child["id"] for child in active] == [check["id"]], "rerouting keeps exactly one active check for the head"
 
 
@@ -172,6 +172,32 @@ def test_unknown_builder_runtime_waits_instead_of_claiming_independence(api):
     [wait] = get(api, "tasks/" + task["id"])["task"]["check_waits"]
     assert wait["label"] == "Waiting for a reviewer"
     assert "different model company" in wait["reason"]
+
+
+def test_ineligible_verdict_waits_unowned_then_reuses_the_same_check(api):
+    team(api)
+    task = ticket(api, RECEIPT)
+    set_pool(api, task, "Review 1", ["rev-a"])
+    assert move(api, task).status_code == 200
+    [check] = checks(api, task)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO turns(id,bot,started,task_id) VALUES('review-turn','rev-a',?,?)", (H.now(), check["id"]))
+        H.task_update(c, "bot:rev-a", check["id"], status="done", verdict="approve", verdict_head=HEAD)
+        actual = {"input_tokens": 100, "cached_tokens": 0, "output_tokens": 10, "model": "claude-opus-5-5",
+                  "provider": "anthropic", "est_cost_usd": 0.01, "billing": "subscription", "runtime": "claude",
+                  "harness": "claude", "effort": "high", "profile": "engineering"}
+        H.turn_finish(c, H.KEEPER, "review-turn", usage={**actual, "segments": [actual]})
+        waiting = c.execute("SELECT * FROM check_waits WHERE ticket_id=? AND state='waiting'", (task["id"],)).fetchone()
+    assert waiting and waiting["child_id"] == check["id"]
+    held = busy(api, "rev-b")
+    set_pool(api, task, "Review 1", ["rev-a", "rev-b"])
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "bot:rev-b", held["id"], status="done", note="VERDICT: approve")
+        rerouted = H.task(c, check["id"])
+        active = [H.task(c, i) for i in H.TR.child_ids(c, task["id"])]
+        active = [child for child in active if child["status"] in H.ACTIVE_STATUSES]
+    assert rerouted["owner"] == "bot:rev-b" and rerouted["status"] == "open"
+    assert rerouted["verdict"] == "approve" and [child["id"] for child in active] == [check["id"]]
 
 
 def test_with_every_reviewer_at_its_limit_the_check_waits_and_the_first_to_finish_takes_it(api):
