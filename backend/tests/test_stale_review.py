@@ -242,10 +242,11 @@ def test_accept_all_cannot_change_a_task_the_person_could_not_change_by_hand(sta
     card = stale_card(api, "priya-test")
     by_hand = api.post(f"/api/v2/tasks/{moved}", json={"status": "done", "version": version},
                        headers=headers("priya-test"))
-    assert by_hand.status_code == 403 and "not yours to change" in by_hand.text, by_hand.text
+    assert by_hand.status_code == 403 and by_hand.json()["error"]["code"] == "identity", by_hand.text
     out = post(api, "stale-review/accept-all", shown(card), token="priya-test")
     assert [r["task"] for r in out["accepted"]] == [mine]
-    assert [r["task"] for r in out["refused"]] == [moved] and "not yours to change" in out["refused"][0]["reason"]
+    assert [r["task"] for r in out["refused"]] == [moved]
+    assert out["refused"][0]["reason"] == by_hand.json()["error"]["detail"]
     with store.read() as c:
         assert H.task(c, mine)["status"] == "done" and H.task(c, moved)["status"] == "open"
         assert c.execute("SELECT outcome FROM stale_suggestions WHERE task_id=?", (moved,)).fetchone()[0] is None

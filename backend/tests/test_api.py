@@ -67,6 +67,8 @@ def unrelated_task_managers(c, *slugs):
     roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
+    c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
+              ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
     c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
