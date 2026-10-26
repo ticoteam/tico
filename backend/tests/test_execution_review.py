@@ -1057,7 +1057,7 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
                                '2 queued requests wait until you decide.')
     assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
                               'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
-                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}]}]
+                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'decided': None}]
     assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
     post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
@@ -1116,6 +1116,43 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
         post(api, f"jobs/{job['id']}/reconcile", {'attempt_id': job['attempt_id'], 'decision': 'resume',
              'note': 'Check what already happened, then continue.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
+
+
+def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api):
+    """Dev 561: Try again on a Needs you line while the bot's lane is busy saves the choice and leaves the run held, so
+    a refreshed card listed it as undecided and a second click was refused (409). Each folded request carries the
+    choice saved for it; the line carries it once every request it settles has one, so the card shows the outcome."""
+    machine = runner(api, 'ana')
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Ship the receipts fix', 'body': 'Push it and open the PR.'})
+    task_id = task.get('task', task).get('id') or task['refs']['task']
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.'})
+    carried = post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']
+    post(api, f"attempts/{attempt['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'Bash', 'status': 'started', 'item_id': 'b1'}}]}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 1,
+         'text': 'Runner restarted during execution'}, machine['token'])
+    post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})   # waits behind the held run
+    rival(api, machine, attempt)
+    [line] = stopped_issue(api)['runs']
+    assert len(line['jobs']) == 2 and line['decided'] is None and all('decided' not in j for j in line['jobs'])
+    first, second = line['jobs']
+    body = {'decision': 'resume', 'note': 'Check what already happened, then continue.',
+            'acknowledge_uncertain_effects': True}
+    assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'attempt_id': first['attempt_id']})['deferred'] is True
+    # Partway: the saved request says so, the other is still to decide, so the line still offers its choice.
+    [line] = stopped_issue(api)['runs']
+    assert [j.get('decided') for j in line['jobs']] == ['resume', None] and line['decided'] is None
+    assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'attempt_id': second['attempt_id']})['deferred'] is True
+    [line] = stopped_issue(api)['runs']
+    assert [j['decided'] for j in line['jobs']] == ['resume', 'resume'] and line['decided'] == 'resume'
+    # A reader who may not decide still sees that a choice is saved, without the handles.
+    [seen] = stopped_issue(api, 'ben-test')['runs']
+    assert seen['decided'] == 'resume' and 'jobs' not in seen
 
 
 def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():

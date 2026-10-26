@@ -555,14 +555,22 @@ def stopped_rows(c, who, auth, bot, limit=5):
     oldest first, for Needs you: (rows, runs). A row has the task title ("A chat request" outside a task, None for
     a task `who` may not read), why it stopped, whether that is `routine`, whether Try again is the safe pick
     (`retry`, by the same rule as the review card, retry_facts), when it stopped, and the jobs a decision settles.
-    `runs` counts every readable run; rows stop at `limit`."""
+    A choice saved while the bot's lane was busy (reconcile_job, deferred) keeps its job held: that job carries it as
+    `decided`, and a row whose every job has one carries it too, so a refreshed card shows the outcome instead of
+    offering a second choice that would be refused. `runs` counts every readable run; rows stop at `limit`."""
     rows, by_run = [], {}
+
+    def handle(job):
+        saved = c.execute("SELECT decision FROM job_recovery WHERE job_id=? AND attempt_id=?",
+                          (job["id"], job["attempt_id"])).fetchone()
+        return {"id": job["id"], "attempt_id": job["attempt_id"], **({"decided": saved[0]} if saved else {})}
+
     for row, task, seen in _readable_held(c, who, auth, bot):
         key = row["attempt_id"] or row["id"]
         job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
         if key in by_run:
             if by_run[key] is not None:
-                by_run[key]["jobs"].append({"id": job["id"], "attempt_id": job["attempt_id"]})
+                by_run[key]["jobs"].append(handle(job))
             continue
         if len(rows) >= limit:
             by_run[key] = None
@@ -575,8 +583,11 @@ def stopped_rows(c, who, auth, bot, limit=5):
                        "cause": cause, "why": STOP_WHY[cause], "routine": cause in ROUTINE_STOPS,
                        "retry": bool(facts["safe"] and facts["starts"] <= 1),
                        "at": attempt["finished"] if attempt else None,
-                       "jobs": [{"id": job["id"], "attempt_id": job["attempt_id"]}]}
+                       "jobs": [handle(job)]}
         rows.append(by_run[key])
+    for row in rows:
+        saved = {job.get("decided") for job in row["jobs"]}
+        row["decided"] = saved.pop() if len(saved) == 1 else None
     return rows, len(by_run)
 
 
