@@ -51,8 +51,9 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
 def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch):
     # A crashed bot offers its newest held run for review; with a stop on record, only that run's own held job.
     # The clock is fixed, so jobs share a created time: the last one written is the newest, read one by one or together.
+    # coo and finance repeat ops's and cpo's shapes, so the page's held runs add no statements per bot.
     from backend.store import encode
-    machine = setup(api, monkeypatch, tasks=5)
+    machine = setup(api, monkeypatch, tasks=9)
     first = claim(api, machine)
     with api.app.state.store.transaction() as c:
         jobs = [row[0] for row in c.execute("SELECT id FROM jobs WHERE bot='ops' ORDER BY rowid")]
@@ -61,19 +62,27 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 (jobs[1], "ops", H.now(), "tie-first", "failed", True),
                 (jobs[2], "ops", H.now(), "tie-last", "expired", False),
                 (jobs[3], "cpo", "2026-10-24T11:00:00.000000Z", "marked", "expired", True),
-                (jobs[4], "cpo", H.now(), "newer", "failed", True)):
+                (jobs[4], "cpo", H.now(), "newer", "failed", True),
+                (jobs[5], "coo", "2026-10-24T11:00:00.000000Z", "coo-old", "failed", True),
+                (jobs[6], "coo", H.now(), "coo-new", "expired", False),
+                (jobs[7], "finance", "2026-10-24T11:00:00.000000Z", "finance-marked", "expired", True),
+                (jobs[8], "finance", H.now(), "finance-newer", "failed", True)):
             c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
                       "started,finished) SELECT ?,?,?,runner_id,generation,?,?,lease_until,?,?,? FROM attempts WHERE id=?",
                       (run, job, bot, "hash-" + run, state, created, created if started else None, H.now(), first["id"]))
             c.execute("UPDATE jobs SET bot=?,state='uncertain',created=?,attempt_id=? WHERE id=?", (bot, created, run, job))
         c.execute("UPDATE attempts SET state='expired' WHERE id=?", (first["id"],))
         c.execute("DELETE FROM registry_metadata WHERE key='last-stop:ops'")
-        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('last-stop:cpo',?)",
-                  (encode({"attempt_id": "marked", "at": H.now()}),))
-        for slug in ("ops", "cpo"):
+        for slug, run in (("cpo", "marked"), ("finance", "finance-marked")):
+            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
+                      ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})))
+        for slug in ("ops", "cpo", "coo", "finance"):
             H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
-    each = lines(api, ["cpo", "ops"], primed=False)[0]
-    assert lines(api, ["cpo", "ops"], primed=True)[0] == each
+    each = lines(api, ["coo", "cpo", "finance", "ops"], primed=False)[0]
+    together, primed = lines(api, ["coo", "cpo", "finance", "ops"], primed=True)
+    assert together == each and lines(api, ["cpo", "ops"], primed=True)[1] == primed
+    assert (each["coo"]["last_stop"]["attempt_id"], each["finance"]["last_stop"]["attempt_id"]) == (
+        "coo-new", "finance-marked")
     ops, cpo = each["ops"]["last_stop"], each["cpo"]["last_stop"]
     assert (ops["attempt_id"], ops["kind"], ops["action"]) == ("tie-last", "never_started", "review")
     assert ops["reason"].startswith("Its computer refused the run before it started.")
