@@ -1112,3 +1112,26 @@ def test_only_owners_and_admins_choose_the_suggestions_bot_and_a_type_manager_st
     assert refused == 'body.manager: ' + M.MANAGER_FIXED
     other = post(api, 'task-types/product-roadmap', {'colour': 'red'}, expected=422)['error']['detail']
     assert other == 'body.colour: Extra inputs are not permitted'
+
+
+def test_a_new_step_on_a_private_by_default_type_has_no_public_name_until_given_one(api):
+    typ = get(api, 'task-types/product-roadmap')['type']
+    assert typ['default_visibility'] == 'private'
+    keep = [{k: s[k] for k in ('id', 'name', 'position', 'status')} for s in typ['steps']]
+    steps = keep + [{'name': 'Legal triage', 'status': 'review'}, {'name': 'Beta', 'status': 'doing', 'public_name': 'Beta'}]
+    after = {s['name']: s['public_name'] for s in post(api, 'task-types/product-roadmap', {'steps': steps})['type']['steps']}
+    assert after['Legal triage'] == '' and after['Beta'] == 'Beta'
+    assert all(after[s['name']] == s['public_name'] for s in typ['steps'])        # existing public names stay
+    # A public name can be taken off again; a type public by default names a new step publicly by its name.
+    steps = [{**{k: s[k] for k in ('id', 'name', 'position', 'status', 'public_name')},
+              **({'public_name': ''} if s['name'] == 'Beta' else {})}
+             for s in post(api, 'task-types/product-roadmap', {'steps': steps})['type']['steps']]
+    assert {s['name']: s['public_name'] for s in post(api, 'task-types/product-roadmap', {'steps': steps})['type']['steps']}['Beta'] == ''
+    open_type = post(api, 'task-types', {'name': 'Changelog', 'default_visibility': 'public',
+                                         'steps': [{'name': 'Drafted', 'status': 'open'}]})['type']
+    assert open_type['steps'][0]['public_name'] == 'Drafted'
+    # A save that flips the type's default and adds a step names the step by the default it saves.
+    keep = [{k: s[k] for k in ('id', 'name', 'position', 'status', 'public_name')} for s in open_type['steps']]
+    hidden = post(api, f"task-types/{open_type['id']}", {'default_visibility': 'private',
+                                                       'steps': keep + [{'name': 'Legal review', 'status': 'review'}]})['type']
+    assert {s['name']: s['public_name'] for s in hidden['steps']} == {'Drafted': 'Drafted', 'Legal review': ''}

@@ -148,14 +148,19 @@ def listing(c, settings, who=None, auth=None, now=None):
     return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created,id")]
 
 
+HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND field='github')"
+MESSAGE_ACTIVITY_SQL = "m.from_actor<>'keeper'"
+
+
 def untouched(c, task, hours, now):
     # Task timestamps cover ordinary edits/comments. History also fences step-only changes and
     # scoped messages in shared conversations; unrelated chat must not restart a task's wait.
     times = [task.get(k) for k in ("created", "updated", "done_at", "checkpoint_at")]
-    times += [r[0] for r in c.execute("SELECT max(ts) FROM task_events WHERE task_id=?", (task["id"],))]
+    # Observed GitHub facts have history, but viewing them and keeper notices are not work on the task.
+    times += [r[0] for r in c.execute(f"SELECT max(ts) FROM task_events WHERE task_id=? AND {HISTORY_ACTIVITY_SQL}", (task["id"],))]
     message = c.execute("SELECT max(max(m.created,coalesce(m.edited_at,m.created),coalesce(m.deleted_at,m.created))) "
                         "FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-                        f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=?",
+                        f"WHERE m.conversation_id=? AND {H.MESSAGE_TASK_SQL}=? AND {MESSAGE_ACTIVITY_SQL}",
                         (task["conversation_id"], task["id"])).fetchone()[0]
     times.append(message)
     parsed = [H.parse_ts(t) for t in times if t]
@@ -198,10 +203,11 @@ DUE_SQL = (
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels_json) WHERE lower(value) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
-    "AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.ts>?) "
+    f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND ts>?) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE m.conversation_id=t.conversation_id AND {H.MESSAGE_TASK_SQL}=t.id "
-    f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR max(m.created,coalesce(m.edited_at,m.created),coalesce(m.deleted_at,m.created))>?)) "
+    f"AND ((m.kind='ask' AND {H.OPEN_ASK_SQL}) OR ({MESSAGE_ACTIVITY_SQL} AND "
+    "max(m.created,coalesce(m.edited_at,m.created),coalesce(m.deleted_at,m.created))>?))) "
     "ORDER BY t.updated,t.id LIMIT ?")
 
 

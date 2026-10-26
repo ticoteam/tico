@@ -1445,8 +1445,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             ask = next((a for a in open_asks if a["to_actor"] == who.actor), None) or next(iter(open_asks), None)
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
+            typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
             item = {**task_view(row, pipelines=pipelines),
                     "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
+                    # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
+                    "steps_only": bool(typ.get("steps_only")),
                     "origin_actor": H.task_origin(c, row), "ask": ask, "open_asks": len(open_asks),
                     "first_line": (row.get("body") or "").split("\n")[0],
                     "from_person": (ask["from_actor"] if ask and H.is_human(ask["from_actor"])
