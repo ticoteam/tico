@@ -1711,9 +1711,18 @@ class BotKeepTasksGoing(Contract):
     expected_revision: int
 
 
+class BotTaskChoice(Contract):
+    """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
+    only the task effort or only the task context length (backend/task_models.py)."""
+    harness: ID | None = None
+    model: ID | None = None
+    effort: ID | None = None
+    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+
+
 class BotTaskModel(Contract):
-    task_model: BotFallbackChoice | None = Field(None, description="Harness, model and effort for the bot's tasks; "
-                                                 "null is the same as the bot")
+    task_model: BotTaskChoice | None = Field(None, description="Harness, model, effort and context length for the "
+                                             "bot's tasks; a missing model is the bot's own, and null clears all of it")
     expected_revision: int = Field(ge=1)
 
 

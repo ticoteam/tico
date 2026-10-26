@@ -25,6 +25,7 @@ function settingsBotEditorRows(e) {
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
+    ${settingsTaskParts(e)}
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>`}`;
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
@@ -190,7 +191,8 @@ function settingsEditBot(slug = '', inline = false) {
   const pending = new Map();   // key → {label, run: async revision => next revision}
   const choiceKinds = ['model', 'fallback', 'task'];
   const pendingNames = () => [...[...pending.values()].map(item => item.label), ...(machinePick ? ['computer'] : []),
-    ...choiceKinds.filter(kind => settingsEditorPendingChoice(rows, kind)).map(kind => SETTINGS_CHOICE_KINDS[kind].name.toLowerCase())];
+    ...choiceKinds.filter(kind => settingsEditorPendingChoice(rows, kind)).map(kind => SETTINGS_CHOICE_KINDS[kind].name.toLowerCase()),
+    ...settingsEditorTaskParts(rows).map(([, name]) => name)];
   const paintPending = () => {
     if (!pendingLine) return;
     const names = pendingNames();
@@ -252,8 +254,21 @@ function settingsEditBot(slug = '', inline = false) {
         if (!keep.checkValidity()) settingsFieldError(keep, keep.validationMessage || 'Enter a whole number from 0 to 1000, or leave it blank.');
         stage('keep', 'keep tasks going', changed(keep) && keep.checkValidity() && settingsKeepTasksRun(keep));
       }
+      if (event.target.matches('[data-task-effort]')) event.target.dataset.touched = '1';
       const delivery = event.target.closest('[data-bot-app-delivery]');
       if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
+      paintPending();
+    });
+    // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
+    rows.addEventListener('tico:choice', event => {
+      const box = event.target.closest('[data-bot-choice][data-kind=task]'), select = rows.querySelector('[data-task-effort]');
+      if (!box?.picker?.valid() || !select) return;
+      const bot = S.emps.find(row => row.name === slug) || e, value = box.picker.value();
+      const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot, choice?.model || ''));
+      // Picking the task model back as it was shows its effort as it was, unless Task effort itself was changed.
+      const held = box.picker.changed() || select.dataset.touched ? select.value : select.dataset.current || '';
+      const effort = efforts.includes(held) ? held : choice?.effort || '';
+      settingsTaskEffortPaint(select, efforts, effort, !choice);
       paintPending();
     });
     rows.addEventListener('input', () => paintPending());
@@ -326,7 +341,7 @@ function settingsEditBot(slug = '', inline = false) {
     try {
       if (editing) {
         const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
-        const task = settingsEditorPendingChoice(rows, 'task');
+        const task = settingsEditorPendingChoice(rows, 'task'), taskParts = settingsEditorTaskParts(rows);
         const unfinished = [model, fallback, task].find(pick => pick && !pick.ready);
         if (unfinished) throw new Error(`Nothing saved: finish choosing the ${unfinished === model ? 'model' : unfinished === fallback ? 'fallback' : 'task model'}, or reset it.`);
         // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing.
@@ -342,11 +357,16 @@ function settingsEditBot(slug = '', inline = false) {
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
           fallback.box.dataset.current = fallback.box.querySelector('[data-choice-fields]').dataset.current = fallback.value;
         }
-        if (task) {
-          // Only the task model: the bot's own model, and so its sessions, stay as they are.
-          rev = await settingsSaveTaskModel(bot, task.value, rev, true);
+        if (task || taskParts.length) {
+          // The task model, Task effort and Task context length in one save, each part not changed kept as it is.
+          // The bot's own model, and so its sessions, stay as they are.
+          const change = Object.fromEntries(taskParts.map(([select]) => 'taskEffort' in select.dataset
+            ? ['effort', select.value] : ['compact_at', Number(select.value) || null]));
+          if (task) change.choice = task.value ? settingsChoiceFromValue(task.value) : null;
+          rev = await settingsSaveTaskModel(bot, change, rev, true);
           saved = true;
-          task.box.dataset.current = task.box.querySelector('[data-choice-fields]').dataset.current = task.value;
+          if (task) task.box.dataset.current = task.box.querySelector('[data-choice-fields]').dataset.current = task.value;
+          taskParts.forEach(([select]) => { select.dataset.current = select.value; });
         }
         rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,
@@ -416,6 +436,11 @@ function settingsEditorPendingChoice(rows, kind) {
   if (!box?.picker?.changed()) return null;
   const value = box.picker.value();
   return {box, value, ready: box.picker.valid() && value !== (box.dataset.current || '')};
+}
+// Task effort and Task context length changed in the editor and not saved yet: [[select, name], ...].
+function settingsEditorTaskParts(rows) {
+  return [['[data-task-effort]', 'task effort'], ['[data-task-context]', 'task context length']]
+    .map(([selector, name]) => [rows?.querySelector(selector), name]).filter(([select]) => select && select.value !== (select.dataset.current || ''));
 }
 function settingsEditOwners(slug, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
