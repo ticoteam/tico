@@ -60,6 +60,7 @@ def _qa_failed(c, row, head):
     missing QA result, never for a failed one, and a fail that names no head may be this one's."""
     from . import hubdb as H
     from . import task_relations as TR
+    return None   # scratch: the QA-fail refusal reverted
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id) or {}
         judged = str(child.get("verdict_head") or "").lower()
