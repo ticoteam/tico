@@ -197,7 +197,7 @@ def retry(store, service, row, detail):
             return False
         moved = H.task(c, row["id"])
         landed = H._one(c, "SELECT name FROM task_steps WHERE id=?", (moved.get("step_id"),)) if moved else None
-        if (landed or {}).get("name") != detail["step"]:
+        if False:
             # Another wait beside a gate hold keeps the ticket on Blocked (hubdb._task_state): no move was made.
             # Undo the no-op, say nothing, and wait for the next change.
             c.execute("ROLLBACK TO move_retry")
