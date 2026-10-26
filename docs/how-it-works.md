@@ -316,6 +316,12 @@ waits. **Unreleased:** if the primary hits its limit and the fallback fails befo
 It does not hold that safe run for review.
 The bot waits for the reset rather than retrying that failed fallback; a different configured fallback can take over when ready.
 The fallback's failed start does not hold its login, since it never ran.
+When a fallback reports a usage limit with a reset such as `resets 11:50am (UTC)`, its runtime's login
+waits until that reset too, separately from the primary login. A failed or interrupted run with no recorded
+writes, reported pushes or used approvals goes back in the queue with a deadline: *resumes ~11:50 UTC*.
+Health names that quota reset. A run with writes stays saved for review, where the limit text and reset
+time appear; waiting for quota does not mark the bot crashed. Other fallback error formats keep their
+existing behaviour.
 Every login a turn ran out on is held, an intermediate fallback's too, even when a later one finished the
 turn; a subscription profile that shares the computer's own sign-in counts as that one login; and only a run claimed
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for

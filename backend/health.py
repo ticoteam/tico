@@ -768,6 +768,16 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
             fix = _fix(*where)
+            if reason == 'cooling_off':
+                from .execution import last_limit
+                last = last_limit(c, row['bot'])
+                result = c.execute("SELECT json_extract(result_json,'$.quota_wait') FROM attempts WHERE id=?",
+                                   (last['id'],)).fetchone() if last else None
+                quota = json.loads(result[0]) if result and result[0] else {}
+                if quota and quota['until'] > H.now():
+                    until = quota['until']
+                    text = (f"Waiting for quota reset ~{until[11:16]} UTC"
+                            + (f" on {until[:10]}" if until[:10] != H.now()[:10] else ''))
         else:
             text = f"Not started after {QUEUE_MINUTES} min"
             fix = _fix("Open Runs", "#/settings", "runs")

@@ -314,6 +314,41 @@ def limit_texts(c, attempt_id):
 
 
 HOP_RE = re.compile(r"running this turn on (\S+)")
+_FALLBACK_RESET_RE = re.compile(r"\bresets ([0-9]{1,2}:[0-9]{2}(?:am|pm)) \(UTC\)")
+
+
+def named_fallback_limit(c, attempt_id, runtime, body, hit):
+    """A fallback's observed UTC reset, including a limit before a later fallback was interrupted.
+
+    Keep the runtime that emitted the error: the final harness need not be the one that met the limit.
+    Other reset formats and a later unrelated error retain their existing settlement behaviour.
+    """
+    from .harnesses import runtime_of
+    from .run_backoff import LIMIT_RE
+    if not body.fallback or body.outcome == "completed":
+        return None
+    events = c.execute("SELECT id,kind,payload_json FROM attempt_events WHERE attempt_id=? "
+                       "AND kind IN ('error','diagnostic') ORDER BY seq", (attempt_id,)).fetchall()
+    hopped = any(e['kind'] == 'diagnostic' and HOP_RE.search(
+        str(json.loads(e['payload_json']).get('text') or '')) for e in events)
+    current = runtime if hopped else runtime_of(body.fallback)
+    found = None
+    for event in events:
+        payload = json.loads(event['payload_json'])
+        if event['kind'] == 'diagnostic':
+            moved = HOP_RE.search(str(payload.get('text') or ''))
+            if moved:
+                current = runtime_of(moved[1])
+            continue
+        text = str(payload.get('error') or '')
+        match = _FALLBACK_RESET_RE.search(text)
+        reset = believable(reset_from_text(match[0], hit), hit) if match else None
+        found = ({'runtime': current, 'notice': text[:300], 'until': _iso(reset), 'event': event['id']}
+                 if current != runtime and reset and LIMIT_RE.search(text) else None)
+    if found:
+        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.limit',json('true')) WHERE id=?",
+                  (found.pop('event'),))
+    return found
 
 
 def chain(texts, runtime, final=None):

@@ -1226,6 +1226,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     message = H.message(c, job["message_id"])
     if not privacy.message_readable(c, "bot:" + job["bot"], message):
         return "unreadable"
+    # A named fallback reset fences this delivery even if another lane clears the bot's status.
+    previous = c.execute("SELECT json_extract(result_json,'$.not_before') FROM attempts WHERE id=?",
+                         (job['attempt_id'],)).fetchone() if job['attempt_id'] else None
+    if previous and previous[0] and previous[0] > H.now():
+        return "cooling_off"
     if why := turn_budgets.refusal(c, job["bot"], message) or run_backoff.job_refusal(c, job["bot"], message):
         return why                  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
@@ -3288,9 +3293,23 @@ class Execution:
         # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
         # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
         check_task, check = check_models.handed_out(c, aid)
+        quota_wait = (login_holds.named_fallback_limit(c, aid, row['handed_runtime'], body, H.now())
+                      if not check and not row['stop_requested'] and not skipped else None)
+        quota_acted = False
+        if quota_wait:
+            # Use the run's authenticated writes and reported pushes, as the run ledger does. A used approval
+            # also stays with a person even if its operation never reached Tico's write receipt.
+            writes = c.execute("SELECT coalesce(writes,0) FROM turns WHERE id=?", (aid,)).fetchone()
+            quota_acted = bool((writes and writes[0]) or body.pushes or c.execute(
+                "SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at BETWEEN ? AND ? LIMIT 1",
+                (actor, row['started'] or row['created'], H.now())).fetchone())
+            quota_wait['review'] = quota_acted
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
-                   encode({**body.model_dump(exclude={"load_snapshot"}), **({"check": check["runtime"]} if check else {})}), aid))
+                   encode({**body.model_dump(exclude={"load_snapshot"}), **({"check": check["runtime"]} if check else {}),
+                           **({'limited': True, 'limit_resets_at': quota_wait['until'], 'quota_wait': quota_wait,
+                               **({'not_before': quota_wait['until']} if not quota_acted else {})}
+                              if quota_wait else {})}), aid))
         if body.outcome == "completed":
             H.notes_settle(c, aid)        # read for good; a failed or interrupted run gives its notes back
         from .performance import stamp_attempt
@@ -3309,6 +3328,8 @@ class Execution:
                                                               "error_class": failure if isinstance(failure, str) else None},
                    H.KEEPER, revision=aid)
         limited = body.outcome != "completed" and body.limited and not stopped
+        if quota_wait:
+            limited = not quota_acted
         # A model at capacity (backend/login_holds.py capacity) is a busy moment, not the login's quota: kept with the
         # run, so Health and a check's next model never count it as quota. Only a refusal before the bot did anything
         # is a turn that never ran; after a message or a tool it may have acted, and a replay could repeat that, so it
@@ -3324,7 +3345,7 @@ class Execution:
         limited = limited and not busy_acted
         # A limit its fallback could not take over is the limit's too (hop_failed): queued again to wait for the reset,
         # never held for a person, and recorded as a limit so the cooldown and the login's hold read it.
-        hopped = (not limited and not stopped and not check
+        hopped = (not limited and not stopped and not check and not quota_wait
                   and hop_failed(c, aid, body, row["started"] or row["created"], H.now()))
         if hopped:
             limited = True
@@ -3381,9 +3402,14 @@ class Execution:
         # What the bot says about a run the Gateway refused, in its words rather than as a crash.
         refused = gateway.run_status(tico_code, tico_error) if tico_code and not (limited or retryable or rejected) else ""
         requeue = not rejected_acted if rejected else limited or retryable or silent or yielded
+        if quota_wait:
+            requeue = not quota_acted
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "cancelled" if stopped
                    else "queued" if requeue else "uncertain", row["job_id"]))
+        if quota_acted:
+            H.event(c, H.KEEPER, 'job.held', aid,
+                    {'job_id': row['job_id'], 'reason': 'fallback quota limit after writes'})
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
             # waits for a person to move the bot or change its model, then retry or dismiss it.
@@ -3497,11 +3523,21 @@ class Execution:
         # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
         # own waits (reset_cooldown).
         gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        if not check and not superseded and not stopped and not gateway_wait and (limited or body.outcome == "completed" or quota_wait):
+            # An intermediate fallback's limit must not become a hold on the final, interrupted runtime.
+            from .harnesses import runtime_of
+            limit_body = (body.model_copy(update={'limited': quota_wait['runtime'] == runtime_of(body.fallback),
+                                                  'limit_resets_at': quota_wait['until']}) if quota_wait else body)
             login_hold = login_holds.after_turn(c, row["runner_id"], row["bot"], "",
-                                                runtime, body, aid, H.now(),
+                                                runtime, limit_body, aid, H.now(),
                                                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {})
                                                 if hopped else None)
+            if quota_wait:
+                profile = login_holds.canonical(c, row['runner_id'], body.profile_used or '', quota_wait['runtime'])
+                login_hold = login_holds.get(c, row['runner_id'], profile, quota_wait['runtime'])
+                src = login_holds.source(c, aid, runtime, limit_body, runner_id=row['runner_id'])
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
+                          (encode(src), aid))
         if rejected:
             self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
@@ -3521,6 +3557,16 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot"], "job_id": row["job_id"]})
         elif stopped:
             self.stopped(c, row, conv["id"])
+        elif quota_wait:
+            retry = quota_wait['until']
+            focus = (f"Waiting for {quota_wait['runtime']} quota reset; resumes ~{retry[11:16]} UTC"
+                     + (f" on {retry[:10]}" if retry[:10] != H.now()[:10] else '')
+                     + ('; this run has writes and is saved for review' if quota_acted else ''))
+            settle_status(c, row['bot'], 'limited', focus, claimed=row['created'])
+            c.execute('UPDATE bot_status SET since=? WHERE bot=?', (H.now(), row['bot']))
+            H.event(c, H.KEEPER, 'attempt.limited', aid,
+                    {'bot': row['bot'], 'job_id': row['job_id'], 'runtime': quota_wait['runtime'],
+                     'retry_after': retry, 'provider_reset': True, 'review': quota_acted})
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's
@@ -3678,7 +3724,7 @@ class Execution:
         # A Gateway outage keeps its own doubling wait (GATEWAY_WAIT) and is Tico's, not the bot's: it never holds a bot.
         outage = silent and tico_code == gateway.UNAVAILABLE
         self.account_failure(c, row, body, aid, conv, failure,
-                             counts=not (stopped or limited or busy or yielded or outage))
+                             counts=not (stopped or limited or quota_wait or busy or yielded or outage))
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
@@ -3762,6 +3808,15 @@ class Execution:
                 stopped = 'read'
                 reason = ("The run stopped after only reading, so trying it again repeats nothing." if calls else
                           "The run stopped before it used any tool, so trying it again repeats nothing.")
+            result = c.execute("SELECT json_extract(result_json,'$.quota_wait') FROM attempts WHERE id=?",
+                               (row['attempt_id'],)).fetchone()
+            quota = json.loads(result[0]) if result and result[0] else {}
+            if readable and quota:
+                until = quota['until']
+                reason += (f" {quota['notice']} — quota resets ~{until[11:16]} UTC on {until[:10]}.")
+                if quota.get('review'):
+                    stopped = 'changed'
+                    reason += ' This run has writes; review them before retrying.'
             jobs.append({'id':row['id'], 'attempt_id':row['attempt_id'], 'readable':readable,
                          'task':{'id':task['id'],'title':task['title'],'status':task['status'],'owner':task['owner'],
                                  'owner_name':owner_name(c, task['owner'])} if task and readable else None,
