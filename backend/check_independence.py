@@ -36,7 +36,10 @@ def _executed(c, task_id):
 
 
 def capture_attempt(c, ticket_id, check_id, head, turn_id):
-    """Capture the attempt that judged `head`, plus actual builder usage observed for that current head.
+    """Capture the attempt that judged `head`, plus actual builder usage across every turn the ticket ran.
+
+    Builder usage is not attributed to a head, so the whole ticket history counts: a builder that used two families,
+    or a turn with no usage segments, narrows or blocks independence rather than letting an overlap through.
 
     Part A calls this when an assigned check attempt finishes. Keeping the attempt id makes a configured candidate
     distinct from the model that actually ran; an unknown or mixed segment is recorded as unknown.

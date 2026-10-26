@@ -3307,8 +3307,6 @@ def _type_steps(conn, actor, type_id, steps):
     # A new step's public name is its name only on a type whose tasks are public by default; on a private one (the
     # Product roadmap) an internal step name does not go public unless someone gives it a public name.
     unnamed = "" if typ.get("default_visibility", "private") != "public" else None
-    from . import check_pools
-    pools = check_pools._ready(conn)
     clean, names, ids = [], set(), set()
     for position, raw in enumerate(steps):
         name = str(raw.get("name") or "").strip()
