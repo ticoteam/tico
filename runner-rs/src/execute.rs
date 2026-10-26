@@ -1842,7 +1842,9 @@ impl Runner {
         }
         if drove.outcome != "completed" && !keeps_session {
             if let Some(th) = &thread {
-                let _ = drop_session(&self.state, &bot, &conv, &runtime, th).await;
+                // The session as it was kept above: Claude's runs under the id its init named, not the thread's.
+                let saved = host.as_ref().map_or_else(|| th.clone(), |h| h.session_id(th));
+                let _ = drop_session(&self.state, &bot, &conv, &runtime, &saved).await;
             }
         }
         let mut reply = std::mem::take(&mut drove.reply);

@@ -644,6 +644,14 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
     assert claim(api, machine) is None
 
 
+def later():
+    """Times for a test's turns from just after its message was written, so the message never reads as a person's
+    after a limit (person_wrote_since), and within its first claim's start reservation."""
+    from backend.store import H
+    base = H.shift(H.now(), seconds=5)
+    return lambda seconds: H.shift(base, seconds=seconds)
+
+
 def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=True, thread='capacity-thread'):
     from backend.store import H
     monkeypatch.setattr(H, 'now', lambda: at)
@@ -668,31 +676,33 @@ def claim_at(api, monkeypatch, machine, at):
 def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch):
     from backend import execution
     machine, message, attempt = setup_attempt(api)
-    capacity_turn(api, monkeypatch, machine, attempt, '2026-10-26T06:30:00.000000Z')
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
     assert get(api, 'bots/ops/execution-review')['jobs'] == []                  # not held for a person
-    assert claim_at(api, monkeypatch, machine, '2026-10-26T06:31:00.000000Z') is None   # the capacity hold
-    following = claim_at(api, monkeypatch, machine, '2026-10-26T06:32:01.000000Z')
+    assert claim_at(api, monkeypatch, machine, at(60)) is None   # the capacity hold
+    following = claim_at(api, monkeypatch, machine, at(121))
     assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
     assert following['message']['body'].endswith(execution.CONTINUE_NOTE)
     # The continuation's own model refuses it before it does anything: still a short hold, still that thread.
-    capacity_turn(api, monkeypatch, machine, following, '2026-10-26T06:33:00.000000Z', acted=False, continues=False)
-    again = claim_at(api, monkeypatch, machine, '2026-10-26T06:35:01.000000Z')
+    capacity_turn(api, monkeypatch, machine, following, at(180), acted=False, continues=False)
+    again = claim_at(api, monkeypatch, machine, at(301))
     assert again['job_id'] == attempt['job_id'] and again['continue_thread'] == 'capacity-thread'
     # At capacity again after it acted: held for review as before, once.
-    capacity_turn(api, monkeypatch, machine, again, '2026-10-26T06:36:00.000000Z')
+    capacity_turn(api, monkeypatch, machine, again, at(360))
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         assert execution.H.status(c, 'ops')['state'] == 'crashed'
     assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [again['id']]
-    assert claim_at(api, monkeypatch, machine, '2026-10-26T06:40:00.000000Z') is None
+    assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
 def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_moves_to_a_fallback(api, monkeypatch):
     from backend import execution
     machine, message, attempt = setup_attempt(api)
-    capacity_turn(api, monkeypatch, machine, attempt, '2026-10-26T06:30:00.000000Z', continues=False)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0), continues=False)
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         assert execution.capacity_continuation(c, attempt['job_id']) is None

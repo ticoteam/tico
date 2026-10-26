@@ -3204,8 +3204,9 @@ class Execution:
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
                       (encode({"kind": login_holds.CAPACITY_KIND, "notice": errors[0][:300]}), aid))
         if continues:
-            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.capacity_continue',json('true')) "
-                      "WHERE id=?", (aid,))
+            # Recorded as the capacity limit it is, so the bot's cooldown (last_limit) holds the job for the wait.
+            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
+                      "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
         limited = limited and not busy_acted or continues
         # A limit its fallback could not take over is the limit's too (hop_failed): queued again to wait for the reset,
         # never held for a person, and recorded as a limit so the cooldown and the login's hold read it.
