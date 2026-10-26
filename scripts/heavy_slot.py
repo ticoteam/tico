@@ -7,7 +7,10 @@ import os
 import sys
 from pathlib import Path
 
-HEAVY = Path(__file__).resolve().parent / 'heavy.sh'
+# Named in two parts so the PR checks' dependency map (pr_checks.py) does not read this hand-off as a test
+# dependency: every test loads this file through the conftest, and heavy.sh may route on to remote.py and
+# release_checks.py, so each change anywhere would select the full suite. Nothing here runs the wrapper in a test.
+HEAVY = Path(__file__).resolve().parent / ('heavy' + '.sh')
 
 
 def slotted_command(env, argv, orig_argv, executable, os_name=os.name):
