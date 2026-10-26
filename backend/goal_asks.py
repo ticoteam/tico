@@ -64,10 +64,20 @@ def _acts_for(actor, owner_id):
     return actor
 
 
-def wanted(conn, owner_id, at=None):
+def readers(conn, auth):
+    """`reads` for wanted and sync: whether a person may Read a bot's activity, its KPIs among it (backend/auth.py)."""
+    return lambda person, owner: auth.person_can(conn, person, H.actor_id(owner), "read")
+
+
+def _may_read(reads, person, owner):
+    """A person's and the company's measures are the team's; a bot's only for a person who may Read the bot."""
+    return not H.is_bot(owner) or bool(reads and reads(person, owner))
+
+
+def wanted(conn, owner_id, at=None, reads=None):
     """Everything that waits on someone now: [{kind, ref, owner, ...the item the Goals page shows}]. `owner` is
     the actor who must act (a bot only for its own red or stale KPI). `owner_id` is the environment owner's
-    roster id."""
+    roster id. `reads` (readers) says whose measures a person may read; without it no bot's measure is named."""
     org = None
     items = []
     ceo = ceo_bot.proactive(conn)      # above Passive: the vision ask and Why lines in Needs you
@@ -137,8 +147,13 @@ def wanted(conn, owner_id, at=None):
             item = {"kind": "proposal", "ref": p["id"], "owner": who, "proposal": p,
                     "goal_title": goal and goal["title"], "kpi_name": record and record["name"]}
             used = K.kpi(conn, (p.get("payload") or {}).get("kpi_id")) if p["kind"] == "goal_kpi" else None
-            if used:
+            if used and _may_read(reads, who, used["owner"]):
                 item["measure_name"] = used["name"]     # an Add a KPI that reuses a measure names it
+            else:
+                used = None
+            # A bot's goal or measure named in the ask is its activity: the ask is the person's and the CEO Bot's.
+            if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner"]) for r in (goal, record, used) if r):
+                item["private"] = True
             items.append(item)
     for who, goals in whys.items():
         items.append({"kind": "why", "ref": WHY_REF, "owner": who, "goals": list(goals.values())})
@@ -259,14 +274,15 @@ OLD_WORDS = "Confirm or reject "
 def _goal_ask(item, manager):
     p, payload = item["proposal"], item["proposal"].get("payload") or {}
     name, goal = item.get("kpi_name") or "", item.get("goal_title") or ""
-    measure = (payload.get("kpi") or {}).get("name") or item.get("measure_name") or "a measure"
-    title = {"goal_kpi": f"Add the measure {measure} to {goal}?",
+    measure = (payload.get("kpi") or {}).get("name") or item.get("measure_name")
+    title = {"goal_kpi": f"Add the measure {measure} to {goal}?" if measure else f"Add a measure to {goal}?",
              "kpi_target": f"Use a new {name} target on {goal}?",
              "kpi_definition": f"Use a new definition for {name}?",
              "goal_wording": f"Use new wording for {goal}?",
              "flag": f"The {manager} noticed something on {goal}"}[p["kind"]]
     said = f" because {p['reason'].rstrip('.')}" if p.get("reason") else ""
-    body = (f"{title.rstrip('?')}. {H.actor_id(p['proposed_by'])} proposed it{said}: {_change(p, measure)}. "
+    change = _change(p, measure or "a measure")
+    body = (f"{title.rstrip('?')}. {H.actor_id(p['proposed_by'])} proposed it{said}: {change}. "
             f"Decide it under Needs you on the Goals page.")
     return title, body
 
@@ -280,7 +296,8 @@ def _reword(conn, task, item):
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"]):
-        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body, quiet=True)
+        H.task_update(conn, G.AUTO_ACTOR, task["id"], title=_free_title(conn, task["owner"], title), body=body,
+                      private=True if item.get("private") else None, quiet=True)
 
 
 def _relist(conn, task, item):
@@ -330,14 +347,14 @@ def manager_ready(conn):
     return bool(row) and row.get("state") not in ("archived", "quarantined")
 
 
-def sync(conn, owner_id, at=None):
+def sync(conn, owner_id, at=None, reads=None):
     """File the asks that are new and close the ones that are resolved. Returns {created, closed}. Never raises
     for one row: a failure is recorded and the rest go on (backend/batch_work.py)."""
     if not manager_ready(conn):
         return {"created": [], "closed": []}
     asks = ceo_bot.proactive(conn)      # at Passive nothing new is filed; what was asked still closes when resolved
     # Only someone on the roster: a refused ask counts against the CEO Bot (rule 8), every hour.
-    want = {(i["kind"], i["ref"], i["owner"]): i for i in wanted(conn, owner_id, at)
+    want = {(i["kind"], i["ref"], i["owner"]): i for i in wanted(conn, owner_id, at, reads)
             if H.is_human(i["owner"]) and H.human(conn, H.actor_id(i["owner"]))}
     have = {(r["kind"], r["ref"], r["owner"]): dict(r) for r in conn.execute("SELECT * FROM goal_asks")}
     created, closed = [], []
@@ -390,7 +407,8 @@ def sync(conn, owner_id, at=None):
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
             made = H.task_create(conn, G.AUTO_ACTOR, _free_title(conn, item["owner"], title), body, item["owner"],
-                                 lint=False, lane="company", top=item["kind"] == "vision", capped=not rush)
+                                 lint=False, lane="company", top=item["kind"] == "vision", capped=not rush,
+                                 private=True if item.get("private") else None)
             conn.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES (?,?,?,?,?)",
                          (*key, made["id"], H.now()))
             created.append(made["id"])
@@ -416,7 +434,7 @@ def for_person(conn, actor, items):
             if room <= 0:
                 continue
             room -= 1
-        view = {k: v for k, v in item.items() if k not in ("ref", "owner")}
+        view = {k: v for k, v in item.items() if k not in ("ref", "owner", "measure_name", "private")}
         if task:
             view["task"] = {"id": task["id"], "title": task["title"], "status": task["status"]}
         out.append(view)

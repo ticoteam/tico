@@ -723,25 +723,33 @@ CARD_FIELDS = {"name": "Name", "definition": "Definition", "unit": "Unit", "dire
                "cadence": "Cadence", "source_note": "Source"}
 
 
-def card(conn, p, hidden=()):
-    """`hidden`: owners whose KPIs the reader may not see; a reused measure of theirs is not named."""
+def card(conn, p, hidden, editor):
+    """What the card tells this reader. `hidden`: owners whose goals and KPIs the reader may not read
+    (backend/goal_routes.py hidden_owners); nothing of theirs is read in, not a reused measure's unit either.
+    `editor`: the reader edits the strategy, so reads unpublished bets; anyone else reads the published ones."""
     pl, kind = p.get("payload") or {}, p["kind"]
-    row = goal(conn, p["goal_id"]) if p.get("goal_id") else None
-    record = kpi(conn, p["kpi_id"]) if p.get("kpi_id") else None
+    seen = lambda record: record if record and record["owner"] not in hidden else None
+    row = seen(goal(conn, p["goal_id"]) if p.get("goal_id") else None)
+    record = seen(kpi(conn, p["kpi_id"]) if p.get("kpi_id") else None)
     out = {"goal_title": row and row["title"], "kpi_name": record and record["name"]}
     if kind == "goal_kpi":
         used = kpi(conn, pl["kpi_id"]) if pl.get("kpi_id") else None
+        if used and not seen(used):
+            out["measure"] = {"name": "a measure you cannot see", "definition": "", "source_note": "", "unit": "",
+                              "direction": "up", "existing": True, "hidden": True}
+            out["target_label"] = K.target_label({}, pl.get("target"))
+            return out
         spec = used or {"direction": "up", **(pl.get("kpi") or {})}
-        if used and used["owner"] in hidden:
-            spec = {"name": "a measure you cannot see", "direction": used["direction"], "unit": used["unit"],
-                    "source_note": "hidden"}
         out["measure"] = {"name": spec.get("name") or "", "definition": spec.get("definition") or "",
                           "source_note": spec.get("source_note") or "", "unit": spec.get("unit") or "",
                           "direction": spec.get("direction") or "up", "existing": bool(used)}
         out["target_label"] = K.target_label(spec, pl.get("target"))
     elif kind == "kpi_target" and record:
-        link = next(iter(K.links_of(conn, goal_id=p.get("goal_id"), kpi_id=record["id"])), None) if p.get("goal_id") else None
-        out["now_label"], out["target_label"] = K.target_label(record, link), K.target_label(record, pl)
+        # The target it has now is the link's on that goal: only for a reader of the goal.
+        link = next(iter(K.links_of(conn, goal_id=row["id"], kpi_id=record["id"])), None) if row else None
+        out["target_label"] = K.target_label(record, pl)
+        if row:
+            out["now_label"] = K.target_label(record, link)
     elif kind == "kpi_definition" and record:
         out["changes"] = [{"label": CARD_FIELDS.get(k, k), "now": record.get(k) or "", "proposed": v}
                           for k, v in K.clean(dict(pl)).items()]
@@ -750,7 +758,11 @@ def card(conn, p, hidden=()):
                    for k, label in (("title", "Title"), ("body", "Description")) if pl.get(k)]
         if pl.get("bet_id"):
             from . import strategy
-            bet = lambda bid: (strategy.bet(conn, str(bid)) or {}).get("statement") if bid else ""
+            if editor:
+                bet = lambda bid: (strategy.bet(conn, str(bid)) or {}).get("statement") if bid else ""
+            else:
+                published = {b.get("id"): b.get("statement") for b in (strategy.current(conn) or {}).get("bets") or []}
+                bet = lambda bid: published.get(bid) if bid else ""
             changes.append({"label": "Serves", "now": bet(row.get("bet_id")) or "", "proposed": bet(pl["bet_id"]) or ""})
         out["changes"] = changes
     return out

@@ -169,9 +169,10 @@ function goalPropHtml(p, extra) {
   if (p.kind === 'goal_kpi') {
     const m = c.measure || pl.kpi || {}, proposed = c.target_label || '';
     head = `Add the measure <b>${esc(m.name || 'with no name')}</b> to ${goal}`;
-    body = `<span class="kpi-prop-detail">${m.definition ? esc(m.definition) : '<span class="muted">What it counts is not written down yet</span>'}</span>
+    // A measure the reader may not read (card `hidden`) says nothing about itself, not even that it lacks a source.
+    body = `${m.hidden ? '' : `<span class="kpi-prop-detail">${m.definition ? esc(m.definition) : '<span class="muted">What it counts is not written down yet</span>'}</span>`}
       <span class="kpi-prop-target">${proposed ? `Target ${esc(proposed)}` : 'No target yet'}</span>
-      ${String(m.source_note || '').trim() ? '' : '<span class="kpi-prop-warn">No data source yet: it will show no numbers until one is set</span>'}`;
+      ${m.hidden || String(m.source_note || '').trim() ? '' : '<span class="kpi-prop-warn">No data source yet: it will show no numbers until one is set</span>'}`;
     // The target fields of the goal editor, folded away: the card stays short, and blank leaves the measure with none.
     const t = pl.target && pl.target.kind && pl.target.kind !== 'none' ? pl.target : {kind: m.direction === 'range' ? 'maintain' : 'improve'};
     if (p.may_decide) more = `<details class="kpi-prop-set"${proposed ? ' data-proposed' : ''}><summary>${proposed ? 'Change the target' : 'Set a target (optional)'}</summary>
