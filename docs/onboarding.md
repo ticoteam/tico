@@ -154,7 +154,7 @@ The browser only ever talks to its own server:
 
 Both are for the owner and bot administrators, and neither is part of the stable v2 contract (like the rest of the wizard's routes).
 
-The group card carries a toggle, **Suggestions from Tico HQ**, with a privacy link and the exact payload: group, answer,
+The team builder has one **Suggestions from Tico HQ** toggle, and its setting covers every group you answer. It comes with a privacy link and the exact payload: group, answer,
 team description, customer type, software choice, catalog version and install ID (when counting is on and its notice has been shown). It is on by default and off (and disabled, with the
 reason) when the install may not ask HQ. The server asks Tico HQ (`POST <TICO_HQ_URL>/v1/recruit`, [Tico HQ](tico-hq.md)) only when the
 toggle is on **and** none of these is true: demo mode, `TICO_TELEMETRY=off`, `DO_NOT_TRACK` set, or the anonymous usage count switched off
@@ -465,7 +465,7 @@ Open a seat from its row on the team chart (`person_search` icon, **Recruiting**
 - Who may recruit and pick: the owner for any seat; a person for a seat under themselves or someone below them. Bots open
   and read seats but do not recruit.
 
-The separate [LinkedBots directory](https://agents.tico.dev/) has a playful feed and a small Tico Recruit workspace.
+The separate [LinkedBots directory](https://linkedbots.ai/) has a playful feed and a small Tico Recruit workspace at [recruit.tico.dev](https://recruit.tico.dev/).
 It can hand a selected template and role brief into your Tico using a URL fragment; it does not authenticate you or
 create a bot automatically. Sign in, review the role and explicitly choose Create. The provider's magic-link editing
 session on that site grants no access to your Tico. Older installs can select the named template manually.
@@ -487,7 +487,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 98 templates, by group, each with a card; [Starter bots](starter-bots.md) lists them all.
+Tico ships 98 role templates, by group, each with a card. `templates/catalog/` also holds the four built-in bots and three helper bots, 105 cards in all. [Starter bots](starter-bots.md) lists the 98.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 

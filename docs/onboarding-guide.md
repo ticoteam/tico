@@ -1,7 +1,7 @@
 # Setup guide: your first bots
 
 A practical guide to getting real work out of your first bots. The screens themselves are in [Finish setup](onboarding.md); what each of
-the 98 templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
+the 98 role templates does is in [Starter bots](starter-bots.md). BotOps and the Librarian can answer questions from this page.
 
 ## Pick your first bots
 
@@ -12,13 +12,14 @@ Start from what your team does, not from what a bot could do.
 2. **Build your team chart.** Pick the groups you want, then answer one short question for each ("What kind of sales do you do
    today?"). Tico recruits bots for that group: its head is checked, the usual ones are checked or shown, and the rest are under
    **More**. Check what you want and watch the chart grow. Skip a group you do not need; Product and Engineering are suggested only
-   if software is your product. A big chart is safe: a bot you have not set up yet is parked, does nothing on its own and costs nothing.
-   The suggestions come from Tico HQ while the toggle on the card is on by default: it sends this answer and your team description,
+   if software is your product. A big chart is safe: a role you have not recruited yet is only a Recruiting seat. It is not a bot, does nothing on its own and
+   costs nothing. Recruiting it creates a bot parked in **Needs setup**.
+   The suggestions come from Tico HQ while the **Suggestions from Tico HQ** toggle in the builder is on, which it is by default: it sends this answer and your team description,
    customer type, software answer, group, catalog version and, when enabled, install id. See [PRIVACY.md](../PRIVACY.md) for the payload
    and retention. Switch it off to use local suggestions.
 3. **Edit before you create.** On the finished chart, click a bot to rename it, choose who it reports to (each group's bots report
    to its head, and the heads to you), or remove it. To have one human's mail sorted and replies drafted, switch on the message bot
-   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and CEO Bot; Inbox Manager appears under **Message bots**. Nothing exists until **Create my team**.
+   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and CEO Bot; Inbox Manager appears under **Message bots**. Nothing exists until **Create my team**: then the four built-in bots exist and every other role you picked is a Recruiting seat.
 4. **Connect tools when a bot asks.** Finish setup does not ask which tools you use and no bot is held back for a missing one. When you press
    **Set up** on a bot, it tells you what it needs (a mailbox, tickets, a repository, a CRM) and where to connect it.
 
@@ -26,7 +27,7 @@ There is no limit on how many bots to create, but set them up one at a time, in 
 
 ## Set one up, together
 
-A new starter shows **Needs setup**. Press **Set up** on its page (or just say hello): it introduces itself, asks a handful of
+A recruited starter shows **Needs setup**. Press **Set up** on its page (or just say hello): it introduces itself, asks a handful of
 questions in one message, and writes a real first draft from your own data so you have something to react to. Starting the setup switches
 its first routine on; ask it to change or turn off the routine and it does, and it marks itself set up once its setup is done.
 

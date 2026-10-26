@@ -101,8 +101,8 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** The four built-in bots are created automatically. Your selected starters are placed on the computer,
-   with **Needs setup** until you talk to them.
+4. **Create my team.** The four built-in bots are created automatically. Each other role you picked waits as a Recruiting seat;
+   recruiting one creates a bot in **Needs setup** until you talk to it.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to both Claude Code and Codex
    (ChatGPT through Codex). **Tico Gateway only** needs no model sign-in. In **Settings > Computers**, wait for each
    selected harness to be installed, then press **Sign in** beside it.
