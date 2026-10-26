@@ -246,6 +246,9 @@ def create_app(settings=None):
                 # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
                 from . import move_retry
                 move_retry.tick(app.state.github_app)
+                # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
+                from . import task_blocked
+                task_blocked.fresh(app.state.github_app)
             from . import system_routines
             def recorded(key, work):
                 # One system routine's run, recorded for Settings > Routines (backend/system_routines.py).
@@ -6269,7 +6272,7 @@ def create_app(settings=None):
     from .archive import install_archives
     install_archives(app, store)
     from .media import install_media
-    install_media(app, store, auth, mutate, send, task_create)
+    install_media(app, store, auth, mutate, send, task_create, review_preflight)
     from .downloads import install_downloads
     install_downloads(app, store)
     from .team_icon import install_team_icon
