@@ -1835,8 +1835,9 @@ class Execution:
                           (json.dumps(runtimes), H.now(), runner_id, profile))
         c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(ready), runner_id))
 
-    def candidate(self, c, who, body, runner, *, job_id=None):
-        """The queued job this runner would be given next, or None. Reads only."""
+    def candidate(self, c, who, body, runner, *, job_id=None, people_only=False):
+        """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
+        message (start_places.from_person), on a computer that holds every other start."""
         lanes, roots = lanes_on(runner), roots_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
@@ -1888,6 +1889,7 @@ class Execution:
             "WHERE pc.bot=j.bot AND pc.onboarding_state IN " + PARKED_SQL + " "
             "AND m.from_actor<>'bot:'||coalesce(pc.reports_to,''))) "
             f"AND {unfenced_sql()} AND {scoped_sql()} " + ("AND j.id=? " if job_id is not None else "") +
+            ("AND m.from_actor LIKE 'human:%' " if people_only else "") +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then task rank, then the longest waiting.
@@ -1907,6 +1909,22 @@ class Execution:
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
                 return row
         return None
+
+    @staticmethod
+    def held_answer(c, runner_id):
+        from .performance import load_status
+        if load_status(c, runner_id)["overloaded"]:
+            return {"attempt": None, "waiting": "computer busy"}
+        return {"attempt": None}
+
+    def held_starts(self, c, runner_id):
+        """(people_only, answer) for a computer that holds new starts: overloaded, or with turns already waiting
+        to start there. Only a person's own message is handed out then (start_places.from_person); with none queued,
+        `answer` is the claim's answer at once. Capacity still applies to that message."""
+        from .performance import load_status
+        if not load_status(c, runner_id)["overloaded"] and not start_places.ready_waiting(c, runner_id):
+            return False, None
+        return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))
 
     def company_waiter(self, c, who, body, runner):
         """Oldest eligible stop-level waiter across computers; unavailable lanes do not block others.
@@ -1981,15 +1999,15 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        from .performance import load_status
-        if load_status(c, who.runner_id)["overloaded"]:
-            return {"attempt": None, "waiting": "computer busy"}
-        if start_places.ready_waiting(c, who.runner_id):
-            return {"attempt": None}
+        people_only, held = self.held_starts(c, who.runner_id)
+        if held:
+            return held
         count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"] or not self.awake(awake_since, now):
             return {"attempt": None}
-        row = self.candidate(c, who, body, runner)
+        row = self.candidate(c, who, body, runner, people_only=people_only)
+        if row is None and people_only:
+            return self.held_answer(c, who.runner_id)
         if row is None and auto_tasks.missing(c, self.store.settings, runner, body):
             return None
         if row is not None and selected is not None:
@@ -2068,11 +2086,11 @@ class Execution:
         why = runner_versions.paused(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
-        from .performance import load_status
-        if load_status(c, who.runner_id)["overloaded"]:
-            return {"attempt": None, "waiting": "computer busy"}
-        if start_places.ready_waiting(c, who.runner_id):
-            return {"attempt": None}
+        people_only, held = self.held_starts(c, who.runner_id)
+        if held:
+            return held
+        if people_only:
+            selected, prepared = None, False     # chosen before the hold, perhaps not a person's
         count = sum(turns_here(c, who.runner_id).values())
         if count >= runner["capacity"]:
             return {"attempt": None}
@@ -2089,7 +2107,9 @@ class Execution:
         if prepared:
             row = self.candidate(c, who, body, runner, job_id=selected["id"]) if selected is not None else None
         else:
-            row = selected if selected is not None else self.candidate(c, who, body, runner)
+            row = selected if selected is not None else self.candidate(c, who, body, runner, people_only=people_only)
+        if row is None and people_only:
+            return self.held_answer(c, who.runner_id)
         # Backfill a free turn after queued conversations and awaited results keep their place.
         if row is None and selected is None and (pending := auto_tasks.missing(c, self.store.settings, runner, body)):
             auto_tasks.enqueue(c, pending)

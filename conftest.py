@@ -69,8 +69,14 @@ def _unix_socket_bind_outside_tmp_path(config):
 
 
 def pytest_configure(config):
-    """A test path that does not exist is an error. Under -n (on by default here) xdist drops it without a word,
+    """A bot's own run first takes one of the box's heavy-job slots (scripts/heavy_slot.py), before collection.
+    A test path that does not exist is an error. Under -n (on by default here) xdist drops it without a word,
     and the run ends as "no tests ran", which a reader piping the output can take for a pass."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("tico_heavy_slot", Path(__file__).parent / "scripts/heavy_slot.py")
+    heavy_slot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(heavy_slot)
+    heavy_slot.reexec()
     _unix_socket_bind_outside_tmp_path(config)
     if hasattr(config, "workerinput") or config.option.pyargs:
         return          # --pyargs names modules, not paths
