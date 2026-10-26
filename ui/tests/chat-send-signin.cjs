@@ -12,17 +12,26 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   const page = await browser.newPage({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
   const errors = [], posts = [], delivered = [];
   const reads = new Set(), readWaiters = new Set();
+  let navigating = false;
+  const readsDrained = () => { if (!reads.size) for (const done of [...readWaiters]) done(); };
   page.on('request', request => {
     const path = new URL(request.url()).pathname;
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigating = true;
     if (request.method() === 'GET' && path !== '/api/v2/events' && !path.endsWith('/watch')) reads.add(request);
+  });
+  // A read still out when the page loads a new document is cancelled with the old one, and Chromium reports neither
+  // requestfinished nor requestfailed for it: left counted, it held the next wait to its deadline ("Fixture reads did
+  // not settle"). A new document in the main frame (not a hash change) ends every read made before it.
+  page.on('framenavigated', frame => {
+    if (frame !== page.mainFrame() || !navigating) return;
+    navigating = false;
+    reads.clear();
+    readsDrained();
   });
   const readFinished = request => {
     reads.delete(request);
-    if (!reads.size) for (const done of [...readWaiters]) done();
+    readsDrained();
   };
-  const responded = new WeakSet(), seen = [], started = new Map();
-  page.on('response', response => responded.add(response.request()));
-  page.on('request', request => started.set(request, Date.now()));
   page.on('requestfinished', readFinished);
   page.on('requestfailed', readFinished);
   page.on('pageerror', e => errors.push(e.message));
@@ -33,8 +42,6 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   const server = http.createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url, 'http://127.0.0.1'), p = url.pathname;
-      const entry = {m: request.method, u: request.url, at: Date.now(), ended: false}; seen.push(entry);
-      response.on('finish', () => { entry.ended = true; }); response.on('close', () => { entry.closed = true; });
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       const body = Buffer.concat(chunks).toString();
@@ -88,11 +95,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       await page.waitForFunction(() => !LIVE_SOON.size);
       if (reads.size) await new Promise((resolve, reject) => {
         const done = () => { clearTimeout(timer); readWaiters.delete(done); resolve(); };
-        const timer = setTimeout(() => { readWaiters.delete(done); reject(new Error('Fixture reads did not settle: ' + JSON.stringify({mode, keeper, edit, editedBefore,
-          stuck: [...reads].map(r => ({u: r.url(), type: r.resourceType(), responded: responded.has(r), age: Date.now() - started.get(r),
-            frame: (() => { try { return r.frame().url(); } catch (e) { return 'detached'; } })(), nav: r.isNavigationRequest()})),
-          server: seen.filter(e => !e.ended).map(e => ({m: e.m, u: e.u, age: Date.now() - e.at, closed: !!e.closed})),
-          page: page.url()}))); }, Math.max(1, deadline - Date.now()));
+        const timer = setTimeout(() => { readWaiters.delete(done); reject(new Error('Fixture reads did not settle')); }, Math.max(1, deadline - Date.now()));
         readWaiters.add(done);
       });
       await frames();
