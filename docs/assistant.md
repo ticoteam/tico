@@ -65,7 +65,7 @@ writes to a bot is marked "via assistant", so BotOps never takes it for your req
 ids (`human:<id>`), never bare names, and a recipient that resolves to a human is not a bot. Everything else the server
 refuses (`403 confirm_required`) and the assistant must propose, including a message for another human, a note to a bot,
 a comment on a task another human is on, and running a task now. The owner may turn **Assistant acts without asking**
-off (Settings > Humans, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
+off (Settings > People, or `PUT /api/v2/access/rules {"assistant_direct": false}`): then only your own tasks, and
 comments on tasks with no bot on them, are direct, and a task, message or comment involving a bot or another human is a
 card again. An assistant run's credential works only while its lease is live.
 

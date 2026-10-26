@@ -502,11 +502,8 @@ def test_sse_replays_persisted_events_after_last_event_id(live, monkeypatch):
         disconnected += 1
         return disconnected > 1
 
-    async def no_sleep(_seconds):
-        return None
-
     monkeypatch.setattr(Request, "is_disconnected", is_disconnected)
-    monkeypatch.setattr(live_meetings_module.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(live_meetings_module, "EVENT_POLL_SECONDS", 0)
 
     async def read_replay():
         response = await event_route.endpoint(request, mid)

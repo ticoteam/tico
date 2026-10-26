@@ -807,6 +807,7 @@ class Store:
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.seed_dev(c)
+            _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
             from . import docs as _docs

@@ -52,6 +52,11 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
       if (p === '/api/v2/setup' && method === 'GET') return json({...record, home: 'human:ana'});
       if (p === '/api/v2/setup/getting-started/state') return json({tour: false, checklist: false, cards: [], skipped: []});
       if (p === '/api/v2/needs-you') return json({items: []});
+      if (p === '/api/v2/access/humans' && method === 'POST') {
+        const body = request.postDataJSON(), id = body.email.split('@')[0];
+        calls.push(['add', body]); people.push({id, name: body.name, email: body.email});
+        return json({person: id, email: body.email, name: body.name});
+      }
       let m;
       if ((m = p.match(/^\/api\/v2\/access\/humans\/([^/]+)\/invite$/)) && method === 'POST') {
         calls.push(['invite', m[1], request.postDataJSON()]);
@@ -103,9 +108,9 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     assert.equal(await row('ben').locator('[data-person-act=password]').count(), 0);
     await page.keyboard.press('Escape');
 
-    // A refused roster invite is a visible error and nothing reads "Invited".
+    // A refused roster invite is a visible error on that person's row and nothing reads "Invited".
     await menuAct('ben', 'invite');
-    await page.locator('.toast', {hasText: "couldn't deliver the invite"}).waitFor();
+    await page.locator('#set-people [data-field-err]', {hasText: "couldn't deliver the invite"}).waitFor();
     assert.deepEqual(calls.shift(), ['invite', 'ben', {}]);
     assert.equal(await row('ben').locator('[data-invited]').count(), 0);
 
@@ -134,17 +139,30 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     assert.equal(await when.innerText(), '3h ago');
     await when.evaluate(n => { n.dataset.ago = new Date(Date.now() - 5e3).toISOString(); agoTick(); });
     assert.equal(await when.innerText(), 'just now', 'under a minute is not counted in seconds');
-    assert.match(await page.locator('.people-note').first().innerText(), /^No email is sent until you choose Send invite\./);
+    // Add and send invite: one click adds the person and sends their invite.
+    await page.locator('#people-add [name=email]').fill('eli@acme.example');
+    await page.locator('#people-add [name=name]').fill('Eli Park');
+    await page.locator('#people-add [data-people-add-invite]').click();
+    await row('eli').locator('[data-invited]').waitFor();
+    assert.deepEqual(calls.splice(0), [['add', {email: 'eli@acme.example', name: 'Eli Park'}], ['invite', 'eli', {}]]);
+    // A refused invite still leaves them added, and their row says why.
+    refuse = true;
+    await page.locator('#people-add [name=email]').fill('fay@acme.example');
+    await page.locator('#people-add [data-people-add-invite]').click();
+    await page.locator('#set-people [data-field-err]', {hasText: "couldn't deliver the invite"}).waitFor();
+    await row('fay').waitFor();
+    assert.deepEqual(calls.splice(0).map(c => c.slice(0, 2)), [['add', {email: 'fay@acme.example', name: ''}], ['invite', 'fay']]);
+    refuse = false;
     await row('ben').locator('.people-more').click();
     assert.equal((await row('ben').locator('[data-person-act=invite]').innerText()).trim(), 'Send invite again');
     await page.keyboard.press('Escape');
 
-    // Create password: a refusal is a toast in words; a made account's password shows once, then is gone.
+    // Create password: a refusal is a red line on the row, in words; a made account's password shows once, then is gone.
     accountPassword = true;
-    await page.goto('https://tico-ui.test/#/settings/people');
+    await page.reload();   // the address already names People, so going to it again would not redraw
     await row('ben').waitFor();
     await menuAct('ben', 'password');
-    await page.locator('.toast', {hasText: 'already has a Tico account; use Invite.'}).waitFor();
+    await page.locator('#set-people [data-field-err]', {hasText: 'already has a Tico account; use Invite.'}).waitFor();
     await menuAct('ben', 'password');
     const dialog = page.locator('#people-dialog');
     await dialog.locator('[data-made-password]').waitFor();

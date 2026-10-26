@@ -116,6 +116,75 @@ def test_a_reviewer_takes_review_children_only_and_wakes_for_its_request_and_peo
         assert P.mismatches(c) == [("reviewer_holds_tasks", "checker", 1)]
 
 
+@pytest.mark.parametrize("title,parent_step,child", [
+    ("Post Release QA pass: v1.2.3", None, False),
+    ("Release QA: v1.2.3", None, False),
+    ("Post Launch QA: runtime installation", None, False),
+    ("Post Release QA sweep", None, False),
+    ("Post-release checks: shared question card", None, True),
+    ("Hosting preview: carry remaining installed-build and live acceptance", None, True),
+    ("Verify shipped behavior", "Post Release QA", True),
+    ("Verify the change", "Review 1", True),
+    ("Verify the change", "Review 2", True),
+    ("Verify the change", "In QA", True),
+    ("Review 1: legacy request", None, True),
+    ("Review 2: legacy request", None, True),
+    ("Security: legacy request", None, True),
+])
+def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(api, title, parent_step, child):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        config = profile_of(c, "checker")
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='checker'").fetchone()[0]
+        parent = H.task_create(c, "bot:ops", "Build it", "x", "bot:cpo") if child else None
+        if parent_step:
+            # Synthetic step: no production task, factory gate or PR is involved.
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('qa-stage','general',?,99,'review')",
+                      (parent_step,))
+            c.execute("UPDATE tasks SET step_id='qa-stage' WHERE id=?", (parent["id"],))
+        c.execute("DELETE FROM jobs")
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker",
+                             parent_id=parent["id"] if parent else None)
+        row = H.task(c, made["id"])
+        assert P.is_review_task(c, row)
+        assert P.pull_refusal(c, row, config) is None
+        assert last_to(c, "checker")["rule"] == "profile_reviewer_request"
+        assert jobs(c, "checker") == 1
+        assert P.mismatches(c) == []
+        assert profile_of(c, "checker") == config
+        assert c.execute("SELECT revision FROM bot_config WHERE bot='checker'").fetchone()[0] == revision
+        H.task_update(c, "bot:ops", made["id"], owner="bot:cpo")
+        c.execute("DELETE FROM jobs")
+        H.task_update(c, "bot:ops", made["id"], owner="bot:checker")
+        assert last_to(c, "checker")["rule"] == "profile_reviewer_assignment"
+        assert jobs(c, "checker") == 1
+
+
+@pytest.mark.parametrize("title,child", [
+    ("Build the thing", False), ("QA: orphan review", False),
+    ("Implement acceptance criteria", False), ("Implement acceptance criteria", True),
+    ("Release checklist planning", False), ("Post-release documentation", True),
+    pytest.param("Release QA dashboard redesign", False, id="qa-dashboard"),
+    pytest.param("Release QA checklist planning", False, id="qa-planning"),
+    pytest.param("Post Release QA dashboard redesign", False, id="post-qa-dashboard"),
+    pytest.param("Add acceptance tests for CSV export", True, id="acceptance-implementation"),
+])
+def test_ordinary_tasks_remain_outside_the_reviewer_profile(api, title, child):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        parent = H.task_create(c, "bot:ops", "Build it", "x", "bot:cpo") if child else None
+        ordinary = H.task_create(c, "bot:ops", title, "QA is mentioned only in the body", "bot:cpo",
+                                 parent_id=parent["id"] if parent else None)
+        assert ordinary["type_id"] == H.GENERAL_TYPE
+        assert not P.is_review_task(c, ordinary)
+        assert P.pull_refusal(c, ordinary, profile_of(c, "checker")) == "auto_start_off"
+        with pytest.raises(H.Refused) as raised:
+            H.task_update(c, "bot:ops", ordinary["id"], owner="bot:checker")
+        assert raised.value.rule == "profile"
+
+
 def test_sweeps_follow_the_profile_and_a_custom_bot_reads_its_own_setting(api):
     with api.app.state.store.transaction() as c:
         for slug, name, options in (("d", P.DOER, {}), ("r", P.REVIEWER, {}), ("l", P.LEAD, {}), ("m", P.MONITOR, {}),

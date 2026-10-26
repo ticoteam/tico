@@ -3,6 +3,8 @@
 The task's own turn starts once the filing turn has ended, never beside it: a task the filing turn finished by then
 starts no turn at all. A turn Tico woke on a task already finished that wrote nothing posts no reply to the person;
 its text stays on the run."""
+import pytest
+
 from backend import wake_presets as W
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post  # noqa: F401  (api is a fixture)
@@ -40,6 +42,29 @@ def test_a_task_a_bot_files_for_itself_starts_once_the_filing_turn_ends(api):
     complete(api, machine, active)
     after = claim(api, machine)
     assert (after["lane"], H.message_task_id(after["message"])) == ("task:" + mine["id"], mine["id"])
+
+
+@pytest.mark.parametrize("child", [False, True], ids=["release-pass", "release-child"])
+def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
+    machine = task_bot(api, lanes=True)
+    active = busy(api, machine)
+    fields = {"title": "Post Release QA pass: v1.2.3"}
+    if child:
+        typ = post(api, "task-types", {"name": "Release flow", "steps": [
+            {"name": "Post Release QA", "status": "review"}]})["type"]
+        parent = post(api, "tasks", {"owner": "finance", "title": "Released work", "body": "Verify it.",
+                                     "type": typ["id"], "step": "Post Release QA"}, token=active["token"])
+        fields = {"title": "Verify shipped behavior", "relations": [{"kind": "parent", "task": parent["id"]}]}
+    mine = post(api, "tasks", {"owner": "ops", "body": "Check the release.", **fields}, token=active["token"])
+    with api.app.state.store.read() as c:
+        notice = c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:ops' "
+                           "AND json_extract(refs_json,'$.task')=? ORDER BY rowid DESC", (mine["id"],)).fetchone()
+        refs = H._json(notice[0], {})
+        assert refs["wake"] == "review_request" and refs["filed_in"] == active["id"]
+    assert claim(api, machine) is None
+    complete(api, machine, active)
+    after = claim(api, machine)
+    assert H.message_task_id(after["message"]) == mine["id"]
 
 
 def test_a_task_the_filing_turn_finished_starts_no_turn(api):

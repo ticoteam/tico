@@ -1,6 +1,8 @@
 # Navigation
 
-The current paths in Tico. Settings is under your email; Tools is in the sidebar.
+The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
+shown in the address bar while the tab is open (`#/settings/people`, `#/settings/gateway`), to bookmark or share, and a tab you can't see opens General instead.
+Tools is in the sidebar.
 Controls appear when your rights allow the action.
 
 | To | Open |
@@ -22,7 +24,7 @@ Controls appear when your rights allow the action.
 | Check problems and recovery | Settings → Health |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
-| Add or manage Humans and member rules | Settings → Humans |
+| Add or manage people and member rules | Settings → People |
 | Choose AI providers | Settings → Computers → Models |
 | Connect the Tico AI Gateway | Settings → Computers → Models → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |

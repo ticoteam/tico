@@ -7,7 +7,7 @@ the caller and not by prompt text.
 ## Three ways in
 
 - **The SQL page** (`#/sql`, under your email next to Credentials; the owner and admins, and the owner may limit it to
-  the owner in Settings > Humans). Type, press
+  the owner in Settings > People). Type, press
   ⌘↩, read the rows. The last query is remembered in the browser.
 - **`hub sql "<select>"`** from a bot run or from a computer. Prints an aligned table and a
   trailing `N rows (M ms)` line; `--json` for the API response, `--csv` for CSV, `--max-rows N`

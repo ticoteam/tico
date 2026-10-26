@@ -346,6 +346,31 @@ class Scheduler:
         from . import quiet_work
         with locked("quiet_work") as c:
             quiet_work.due(c, stamp(at), failures)
+        from . import assigned_start
+        if not self.store.settings.rehearsal:
+            unstarted = []
+            try:
+                with self.store.read() as c:
+                    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                                      (assigned_start.CURSOR_KEY,)).fetchone()
+                    cursor = [H._json(saved[0], "") if saved else ""]
+                    unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
+                with locked("assigned_start_cursor") as c:
+                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                              (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
+            except Exception as exc:
+                failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
+            for task_id in unstarted:
+                with locked("assigned_start:" + task_id) as c:
+                    with isolated(c, "assigned_start", task_id, failures):
+                        assigned_start.sweep(c, stamp(at), [task_id])
+            from . import queue_refusals
+            with self.store.read() as c:
+                observations = queue_refusals.pending(c, self.store.settings, stamp(at), failures)
+            for change in observations:
+                with locked("queue_refusals:" + change[0]) as c:
+                    with isolated(c, "queue_refusals", change[0], failures):
+                        queue_refusals.apply(c, change)
         # A milestone wait whose pull request merged or release was published, while the server was down or
         # before its wake was written, gets its one wake (backend/milestone_waits.py).
         from . import milestone_waits

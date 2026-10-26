@@ -74,8 +74,17 @@ const harnessRow = id => HARNESS_ROWS.find(row => row.id === id) || null;
 const harnessCaps = id => harnessRow(id)?.capabilities || {};
 const harnessesWith = test => HARNESS_ROWS.filter(row => row.capabilities && test(row.capabilities));
 const SETTINGS_TAB_KEY = 'tico.settings.tab';
-// Remembered per browser tab so a reload lands where the owner was, not back on Computers.
-let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'devices'; } catch { return 'devices'; } })();
+// Remembered per browser tab so a reload lands where the person was; a first visit opens General.
+let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
+// The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
+let SETTINGS_ADDRESS = '';
+// Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
+// can't see opens General with a line saying so; an unknown name just opens General.
+const SETTINGS_TABS = ['general', 'people', 'bots', 'ceo', 'devices', 'repos', 'tasks', 'inbox', 'inbound', 'recurring',
+  'webhooks', 'listening', 'health', 'history', 'gateway', 'billing'];
+const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
+  rules: 'recurring', routines: 'recurring', chat: 'models'};   // chat: the old Chat tab, now the Models card
+let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
@@ -96,12 +105,59 @@ const settingsCanCreateBots = () => S.me?.role === 'owner' || !!S.me?.bot_admin 
 // The owner, an admin, one of the bot's owners, or someone it reports up to: what the server says (`can_manage`).
 const settingsCanManageBot = e => S.me?.role === 'owner' || !!S.me?.bot_admin || !!e?.can_manage;
 const settingsIsAdmin = () => S.me?.role === 'owner' || !!S.me?.bot_admin;
+// The team owner's name, for "who can change this" lines; '' when the roster has not loaded.
+function settingsOwnerName() {
+  const people = [...(SETTINGS_DATA.people || []), ...(S.people || [])], id = S.me?.owner_id;
+  const owner = people.find(p => (id && p.id === id) || p.owner || p.role === 'owner');
+  return owner?.name || S.config?.owner_name || '';
+}
+// "Only Ana, the owner, can change models." / "Only Ana (the owner) or an admin can change this."
+function settingsWhoCanHTML(what = 'this', {admins = false} = {}) {
+  const name = settingsOwnerName();
+  const who = admins ? (name ? `${esc(name)} (the owner) or an admin` : 'the owner or an admin') : (name ? `${esc(name)}, the owner,` : 'the owner');
+  return `<p class="settings-cell-note" data-who-can>Only ${who} can change ${esc(what)}.</p>`;
+}
+// The one way a failure shows: a red line under the control that failed, saying what to do. A row-like
+// parent holds it so it sits under the whole row; a list item holds it inside.
+function settingsFieldAnchor(control) {
+  return control?.closest?.('li, label, .row, .sb-row, .people-line, .privacy-row, .rrow-wrap, tr') || control;
+}
+function settingsFieldClear(control) {
+  const anchor = settingsFieldAnchor(control);
+  if (!anchor) return;
+  const inside = anchor.querySelector?.(':scope > [data-field-err]'), next = anchor.nextElementSibling;
+  inside?.remove();
+  if (next?.matches?.('[data-field-err]')) next.remove();
+}
+function settingsFieldError(control, message) {
+  const anchor = settingsFieldAnchor(control);
+  if (!anchor?.isConnected) { toast(message, true); return; }
+  settingsFieldClear(control);
+  const line = document.createElement('p');
+  line.className = 'field-err err'; line.dataset.fieldErr = ''; line.setAttribute('role', 'alert');
+  line.textContent = message;
+  if (anchor.tagName === 'LI' || anchor.tagName === 'TR') (anchor.tagName === 'TR' ? anchor.lastElementChild : anchor).appendChild(line);
+  else anchor.after(line);
+}
+// Ask before anything hard to undo. Resolves true only on the confirm button.
+function settingsConfirm({title, text, ok = 'Confirm', danger = true}) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal settings-confirm'; dialog.setAttribute('aria-label', title);
+    dialog.innerHTML = `<form method="dialog"><div class="tmodal-title">${esc(title)}</div><div class="tmodal-body"><p>${esc(text)}</p>
+      <div class="onb-actions"><button type="submit" class="ghost" value="cancel" data-confirm-cancel>Cancel</button><span class="spacer"></span>
+      <button type="submit" class="primary${danger ? ' people-danger' : ''}" value="ok" data-confirm-ok>${esc(ok)}</button></div></div></form>`;
+    dialog.addEventListener('close', () => { resolve(dialog.returnValue === 'ok'); dialog.remove(); });
+    document.body.appendChild(dialog); dialog.showModal();
+    dialog.querySelector('[data-confirm-cancel]').focus();
+  });
+}
 // Whoever the server lets make a personal token (`can_create_tokens`); an admin also sees everyone's. Someone
 // who still holds a token keeps the card to revoke it.
 const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'devices'; location.hash = INTEGRATIONS; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'general'; location.hash = INTEGRATIONS; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
@@ -110,13 +166,13 @@ function pageSettings() {
     <div id="settings-issues"></div>
     <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" data-ceo="${settingsCeoBotShown()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
-      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">Humans</button>' : ''}
+      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       ${settingsCeoBotShown() ? `<button type="button" data-settings-tab="ceo" role="tab">${esc(ceoBotName())}</button>` : ''}
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inbox" role="tab">Inbox</button>
+      <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
         <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
         <button type="button" data-settings-tab="recurring" role="tab">Rules</button>
@@ -129,6 +185,7 @@ function pageSettings() {
       </div></details>
     </div>
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
+      <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         <p class="settings-cell-note" id="settings-team-moved">Stale ticket review and Start fresh when the topic changes:
           <a href="#/settings/routines" data-settings-moved>Moved to Settings &gt; Rules</a></p>
@@ -196,7 +253,7 @@ function pageSettings() {
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
       ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
     ${settingsCeoBotShown() ? `<div class="settings-pane" id="settings-ceo" role="tabpanel" hidden><section class="card"><header><h2>${esc(ceoBotName())}</h2></header><div id="set-ceo-bot">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
-    <dialog class="tmodal" id="people-dialog" aria-label="Humans"></dialog>
+    <dialog class="tmodal" id="people-dialog" aria-label="People"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
     <dialog class="bot-editor catalog-picker" id="catalog-picker" aria-labelledby="catalog-picker-title"></dialog>`;
@@ -245,6 +302,7 @@ function pageSettingsThemeBind() {
 }
 function settingsShow(tab) {
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
+  tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
   // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
@@ -255,8 +313,14 @@ function settingsShow(tab) {
   // Tab names come from the navigation; recheck access in case this person's role just changed.
   const owner = S.me?.role === 'owner';
   const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), listening: settingsIsAdmin(), gateway: settingsIsAdmin(), ceo: settingsCeoBotShown()};
-  SETTINGS_TAB = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab) ? tab : 'devices';
+  const shown = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab);
+  // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
+  SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
+  SETTINGS_TAB = shown ? tab : 'general';
+  const denied = $('#settings-denied');
+  if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
+  settingsAddress();
   if (['health', 'history', 'recurring', 'webhooks', 'listening', 'inbound', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
@@ -317,6 +381,14 @@ function settingsShow(tab) {
   if (listeningPane) { listeningPane.hidden = SETTINGS_TAB !== 'listening'; if (SETTINGS_TAB === 'listening' && !formBusy(listeningPane)) void renderSettingsListening(); }
   settingsRevealSoon(SETTINGS_REVEAL);
 }
+// While Settings is the page, the address bar names the tab shown: #/settings/<tab>, or #/settings/rules?task=<id> while
+// the rules are narrowed to one task's or bot's. It replaces the entry: no hashchange, no new history step.
+function settingsAddress() {
+  if (S.route !== SETTINGS) return;
+  const f = SETTINGS_TAB === 'recurring' && RULES_FOR ? rulesFor() : null;
+  SETTINGS_ADDRESS = f ? `${SETTINGS}/rules?${f.kind}=${encodeURIComponent(f.id)}` : `${SETTINGS}/${SETTINGS_TAB}`;
+  if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
+}
 // On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
 // Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.
 function settingsTabIntoView(target) {
@@ -349,7 +421,7 @@ function settingsTeamIconBind() {
       if (!response.ok) { signInRedirect(response, result); throw apiFailure(result, response); }
       if (result.url !== '/api/v2/team/icon') throw new Error('The server did not confirm this icon. Please retry.');
       image.src = API + '/v2/team/icon?v=' + Date.now();
-      status.textContent = 'Team icon saved';
+      status.textContent = ''; toast('Saved');
     } catch (error) { status.textContent = error.message; status.classList.add('err'); }
     finally { button.disabled = input.disabled = false; input.value = ''; }
   };
@@ -374,12 +446,12 @@ async function renderSettingsAssistantApprovals() {
       <span>My assistant can decide approvals for me</span></label>
     <p class="settings-cell-note">${v.team_allows
       ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
-      : 'Your team’s owner has turned this off for everyone (Settings > Humans).'}</p>
+      : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
   $('#assistant-decides').onchange = async ev => {
-    try { await post('/v2/assistant/settings', {decides_approvals: ev.target.checked}); toast(ev.target.checked ? `${assistantName()} can decide your approvals` : 'Approvals need your click again'); }
-    catch (e) { toast(e.message, true); }
-    void renderSettingsAssistantApprovals();
+    const box = ev.target;
+    try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
+    catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
   };
   host.querySelectorAll('[data-undo-approval]').forEach(button => button.onclick = async () => {
     button.disabled = true;
@@ -399,13 +471,14 @@ async function renderSettingsPrivacy() {
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
   $('#privacy-count').onchange = async ev => {
-    try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast(ev.target.checked ? 'Counting is on' : 'Counting is off'); }
-    catch (e) { toast(e.message, true); }
-    void renderSettingsPrivacy();
+    try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
+    catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }
   };
-  if ($('#privacy-reset')) $('#privacy-reset').onclick = async () => {
-    try { await post('/v2/system/usage-count/reset'); toast('New install ID made'); } catch (e) { toast(e.message, true); }
-    void renderSettingsPrivacy();
+  if ($('#privacy-reset')) $('#privacy-reset').onclick = async ev => {
+    const button = ev.currentTarget;
+    if (!await settingsConfirm({title: 'Reset install ID?', ok: 'Reset install ID',
+      text: 'Tico makes a new random ID. The old one is gone for good, so earlier counts can no longer be linked to this install.'})) return;
+    try { await post('/v2/system/usage-count/reset'); toast('Saved'); void renderSettingsPrivacy(); } catch (e) { settingsFieldError(button, e.message); }
   };
 }
 async function renderSettingsTurnLevels() {
@@ -429,12 +502,13 @@ async function renderSettingsTurnLevels() {
       event.preventDefault();
       const status = form.querySelector('[data-turn-levels-status]'), button = form.querySelector('button');
       const warning = Number(form.elements.warning_per_person.value), stop = Number(form.elements.stop_per_person.value);
-      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; return; }
-      button.disabled = true;
+      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; status.classList.add('err'); return; }
+      button.disabled = true; status.textContent = ''; status.classList.remove('err');
       try {
         const saved = await post('/v2/settings/turn-levels', {warning_per_person: warning, stop_per_person: stop});
-        status.textContent = `Saved. Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
-      } catch (error) { status.textContent = error.message; }
+        toast('Saved');
+        status.textContent = `Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
+      } catch (error) { status.textContent = error.message; status.classList.add('err'); }
       finally { button.disabled = false; }
     };
   } catch (error) { host.textContent = error.message; }

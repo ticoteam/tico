@@ -18,6 +18,10 @@ from .models import Contract
 from .store import H, Problem, encode
 from .views import human_only
 
+# Seconds between polls of a meeting's event stream. Tests set it to 0 rather than replacing asyncio.sleep, which
+# is process-wide and would also stop the server's own loop-lag probe from ever yielding.
+EVENT_POLL_SECONDS = 1
+
 
 class Connect(Contract):
     title: str = Field(default="Live meeting", min_length=1, max_length=200)
@@ -1318,6 +1322,6 @@ def install_live_meetings(app, store, auth, write):
                     payload = json.loads(row["payload_json"])
                     yield f"id: {current}\nevent: {row['type']}\ndata: {encode(payload)}\n\n"
                 yield ": keep-alive\n\n"
-                await asyncio.sleep(1)
+                await asyncio.sleep(EVENT_POLL_SECONDS)
         return StreamingResponse(generate(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})

@@ -63,12 +63,17 @@ function hlCheckHtml(check) {
   const owner = check.id === 'version' && HL?.audience === 'owner';
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
-  const result = owner && HL_CHECK_MSG
-    ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '';
+  // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
+  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+    ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
+  const result = (owner && HL_CHECK_MSG
+    ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
+    + (update || (owner && busy) ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : '');
   return `<li class="hl-check ${esc(check.status)}" data-hl-check="${esc(check.id)}" data-status="${esc(check.status)}">
     <span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[check.status] || HL_ICONS.unknown}</span>
     <div class="hl-main"><strong>${esc(check.label)}</strong><p>${esc(check.summary)}</p>${result}</div>
-    <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
+    <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${update}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
 }
 
 // Report this on what is red: Support opens with it attached (ui/support.js), unless this server turned support off.
@@ -249,6 +254,11 @@ async function hlCheckUpdates() {
     const reply = await fetch(API + '/v2/system/update/check', {method: 'POST'});
     const notice = await reply.json().catch(() => ({}));
     if (!reply.ok) throw apiFailure(notice, reply);
+    // The release it found is the one Update now installs, here and in the sidebar.
+    if (notice?.available && notice.latest && S.config) {
+      S.config.update = {...(S.config.update || {}), available: true, latest: notice.latest, current: notice.current || S.config.update?.current};
+      window.renderNewVersion?.();
+    }
     await hlRefresh();
     // An available update is already the Version line, refreshed above: say it once, not twice.
     HL_CHECK_MSG = notice?.checking ? {text: 'Still checking. Look again in a moment.'}
@@ -318,6 +328,8 @@ document.addEventListener('change', event => {
 
 document.addEventListener('click', event => {
   if (event.target.closest('[data-hl-check-updates]')) { void hlCheckUpdates(); return; }
+  const update = event.target.closest('[data-hl-update]');
+  if (update) { if (typeof nvBusy !== 'undefined' && !nvBusy) { update.disabled = true; void nvStart(); } return; }
   const setup = event.target.closest('[data-hl-setup-check]');
   if (setup) { void hlSetupCheck(setup); return; }
   const move = event.target.closest('[data-stuck-move]');

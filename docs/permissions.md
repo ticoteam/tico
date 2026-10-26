@@ -63,7 +63,7 @@ Every human on the team has one role:
 | **Admin** | humans the owner makes admins (the old "bot administrators": the list is read under either name for one release) | manage every bot but the built-in ones (below), humans and computers (enrol, revoke, open to members' bots); set what members may do and the bot limit. They cannot make or remove admins or owners. They are credential administrators and see the SQL page, unless the owner turns that off ([Team rules](#team-rules)) |
 | **Member** | everyone else | create and manage their own bots, add coworkers, and use the bots they are allowed to |
 
-Settings > Humans (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
+Settings > People (owners and admins) shows each human on one row: their role (the owner switches Admin and Member there), a
 **Can sign in** switch, and a ⋯ menu with two capabilities per member:
 
 - **Can add bots** (`create_bots`): on for everyone unless switched off.
@@ -77,7 +77,7 @@ API tokens and delegated Assistant/BotOps actions cannot link it. This grants sh
 grant Hosting, Billing, Gateway or Support access. Every company agent can continue reading messages without consuming
 them, but the eight Inbox agent tools carry no company-linking authority.
 
-The **team's domain** is the domain(s) the owner allows to sign in (Settings > Humans, **Anyone at <domain> can sign in**); when
+The **team's domain** is the domain(s) the owner allows to sign in (Settings > People, **Anyone at <domain> can sign in**); when
 none is set it is the owner's own email domain. When that is a public email service such as gmail.com, it is the team email domain the
 owner gave in Finish setup (**Names**, optional), then the team domains of the humans already on the roster; with none of those,
 members add nobody until the owner adds a human or sets a domain. A newly added human goes on the roster and on the sign-in list, so they can
@@ -96,7 +96,7 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
 ## Team rules
 
-The product favours getting going fast, and the owner tightens it later. Settings > Humans (owner only, saved as they change;
+The product favours getting going fast, and the owner tightens it later. Settings > People (owner only, saved as they change;
 `GET` and `PUT /api/v2/access/rules`) has ten switches, all **on** by default:
 
 | Rule | On (default) | Off |
@@ -126,7 +126,7 @@ routines, access or place, and only the owner may add them. A member cannot regi
 The CEO Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your CEO Bot](ceo-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
-Settings > Humans (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
+Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
 ([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
