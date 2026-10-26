@@ -644,6 +644,69 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
     assert claim(api, machine) is None
 
 
+def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=True, thread='capacity-thread'):
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
+    events = [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'send_email', 'text': 'Sent'}}] if acted else []
+    events.append({'seq': len(events) + 1, 'kind': 'error',
+                   'payload': {'error': 'Selected model is at capacity. Please try a different model.', 'limit': True}})
+    post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'last_seq': len(events), 'text': '',
+                                                     'limited': not acted, 'continues': continues}, machine['token'])
+
+
+def claim_at(api, monkeypatch, machine, at):
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+    ready(api, machine, ['ops'])
+    return claim(api, machine)
+
+
+def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    capacity_turn(api, monkeypatch, machine, attempt, '2026-10-26T06:30:00.000000Z')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []                  # not held for a person
+    assert claim_at(api, monkeypatch, machine, '2026-10-26T06:31:00.000000Z') is None   # the capacity hold
+    following = claim_at(api, monkeypatch, machine, '2026-10-26T06:32:01.000000Z')
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
+    assert following['message']['body'].endswith(execution.CONTINUE_NOTE)
+    # The continuation's own model refuses it before it does anything: still a short hold, still that thread.
+    capacity_turn(api, monkeypatch, machine, following, '2026-10-26T06:33:00.000000Z', acted=False, continues=False)
+    again = claim_at(api, monkeypatch, machine, '2026-10-26T06:35:01.000000Z')
+    assert again['job_id'] == attempt['job_id'] and again['continue_thread'] == 'capacity-thread'
+    # At capacity again after it acted: held for review as before, once.
+    capacity_turn(api, monkeypatch, machine, again, '2026-10-26T06:36:00.000000Z')
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.H.status(c, 'ops')['state'] == 'crashed'
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [again['id']]
+    assert claim_at(api, monkeypatch, machine, '2026-10-26T06:40:00.000000Z') is None
+
+
+def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_moves_to_a_fallback(api, monkeypatch):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    capacity_turn(api, monkeypatch, machine, attempt, '2026-10-26T06:30:00.000000Z', continues=False)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.capacity_continuation(c, attempt['job_id']) is None
+    # A job that continues a thread waits out its own login's hold even where a fallback is ready.
+    monkeypatch.setattr(execution, 'primary_hold', lambda *a, **k: 'held')
+    monkeypatch.setattr(execution, 'fallback_choice', lambda *a, **k: ('', 'claude'))
+    with api.app.state.store.transaction() as c:
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) is None
+        c.execute("UPDATE attempts SET thread_id='kept',result_json=json_set(result_json,'$.capacity_continue',json('true')) "
+                  "WHERE id=?", (attempt['id'],))
+        assert execution.capacity_continuation(c, attempt['job_id']) == 'kept'
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) == 'held'
+
+
 def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(api):
     from backend.store import H
     machine, message, attempt = setup_attempt(api)

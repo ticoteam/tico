@@ -582,6 +582,21 @@ def limit_errors(c, attempt_id):
         (attempt_id,))]
 
 
+# Said to the turn that continues one the model's capacity stopped (capacity_continuation): its thread holds what it did.
+CONTINUE_NOTE = ("\n\nTico: the model was at capacity and stopped your previous turn on this request partway through. "
+                 "This turn continues that same session once the model is free again: carry on from where it stopped, "
+                 "and do not repeat anything it already did.")
+
+
+def capacity_continuation(c, job_id):
+    """The thread a job continues after the model's capacity stopped one of its turns once it had acted (complete
+    `continues`), or None. The job continues it once: a second such stop is held for review, and none of its later
+    turns starts a fresh thread or moves to a fallback, which could repeat what the stopped turn did."""
+    row = c.execute("SELECT thread_id FROM attempts WHERE job_id=? AND json_extract(result_json,'$.capacity_continue')=1 "
+                    "ORDER BY created DESC LIMIT 1", (job_id,)).fetchone()
+    return row[0] if row else None
+
+
 def last_limit(c, bot):
     """The bot's most recent attempt that ended on a usage limit."""
     # Another lane begun before the limit can finish afterwards without lifting the bot's hold.
@@ -997,6 +1012,8 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
+    if why and job_id and capacity_continuation(c, job_id):
+        return why          # only its own thread, on its own login, continues it
     return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
 
 
@@ -2329,6 +2346,11 @@ class Execution:
                              (row['id'],row['attempt_id'])).fetchone()
         if recovery:
             msg = {**msg, 'body':msg['body'] + '\n\nOperator recovery instructions (' + recovery['actor'] + '):\n' + recovery['note']}
+        # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
+        # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
+        continue_thread = capacity_continuation(c, row['id'])
+        if continue_thread:
+            msg = {**msg, 'body': msg['body'] + CONTINUE_NOTE}
         # Next-run tasks ride along with whatever woke the bot: one run, one prompt, each task
         # still its own task to mark done. Only a runner that puts them in its prompt gets them.
         # Any lane carries them: a bot whose turns are all tasks and routines never has a main-lane
@@ -2406,6 +2428,7 @@ class Execution:
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
+                            **({"continue_thread": continue_thread} if continue_thread else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
                             "history": history, "principal": principal,
@@ -3172,10 +3195,18 @@ class Execution:
                 and all(login_holds.capacity(error) for error in errors))
         busy_acted = busy and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
                                         "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
-        if busy and body.limited:
+        # Unless the runner kept its thread (`continues`): then the job goes back in the queue, and after the capacity
+        # hold its next turn continues that thread, which knows what it did. Once only: a continuation the model's
+        # capacity stops again after acting is held for review (capacity_continuation).
+        continues = (busy_acted and body.continues and bool(row["thread_id"])
+                     and not capacity_continuation(c, row["job_id"]))
+        if busy and (body.limited or continues):
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
                       (encode({"kind": login_holds.CAPACITY_KIND, "notice": errors[0][:300]}), aid))
-        limited = limited and not busy_acted
+        if continues:
+            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.capacity_continue',json('true')) "
+                      "WHERE id=?", (aid,))
+        limited = limited and not busy_acted or continues
         # A limit its fallback could not take over is the limit's too (hop_failed): queued again to wait for the reset,
         # never held for a person, and recorded as a limit so the cooldown and the login's hold read it.
         hopped = (not limited and not stopped and not check

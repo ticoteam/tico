@@ -5001,12 +5001,15 @@ def create_app(settings=None):
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
+        # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
+        # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
                                                           "run_pushes": True, "run_rotation": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
-                                                          "attempt_thread": True, "runner_drain": True}}
+                                                          "attempt_thread": True, "runner_drain": True,
+                                                          "capacity_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
