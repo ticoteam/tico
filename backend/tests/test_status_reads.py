@@ -194,3 +194,38 @@ def test_primed_status_pages_show_each_person_exactly_what_they_showed_before(ap
         assert lines["busy-0"]["state"] == "running" and lines["busy-2"]["last_stop"]
         assert any(line["needs_human"] for line in lines.values())
     assert "inbox" not in {line["bot"] for line in page(api, monkeypatch, "/api/v2/status", "ben-test")[0]["bots"]}
+
+
+def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monkeypatch):
+    # Dev 509: OR-ing owner and requester read every task the bots ever had; on a long-lived team that was most of
+    # a second of each status page. Finished company tasks now cost nothing: the work done stays the same.
+    machine = setup(api, monkeypatch, tasks=4)
+    busy(api, machine, 0, 6)
+    slugs = [f"busy-{n}" for n in range(6)]
+    store = api.app.state.store
+
+    def read():
+        steps = [0]
+        with store.read_transaction() as c:
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
+            inputs = privacy.status_inputs(c, slugs)
+            c.set_progress_handler(None, 1)
+            actors = ["bot:" + slug for slug in slugs]
+            marks = " IN (" + ",".join("?" * len(actors)) + ")"
+            # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
+            wanted = {tuple(t) for t in c.execute(
+                f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) "
+                f"AND {privacy.STATUS_TASKS_SQL}", actors * 2)}
+        got = {slug: sorted(tuple(t[k] for k in t) for t in kinds["tasks"]) for slug, kinds in inputs.items()}
+        assert {t for rows in got.values() for t in rows} == wanted
+        return got, steps[0]
+
+    before, steps = read()
+    assert any(t[4] for rows in before.values() for t in rows)          # private tasks are among them
+    with store.transaction() as c:
+        for n in range(40):
+            task = H.task_create(c, "bot:" + slugs[n % 6], f"Old {n}", "Done long ago. " * 200,
+                                 "bot:" + slugs[(n + 1) % 6], private=False)
+            c.execute("UPDATE tasks SET status=? WHERE id=?", ("done" if n % 2 else "closed", task["id"]))
+    after, more = read()
+    assert after == before and more == steps

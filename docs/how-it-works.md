@@ -422,8 +422,8 @@ it completes or the reset time passes ([Health Monitor](health-monitor.md), `def
 The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
-pick is the first from a provider other than the one the work was written on; with none, it is refused rather than
-run on the author's own provider. An entry whose provider is off or whose model is retired is skipped, and a
+pick is the first from a provider other than the one the work was written on; with none that can run, it runs on
+the author's own provider and the task's history says so. Another provider is preferred, never required. An entry whose provider is off or whose model is retired is skipped, and a
 runtime alone follows its provider's current model. `check_order` in the same view is the order in effect.
 
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's

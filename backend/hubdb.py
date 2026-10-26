@@ -1193,8 +1193,9 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
     # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
     from .roadmap_flow import ensure as ensure_roadmap_types, migrate as migrate_roadmap_roles
-    from . import task_blocked
+    from . import task_blocked, blocker_asks
     task_blocked.ensure(conn)
+    blocker_asks.ensure(conn)
     migrate_roadmap_roles(conn)
     if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
         add_column(conn, "task_types", "manager", "TEXT")
@@ -3616,6 +3617,9 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
         from . import rules as wake_rule_engine
         wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
+    if row.get("status") != effective and row.get("status") is not None:
+        from .check_blocked import changed as check_changed
+        check_changed(conn, row["id"])      # a Review or QA check's ticket shows it blocked (Dev 553)
     if row.get("status") in ACTIVE_STATUSES and effective not in ACTIVE_STATUSES:
         # A checker that finished a check takes the oldest one waiting in its pools (backend/check_pools.py).
         from . import check_pools
@@ -5253,7 +5257,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 goal_id=None, next_run=False, type=None, step=None, number=None, mover=None, private=None,
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
-                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None):
+                change_paths=None, qa=None, qa_not_checkable_live=False, capped=True, receipt_owner=None,
+                quiet_notice=False):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5268,6 +5273,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     joins the bottom of the owner's queue and of its step unless `top`.
     `number` keeps an imported task's number: a mover's (`mover`, as in `task_update`), and free.
     `capped=False` files an urgent CEO Bot ask past its daily cap (goal_asks.urgent).
+    `quiet_notice` writes the owner's notice without waking it: a task joined to an open ask about the same blocker
+    (backend/blocker_asks.py) wakes when that ask is done.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5478,7 +5485,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
           {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
            **gate_child, **(wake_refs or {})} or None,
-          quiet_bots=next_run, quiet=next_run, trigger=trigger, source=trigger_source)
+          quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger, source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
@@ -5654,6 +5661,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 # The move Tico retries once what refused it clears (backend/move_retry.py).
                 if getattr(exc, "review_gate", None):
                     exc.review_gate["step"] = target_step["name"]
+                    # A move onto another board names that board: its step names mean nothing on the task's own.
+                    if type_id != row.get("type_id"):
+                        exc.review_gate["type"] = type_id
                 raise
         # A move between steps with the same status changes only the pipeline label.
         if step is not None and effective == row["status"]:
@@ -6395,10 +6405,16 @@ def wait_detail(conn, row, *, children=True):
     open_children = _rows(conn.execute(
         f"SELECT id,owner,title FROM tasks WHERE id IN ({TR.CHILD_IDS}) AND status NOT IN {live} "
         "ORDER BY created,id", (row["id"],))) if children else []
+    check = None
     for child in open_children:
         # Pipeline checks are work at the current step, not dependencies preventing it.
         # An explicit blocked_by relation below still holds on any such child.
         if engineering and is_bot(child["owner"]) and profiles.is_review_task(conn, child, parent_id=row["id"]):
+            if check is None:
+                from .check_blocked import detail as check_detail
+                check = check_detail(conn, row) or False     # unless the check itself is blocked (Dev 553)
+            if check:
+                return check
             continue
         return {"why": "an open child task", "on": child["owner"]}
     blocker = live_blocker(conn, row["id"], children=children)
@@ -6444,14 +6460,19 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     at = at or now()
     cutoff = shift(at, hours=-grace_hours)
     moved = []
-    # A gate or worktree hold clears only through task_blocked reconciliation, which knows its real condition
-    # (fresh CI, no unlinked pushes); reopening one here would claim nothing is outstanding when something is.
+    from . import move_retry, review_gate
     for row in _rows(conn.execute("SELECT * FROM tasks WHERE status='waiting' AND owner LIKE 'bot:%' "
-                                  "AND coalesce(blocked_kind,'') NOT IN ('gate','worktree') "
                                   "AND updated<=? ORDER BY updated", (cutoff,))):
         with isolated(conn, "sweep_stranded", row["id"]):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
+                continue
+            # A gate or worktree hold on an engineering ticket clears only through task_blocked reconciliation, which
+            # knows its real condition (fresh CI, no unlinked pushes), and a move Tico still retries clears when it is
+            # made; reopening either here would claim nothing is outstanding when something is. A gate hold on
+            # another board that no retry will clear is released here, or nothing ever would.
+            if row.get("blocked_kind") in ("gate", "worktree") and (
+                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at))):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("

@@ -648,7 +648,8 @@ class Scheduler:
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
                          "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
-                         "late tickets nobody told": aged.get("untold") or []}
+                         "late tickets nobody told": aged.get("untold") or [],
+                         "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

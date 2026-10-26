@@ -1248,7 +1248,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     if task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER and not refs.get("run_now"):
         # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
         # do not hold it back, though a snooze, a person, an approval or a worktree still does.
-        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask"))):
+        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
@@ -1441,6 +1441,41 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         if refused is None or job["created"] < refused[0]:
             refused = (job["created"], why, person, job["id"])
     return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
+
+
+def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
+    """Each queued job with its own claim reason; common bot fences are read once."""
+    from .read_cache import one, rows
+    from .shared_bots import follow
+    runner = one(c, RUNNER_SQL, (runner_id,))
+    row = one(c, CLAIM_CONFIG_SQL, (bot,))
+    if not runner:
+        return
+    held_bots, held_lanes = claimed_busy(runner_id)
+    ready = readiness_document(runner["readiness_json"])
+    why, config = (claim_refusal(c, settings, runner, bot, row["config_json"], row["draining"], ready, held_bots,
+                                 default=default) if row else ("config", {}))
+    queue = rows(c, queued_jobs_sql(), (bot,))
+    if oldest:
+        queue = sorted(queue, key=lambda j: (j["created"], j["id"]))
+    if why:
+        for job in queue:
+            yield job, why
+        return
+    lanes, roots = lanes_on(runner), roots_on(runner)
+    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    busy |= held_lanes
+    followed = follow(c, bot, config)
+    live = live_tasks(c)
+    for job in queue:
+        if not job["in_scope"]:
+            why = "scoped"
+        elif not job["free"]:
+            why = "uncertain"
+        else:
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live) or (
+                "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
+        yield job, why
 
 
 class Execution:
@@ -2315,9 +2350,11 @@ class Execution:
         handed = providers.bot_choice(c, self.store.settings, followed)
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot"]) if task else None
-        if (task and task['owner'] == 'bot:' + row['bot'] and not auto_tasks.refusal(c, task, followed, woken=True)
+        released_notice = bool(task and auto_tasks.notice_releases(c, task, msg))
+        if (task and task['owner'] == 'bot:' + row['bot']
+                and not auto_tasks.refusal(c, task, followed, woken=True, message=msg)
                 and not (msg.get("refs") or {}).get("run_now")):
-            task = auto_tasks.started(c, task)
+            task = auto_tasks.started(c, task, message=msg)
         roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).
@@ -2449,8 +2486,8 @@ class Execution:
                              (row['id'],row['attempt_id'])).fetchone()
         if recovery:
             msg = {**msg, 'body':msg['body'] + '\n\nOperator recovery instructions (' + recovery['actor'] + '):\n' + recovery['note']}
-            if task:
-                msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
+        if task and (recovery or released_notice):
+            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
         # Next-run tasks ride along with whatever woke the bot: one run, one prompt, each task
         # still its own task to mark done. Only a runner that puts them in its prompt gets them.
         # Any lane carries them: a bot whose turns are all tasks and routines never has a main-lane
