@@ -98,7 +98,7 @@ def test_any_other_notice_on_the_waiting_parent_is_still_held(api):
     assert claim(api, machine, "ops") is None
 
 
-@pytest.mark.parametrize("wait", ["snooze", "waiting_on", "approval", "worktree", "blocker"])
+@pytest.mark.parametrize("wait", ["snooze", "waiting_on", "approval", "worktree", "blocker", "question", "manual"])
 def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
     machine, parent, done, still = waiting_parent(api, results=1)
     with api.app.state.store.transaction() as c:
@@ -114,6 +114,13 @@ def test_a_result_still_waits_for_the_parents_other_waits(api, wait):
             ensure(c)
             c.execute("INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,created,updated) "
                       "VALUES(?,?,'bot:ops','acme/app',0,'waiting',?,?)", (H.new_id(), parent, H.now(), H.now()))
+        elif wait == "question":    # read past the skipped subtasks: wait_detail's own checks still hold it
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                      "VALUES(?,?,'bot:ops','human:ana','ask','Which release?',?,?)",
+                      (H.new_id(), H.task(c, parent)["conversation_id"], '{"task": "%s"}' % parent, H.now()))
+        elif wait == "manual":
+            c.execute("UPDATE tasks SET blocked_kind='manual',blocked_reason='Held until the freeze lifts' "
+                      "WHERE id=?", (parent,))
         else:   # a task outside this one that it waits on, not one of its subtasks
             other = H.task_create(c, "human:ana", "Ship the release", "x", "bot:cpo", lint=False)["id"]
             TR.relate(c, "human:ana", other, parent, "blocks")
