@@ -17,23 +17,39 @@ REMOVED = ("deleted_at", "hidden_at", "superseded_at")
 # only the phrase: a separate "2 failed" in the same receipt must still block.
 _FAILURE = r"(?:fail(?:s|ing|ed|ures?)?|errors?)"
 _FIX = r"(?:fix(?:ed|ing)|repair(?:ed|ing)|resolv(?:ed|ing)|correct(?:ed|ing))"
+_PAST = r"(?:earlier|previous|prior|historical|old)"
+# Where an earlier failure was seen ("seen at the prior head"). Only these words
+# may sit between the failure and its repair, so "2 failed tests need fixing"
+# and "2 failures were not fixed" stay failures.
+_SEEN_WORD = (rf"(?:seen|found|reported|observed|at|on|in|from|the|a|an|last|{_PAST}|head|run|"
+              r"commit|build|CI|tests?)\s+")
+_SEEN = rf"(?:{_SEEN_WORD}){{0,8}}"
+_AUX_WORD = r"(?:is|was|were|are|has|have|had|been|now|already)\s+"
+_AUX = rf"(?:{_AUX_WORD}){{0,5}}"
+# After a where-seen gap the repair must be the clause's own verb ("have been
+# fixed."), so "2 failed on the commit fixing the parser" or "2 failed in the
+# repaired fixture" stays a failure.
+_SEEN_REPAIR = (rf"(?:{_SEEN_WORD}){{1,8}}(?:{_AUX_WORD}){{1,5}}(?:fixed|repaired|resolved|corrected)"
+                r"(?=\s*(?:[.;,:!?)]|$|\b(?:but|and)\b))")
 # A historical subject can still describe a failure that is happening now.
 CURRENT_FAILURE = re.compile(
     rf"\b{_FAILURE}\s+(?:tests?\s+)?"
-    rf"(?:(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}"
-    rf"{_FIX}\s*[;,]?\s*(?:but\s+)?(?:(?:they|it|this|that)\s+)?)?"
+    rf"(?:{_SEEN}{_AUX}{_FIX}\s*[;,]?\s*(?:but\s+)?(?:(?:they|it|this|that)\s+)?)?"
     r"(?:(?:is|are|has|have|been|now|still|keeps)\s+){0,4}"
     r"(?:recurring|recurs|recurred|reoccurred|returned|persisting|persists|persistent|present|happening|"
     r"(?:is|are)\s+(?:still\s+)?back)\b", re.I)
 HISTORY = re.compile(
-    rf"\b(?:earlier|previous|historical|old)\s+(?:test\s+)?{_FAILURE}\b|"
-    rf"\b{_FIX}\s+(?:(?:the|a|an|earlier|previous|test|fixture|[0-9]+)\s+){{0,5}}{_FAILURE}\b|"
-    rf"\b{_FAILURE}\s+(?:tests?\s+)?"
-    rf"(?:(?:is|was|were|are|has|have|had|been|now|already)\s+){{0,5}}{_FIX}\b", re.I)
+    rf"\b(?:{_PAST}\s+)?(?:test\s+)?{_FAILURE}\s+(?:tests?\s+)?(?:{_SEEN_REPAIR}|{_AUX}{_FIX}\b)|"
+    rf"\b{_PAST}\s+(?:test\s+)?{_FAILURE}\b|"
+    rf"\b{_FIX}\s+(?:(?:the|a|an|earlier|previous|prior|test|fixture|[0-9]+)\s+){{0,5}}{_FAILURE}\b", re.I)
+# A counted failure in a sentence that names its own head is a result at that
+# head even without a test word ("Re-run at head <sha>: 2 failed").
+COUNTED_FAILURE = re.compile(
+    rf"\b[1-9][0-9]*\s+(?:{_PAST}\s+)?(?:tests?\s+)?{_FAILURE}\b|\b{_FAILURE}\s*[:=]\s*[1-9][0-9]*\b", re.I)
 
 
 CONTINUATION = re.compile(
-    rf"^\s*[0-9]+\s+(?:(?:earlier|previous|historical|old|test)\s+){{0,3}}"
+    rf"^\s*[0-9]+\s+(?:(?:{_PAST}|test)\s+){{0,3}}"
     rf"(?:{_FAILURE}|pass(?:ed)?|skip(?:ped)?)\b|\b[0-9]+\s+(?:tests?\s+)?{_FAILURE}\b|"
     rf"\b{_FAILURE}\s*[:=]\s*[1-9][0-9]*\b", re.I)
 
@@ -50,7 +66,7 @@ def _recognise(line, test_context=False):
         # "2 earlier failed" is still a counted outcome. Repair phrases such
         # as "2 failures now fixed" describe a repair even when they have counts.
         counted = re.search(r"\b[1-9][0-9]*\s+$", outcome[:match.start()])
-        historical = re.match(r"(?:earlier|previous|historical|old)\b", match[0], re.I)
+        historical = re.match(rf"{_PAST}\b", match[0], re.I) and not re.search(rf"\b{_FIX}\b", match[0], re.I)
         return match[0] if counted and historical else ""
     result = HISTORY.sub(history, outcome)
     status = ("failed" if CURRENT_FAILURE.search(outcome) or FAIL.search(result) else "unrecognised" if PLAN.search(result)
@@ -84,7 +100,8 @@ def recognise_many(line):
             else:
                 clauses.append(part)
         for clause in clauses:
-            if receipt := _recognise(clause, test_context=bool(TEST.search(sentence))):
+            context = TEST.search(sentence) or (SHA.search(clause) and COUNTED_FAILURE.search(clause))
+            if receipt := _recognise(clause, test_context=bool(context)):
                 found.append({**receipt, "text": line})
     return found
 

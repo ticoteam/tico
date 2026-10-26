@@ -50,7 +50,7 @@ description it was written with. The plain-English check on a title a bot writes
 numbers, no all-caps words) also applies to General tasks only, so a bot can file "#18945 (B/F)
 Fix the account page" as written. It still needs a title. A decision for a person stays on General.
 
-Whoever may change a task's other fields (its owner, its requester, the owner or requester of a task
+Whoever may change a task's other fields (its owner, its requester, their managers, the owner or requester of a task
 above it, a delegate or a mover) may also rename it. A new title gets the checks a new task's title
 would: never empty, at most 300 characters, a verb first and no internal codes on a General task for
 a person, plain English when a bot writes it on General, and no other live task between the same
@@ -59,6 +59,24 @@ new title as its subject.
 
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
+
+## Managers acting on tasks
+
+A bot or person above a task's owner or requester on the org chart inherits that
+party's task permissions through the entire chain, including department groups.
+Managers can read a bot report's private tasks, change its work, manage blockers and
+links, comment, ask questions, snooze and manage the owner's worktrees. A manager's
+comment or question wakes the owner bot as a requester's does. History and comment
+authorship name the manager who acted.
+
+The two sides keep their distinct rights: an owner bot's manager, bot or person, can
+complete work but not close or reopen it; a requester's manager can close and reopen it. The existing rule protecting a
+person's closure still applies. Managers gain no rights on unrelated private tasks;
+person-only private tasks stay with their parties and guest. Managers gain
+no right to edit or delete someone else's comments or decide a named approval, and
+no new credential, sending, spending, merge or bot administration permissions.
+Publishing a private task still requires its human requester. Task types, labels
+that trigger workflows and review handoff checks retain their existing restrictions.
 
 ## Software review handoffs and QA defaults
 
@@ -70,7 +88,7 @@ A refused move is remembered, and Tico makes it itself once what refused it chan
 
 A ticket has at most one open **Review 1**, **Review 2** or **QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
-A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` line in its note or comment fills the same fields when no flag is given; the latest one wins. The ticket's owner is woken once with the verdict and the head it judged (`verdict`, `verdict_head`), and the subtask shows both.
+A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` clause anywhere in its note, comment or final reply fills the same fields when no flag is given; the latest one wins. A Review 1, Review 2, QA or Security subtask of someone else's ticket that a bot owns, marked done with no verdict since it was last reopened, is refused with the `--verdict` hint; reopening a check clears its verdict. A person's own subtask with one of those titles is an ordinary task and finishes without a verdict. The ticket's owner is woken once with the verdict and the head it judged (`verdict`, `verdict_head`), and the subtask shows both.
 
 Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. Each result clause belongs to its own head. Phrases about earlier or repaired failures do not claim that the current run failed; an explicit result such as `40 passed, 2 failing/errored` still does. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. The review gate also counts receipts posted by bots above the owner in its `reports_to` chain and people who may edit the ticket. This changes neither their task permissions nor privacy: the mover and Builder must both be able to read the evidence. A written failure cannot be cleared by another written passing rerun at that same head; all-green GitHub checks can supersede it. Refusals name the next action and who can supply it.
 
@@ -198,7 +216,7 @@ letters and digits in any script, case folded; one with none is refused.
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
 the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
-about. Only the bot that owns the task names the person, and a private task can only ask a person who can read it,
+about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
 person on it: its guest").
 
@@ -461,13 +479,14 @@ changed it since. The same three are `hub_rule_suggestions`, `hub_rule_apply` an
 ## Snoozing a task
 
 **Snooze** sets a task aside until a date: it tells its bot or person that nobody plans to get to it
-before then. Its requester, its owner, anyone on it by role, or a mover snoozes it from the task's
+before then. Its requester, its owner, their managers, anyone on it by role, or a mover snoozes it from the task's
 **…** menu (Tomorrow, Next week, In two weeks, In a month, or a typed date), with
 `hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
 `snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
-When someone other than its requester snoozes a task, the requester is told.
+When someone other than its requester snoozes a task, the requester is told. A role holder's
+manager gains no snooze permission unless they also manage the owner or requester.
 
 Until that moment:
 
@@ -667,8 +686,12 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
 parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
-the parent's next turn resumes there. There is no requester delivery session on the completed
-subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+the parent's next turn resumes there. That holds while the parent is Waiting on its other open subtasks: they
+do not hold one subtask's result back. Its other waits still do: a snooze, a person it waits on, an unanswered
+question, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
+the parent out of Waiting. There is no requester delivery session on the completed
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
+subtask returns its result to the parent in the same way.
 A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
 requester hears when the parent itself finishes, so a manager's task → builder task → review
 subtask sends the review back to the builder, and the completed build back to the manager.
@@ -684,9 +707,9 @@ Subtasks never inherit a human's delegation anchor from a bot's request. BotOps 
 filing bot's rights when that bot asks it to work on a subtask.
 
 Parent owners can track descendants they can read, without gaining Read on hidden bots.
-Only the task's owner or requester, or a human mover, can re-parent it; bots must also own,
+Only the task's owner, requester, their managers or a human mover can re-parent it; bots must also own,
 request or manage the new parent. Moving or detaching a subtask also requires its current
-parent's owner or requester, or a human mover. Moving a task moves its whole subtree,
+parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
@@ -1085,13 +1108,14 @@ New ordinary tasks are readable by active company people and bots. Reading does 
 permission to change, reassign or complete work. Type bot settings continue to grant comment,
 subtask and work permissions; they cannot override Private or restricted bot activity.
 
-Turn on **Private** in the existing task controls to limit future reads to the requester and
-current assignee, human or bot. The assignee may tighten visibility; only the human requester
+Turn on **Private** in the existing task controls to limit future reads to the requester,
+current assignee and the managers of any bot party. Tasks with only person parties remain
+private to those parties and their guest. The assignee or its managers may tighten visibility; only the human requester
 can publish again. Bots cannot publish a private task, including when acting for a person.
 Bot-requested private work stays private until a future explicit human publication mechanism
-exists. Mentions, administrators, managers, parent ownership and delegations grant no access.
+exists. Mentions, administrator status, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester. Reassignment never clears Private.
+future access unless they remain its requester or manage a current bot party. Reassignment never clears Private.
 
 ### A private task with no person on it: its guest
 
@@ -1107,7 +1131,7 @@ who it reached, and its Private row names them.
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
 - There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the
+- Only the bot that owns the task or its managers bring a guest in; the requesting bot cannot. Reassigning the task ends the
   guest's access; a new bot owner may then bring in one person of its own.
 - When a private task above it has a person on it, only someone who reads that task above can become the guest. From
   the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and

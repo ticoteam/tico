@@ -595,8 +595,9 @@ const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encode
   attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
-const stoppedOutcome = (decision, deferred) => deferred
-  ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
+const stoppedOutcome = (decision, deferred) => decision === 'mixed'
+  ? 'Choices saved. The bot is busy; Tico will apply them when its turn ends.'
+  : deferred ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
   : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
 // `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {

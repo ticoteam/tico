@@ -557,14 +557,22 @@ def stopped_rows(c, who, auth, bot, limit=5):
     oldest first, for Needs you: (rows, runs). A row has the task title ("A chat request" outside a task, None for
     a task `who` may not read), why it stopped, whether that is `routine`, whether Try again is the safe pick
     (`retry`, by the same rule as the review card, retry_facts), when it stopped, and the jobs a decision settles.
-    `runs` counts every readable run; rows stop at `limit`."""
+    A choice saved while the bot's lane was busy (reconcile_job, deferred) keeps its job held: that job carries it as
+    `decided`, and a row whose every job has one carries it too ("mixed" when they differ), so a refreshed card shows the outcome instead of
+    offering a second choice that would be refused. `runs` counts every readable run; rows stop at `limit`."""
     rows, by_run = [], {}
+
+    def handle(job):
+        saved = c.execute("SELECT decision FROM job_recovery WHERE job_id=? AND attempt_id=?",
+                          (job["id"], job["attempt_id"])).fetchone()
+        return {"id": job["id"], "attempt_id": job["attempt_id"], **({"decided": saved[0]} if saved else {})}
+
     for row, task, seen in _readable_held(c, who, auth, bot):
         key = row["attempt_id"] or row["id"]
         job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
         if key in by_run:
             if by_run[key] is not None:
-                by_run[key]["jobs"].append({"id": job["id"], "attempt_id": job["attempt_id"]})
+                by_run[key]["jobs"].append(handle(job))
             continue
         if len(rows) >= limit:
             by_run[key] = None
@@ -577,8 +585,12 @@ def stopped_rows(c, who, auth, bot, limit=5):
                        "cause": cause, "why": STOP_WHY[cause], "routine": cause in ROUTINE_STOPS,
                        "retry": bool(facts["safe"] and facts["starts"] <= 1),
                        "at": attempt["finished"] if attempt else None,
-                       "jobs": [{"id": job["id"], "attempt_id": job["attempt_id"]}]}
+                       "jobs": [handle(job)]}
         rows.append(by_run[key])
+    for row in rows:
+        # The Details card decides each folded request on its own, so they can differ.
+        saved = {job.get("decided") for job in row["jobs"]}
+        row["decided"] = None if None in saved else saved.pop() if len(saved) == 1 else "mixed"
     return rows, len(by_run)
 
 
@@ -1231,9 +1243,11 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset()):
     conversation = H.conversation(c, message["conversation_id"])
     task_id = H.message_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
-    if (task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER
-            and not (message.get("refs") or {}).get("run_now")):
-        if why := auto_tasks.refusal(c, task, followed, woken=True):
+    refs = message.get("refs") or {}
+    if task and task['owner'] == 'bot:' + job['bot'] and message['from_actor'] == H.KEEPER and not refs.get("run_now"):
+        # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
+        # do not hold it back, though a snooze, a person, an approval or a worktree still does.
+        if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask"))):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
@@ -2888,10 +2902,13 @@ class Execution:
             if lanes and job_lane(c, row["bot"], followed, message, H.conversation(c, queued["conversation_id"]),
                                   lanes, roots) != lane:
                 continue
-            prior = c.execute("SELECT a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
+            prior = c.execute("SELECT i.attempt_id,a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
                               "WHERE i.message_id=?", (queued["id"],)).fetchone()
             if prior and prior["state"] in ("leased", "running"):
                 continue
+            if prior and prior["attempt_id"] != aid:
+                # As in inputs(): the run that already read this message keeps its tasks for privacy.
+                privacy.record_moved_input(c, prior["attempt_id"], aid, queued)
             c.execute("INSERT INTO attempt_inputs VALUES(?,?,?) ON CONFLICT(message_id) DO UPDATE SET "
                       "attempt_id=excluded.attempt_id,acked_at=excluded.acked_at", (aid, queued["id"], H.now()))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, queued["conversation_id"]))
@@ -3225,6 +3242,9 @@ class Execution:
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
             task = H.task(c, H.message_task_id(msg, conv)) if H.message_task_id(msg, conv) else None
+            if task and task["owner"] == actor:
+                # Record the owner's final verdict even when the reply is withheld until Done.
+                H.record_verdict(c, actor, task, text=text)
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):
