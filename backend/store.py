@@ -395,10 +395,11 @@ CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
 SCHEMA += SLACK_SCHEMA
 
 
-def refused(c, identity, exc):
-    """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it."""
-    c.execute("ROLLBACK TO domain_write")
-    c.execute("RELEASE domain_write")
+def refused(c, identity, exc, savepoint="domain_write"):
+    """Undo a refused domain write, keep its audit (and rule 8's count), and say what answers it. `savepoint` is the
+    write undone: the whole request's, or one task's of a bulk change (app.py task_bulk), which goes on to the next."""
+    c.execute("ROLLBACK TO " + savepoint)
+    c.execute("RELEASE " + savepoint)
     from . import ceo_acts
     if isinstance(exc, ceo_acts.Proposed):
         # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
@@ -812,7 +813,14 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
+            _rules.ensure_schema(c)
             _rules.seed_dev(c)
+            from . import check_pools as _check_pools
+            _check_pools.ensure(c)
+            _check_pools.seed(c)
+            from . import step_flow as _step_flow
+            _step_flow.ensure(c)
+            _step_flow.seed(c)
             _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
             c.executescript(_owner_link.SCHEMA)
@@ -1805,6 +1813,9 @@ class Store:
                         for item in value:
                             referenced(item)
                 referenced(result)
+                if operation == "/api/v2/task-bulk":
+                    for rows in result.get("tasks", {}).values():
+                        task_ids.update(task["id"] for task in rows)
                 for task_id in task_ids:
                     replay_auth.task(c, replay_principal, task_id)
                 privacy.require_payload(c, replay_principal, result)

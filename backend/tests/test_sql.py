@@ -343,6 +343,37 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
 
 
+def test_message_scan_skips_python_only_when_the_sql_gate_proves_visibility(api, world, monkeypatch):
+    from backend import sql as S
+
+    room, public = world['coo_task']['conversation_id'], world['coo_task']['id']
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, 'human:ben', 'Hidden scan source', '', 'bot:finance', private=True, lint=False)
+        plain = H.say(c, 'human:ana', 'human:ben', 'Plain scan row', conversation_id=room)
+        progress = H.say(c, 'human:ana', 'human:ben', 'Structured scan row', conversation_id=room,
+                         refs={'task': public, 'progress': {'sequence': 1}})
+        reply = H.say(c, 'human:ana', 'human:ben', 'Run scan row', conversation_id=room,
+                      in_reply_to=plain['id'], refs={'task': public, 'turn_id': world['attempt']['id'],
+                                                   'answers': [plain['id']]})
+        denied = H.say(c, 'human:ana', 'human:ben', 'Denied scan row', conversation_id=room,
+                       refs={'task': hidden['id']})
+        unknown = H.say(c, 'human:ana', 'human:ben', 'Unknown scan row', conversation_id=room,
+                        refs={'task': 'unknown-scan-task'})
+    checked = []
+    original = S.ReadIndex.message
+    def counted(index, mid, *args):
+        checked.append(mid)
+        return original(index, mid, *args)
+    monkeypatch.setattr(S.ReadIndex, 'message', counted)
+    visible = {plain['id'], progress['id'], reply['id']}
+    candidates = sorted(visible | {denied['id'], unknown['id']})
+    found = query(api, 'SELECT id FROM messages WHERE id IN (' + ','.join('?' for _ in candidates) + ')',
+                  world['attempt']['token'], params=candidates)
+    assert {row[0] for row in found['rows']} == visible
+    assert not visible.intersection(checked), checked
+    assert {denied['id'], unknown['id']} <= set(checked), checked
+
+
 def test_direct_content_prefilter_keeps_escaped_and_nested_provenance(api, world):
     from backend.auth import Identity
     from backend.privacy_index import ReadIndex

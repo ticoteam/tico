@@ -551,6 +551,8 @@ pub async fn publish_history(path: &Path, repository: &str, env: &Env) -> (&'sta
 pub(crate) struct Flags {
     pub(crate) lost: AtomicBool,
     pub(crate) stopped: AtomicBool,
+    /// Why the hub stopped the turn when it said (a quarantine, Dev 573); a person's Stop gives none.
+    pub(crate) stop_reason: Mutex<Option<String>>,
     pub(crate) done: AtomicBool,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
@@ -1102,6 +1104,7 @@ impl Runner {
         let flags = Arc::new(Flags {
             lost: AtomicBool::new(false),
             stopped: AtomicBool::new(false),
+            stop_reason: Mutex::new(None),
             done: AtomicBool::new(false),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
@@ -2355,7 +2358,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.active.lock().unwrap().extend(["a1".into(), "another-waiter".into()]);
         runner.places.lock().unwrap().insert("a1".into());
@@ -2383,7 +2386,7 @@ mod tests {
     }
 
     fn lease_flags() -> Flags {
-        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                 done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) }
     }
 
@@ -2445,7 +2448,7 @@ mod tests {
         let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
         let runner = Runner::new(config, client, crate::state::State::open(&dir.join("state")).unwrap());
         let turn = json!({"id": "a1", "start_reservation_seconds": 180});
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(30)) };
         runner.places.lock().unwrap().insert("a1".into());
         runner.pre_start_lock(&turn, &flags, async { Ok(()) }).await.unwrap();
@@ -2505,7 +2508,7 @@ mod tests {
         *runner.runtime_rows.lock().unwrap() = Default::default();
 
         let login = crate::login_turns::Login::new("codex", "");
-        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = || Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                                done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let over = |f: &Flags| runner.login_wait_over(f, &login).unwrap_or_default();
         assert_eq!(over(&flags()), "");
@@ -2889,7 +2892,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -2965,7 +2968,7 @@ for line in sys.stdin:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let t = host.start_turn("th1", "Write the release notes", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = crate::drive::Drive { limit_name: "max_run_minutes (60 minutes)", aid: "a-ops", host: &host, thread: "th1", effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), flags: &flags,
@@ -2977,6 +2980,10 @@ for line in sys.stdin:
         // Paused, not stopped or failed: it goes back in the queue and continues after the waiter.
         assert!(drove.yielded && drove.outcome == "interrupted", "{}", drove.outcome);
         assert!(goal.failure.is_none());
+        let terminal: i64 = runner.state.with(|c| c.query_row(
+            "SELECT count(*) FROM events WHERE attempt_id='a-ops' AND kind='diagnostic' AND json_extract(payload,'$.interruption_complete')=1",
+            [], |r| r.get(0))).unwrap();
+        assert_eq!(terminal, 0, "a forced grace expiry must not claim the host acknowledged its end");
         assert!(std::fs::read_to_string(&interrupts).unwrap().contains("t1"), "the turn was never interrupted");
         drop(held);
         drop(tokio::time::timeout(Duration::from_secs(5), review).await.expect("the waiter got the login").unwrap());
@@ -3692,7 +3699,7 @@ for line in sys.stdin:
         let (runner, dir, server) = drain_test_runner(300).await;
         let login = Login::new("codex", &format!("drain-{}", uuid::Uuid::new_v4()));
         let held = crate::login_turns::try_take(&login.key, &Turn::new("holder", "", Class::Other)).unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let turns: Vec<_> = (0..3).map(|i| Turn::new(&format!("waiter{i}"), "", Class::Other).of(&format!("work{i}"), &format!("a{i}"))).collect();
         for turn in &turns { runner.state.record(&json!({"id": turn.attempt, "bot": turn.bot})).unwrap(); }
@@ -3738,7 +3745,7 @@ for line in sys.stdin:
         let th = host.start_thread("ops", &settings).await.unwrap();
         runner.state.save_session("ops", "c-cap", "pi", &th).unwrap();
         let t = host.start_turn(&th, "Wait", None).await.unwrap();
-        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), done: AtomicBool::new(false),
+        let flags = Flags { lost: AtomicBool::new(false), stopped: AtomicBool::new(false), stop_reason: Mutex::new(None), done: AtomicBool::new(false),
                             done_notify: Notify::new(), deadline: Mutex::new(Instant::now() + Duration::from_secs(60)) };
         let wake = Notify::new();
         let d = Drive { aid: "a-cap", host: &host, thread: &th, effort: None, warning_at: Instant::now() + Duration::from_secs(30), limit: Instant::now() + Duration::from_secs(60), limit_name: "synthetic drain", flags: &flags,

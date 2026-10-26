@@ -355,8 +355,9 @@ class GitHubApp:
         r = self._call("GET", "/app/installations", params={"per_page": 100},
                        headers={"Authorization": "Bearer " + token})
         if r.status_code >= 300:
+            limited = rate_limited(r)
             raise Problem("github_installations", "GitHub would not list the app's installations", 502,
-                          extra={"github_status": r.status_code})
+                          retryable=limited, extra={"github_status": r.status_code, "rate_limited": limited})
         found = next((i for i in r.json() if str((i.get("account") or {}).get("login", "")).lower() == row["org"].lower()), None)
         with self.store.transaction() as c:
             c.execute("UPDATE github_app SET installation_id=? WHERE id='app'", (found["id"] if found else None,))
@@ -491,6 +492,9 @@ class GitHubApp:
             body["repositories"] = [r.split("/", 1)[1] for r in repos]
         r = self._call("POST", f"/app/installations/{installation}/access_tokens", json=body,
                        headers={"Authorization": "Bearer " + token})
+        if rate_limited(r):
+            raise Problem("github_token", "GitHub rate limited the installation token request; try again shortly", 502,
+                          retryable=True, extra={"github_status": r.status_code, "rate_limited": True})
         said = _said(r)
         if r.status_code in (403, 422) and "permission" in said.lower():
             raise Problem("github_app_permissions",
@@ -848,6 +852,17 @@ def _said(response):
         return str(response.json().get("message") or "")[:200]
     except (ValueError, AttributeError):
         return ""
+
+
+def rate_limited(response):
+    """A 403 can be a temporary limit, so classify it before access diagnostics discard its headers and message."""
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    headers = getattr(response, "headers", {})
+    return (headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers
+            or any(word in _said(response).lower() for word in ("rate limit", "abuse")))
 
 
 def manifest(settings, name, administration):

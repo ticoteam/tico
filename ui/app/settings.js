@@ -242,6 +242,7 @@ function pageSettings() {
       <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
+      <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
@@ -331,7 +332,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') void roadmapSettingsMount();
+  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); }
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
@@ -539,6 +540,7 @@ async function loadSettings() {
       issues: operations.issues || [], history, limits,
       schedulerEnabled: operations.scheduler_enabled, loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
+    if (TASK_SETTINGS && !formBusy($('#set-task-settings'))) taskSettingsPaint();
     renderTree();
     if (S.route !== SETTINGS) return;
     renderSettingsIssues(); renderSettingsBots(); renderSettingsMachines(); renderSettingsServices(); renderSettingsHistory();
@@ -578,6 +580,8 @@ function renderSettingsIssues() {
 // not retried unless the person knows better.
 const STOPPED_PICK = {
   read: {retry: true, what: () => 'before changing anything', say: () => 'Try again: it only read, so nothing repeats.'},
+  restarted: {retry: true, what: () => 'when its computer restarted',
+    say: () => 'Try again: check what already happened first, then continue.'},
   changed: {retry: false, what: tools => `after using ${tools || 'an approval or a tool that can change things'}`,
     say: tools => `Don’t retry unless you know ${tools || 'that action'} didn’t finish. It could run twice.`},
   twice: {retry: false, what: () => 'the same way more than once',
@@ -595,8 +599,9 @@ const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encode
   attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
-const stoppedOutcome = (decision, deferred) => deferred
-  ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
+const stoppedOutcome = (decision, deferred) => decision === 'mixed'
+  ? 'Choices saved. The bot is busy; Tico will apply them when its turn ends.'
+  : deferred ? `Choice saved. The bot is busy; Tico will ${decision === 'resume' ? 'try again' : 'dismiss this run'} when its turn ends.`
   : decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry this run.';
 // `after` redraws the page it was opened from once a run is decided: Settings, or the bot's own header.
 async function executionReview(bot, after = () => $('#settings-tabs') && loadSettings()) {

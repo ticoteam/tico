@@ -645,9 +645,36 @@ class Scheduler:
                         aged = step_age.sweep(c, stamp(at))
                 except Exception as exc:
                     failures.append({"step_age": type(exc).__name__})
+                # Work piling up at a step with a backlog setting: whoever it names hears of it (backend/step_backlog.py).
+                backlogged = []
+                try:
+                    from . import step_backlog
+                    with self.store.transaction() as c:
+                        backlogged = [f"{n} at {s}" + (f" for {o}" if o else "") for s, o, n, _ in step_backlog.sweep(c, stamp(at))]
+                except Exception as exc:
+                    failures.append({"step_backlog": type(exc).__name__})
+                # Tickets waiting at an assigning step go to the least busy bot of its pool (backend/task_allocator.py).
+                allocated = []
+                try:
+                    from . import task_allocator
+                    with self.store.transaction() as c:
+                        allocated = [f"{t} to {b}" for t, b in task_allocator.allocate(c, stamp(at))]
+                except Exception as exc:
+                    failures.append({"task_allocator": type(exc).__name__})
+                # A check open past its step's timeout is closed and its round skipped (backend/step_flow.py).
+                timed_out = []
+                try:
+                    from . import verdict_moves
+                    with self.store.transaction() as c:
+                        timed_out = verdict_moves.timeouts(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"check_timeouts": type(exc).__name__})
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
-                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or []}
+                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
+                         "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
+                         "late tickets nobody told": aged.get("untold") or [],
+                         "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

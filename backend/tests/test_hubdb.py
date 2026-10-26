@@ -264,6 +264,7 @@ class Rule5Tasks(HubCase):
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
         self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
                           (json.dumps({"bot_contact": "tasks"}),))
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
@@ -291,6 +292,21 @@ class Rule5Tasks(HubCase):
         H.task_update(self.conn, ANA, secret["id"], status="done", note="Signed.")
         self.assertEqual(len(self.finished(secret, SEO)), 1)
         self.assertFalse(self.finished(secret, ANALYTICS))
+
+    def test_a_person_finishing_a_bots_task_with_nothing_said_does_not_wake_it(self):
+        row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
+        H.task_update(self.conn, ANA, row["id"], status="done")
+        [told] = self.finished(row, SEO)
+        self.assertTrue(json.loads(told["refs_json"]).get("quiet"), "no run for a finished task with no note")
+
+    def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
+        quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
+        H.task_close(self.conn, ANA, quiet["id"])
+        H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
+        refs = {row["id"]: [json.loads(m["refs_json"]) for m in H.messages(self.conn, row["conversation_id"])
+                            if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
+        self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
+        self.assertFalse(refs[noted["id"]][0].get("quiet"), "a note may change what the bot does next")
 
     def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)

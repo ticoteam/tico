@@ -261,9 +261,26 @@ that only read) and consumed no approval, is resumed once, each with a note in t
 record (`job.auto_reconcile` in the event log). A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same chat, or the same task session). An operator can choose
 **Try again** or **Don’t retry** in Stopped runs; while such a run is still live, Tico saves the choice and applies it
-when that run ends. When the runner itself reported the run interrupted
-(it restarted), such a run resumes at once; when the same computer picks it up again it continues
-the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+when that lane frees. BotOps’s review is done as soon as all its recovery choices are saved. Tico records the live-work dependency
+in the recovery history and shows its ownership in Stopped runs. Within five minutes of that work ending, the
+scheduler re-evaluates the stopped job and records who owns recovery and why.
+When the computer reports a restart, a run resumes on the next scheduler sweep, including one that used a shell or
+edited files. Its recovery note gives the interruption time and tells it to check what already happened first;
+the same computer continues the same provider session. A consumed approval or a named irreversible outside action
+(merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
+is dismissed and BotOps is told. The computer records fixed operation labels alongside shell events without exposing
+command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
+command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without the computer’s restart report keeps the conservative rule above. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+A known primary login reset keeps runnable jobs queued until that reset when no eligible fallback is ready;
+a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
+only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
+approval. Missing telemetry or any output or possible effect keeps the safe review path.
+A quarantine stops each running turn through the runner's normal Stop response, carrying
+`stop_reason`. Its end reason says *Quarantined: <reason>, resumes about HH:MM UTC*
+(or *until a person clears it*). Its jobs return to the queue until the quarantine lifts;
+the bot's activity says they will run again. A real lease loss still says the computer
+stopped answering. Later held runs are named on the bot's existing review task, and
+closing that task while runs remain held reopens it on the next sweep.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
@@ -320,7 +337,8 @@ Every login a turn ran out on is held, an intermediate fallback's too, even when
 turn; a subscription profile that shares the computer's own sign-in counts as that one login; and only a run claimed
 after a hold began can end it by working, so a run that started earlier and finishes later does not. When it ends, one queued run goes first; the others on the login wait for
 its result, so a login sees one try per window however many runs wait. **Settings → Health** says whose login it is
-and when it resumes. A person's message to the bot written after the limit lets it try once at once (**Try now** also works while
+and when it resumes. When the provider gave no known reset time, a person's message written after the limit
+lets it try once at once. A known reset keeps new messages queued until then. **Try now** explicitly ends a hold (and also works while
 only the bot's own login is held and its work goes on on a fallback); a run that
 hits the limit again goes back to the hold. **Try now**, beside the warning on the bot's page and in its chat line for anyone who
 manages the bot (`POST /api/v2/bots/{bot}/limit/retry`, BotOps as the person who asked), ends the
@@ -416,8 +434,8 @@ it completes or the reset time passes ([Health Monitor](health-monitor.md), `def
 The company's **check model** (*Check model* in **Settings → Computers → Models**, `check_models` on
 `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
-pick is the first from a provider other than the one the work was written on; with none, it is refused rather than
-run on the author's own provider. An entry whose provider is off or whose model is retired is skipped, and a
+pick is the first from a provider other than the one the work was written on; with none that can run, it runs on
+the author's own provider and the task's history says so. Another provider is preferred, never required. An entry whose provider is off or whose model is retired is skipped, and a
 runtime alone follows its provider's current model. `check_order` in the same view is the order in effect.
 
 **A bot's session is its own** ([Sessions](sessions.md)). By default every task is its own provider thread, and the bot's
@@ -460,7 +478,7 @@ down, into another column, or between lanes; everyone else sees the board and co
 **A bot finishes.** It commits its repository, marks the task `done` with a note, and the reply is
 saved in the conversation. The task shows under **Tasks → Done** with the bot's note; a bot that
 requested it gets a *Finished: <title>* message (`/api/v2/messages?unread=1`) and may choose Close.
-Done stays Done until someone authorized closes it. Every run is listed under **Settings → History → Runs** and on
+Its requester or a person closes it; until then its owner can reopen it with `doing`, or put it back with `open` and a note. Every run is listed under **Settings → History → Runs** and on
 the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**

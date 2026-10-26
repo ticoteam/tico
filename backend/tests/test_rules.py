@@ -211,3 +211,167 @@ def test_a_long_rule_list_is_byte_capped_and_continues_where_it_stopped(api):
             break
         offset = page["next_offset"]
     assert offset and len(seen) == 400, "the cap split the 500-row page, and every row is still reached"
+
+
+def tagged(c, task, *keys):
+    """`task` with these tags on it, put there by a person's write, as a fresh row."""
+    for key in keys:
+        if not H.tag_by_key(c, key):
+            H.tag_create(c, "human:ana", key, mover=True)
+    H.task_update(c, "human:ana", task["id"], labels=[*H.task_labels(task), *keys])
+    return H.task(c, task["id"])
+
+
+def actions(c, rule_id):
+    return [json.loads(r[0]) for r in c.execute(
+        "SELECT detail_json FROM events WHERE action='rule.action' AND json_extract(detail_json,'$.rule')=? "
+        "ORDER BY rowid", (rule_id,))]
+
+
+def test_a_tag_rule_assigns_the_task_through_a_reassignment_and_records_the_rule(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        H.tag_create(c, "human:ana", "billing", mover=True)
+    row = rule_row(api, when={"tag": "billing"}, then="action", params={"action": "assign", "owner": "ops"})["rule"]
+    assert row["params"]["owner"] == "bot:ops"
+    with api.app.state.store.transaction() as c:
+        plain, task = plain_task(c, "Untagged work"), tagged(c, plain_task(c), "billing")
+        c.execute("DELETE FROM jobs")
+        news(c, plain)
+        assert H.task(c, plain["id"])["owner"] == "bot:cpo", "no tag, no match"
+        msg = news(c, task)
+        assert msg["refs"]["rule"] == row["id"] and msg["refs"]["quiet"] is True
+        assert H.task(c, task["id"])["owner"] == "bot:ops"
+        assert jobs(c, "ops") == 1, "the new owner is woken as on any reassignment"
+        moved = c.execute("SELECT actor, old, new, note FROM task_events WHERE task_id=? AND field='owner'",
+                          (task["id"],)).fetchone()
+        assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", f"Rule {row['id']}")
+        assert actions(c, row["id"]) == [{"rule": row["id"], "action": "assign", "owner": "bot:ops"}]
+
+
+def test_an_assign_rule_never_hands_a_private_task_to_someone_who_cannot_read_it(api):
+    # Rules act as the keeper, which passes the private-task check: the action itself must keep the task to its readers.
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        H.tag_create(c, "human:ana", "billing", mover=True)
+    row = rule_row(api, when={"tag": "billing"}, then="action", params={"action": "assign", "owner": "ops"})["rule"]
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "bot:cpo", "Private work", "Not for ops", "bot:cpo", private=True)
+        assert H.task_private(c, hidden) and not H.task_private_readable(c, "bot:ops", hidden)
+        hidden = tagged(c, H.task(c, hidden["id"]), "billing")
+        readable = tagged(c, plain_task(c), "billing")      # ops filed it, so ops may read it
+        c.execute("DELETE FROM jobs")
+        news(c, hidden)                 # not handed over, and the owner it stays with is still woken (fail open)
+        assert H.task(c, hidden["id"])["owner"] == "bot:cpo" and jobs(c, "ops") == 0 and jobs(c, "cpo") == 1
+        assert actions(c, row["id"]) == []
+        news(c, readable)
+        assert H.task(c, readable["id"])["owner"] == "bot:ops"
+
+
+def test_a_rule_never_changes_a_private_task_its_writer_cannot_read(api):
+    # The keeper passes the private-task check, so the writer's own access is what keeps a rule off another's task.
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        H.tag_create(c, "human:ana", "urgent", mover=True)
+    row = rule_row(api, then="action", params={"action": "add_tag", "tag": "urgent"})["rule"]
+    with api.app.state.store.transaction() as c:
+        hidden = H.task_create(c, "bot:cpo", "Private work", "Not for ben", "bot:cpo", private=True)
+        assert not H.task_private_readable(c, row["created_by"], hidden)
+        c.execute("DELETE FROM jobs")
+        news(c, hidden)
+        assert H.task_labels(H.task(c, hidden["id"])) == [] and jobs(c, "cpo") == 1
+        assert actions(c, row["id"]) == []
+        task = plain_task(c)
+        news(c, task)
+        assert H.task_labels(H.task(c, task["id"])) == ["urgent"]
+
+
+def test_an_edited_rule_uses_its_action_writer_without_changing_its_creator(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        H.tag_create(c, "human:ana", "urgent", mover=True)
+        hidden = H.task_create(c, "bot:cpo", "Private work", "Not for ben", "bot:cpo", private=True)
+        assert H.task_private_readable(c, "human:ana", hidden)
+        assert not H.task_private_readable(c, "human:ben", hidden)
+    row = rule_row(api, token="ana-test", then="action", params={"action": "note"})["rule"]
+    edited = post(api, f"rules/{row['id']}", {"expected_revision": row["revision"],
+                  "params": {"action": "add_tag", "tag": "urgent"}}, token="ben-test")["rule"]
+    assert edited["created_by"] == "human:ana" and edited["action_by"] == "human:ben"
+    edited = post(api, f"rules/{row['id']}", {"expected_revision": edited["revision"],
+                  "note": "Routing policy"}, token="ana-test")["rule"]
+    assert edited["action_by"] == "human:ben", "a metadata edit does not lend the creator's access back"
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM jobs")
+        msg = news(c, hidden)
+        assert H.task_labels(H.task(c, hidden["id"])) == []
+        assert jobs(c, "cpo") == 1 and msg["refs"]["rule"] == R.FAIL_OPEN
+        assert actions(c, row["id"]) == []
+        # An upgraded revised rule with no recorded action writer cannot borrow its creator's access either.
+        c.execute("UPDATE rules SET action_by=NULL WHERE id=?", (row["id"],))
+        R.ensure_schema(c)
+        c.execute("DELETE FROM jobs")
+        news(c, hidden)
+        assert H.task_labels(H.task(c, hidden["id"])) == [] and jobs(c, "cpo") == 1
+    saved = post(api, f"rules/{row['id']}", {"expected_revision": edited["revision"],
+                 "when": {"actor": "keeper"}}, token="ana-test")["rule"]
+    assert saved["created_by"] == "human:ana" and saved["action_by"] == "human:ana"
+    with api.app.state.store.transaction() as c:
+        news(c, hidden)
+        assert H.task_labels(H.task(c, hidden["id"])) == ["urgent"]
+
+
+def test_tag_actions_add_and_remove_once_and_cannot_retrigger_their_rule(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        for key in ("triage", "urgent"):
+            H.tag_create(c, "human:ana", key, mover=True)
+    add = rule_row(api, then="action", params={"action": "add_tag", "tag": "Urgent"})["rule"]
+    drop = rule_row(api, scope_kind="bot", scope_id="cpo", when={"tag": "triage"}, then="action",
+                    params={"action": "remove_tag", "tag": ["triage"]})["rule"]
+    assert add["params"]["tag"] == ["urgent"]
+    with api.app.state.store.transaction() as c:
+        task = tagged(c, plain_task(c), "triage")
+        first = news(c, task)                       # the bot row comes first: triage comes off
+        assert first["refs"]["rule"] == drop["id"] and H.task_labels(H.task(c, task["id"])) == []
+        second = news(c, task)                      # no triage now: the bot row no longer matches, the team row adds
+        assert second["refs"]["rule"] == add["id"] and H.task_labels(H.task(c, task["id"])) == ["urgent"]
+        news(c, task)                               # already on: nothing written
+        labels = c.execute("SELECT actor, note FROM task_events WHERE task_id=? AND field='labels' ORDER BY rowid",
+                           (task["id"],)).fetchall()
+        assert [tuple(r) for r in labels[1:]] == [(H.KEEPER, f"Rule {drop['id']}"), (H.KEEPER, f"Rule {add['id']}")]
+        assert [a["changed"] for a in actions(c, add["id"])] == [True, False]
+        assert [a["changed"] for a in actions(c, drop["id"])] == [True]
+
+
+def test_two_assign_rules_that_hand_a_task_back_and_forth_run_once(api):
+    setup(api)
+    to_ops = rule_row(api, scope_kind="bot", scope_id="cpo", event="assignment", then="action",
+                      params={"action": "assign", "owner": "ops"})["rule"]
+    to_cpo = rule_row(api, scope_kind="bot", scope_id="ops", event="assignment", then="action",
+                      params={"action": "assign", "owner": "cpo"})["rule"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Hand-off work", "Do it", "bot:cpo")
+        assert H.task(c, task["id"])["owner"] == "bot:ops"
+        # ops's assignment, written by cpo's rule, is news: ops's own rule does not hand the task back.
+        assert len(actions(c, to_ops["id"])) == 1 and actions(c, to_cpo["id"]) == []
+        last = c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:ops' ORDER BY rowid DESC LIMIT 1").fetchone()
+        assert json.loads(last[0])["rule"] == to_cpo["id"]
+
+
+def test_assign_and_tag_actions_refuse_what_does_not_exist(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        H.tag_create(c, "human:ana", "release-checklist", is_template=True, mover=True)
+        H.tag_create(c, "human:ana", "billing", mover=True)
+
+    def act(expected, **params):
+        return rule_row(api, then="action", params=params, expected=expected)
+    act(404, action="assign", owner="nobody")
+    act(404, action="assign", owner="keeper")
+    act(422, action="assign")
+    act(404, action="add_tag", tag="no-such-tag")
+    act(422, action="add_tag", tag="release-checklist")       # a template is not put on a task
+    act(422, action="remove_tag", tag=[])
+    act(422, action="remove_tag", tag=["billing", 7])
+    assert act(200, action="assign", owner="human:cara")["rule"]["params"]["owner"] == "human:cara"
+    rule_row(api, token="cara-test", then="action", params={"action": "add_tag", "tag": "billing"}, expected=403)

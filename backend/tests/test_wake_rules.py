@@ -341,7 +341,7 @@ def test_the_always_wake_list_is_one_list_the_bot_to_bot_rule_reads_first(api):
     from backend import bot_to_bot as B
     setup(api)
     with api.app.state.store.transaction() as c:
-        assert [key for key, _ in W.ALWAYS_WAKE] == ["person", "ask", "approval", "needs_action", "reply", "gate"]
+        assert [key for key, _ in W.ALWAYS_WAKE] == ["person", "manager", "ask", "approval", "needs_action", "reply", "gate", "handoff"]
         # A bot's plain fyi to a bot waits (Dev 149); the same words with an always-wake reference do not.
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {}, "fyi") is True
         assert B.can_wait(c, "bot:ops", "bot:cpo", "say", {"run_now": True}, "fyi") is False

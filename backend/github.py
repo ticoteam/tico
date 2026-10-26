@@ -76,21 +76,23 @@ def _save_burst(c, task, burst, **parts):
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
-def queue_wake(c, task, item, batch=None):
+def queue_wake(c, task, item, batch=None, handoff=None):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
     `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
     request), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
     one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
     also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
-    message so one can never lift or lower another."""
+    message so one can never lift or lower another. `handoff` (a merge conflict) puts the burst first in the owner's
+    queue (backend/verdict_moves.py) and stays on it until it is sent."""
     from .repositories import metadata
     burst = metadata(c, "github-task-wake:" + task["id"])
     items = burst.get("items", [])
     if item not in items:
         items = (items + [item[:1000]])[-50:]
     kind = batch if not burst.get("items") or burst.get("batch") == batch else None
-    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items, **({"batch": kind} if kind else {}))
+    _save_burst(c, task, {k: v for k, v in burst.items() if k != "batch"}, items=items, **({"batch": kind} if kind else {}),
+                **({"handoff": handoff} if handoff else {}))
 
 
 def queue_note(c, task, item):
@@ -138,6 +140,8 @@ def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
     from .repositories import metadata
+    from .review_gate import engineering
+    from . import step_flow, verdict_moves
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
         with isolated(c, "github_wake", row["key"]):
@@ -149,13 +153,18 @@ def flush_wakes(c):
             if live:
                 if burst.get("items"):
                     H._wake(c, task, task["owner"], "\n".join(burst["items"]),
+                            {verdict_moves.HANDOFF: burst["handoff"]} if burst.get("handoff") else
                             {"wake_batch": burst["batch"]} if burst.get("batch") else None, trigger="pr_checks")
                 if burst.get("notes"):
                     H._wake(c, task, task["owner"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks")
                 for done in burst.get("done", []):
+                    # A failed check on a bot's ticket on a board with a flow is its builder's hand-off, at any step.
+                    failed = done["result"] == "fail" and H.is_bot(task["owner"]) and (
+                        engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
                     H._wake(c, task, task["owner"], done["item"],
                             {"wake": "pr_checks_done", "pr_head": done["head"], "pr_result": done["result"],
-                             **({"pr_armed": True} if done.get("armed") else {})}, trigger="pr_checks")
+                             **({"pr_armed": True} if done.get("armed") else {}),
+                             **({verdict_moves.HANDOFF: "failed_check"} if failed else {})}, trigger="pr_checks")
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
             if live:
                 sent.append(task["id"])
@@ -329,6 +338,14 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         record_health_wait({**link, "state": state, "mergeable": mergeable,
                             **({"checks": "pending"} if new_head else {})}, detail)
         c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+        if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
+            # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
+            from . import verdict_moves
+            verdict_moves.merged(c, task)
+        elif new_head and action == "synchronize" and state == "open":
+            # A push at a check step whose check already finished needs a check of the new head.
+            from . import check_pools, verdict_moves
+            check_pools.safely(c, verdict_moves.new_head, task)
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)]
         # GitHub computes unknown mergeability after a push, without a corresponding user action.
@@ -349,7 +366,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if (state == "closed" and link["state"] != state and link["id"] not in registered
                 or conflict_wake):
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
-            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
+            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None,
+                       handoff="merge_conflict" if conflict_wake else None)
         if not read_refresh:
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
@@ -437,6 +455,7 @@ def pr_signal(c, event, payload):
         fields = {}
         label = link["title"]
         wake, batch, who_key = False, None, ""
+        finished_head = None
         if event in ("check_run", "check_suite", "status"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
@@ -481,6 +500,7 @@ def pr_signal(c, event, payload):
                             f"{link['url']}/checks" + (f" at {sha}" if sha else ""))
                     armed = fire_once(detail, done)
                     queue_checks_done(c, task, full, outcome, done, armed)
+                    finished_head = (full, outcome)
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -531,6 +551,10 @@ def pr_signal(c, event, payload):
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
                   (*fields.values(), link["id"]))
+        if finished_head:
+            # Green at a Fixes step moves the ticket on; green where the last check approved wakes the merge.
+            from . import verdict_moves
+            verdict_moves.checks_done(c, task, *finished_head)
         if wake and batch == "review" and not by_person(c, payload, who_key):
             queue_note(c, task, item)       # a bot's or an App's review is news for the next run, not a wake
         elif wake:

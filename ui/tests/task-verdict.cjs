@@ -2,7 +2,7 @@
 // Guards: the chip shows on the row, in the parent's Subtasks and in the subtask's own properties, with the judged head
 // as 7 characters, good and bad in different colours, and nothing for a subtask with no verdict; a refused subtask
 // ("already open") reads under the field it was typed in, the title kept; a refused status change reads on its row,
-// also in a narrow list where row notes hide. Fixtures only.
+// also in a narrow list where row notes hide; a person's QA waiver reads "QA waived", never as a pass. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
@@ -71,6 +71,50 @@ const refuse = (page, path, method, status, detail, code) => page.route('**' + p
       const said = page.locator('#task-body [data-task-key="tt-r2"] [data-task-refused] .tl-note-text');
       await said.waitFor();
       assert.ok((await said.boundingBox())?.width > 40, 'the words are drawn');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
+      // A person's QA waiver (ui/app/task-code.js taskQaWaiverHTML): "QA waived" in amber in the ticket's properties
+      // and in its history, never a green pass, with who, why and the head; a waiver for an old head says so.
+      const HEAD = 'c0ffee1234567890c0ffee1234567890c0ffee12';
+      const waiver = {head: HEAD, step: 'In QA', pr: 'https://github.com/acme/shop/pull/12', actor: 'human:ana',
+        reason: 'Urgent checkout fix; the QA bot is down and both reviews approved this head.', at: at(10), current: true};
+      const tasks = baseTasks();
+      tasks[0] = {...tasks[0], qa_waivers: [waiver]};
+      const {page, errors} = await open(browser, {hash: '#/tasks?view=list', baseTasks: tasks, local});
+      await page.route('**/api/v2/tasks/t-dev', route => route.request().method() === 'GET'
+        ? route.fulfill({contentType: 'application/json', body: JSON.stringify({task: tasks[0], children: [], comments: [], messages: [],
+          events: [{id: 'e1', ts: at(12), actor: 'bot:qa', field: 'verdict', old: null, new: 'pass 0f9e8d7c'},
+                   {id: 'e2', ts: at(10), actor: 'human:ana', field: 'qa_waiver', old: null, note: waiver.reason,
+                    new: JSON.stringify({head: HEAD, step: 'In QA', pr: waiver.pr})}]})}) : route.fallback());
+      await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-dev')));
+      const line = page.locator('#task-modal .task-comments .tcomment.qa-waiver');
+      await line.waitFor();
+      const said = await line.innerText();
+      assert.match(said, /QA waived/);
+      assert.match(said, /waived QA on c0ffee1: a waiver, not a QA pass/);
+      assert.ok(said.includes(waiver.reason), 'the whole reason');
+      assert.doesNotMatch(said, /Passed/);
+      const verdict = page.locator('#task-modal .task-comments .tcomment', {hasText: 'recorded the verdict pass'});
+      assert.equal(await verdict.count(), 1, 'a real verdict reads as one');
+      assert.equal(await verdict.locator('[data-qa-waiver]').count(), 0, 'and carries no waiver mark');
+      const prop = page.locator('#task-modal [data-prop-row="qa-waiver"]');
+      await prop.waitFor();
+      assert.equal(await prop.locator('[data-qa-waiver]').getAttribute('data-current'), 'yes');
+      assert.match(await prop.innerText(), /QA waived\s+c0ffee1/);
+      assert.ok((await prop.innerText()).includes(waiver.reason));
+      assert.match(await prop.locator('[data-qa-waiver]').getAttribute('title'), /A waiver, not a QA pass/);
+      assert.equal(await page.locator('#task-modal [data-prop-row="verdict"]').count(), 0, 'no verdict row on the ticket');
+      const amber = await prop.locator('[data-qa-waiver]').evaluate(el => getComputedStyle(el).backgroundColor);
+      const passBg = await page.locator('#task-body [data-task-key="tt-qa"] [data-verdict="pass"]')
+        .evaluate(el => getComputedStyle(el).backgroundColor);
+      assert.notEqual(amber, passBg, 'a waiver never looks like a pass');
+      // After a push the waiver no longer covers the pull request's head.
+      tasks[0].qa_waivers = [{...waiver, current: false}];
+      await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-dev')));
+      await page.locator('#task-modal [data-prop-row="qa-waiver"] [data-current="no"]').waitFor();
+      assert.match(await page.locator('#task-modal [data-prop-row="qa-waiver"]').innerText(), /old head/);
       assert.deepEqual(errors, []);
       await page.close();
     }

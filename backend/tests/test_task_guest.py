@@ -11,6 +11,14 @@ from backend.tests.test_tasks_board import bot_token
 ASK = {"title": "Approve the zip triage plan", "body": "Please approve the triage plan: reply yes or no on this task."}
 
 
+
+@pytest.fixture(autouse=True)
+def private_tasks_have_an_unrelated_manager(api):
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+
+
 def task(api, requester, owner, title, parent=None):
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, requester, title, f"Confidential: {title}.", owner, private=True, lint=False)

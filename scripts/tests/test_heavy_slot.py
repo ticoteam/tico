@@ -31,3 +31,15 @@ def test_pytest_main_inside_another_program_and_listing_go_straight_on():
     # pytest.main from a script: orig_argv is that script's, so re-running it would run something else.
     assert slotted_command({'HUB_BOT': 'ops'}, ['scripts/tool.py'], ['python3', 'scripts/tool.py'], PY, 'posix') is None
     assert slotted_command({'HUB_BOT': 'ops'}, ARGV, [*ORIG, '--collect-only'], PY, 'posix') is None
+
+
+def test_with_remote_runs_on_a_few_named_test_files_stay_here_and_a_suite_goes():
+    env = {'HUB_BOT': 'ops', 'TICO_HEAVY_REMOTE': '1'}
+    # The files a bot just changed: its uncommitted work, which a VM running the pushed commit would not test.
+    assert slotted_command(env, ARGV, ORIG, PY, 'posix') == [
+        'env', 'TICO_HEAVY_REMOTE=0', 'bash', str(HEAVY), PY, '-X', 'utf8', '-m', 'pytest', '-q', 'backend/tests/test_a.py']
+    one = [*ORIG[:-1], 'backend/tests/test_a.py::test_b', '-k', 'x']
+    assert slotted_command(env, ARGV, one, PY, 'posix')[:2] == ['env', 'TICO_HEAVY_REMOTE=0']
+    # The whole suite, a directory, or many files go to the VM.
+    for args in ([], ['backend/tests'], [f'backend/tests/test_{i}.py' for i in range(4)]):
+        assert slotted_command(env, ARGV, [*ORIG[:-1], *args], PY, 'posix')[0] == 'bash'

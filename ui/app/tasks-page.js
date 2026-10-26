@@ -229,7 +229,8 @@ function taskOwnerOptions(selected = '') {
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
     <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.name)}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+      `<option value="${esc(e.name)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
+        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.name) || pick('bot:' + e.name)}>${esc(e.display_name || e.name)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
 }
 function taskCreateModal() {
   let d = $('#task-create');
@@ -342,6 +343,7 @@ async function tasksLoad(state, opts = {}) {
   // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
   // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
   const cursor = state.since;
+  if (!cursor) state.activeComplete = false;
   state.loading = !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
   if (!cursor) tasksRender(state);
   const others = () => [v2Get('/v2/routines'), v2Get('/v2/tasks/labels'),
@@ -350,7 +352,7 @@ async function tasksLoad(state, opts = {}) {
   if (cursor) {
     [changed, rec, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
     if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    if (!changed || changed.reset) { changed = null; state.since = null; }
+    if (!changed || changed.reset) { changed = null; state.since = null; state.activeComplete = false; }
   }
   if (!changed) {
     if (cursor) tasksRender(state);
@@ -389,16 +391,20 @@ async function tasksLoad(state, opts = {}) {
   const drain = async next => {
     while (next != null && TASKS_ST === state && state.loadSeq === seq) {
       const page = await v2Get(activeTasksPath(next));
-      if (!page || TASKS_ST !== state || state.loadSeq !== seq) return;
+      if (!page || TASKS_ST !== state || state.loadSeq !== seq) return false;
       state.tasks = mergeTaskRows(state.tasks, page.tasks || []);
       next = page.next_offset;
       tasksTools(state); tasksRender(state);
     }
+    return next == null;
   };
   if (active) {
-    await drain(active.next_offset);
+    const complete = await drain(active.next_offset);
     // Only a list read to its end can be caught up from its cursor.
-    if (TASKS_ST === state && state.loadSeq === seq) state.since = active.cursor || null;
+    if (TASKS_ST === state && state.loadSeq === seq) {
+      state.activeComplete = complete;
+      state.since = complete ? active.cursor || null : null;
+    }
   }
   // Done and Closed keep their own paging. A reload after a change folds in the newest page; the poll does that too, but
   // only while finished tasks are on screen (Done, Closed, or an unfolded board), and never more than that one page.

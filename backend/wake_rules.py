@@ -41,20 +41,34 @@ CAUSE = contextvars.ContextVar("wake_cause", default="")
 # Never filtered. Each entry: (key, what it is). `always_wakes` returns the key that matched.
 ALWAYS_WAKE = (
     ("person", "a person's message or comment, or a notice of a person's own act (an approval, a step move)"),
+    ("manager", "a task comment from a party’s org-chart manager"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
     ("approval", "an approval decided, withdrawn or asked about, or a structured question"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
     ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
     ("gate", "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security"),
+    ("handoff", "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or a merge"),
 )
 ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
 FLAG = "needs_action"
 VERDICT = re.compile(r"^\s*VERDICT:\s*(approve|changes)\s+PR\s+#\d+\s+head\s+[0-9a-f]{7,40}\b", re.I | re.M)
-# The same line read for its fields: a review or QA child's verdict and the head it judged (hubdb.record_verdict).
-VERDICT_FIELDS = re.compile(r"^\s*VERDICT:\s*(approve|changes|pass|fail)\b(?:\s+PR\s+#\d+)?(?:\s+head\s+([0-9a-f]{7,40})\b)?",
+# The same verdict read for its fields, as a clause anywhere in prose: a review or QA child's verdict and the head it
+# judged (hubdb.record_verdict). A quoted format line ("approve|changes", "pass or fail", "PR #<n> head <sha>")
+# names no verdict, so it never overwrites a real one before it.
+VERDICT_FIELDS = re.compile(r"\bVERDICT:\s*(approve|changes|pass|fail)(?![\w-])(?!\s*[|/])(?!\s+or\b)"
+                            r"(?:\s+PR\s+#\d+\b)?(?:\s+head\s+([0-9a-f]{7,40})\b)?(?!\s+(?:PR|head)\b)",
                             re.I | re.M)
+
+
+def verdict_fields(text):
+    """The last VERDICT clause wins, including clauses inside prose."""
+    found = None
+    for found in VERDICT_FIELDS.finditer(str(text or "")):
+        pass
+    return (found[1].lower(), (found[2] or "").lower() or None) if found else None
+
 
 # What a parked task waits for, by the refs its wake carries. These wake even when the bot's own write caused them.
 AWAITED = (
@@ -100,6 +114,12 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
     cause = CAUSE.get() if cause is None else cause
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
         return "person"
+    if refs.get("comment") and str(actor).startswith("bot:") and str(target).startswith("bot:"):
+        from . import hubdb as H
+        row = H.task(conn, H._task_ref(refs.get("task")) or "")
+        if (row and actor not in (row["owner"], row["requester"])
+                and H.task_participant(conn, actor, row)):
+            return "manager"
     if kind in ALWAYS_KINDS:
         return "ask"
     if set(refs) & ALWAYS_REFS:
@@ -108,6 +128,8 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
         return "needs_action"
     if VERDICT.search(str(body or "")):
         return "gate"
+    if actor == "keeper" and refs.get("handoff"):
+        return "handoff"        # only Tico marks one (backend/verdict_moves.py)
     if in_reply_to and _awaited_reply(conn, target, in_reply_to):
         return "reply"
     return None

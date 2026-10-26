@@ -58,9 +58,9 @@ def parse_until(value):
 
 
 def may_snooze(conn, actor, row, mover=False):
-    """The requester, the owner, anyone on the task by role, a mover or the keeper."""
+    """The parties and their managers, a role holder, a mover or the keeper."""
     H = _H()
-    if mover or actor == H.KEEPER or actor in (row["owner"], row["requester"]):
+    if H.task_mover(conn, actor, row, mover) or H.task_participant(conn, actor, row):
         return True
     from .task_roles import roles_of
     return any(actor in actors for actors in roles_of(conn, row["id"]).values())
@@ -74,7 +74,7 @@ def _check(conn, actor, task_id, mover):
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
     H._task_private_writer(conn, actor, row)
     if not may_snooze(conn, actor, row, mover):
-        H.refuse(conn, actor, "identity", "Only the requester, the owner or someone on the task snoozes it")
+        H.refuse(conn, actor, "identity", "Only the requester, owner, their managers, a role holder or a mover snoozes it")
     return row
 
 
