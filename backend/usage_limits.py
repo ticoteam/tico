@@ -55,7 +55,8 @@ class Default(dict):
 def company(c):
     """The default for bots with no limit of their own: {hourly_usd, daily_usd, weekly_usd, monthly_usd, count_subscription}.
     Subscription runs count unless the team turned that off."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    from .read_cache import metadata
+    row = metadata(c, KEY)
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -123,8 +124,9 @@ def pools(c, default=None):
     """{scope: caps} for every pool with a cap set: `company` and `group:<id>`."""
     memo = default.memo if isinstance(default, Default) else {}
     if "pools" not in memo:
+        from .read_cache import rows
         found = {}
-        for row in c.execute("SELECT * FROM usage_pools"):
+        for row in rows(c, "SELECT * FROM usage_pools"):
             caps = _caps(row)
             if any(caps.values()):
                 found[row["scope"]] = caps

@@ -122,8 +122,14 @@ def reserve(c, attempt, settings=None):
     return {"reserved": True, "start_until": until}
 
 
-def summary(c, runner_id, settings):
-    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks."""
+def summary(c, runner_id, settings, default=None):
+    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Read once per computer
+    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total)."""
+    from .read_cache import value
+    return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
+
+
+def _summary(c, runner_id, settings, default):
     from . import performance
     out = dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS)
     groups = {}
@@ -161,7 +167,8 @@ def summary(c, runner_id, settings):
                          (runner_id,)):
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         if not why and runner:
-            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready)
+            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
+                                       default=default)
             why = reasons.get(refused, 'pre-start requirements' if refused else '')
         if not why and overloaded:
             why = 'computer busy'

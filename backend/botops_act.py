@@ -221,6 +221,7 @@ LIMITS = re.compile(API + rf"usage/limits(/{_S})?")
 CONFIRM = _routes(
     ("POST", rf"(people|humans)/{_S}"),
     ("PUT", r"access/limits"), ("PUT", r"access/allow"),
+    ("POST", rf"routines/{_S}/delete"),
     ("POST", rf"(runners|computers)/{_S}/(member-bots|revoke)"),
     ("POST", rf"(goal-proposals|proposals)/{_S}/decide"),
     ("POST", r"support/tickets"),
