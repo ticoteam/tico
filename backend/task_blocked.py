@@ -146,8 +146,9 @@ def reconciliation(c, row):
             return None
         gate = H._json(row.get('blocked_gate_json'), {}) or {}
         # A fresh refusal can describe a newer head/check result than the cached link.
-        # Only a subsequent GitHub observation may clear that uncertainty.
-        for pr in review_gate.links(c, row):
+        # Only a subsequent GitHub observation may clear that uncertainty. These are the PRs the gate below judges,
+        # merged ones included when a ticket has no open PR.
+        for pr in review_gate.review_links(c, row):
             if gate.get('pr') != pr['url']:
                 continue
             detail = H._json(pr.get('detail_json'), {}) or {}
