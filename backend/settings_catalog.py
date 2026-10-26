@@ -209,7 +209,8 @@ def _held(body, dotted):
 def kind_for(e, body):
     """The entry's class for this body: a direct entry is `when_held` when the body holds one of its `confirm_when`
     values."""
-    if e.kind == "direct" and any(_held(body, place) in values for place, values in e.confirm_when):
+    if (e.kind == "direct" and (e.key != "rules.wake" or body.get("then") == "action")
+            and any(_held(body, place) in values for place, values in e.confirm_when)):
         return e.when_held
     return e.kind
 
@@ -240,7 +241,7 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
-def plan(c, auth, who, e, value, target=None, base="", propose=None):
+def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_update=None):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps acting for a person, a confirm entry's Confirm card (`propose`) or a
     person-only entry's reason and link."""
@@ -266,7 +267,16 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None):
     else:
         raise Problem("validation", f"{e.name} takes a JSON object", 422)
     request = {"method": e.method, "path": path_for(e, target), "body": body}
-    kind = kind_for(e, body)
+    class_body = body
+    if e.key == "rules.wake" and target and target.get("id"):
+        # A partial update inherits its action and params from the stored rule. The catalogue must classify what
+        # the route will save, not only the fields the caller happened to include.
+        if effective_update is None:
+            if acting_for and ("then" not in body or "params" not in body):
+                raise person_only()
+        else:
+            class_body = effective_update(c, auth, who, target["id"], body)
+    kind = kind_for(e, class_body)
     if kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
@@ -318,6 +328,17 @@ def install(app, store, auth, settings):
         target = {"bot": body.bot or "", "computer": body.computer or "", "person": body.person or "", "id": body.id or ""}
         propose = getattr(app.state, "botops_propose", None)
         with store.transaction() as c:
+            def effective_wake_update(c, auth, who, rule_id, update):
+                from . import rules
+                row = rules.get(c, rule_id)
+                rules._require(c, settings, auth, who, row["scope_kind"], row["scope_id"])
+                if row["revision"] != update.get("expected_revision"):
+                    from .store import Problem
+                    raise Problem("version_conflict", "The rule changed; refresh before saving", 409)
+                params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
+                return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
+
             return plan(c, auth, who, e, body.value, target, settings.public_url,
                         propose=propose and (lambda c, who, method, path, data, summary:
-                                             propose(c, who, method, path, data, summary[:300])))
+                                             propose(c, who, method, path, data, summary[:300])),
+                        effective_update=effective_wake_update)

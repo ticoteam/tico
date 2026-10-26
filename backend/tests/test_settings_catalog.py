@@ -3,6 +3,7 @@
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from backend import botops_act, settings_catalog, team_rules
 from backend.assistant import valid_operation
 from backend.settings_entries import ALIASES, ENTRIES, NO_CARD_YET, NOT_SETTINGS, SETTINGS_FILES
 from backend.store import Problem
-from backend.tests.test_api import api, get  # noqa: F401  (fixture)
+from backend.tests.test_api import api, get, post  # noqa: F401  (fixture)
 from backend.tests.test_mcp import call as mcp
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
@@ -120,6 +121,40 @@ def test_a_wake_rule_that_sends_outside_is_not_direct():
             settings_catalog.plan(None, None, _owner(), e, {**quiet, "then": "action", "params": {"action": action}},
                                   propose=card)
         assert refused.value.code == "person_only", action
+
+
+def test_botops_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api, botops):
+    # These are synthetic rows in the test database; no webhook delivery worker runs here.
+    hook = post(api, "webhooks", {"name": "Synthetic", "url": "https://example.com/hook",
+                                   "events": ["*"]})["webhook"]
+    rule = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "action",
+                                "params": {"action": "send_webhook", "webhook": hook["id"],
+                                           "type": "custom.settings_test", "data": {}}, "on": False})["rule"]
+    quiet = post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "note",
+                                 "on": False})["rule"]
+
+    ana = turn(api, botops, person="ana-test", text="Update my wake rules")
+    for value in ({"expected_revision": 1, "on": True},
+                  {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}}):
+        err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value},
+                           ana["token"])
+        assert err and refused.get("error") == "person_only", refused
+        with api.app.state.store.read() as c:
+            stored = c.execute("SELECT enabled,then_outcome,params_json,revision FROM rules WHERE id=?",
+                               (rule["id"],)).fetchone()
+            assert (stored["enabled"], stored["then_outcome"], json.loads(stored["params_json"]), stored["revision"]) == (
+                0, "action", {"action": "send_webhook", "data": {}, "type": "custom.settings_test",
+                              "webhook": hook["id"]}, 1)
+
+    err, changed = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": quiet["id"],
+                            "value": {"expected_revision": 1, "on": True}}, ana["token"])
+    assert not err and changed["value"] == {"expected_revision": 1, "on": True}, changed
+    finish(api, botops, ana)
+
+    # The person can still make the same outbound change directly in Settings.
+    err, changed = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"],
+                            "value": {"expected_revision": 1, "on": True}}, "ana-test")
+    assert not err and changed["value"]["on"] is True, changed
 
 
 def test_nothing_is_not_a_value_and_the_team_icon_is_an_upload():
