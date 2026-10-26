@@ -217,10 +217,10 @@ def reports_of(actor, roster, entries, archived=()):
 
 
 # ----------------------------------------------------------------------------- writes
-def _event(conn, goal_id, actor, field, old, new, note="", status_by=None, status_source=None):
+def _event(conn, goal_id, actor, field, old, new, note="", status_by=None, status_source=None, ts=None):
     conn.execute("INSERT INTO goal_events (id, goal_id, ts, actor, field, old, new, note, status_by, status_source) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                 (H.new_id(), goal_id, H.now(), actor, field,
+                 (H.new_id(), goal_id, ts or H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new), note or "",
                   status_by, status_source))
 
@@ -284,7 +284,8 @@ def set_status(conn, actor, goal_id, status, note=""):
                  "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated=?, "
                  "rank=CASE WHEN ? IN ('done','dropped') THEN NULL WHEN rank IS NULL THEN ? ELSE rank END "
                  "WHERE id=?", (status, note, actor, ts, ts, status, _next_rank(conn, row["owner"]), goal_id))
-    _event(conn, goal_id, actor, "status", row["status"], status, note, status_by=actor, status_source="person")
+    # The event's time is the colour's `status_at`, which Undo on "Goal removed" puts back (`_before_drop`).
+    _event(conn, goal_id, actor, "status", row["status"], status, note, status_by=actor, status_source="person", ts=ts)
     H.event(conn, actor, "goal.status", goal_id, {"status": status})
     if status == "dropped":
         # Nothing is deleted: the children move up to the goal this one served.
@@ -309,15 +310,21 @@ def was_proposed(conn, row):
 
 
 def _before_drop(conn, goal_id):
-    """How a dropped goal's colour was set just before the drop: the last colour (or hand-back) event before it, read
-    from the history so Undo puts back what was there, not what a page says was there. None when it was proposed."""
+    """The colour a dropped goal had by hand just before the drop, as (colour, note, setter, time), read from the
+    history so Undo puts back what was there, not what a page says was there. A reopen's own `status` event carries
+    its reason, so the colour it gave is read from the `status_restore` row it writes beside it. None when the colour
+    was automatic or there was none (a proposal)."""
     drop = conn.execute("SELECT ts, rowid FROM goal_events WHERE goal_id=? AND field='status' AND new='dropped' "
                         "ORDER BY ts DESC, rowid DESC LIMIT 1", (goal_id,)).fetchone()
     if not drop:
         return None
-    return conn.execute("SELECT field, new, note, status_by, status_source, ts FROM goal_events WHERE goal_id=? "
-                        "AND field IN ('status','status_source') AND (ts < ? OR (ts = ? AND rowid < ?)) "
-                        "ORDER BY ts DESC, rowid DESC LIMIT 1", (goal_id, drop[0], drop[0], drop[1])).fetchone()
+    prior = conn.execute("SELECT field, old, new, note, status_by, status_source, ts FROM goal_events WHERE goal_id=? "
+                         "AND field IN ('status','status_source','status_restore') "
+                         "AND (ts < ? OR (ts = ? AND rowid < ?)) ORDER BY ts DESC, rowid DESC LIMIT 1",
+                         (goal_id, drop[0], drop[0], drop[1])).fetchone()
+    if not prior or prior["field"] == "status_source" or prior["status_source"] != "person" or prior["new"] not in COLOURS:
+        return None
+    return prior["new"], prior["note"], prior["status_by"], prior["old"] if prior["field"] == "status_restore" else prior["ts"]
 
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
@@ -337,9 +344,8 @@ def reopen(conn, actor, goal_id, status=None, note="", undo=False):
         if row["status"] != "dropped":
             H.refuse(conn, actor, "kind", "Undo brings back a removed goal; a done goal is reopened with a reason")
         prior = _before_drop(conn, goal_id)
-        by_hand = prior and prior["field"] == "status" and prior["status_source"] == "person" and prior["new"] in COLOURS
-        if by_hand:
-            new, source, said, by, at = prior["new"], "person", prior["note"], prior["status_by"], prior["ts"]
+        if prior:
+            (new, said, by, at), source = prior, "person"
         else:
             new, source, said, by, at = _before_finish(conn, goal_id), "auto", "", actor, ts
         why = "Undo remove"
@@ -357,7 +363,8 @@ def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     conn.execute("UPDATE goals SET status=?, status_note=?, status_by=?, status_at=?, status_source=?, "
                  "suggest_status=NULL, suggest_note=NULL, suggest_at=NULL, updated=?, rank=? WHERE id=?",
                  (new, said, by, at, source, ts, rank, goal_id))
-    _event(conn, goal_id, actor, "status", row["status"], new, why, status_by=by, status_source=source)
+    _event(conn, goal_id, actor, "status", row["status"], new, why, status_by=by, status_source=source, ts=ts)
+    _event(conn, goal_id, actor, "status_restore", at, new, said, status_by=by, status_source=source, ts=ts)
     H.event(conn, actor, "goal.reopen", goal_id, {"status": new, "source": source, "undo": bool(undo)})
     if source == "auto":
         apply_auto(conn, goal_id)

@@ -359,14 +359,16 @@ def install(app, store, auth, mutate, settings):
 
     @app.get("/api/v2/goals")
     def goals_list(request: Request, owner: str | None = None, all: bool = False, status: str | None = None):
-        """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal."""
+        """`hub goal list`: mine, the chain above and my reports' by default; `all` is every goal, or every one
+        `owner` owns."""
         who = request.state.identity
         auth.domain(who)
         due = []
         with store.read() as c:
             if all:
                 statuses = tuple(status.split(",")) if status else None
-                rows = readable_goals(c, who, G.goals(c, status=statuses, live_only=not statuses))
+                whose = goal_owner(c, who, owner) if owner else None
+                rows = readable_goals(c, who, G.goals(c, owner=whose, status=statuses, live_only=not statuses))
                 return {"goals": rows}
             actor = goal_owner(c, who, owner)
             roster, entries, archived = org_shape(c)

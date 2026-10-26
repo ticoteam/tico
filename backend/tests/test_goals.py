@@ -103,3 +103,37 @@ def test_reopening_with_auto_puts_back_the_colour_it_had_and_a_proposal_stays_on
     post(api, f"goals/{proposed['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
     undone = post(api, f"goals/{proposed['id']}/reopen", {"undo": True}, token="ben-test")["goal"]
     assert (undone["status"], undone["status_source"]) == (auto["status"], "auto")
+
+
+def test_undo_after_an_undo_or_a_reopen_puts_back_the_colour_sentence_not_the_history_reason(api):
+    top = company_goal(api)
+    mine = post(api, "goals", {"title": "Ship the rental stats page", "owner": "me", "parent_id": top["id"]},
+                token="ben-test")["goal"]
+    post(api, f"goals/{mine['id']}/status", {"status": "green", "note": "Accepted."})
+    set_at = post(api, f"goals/{mine['id']}/status", {"status": "yellow", "note": "Backend is late."},
+                  token="ben-test")["goal"]["status_at"]
+
+    def drop_and_undo():
+        post(api, f"goals/{mine['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
+        return post(api, f"goals/{mine['id']}/reopen", {"undo": True})["goal"]
+
+    drop_and_undo()
+    twice = drop_and_undo()
+    assert (twice["status"], twice["status_note"], twice["status_by"], twice["status_at"]) == \
+        ("yellow", "Backend is late.", "human:ben", set_at)
+    post(api, f"goals/{mine['id']}/status", {"status": "done", "note": ""}, token="ben-test")
+    reopened = post(api, f"goals/{mine['id']}/reopen", {"status": "red", "note": "The launch slipped"},
+                    token="ben-test")["goal"]
+    undone = drop_and_undo()
+    assert (undone["status"], undone["status_note"], undone["status_by"], undone["status_at"]) == \
+        ("red", "The launch slipped", "human:ben", reopened["status_at"])
+
+
+def test_every_finished_goal_of_one_owner_is_listed_without_the_rest_of_the_team(api):
+    top = company_goal(api)
+    for token in ("ben-test", "ana-test"):
+        g = post(api, "goals", {"title": "Ship it", "owner": "me", "parent_id": top["id"]}, token=token)["goal"]
+        post(api, f"goals/{g['id']}/status", {"status": "dropped", "note": ""}, token=token)
+    listed = get(api, "goals?all=1&status=done,dropped&owner=human:ben")["goals"]
+    assert [g["owner"] for g in listed] == ["human:ben"]
+    assert len(get(api, "goals?all=1&status=done,dropped")["goals"]) == 2

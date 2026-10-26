@@ -205,10 +205,18 @@ function goalFinishedDetailHtml(d) {
       ${history.length ? `<ul class="goal-fin-history">${history.map(e => `<li class="muted">${said(e)}</li>`).join('')}</ul>` : ''}
     </div>`;
 }
-function goalReopenFormHtml(g) {
+function goalReopenAutoOnly(g, goals) {
+  const me = mePerson(), actor = me ? 'human:' + me.id : '';
+  if (S.me?.role === 'owner' || !actor || g.status_source != null || !g.parent_id || g.owner !== actor) return false;
+  const parent = goals.find(x => x.id === g.parent_id);
+  return Boolean(parent && parent.owner !== actor);
+}
+function goalReopenFormHtml(g, goals) {
+  const autoOnly = goalReopenAutoOnly(g, goals);
+  const choices = autoOnly ? [] : GOAL_COLOURS.filter(([v]) => v !== 'done').map(([v, label]) => `<option value="${v}">${label}</option>`).join('');
   return `<form class="goal-form goal-reopen" data-fin-reopen-form="${esc(g.id)}" novalidate>
       <div class="goal-f goal-colour"><span>Colour</span><div class="goal-colour-row">
-        <select name="status" aria-label="Colour"><option value="">Choose…</option>${GOAL_COLOURS.filter(([v]) => v !== 'done').map(([v, label]) => `<option value="${v}">${label}</option>`).join('')}<option value="auto">Let ${esc(ceoBotName())} set it</option></select>
+        <select name="status" aria-label="Colour"><option value="">Choose…</option>${choices}<option value="auto">Let ${esc(ceoBotName())} set it</option></select>
         <input name="note" type="text" maxlength="300" autocomplete="off" placeholder="One line: why it is back" aria-label="Why it is back"></div></div>
       <div class="goal-actions"><button class="primary" type="submit">Reopen</button><button class="ghost" type="button" data-fin-reopen-cancel>Cancel</button></div>
     </form>`;
@@ -222,7 +230,7 @@ function goalFinishedHtml(list, goals, F) {
           <span class="goal-fin-title">${esc(g.title)}</span><span class="goal-fin-what">${g.status === 'done' ? 'Done' : 'Dropped'}</span>
           <span class="muted goal-fin-when">${esc(kpiDay(goalFinishedAt(g)))}${g.status_by ? ' · ' + esc(goalActorName(g.status_by)) : ''}</span></button>
           ${goalMayEdit(g, goals) && F.reopen !== g.id ? `<button class="linkish" type="button" data-fin-reopen="${esc(g.id)}">Reopen</button>` : ''}</div>
-        ${F.reopen === g.id ? goalReopenFormHtml(g) : ''}${open ? goalFinishedDetailHtml(F.detail[g.id]) : ''}</li>`;
+        ${F.reopen === g.id ? goalReopenFormHtml(g, goals) : ''}${open ? goalFinishedDetailHtml(F.detail[g.id]) : ''}</li>`;
   };
   return `<section class="goal-fin" aria-label="Finished goals">
       <button class="linkish goal-fin-toggle" type="button" data-fin-toggle aria-expanded="${F.open}">Finished (${list.length})</button>

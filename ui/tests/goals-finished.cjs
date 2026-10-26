@@ -15,8 +15,10 @@ const at = day => `2026-10-${day}T09:00:00Z`;
 const finished = (id, title, owner, status, day, by) => ({id, title, owner, parent_id: null, status, status_source: 'person', status_by: by,
   status_note: '', status_at: at(day), rank: null, kpis: []});
 const goals = [
+  {id: 'g-company', title: 'Grow revenue', owner: 'company', parent_id: null, status: 'green', status_source: 'person', status_by: 'human:ana', status_at: at(1), rank: 0, kpis: []},
   {id: 'g-ben', title: 'Ship the stats page', owner: 'human:ben', parent_id: null, status: 'yellow', status_source: 'person', status_by: 'human:ben',
    status_note: 'Backend is late', status_at: at(10), rank: 0, kpis: []},
+  {...finished('g-proposed', 'Propose the stats page', 'human:ben', 'dropped', 26, 'human:ben'), parent_id: 'g-company', status_source: null},
   finished('g-b1', 'Hire a designer', 'human:ben', 'done', 20, 'human:ben'),
   finished('g-b2', 'Launch the beta', 'human:ben', 'dropped', 24, 'human:ana'),
   finished('g-b3', 'Write the handbook', 'human:ben', 'done', 22, 'human:ben'),
@@ -75,20 +77,20 @@ const goals = [
     // The tree still shows live goals only.
     assert.equal(await page.locator('#goal-tree [data-goal="g-b1"]').count(), 0, 'a finished goal is not in the tree');
 
-    // 1. Two done and one dropped: "Finished (3)", closed.
+    // 1. Two done and two dropped: "Finished (4)", closed.
     await open('human:ben');
     const toggle = panel.locator('[data-fin-toggle]');
-    assert.equal(await toggle.innerText(), 'Finished (3)');
+    assert.equal(await toggle.innerText(), 'Finished (4)');
     assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
     assert.equal(await panel.locator('.goal-fin-row').count(), 0, 'closed until opened');
 
     // 2. Open: title, Done or Dropped, date, who set it; newest first.
     await toggle.click();
     const rows = panel.locator('.goal-fin-row');
-    assert.deepEqual(await rows.locator('.goal-fin-title').allInnerTexts(), ['Launch the beta', 'Write the handbook', 'Hire a designer']);
-    assert.deepEqual(await rows.locator('.goal-fin-what').allInnerTexts(), ['Dropped', 'Done', 'Done']);
-    assert.match(await rows.first().locator('.goal-fin-when').innerText(), /Oct 24.*Ana Silva/);
-    assert.match(await rows.nth(1).locator('.goal-fin-when').innerText(), /Oct 22.*Ben Park/);
+    assert.deepEqual(await rows.locator('.goal-fin-title').allInnerTexts(), ['Propose the stats page', 'Launch the beta', 'Write the handbook', 'Hire a designer']);
+    assert.deepEqual(await rows.locator('.goal-fin-what').allInnerTexts(), ['Dropped', 'Dropped', 'Done', 'Done']);
+    assert.match(await rows.first().locator('.goal-fin-when').innerText(), /Oct 26.*Ben Park/);
+    assert.match(await rows.nth(2).locator('.goal-fin-when').innerText(), /Oct 22.*Ben Park/);
     // A row opens read only: its measures and its updates, nothing to edit.
     await rows.first().locator('[data-fin-open]').click();
     await panel.locator('.goal-fin-detail .goal-fin-kpis').waitFor();
@@ -96,15 +98,25 @@ const goals = [
     assert.match(detail, /Beta signups/); assert.match(detail, /Paused for the redesign\./); assert.match(detail, /Ana Silva · dropped/);
     assert.equal(await panel.locator('.goal-fin-detail input, .goal-fin-detail select').count(), 0, 'read only');
 
+    // A proposer may bring their dropped proposal back without silently accepting it themselves.
+    await rows.first().locator('[data-fin-reopen]').click();
+    const proposalForm = panel.locator('[data-fin-reopen-form="g-proposed"]');
+    assert.deepEqual(await proposalForm.locator('select option').allInnerTexts(), ['Choose…', 'Let CEO Bot set it']);
+    await proposalForm.locator('select').selectOption('auto');
+    await proposalForm.locator('input[name=note]').fill('The proposal is back');
+    await proposalForm.locator('button[type=submit]').click();
+    await until(() => posted.some(r => r.path === '/api/v2/goals/g-proposed/reopen'), 'proposal reopened automatically');
+    assert.deepEqual(posted.find(r => r.path === '/api/v2/goals/g-proposed/reopen').body, {status: 'auto', note: 'The proposal is back'});
+
     // 4. Ben may set his goal's colour: Reopen asks for a colour and one line why, and the goal is live again.
     await rows.first().locator('[data-fin-reopen]').click();
     const form = panel.locator('[data-fin-reopen-form="g-b2"]');
     await form.locator('button[type=submit]').click();
-    assert.equal(posted.filter(r => r.path.endsWith('/reopen')).length, 0, 'no colour chosen: nothing sent');
+    assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no colour chosen: nothing sent');
     assert.deepEqual(await form.locator('select option').allInnerTexts(), ['Choose…', 'On track', 'At risk', 'Off track', 'Let CEO Bot set it']);
     await form.locator('select').selectOption('green');
     await form.locator('button[type=submit]').click();
-    assert.equal(posted.filter(r => r.path.endsWith('/reopen')).length, 0, 'no reason: nothing sent');
+    assert.equal(posted.filter(r => r.path === '/api/v2/goals/g-b2/reopen').length, 0, 'no reason: nothing sent');
     await form.locator('input[name=note]').fill('The beta is back on');
     await form.locator('button[type=submit]').click();
     await until(() => posted.some(r => r.path === '/api/v2/goals/g-b2/reopen'), 'reopen sent');
