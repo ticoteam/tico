@@ -603,6 +603,15 @@ class Scheduler:
                 with self.store.transaction() as c:
                     from . import run_diagnostics
                     run_diagnostics.sweep(c, stamp(at))
+                # Holds include person and approval waits that deliberately
+                # never enter the stall candidate list. Reconcile them independently,
+                # with one short transaction per task so runner writes can progress.
+                from . import task_blocked
+                with self.store.read_transaction() as c:
+                    blocked_ids = task_blocked.candidates(c, stamp(at))
+                for task_id in blocked_ids:
+                    with locked('blocked_check:' + task_id) as c:
+                        task_blocked.sweep(c, stamp(at), task_ids=[task_id])
                 # Discover candidates in a WAL snapshot, then recheck one task under each
                 # short lock. Unrelated runner writes can progress between tasks.
                 with self.store.read_transaction() as c:
@@ -638,7 +647,9 @@ class Scheduler:
                     failures.append({"step_age": type(exc).__name__})
                 acted = {"stalled tasks woken": woke.get("woke") or [], "sent to BotOps": woke.get("escalated") or [],
                          "retried": woke.get("retried") or [], "held for setup": woke.get("held") or [],
-                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or []}
+                         "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
+                         "late tickets nobody told": aged.get("untold") or [],
+                         "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.
                 try:

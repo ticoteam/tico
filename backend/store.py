@@ -411,6 +411,9 @@ def refused(c, identity, exc):
         # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
         from . import move_retry
         move_retry.remember(c, identity.actor, exc.review_gate)
+    if notice := getattr(exc, "task_hold", None):
+        from .task_blocked import hold
+        hold(c, notice["task"], notice["reason"], notice["kind"])
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:

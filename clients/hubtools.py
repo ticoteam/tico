@@ -580,6 +580,12 @@ def tag_update(api, args):
        "change_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed paths for the QA creation rule"},
        "qa": {"type": "boolean", "description": "Explicit QA override; false means no QA"},
        "qa_not_checkable_live": {"type": "boolean", "description": "Rendered result needs candidate QA"},
+       "blocker": {"type": "object", "additionalProperties": False, "required": ["repo", "status", "endpoint"],
+                   "properties": {"repo": {"type": "string"}, "status": {"type": "integer", "minimum": 100, "maximum": 599},
+                                  "endpoint": {"type": "string"}},
+                   "description": "What refused, on a task to DevOps or a person: repo, HTTP status, endpoint "
+                                  "(e.g. ticoteam/tico, 403, workflow_dispatch). An open ask about the same three "
+                                  "joins this task instead of a second ask; the reply says so"},
        "top": {"type": "boolean", "default": False,
                "description": "Put it at the top of the owner's queue instead of the bottom"},
        "links": {"type": "array", "items": {"type": "string"},
@@ -601,7 +607,7 @@ def task_create(api, args):
                   "public_title", "public_summary"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
-    for field in ("qa", "change_paths", "qa_not_checkable_live"):
+    for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -621,7 +627,7 @@ def task_create(api, args):
       {"parent": TASK_ID, "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
        "title": _s("What to do"), "body": _s("Details", default=""),
        "check_model": _s("A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.1-sol`; `auto` for "
-                         "the company's check model from a provider other than the parent's author"),
+                         "the company's check model, from a provider other than the parent's author when one can run it"),
        "check_role": {"type": "string", "enum": ["review", "check"],
                       "description": "With check_model: a review of work, or a check of a claim (default check)"}},
       required=("parent", "title"), writes=True)
@@ -681,6 +687,17 @@ def task_run(api, args):
       required=("id", "until"), writes=True)
 def task_snooze(api, args):
     return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"]}, key=_key(args))
+
+
+@tool("hub_task_waive_qa", "A person waives a Dev ticket's current In QA step for one exact pull request head, with a "
+      "reason: the ticket's owner or a manager. Recorded in its history as a waiver, never as a QA pass; refused unless "
+      "the head is the open pull request's current head with every hosted check passed and Review 1 and Review 2 "
+      "each approving it. CI, Review 1, Review 2 and release approval cannot be waived, and a bot cannot waive QA.",
+      {"id": TASK_ID, "head": _s("The pull request's current head: the full 40-character commit sha"),
+       "reason": _s("Why QA is waived, in plain words")},
+      required=("id", "head", "reason"), writes=True)
+def task_waive_qa(api, args):
+    return api.post(f"tasks/{args['id']}/qa-waiver", {"head": args["head"], "reason": args["reason"]}, key=_key(args))
 
 
 @tool("hub_task_defer", "A quiet (next-run) task carried into this run that you will not do now: say when it is "
@@ -832,7 +849,8 @@ def task_question(api, args):
 
 @tool("hub_task_update", "Move a task you own: status, note, owner, due, labels, title, who is on it by role, or what blocks it. "
       "Finish with `status: done` and a concise result note; the requester closes. "
-      "Done stays Done, including tasks you requested for yourself; the requester closes with hub_task_close.",
+      "To reopen your done task, set doing or open; open requires a note and holds automatic starts for 60 minutes "
+      "unless a comment, new link or finished blocker changes it. The requester closes with hub_task_close.",
       {"id": TASK_ID,
        "private": {"type": "boolean", "description": "Tighten visibility; only the direct human requester can publish"},
        "visibility": _s("Roadmap publication", enum=["public", "private"]),
@@ -2742,10 +2760,12 @@ def release_now(api, args):
 
 
 @tool("hub_routine_delete", "Delete a routine. Its history stays; an occurrence nobody has "
-      "claimed yet closes.", {"id": _s("Routine id")}, required=("id",), writes=True)
+      "claimed yet closes. BotOps acting for a person gets a Confirm card in their chat (`needs_confirm`) instead.",
+      {"id": _s("Routine id")}, required=("id",), writes=True)
 def routine_delete(api, args):
     bot = str(args["id"]).split(":", 1)[0]
-    return _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))["routine"]
+    answer = _routine_api(api, bot).post(f"routines/{args['id']}/delete", {}, key=_key(args))
+    return answer if answer.get("needs_confirm") else answer["routine"]
 
 
 @tool("hub_routine_run", "Run a scheduled routine now, with your own rights or BotOps's requester rights.",
@@ -4487,6 +4507,7 @@ def turns(api, args):
       "- queues.<bot>.held: jobs a wake preset holds until its release.\n"
       "- queues.<bot>.dead / dead_ids: queued jobs behind an interrupted run nobody reviewed; they never run until that run is resumed or dismissed. Never counted as queued.\n"
       "- queues.<bot>.uncertain: interrupted runs waiting for that review.\n"
+      "- queues.<bot>.decisions[]: stopped runs with a resume or dismiss decision, still held or decided since `since`, newest first (20 at most): job, attempt, current (false once the job has run a later try), state (held, cancelled, queued, completed...; null when not current), decision, by, by_kind (botops, person, tico, bot), at, note (null when you cannot open the run's conversation), label (\"Cancelled: dismissed by BotOps at 09:50Z, <note>\"; \"Resumed by ...\" when not current).\n"
       "- failures.total / by_cause / by_bot: failed, interrupted or expired runs since `since`; causes quota, capacity, restart, timeout, crash, stopped, each with n, first and last time.\n"
       "- failures.truncated / complete_after: true when the window held more failures than one read counts / counts are whole only for failures after this time (null when not truncated).",
       {"type": _s("Task type id or name; default the engineering board"),

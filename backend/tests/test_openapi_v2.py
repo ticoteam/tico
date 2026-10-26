@@ -145,6 +145,10 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("listKpis", "get", "/api/v2/kpis", params={"include_archived": "true"})
     call("updateKpi", "post", "/api/v2/kpis/" + kpi["id"], json={"definition": "Accounts that finish setup"})
     call("archiveKpi", "post", "/api/v2/kpis/%s/archive" % kpi["id"], json={})
+    archived_goal = call("getGoal", "get", "/api/v2/goals/" + goal["id"])["goal"]
+    archived_measure = next(k for k in archived_goal["kpis"] if k["id"] == kpi["id"])
+    assert conforms(archived_measure, document["components"]["schemas"]["Kpi"], document) is None
+    assert archived_measure["status"] is None and archived_measure["freshness"] == "archived"
     call("restoreKpi", "post", "/api/v2/kpis/%s/restore" % kpi["id"], json={})
     other = call("createKpi", "post", "/api/v2/kpis", json={"name": "NPS", "direction": "range"})["kpi"]
     call("linkGoalKpi", "post", "/api/v2/goals/%s/kpis" % goal["id"], json={"kpi_id": other["id"], "kind": "maintain", "min": 30})
@@ -173,3 +177,25 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
 
+
+
+def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
+    from backend.tests.test_api import post
+    from backend.store import H
+    from backend.tests.test_task_lanes import task_bot
+    from backend.tests.test_subtask_results import start
+    machine = task_bot(api, lanes=True)
+    task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner": "bot:ops"})
+    checking = start(api, machine, task["id"], "closure-task")
+    task = checking["task"]
+    path = f"tasks/{task['id']}"
+    refused = post(api, path, {"version": task["version"], "status": "closed"}, checking["token"], expected=403)
+    assert refused["error"]["code"] == "close"
+    post(api, path, {"version": task["version"], "status": "closed", "title": "Changed"}, expected=422)
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+        assert (row["status"], row["title"], row["version"]) == ("doing", task["title"], task["version"])
+    closed = post(api, path, {"version": task["version"], "status": "closed", "note": "Accepted."})
+    assert closed["status"] == "closed" and closed["closed_by"] == "human:ana"
+    assert closed["version"] == task["version"] + 1
+    post(api, path, {"version": task["version"], "status": "closed"}, expected=409)

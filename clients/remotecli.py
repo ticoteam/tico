@@ -442,6 +442,11 @@ def run(args, who=None):
                     payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
             if args.label:
                 payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
+            if getattr(args, "blocker", None):
+                repo, status, endpoint = args.blocker
+                if not status.isdigit():
+                    raise SystemExit("hub: --blocker STATUS is an HTTP status number, e.g. 403")
+                payload["blocker"] = {"repo": repo, "status": int(status), "endpoint": endpoint}
             if args.top:
                 payload["top"] = True
             if args.link:
@@ -463,6 +468,8 @@ def run(args, who=None):
         if sub == "defer":
             return post(f"tasks/{args.id}/defer", {"after": args.after, "at": args.at,
                                                    "next_run": bool(args.next_run), "handled": bool(args.handled)})
+        if sub == "waive-qa":
+            return post(f"tasks/{args.id}/qa-waiver", {"head": args.head, "reason": args.reason})
         if sub in ("list", "snooze", "unsnooze"):
             return via_tool(client, args)
         if sub == "ask":

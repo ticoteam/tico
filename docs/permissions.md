@@ -103,7 +103,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
-| **BotOps changes providers and limits without asking** | Legacy setting kept for compatibility; BotOps uses the requester's rights directly | BotOps still uses the requester's rights directly |
+| **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Admins store credentials** | Admins are credential administrators | only the owner (and `TICO_CREDENTIAL_ADMINS`) stores credentials |
 | **Members store credentials for their bots** | anyone on the team stores a credential for a bot they own or manage, granted to that bot | only credential administrators store credentials |
@@ -127,7 +127,7 @@ The CEO Bot's level, regular checks and name, and publishing a strategy version,
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_onboarding`
-([Finish setup](onboarding.md#what-create-does)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
+([Recruiting a seat](onboarding.md#recruiting-a-seat)) is parked, does nothing on its own and costs nothing, so it does not count; it counts once
 it says it is set up, and that call answers `bot_limit` when the member is already at their limit.
 
 ## Bots that create repositories
@@ -388,6 +388,30 @@ bot** turns it off. In a run carrying a person's rights, the token writes the re
 (owner, admin, the bot's owners, above it on the chart); in a run a bot asked for, and for the computer's git helper with no BotOps
 run in progress, only BotOps' own. A token is reused only for the exact same repositories, so a wider one never reaches a
 narrower run.
+
+**What still waits for the person's tap.** The rights BotOps borrows are never a confirmation: only the person's own click
+on a Confirm card in their BotOps chat is, and it runs the stored request as them. So BotOps answers these with
+`needs_confirm` and a card, and nothing changes until the tap:
+- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/people/{id}`);
+- a credential granted to a person or to every computer (a grant to a bot, and taking a grant back, stay direct);
+- placing a member's bot on a computer that does not take members' bots;
+- the routes in `botops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots
+  switch and revoking it, deciding a proposal, a support request, a file's sharing, directory sync, disconnecting Slack
+  or GitHub, and picking a seat's candidate (listing candidates stays direct);
+- always, whatever the person said: handing over ownership (`POST /api/v2/access/owner`, the owner only), updating Tico
+  (`POST /api/v2/system/update`), a change to the rules **BotOps changes providers and limits without asking** or
+  **BotOps manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
+  never in BotOps' answer;
+- providers (turning the Tico AI Gateway off or back to automatic included, the owner only) and raised limits when the
+  owner turned **BotOps changes providers and limits without asking** off.
+
+What only an owner or an admin may ask for is refused at once for a member, not handed over as a card that fails. A few
+routes give back a secret's value, and BotOps acting for a person is refused them (`403 person_only`, with where the person
+does it): revealing a stored credential, making someone a password, making a personal API token and making a SCIM token.
+A secret in a request body is refused too (`422 secret_in_request`), including the Gateway's `key` and Slack's
+`bot_token` and `app_token`. A body the route itself would refuse, an unknown field included, gets the route's own
+`422` and no card: a card never stores or shows back what its route has no place for. Each step of a bulk card is
+checked against its own route, and one step refused refuses the whole card.
 
 If a friendly tool refuses for permissions, BotOps retries the same action with `hub_api` before handing work back. Both use the same rights.
 

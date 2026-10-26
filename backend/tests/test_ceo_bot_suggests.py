@@ -216,6 +216,9 @@ def test_a_merged_item_names_only_the_originals_its_reader_may_read(api):
     """The merged item's list of originals is the reader's: one Ana can no longer read is left out of it."""
     ceo = with_ceo_bot(api)
     asked = ask_ana(api, "ops", "Ship the pricing page")
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         filed = H.task_create(c, "bot:finance", "Pick the pricing page to launch", "Which one?", OWNER)["id"]
     level(api, 2)

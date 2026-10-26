@@ -50,7 +50,7 @@ description it was written with. The plain-English check on a title a bot writes
 numbers, no all-caps words) also applies to General tasks only, so a bot can file "#18945 (B/F)
 Fix the account page" as written. It still needs a title. A decision for a person stays on General.
 
-Whoever may change a task's other fields (its owner, its requester, the owner or requester of a task
+Whoever may change a task's other fields (its owner, its requester, their managers, the owner or requester of a task
 above it, a delegate or a mover) may also rename it. A new title gets the checks a new task's title
 would: never empty, at most 300 characters, a verb first and no internal codes on a General task for
 a person, plain English when a bot writes it on General, and no other live task between the same
@@ -60,17 +60,37 @@ new title as its subject.
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
 
+## Managers acting on tasks
+
+A bot or person above a task's owner or requester on the org chart inherits that
+party's task permissions through the entire chain, including department groups.
+Managers can read a bot report's private tasks, change its work, manage blockers and
+links, comment, ask questions, snooze and manage the owner's worktrees. A manager's
+comment or question wakes the owner bot as a requester's does. History and comment
+authorship name the manager who acted.
+
+The two sides keep their distinct rights: an owner bot's manager, bot or person, can
+complete work but not close or reopen it; a requester's manager can close and reopen it. The existing rule protecting a
+person's closure still applies. Managers gain no rights on unrelated private tasks;
+person-only private tasks stay with their parties and guest. Managers gain
+no right to edit or delete someone else's comments or decide a named approval, and
+no new credential, sending, spending, merge or bot administration permissions.
+Publishing a private task still requires its human requester. Task types, labels
+that trigger workflows and review handoff checks retain their existing restrictions.
+
 ## Software review handoffs and QA defaults
 
 On the engineering board, moving a ticket with a linked open PR into **Review 1** or **Review 2** checks CI first. All-green checks at each PR's current head count as passing test evidence without a written receipt, even when a note reports a failure there. Creating a **Review 1:** or **Review 2:** child task makes the same checks before queuing its reviewer. A review child also needs a linked PR. Other boards keep their usual flow.
 
 A failing check refuses the move and names the check. A failed GitHub check attempt still blocks after a green rerun at the same head: fix the failure and push a new head. The server requests all check attempts rather than GitHub's default latest-only results; legacy commit statuses keep the latest status per context and any earlier failure. Pending checks are allowed with a passing written receipt. No checks, or only skipped/neutral checks, also require a written passing receipt naming the current head. At least one successful check and no pending or failed checks are needed to replace that receipt; skipped/neutral companions are allowed. A missing, stale, failed or unrecognised receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
 
-A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, Tico tries again every 5 minutes. A temporary failure (timeout, 5xx, rate limit) never files a task. A permission, key, installation or repository-access failure files one task for the DevOps bot on the first refusal; a failure with no cause does so only when it repeats. With no active DevOps bot, the task goes to the board's manager. The same applies when GitHub answers 403 to a reviewer's review. A remembered move is dropped when the ticket moves elsewhere or after three days.
+A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, Tico tries again every 5 minutes. A temporary failure (timeout, 5xx, rate limit) never files a task. A permission, key, installation or repository-access failure files one task for the DevOps bot on the first refusal; a failure with no cause does so only when it repeats. A PR link Tico cannot resolve, or one with no recorded head, never files one: relinking the PR clears it. With no active DevOps bot, the task goes to the board's manager. The same applies when GitHub answers 403 to a reviewer's review. A remembered move is dropped when the ticket moves elsewhere or after three days.
 
 A ticket has at most one open **Review 1**, **Review 2** or **QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
-A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` line in its note or comment fills the same fields when no flag is given; the latest one wins. The ticket's owner is woken once with the verdict and the head it judged (`verdict`, `verdict_head`), and the subtask shows both.
+A reviewer or QA records the verdict as fields on its own subtask: `hub task done <id> --verdict approve|changes|pass|fail --head <sha>` (also `hub task update --verdict --head`, the `hub_task_done` and `hub_task_update` tools, and `verdict` and `verdict_head` on `POST /api/v2/tasks/{id}`). A `VERDICT: approve PR #12 head <sha>` clause anywhere in its note, comment or final reply fills the same fields when no flag is given; the latest one wins. A Review 1, Review 2, QA or Security subtask of someone else's ticket that a bot owns, marked done with no verdict since it was last reopened, is refused with the `--verdict` hint; reopening a check clears its verdict. A person's own subtask with one of those titles is an ordinary task and finishes without a verdict. The ticket's owner is woken once with the verdict and the head it judged (`verdict`, `verdict_head`), and the subtask shows both.
+
+A person who owns a Dev ticket, or manages it (the company owner, someone on a team that may move any task, or a person above the owner on the org chart), may **waive its QA step** for one exact pull request head when QA cannot run in time: `hub task waive-qa <id> --head <full sha> --reason "..."` (`POST /api/v2/tasks/{id}/qa-waiver` with `head`, `reason` and optionally `step`). Only the ticket's current **In QA** step can be waived. CI, Review 1, Review 2 and release approval cannot be. The waiver is refused, naming what is missing, unless the head is the current head of one of the ticket's open pull requests, and every hosted check on each of those pull requests has passed, read from GitHub at that moment (a skipped check doesn't count as a pass, and a failed attempt still blocks after a passing re-run). A push recorded while GitHub is being read refuses it too; retry. That read needs the company's GitHub App: without it the waiver is refused, because check webhooks alone can't tell a pass from a skip. No review subtask may still be open, and the latest Review 1 and Review 2 must each have approved that exact head. A waiver stands in for a missing QA result, never a failed one: a QA `fail` at that head, or one that names no head, refuses it. A bot cannot waive QA, including BotOps or the Assistant acting for a person. The waiver records the actor, reason, head, step, pull request and time as a `qa_waiver` event in the ticket's history. The task view lists the ticket's waivers under `qa_waivers`, each with `current` (false once a push moves the pull request to a new head). A waiver is never a QA verdict: it sets no `verdict` and leaves the QA subtask alone. The task page shows it as **QA waived** in amber, never as a pass. The ticket's owner is told once, unless they waived it themselves. It does not move the ticket or merge anything. The owner merges at that exact head, and a new head needs a QA result or a new waiver.
 
 Receipts stay ordinary text, for example `Tests: base <40-character SHA> head <40-character SHA>: 9 passed, 0 failed`. The result and head belong on one line. Each result clause belongs to its own head. Phrases about earlier or repaired failures do not claim that the current run failed; an explicit result such as `40 passed, 2 failing/errored` still does. The shared reader used by review handoffs and the release checklist accepts ticket notes, owner messages, keeper ready-for-review notices and review-child evidence from the reviewer or Builder. The review gate also counts receipts posted by bots above the owner in its `reports_to` chain and people who may edit the ticket. This changes neither their task permissions nor privacy: the mover and Builder must both be able to read the evidence. A written failure cannot be cleared by another written passing rerun at that same head; all-green GitHub checks can supersede it. Refusals name the next action and who can supply it.
 
@@ -198,7 +218,7 @@ letters and digits in any script, case folded; one with none is refused.
 The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
 or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
 the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
-about. Only the bot that owns the task names the person, and a private task can only ask a person who can read it,
+about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
 person on it: its guest").
 
@@ -266,7 +286,11 @@ readers cannot read is not kept as a checkpoint.
 The task's **Runs** section (`GET /api/v2/tasks/{id}/run-view`) shows that checkpoint ("Where it left off") with its
 author and time, then the task's last 20 attempts, newest first. Each try says its outcome, why it failed or lost its
 lease, and what followed it: run again automatically or by a person, resumed or dismissed with the decision's note, or
-waiting for a person. Under it are the subagents the try started, as a tree with each one's type, model, duration and
+waiting for a person. A try with a resume or dismiss decision shows it beside its state, read from the decision
+record each time so a later decision replaces it: "Cancelled: dismissed by BotOps at 09:50Z, <note>" (or Held,
+Queued, Done for a resume), naming BotOps, the person or Tico's auto-reconcile. Once the job has moved to a later
+try, the earlier try says only what was decided ("Resumed by BotOps at 09:50Z, <note>"); a later stop with no
+decision of its own shows none. Under it are the subagents the try started, as a tree with each one's type, model, duration and
 result, and the shells and monitors it ran in the background; one still running is also listed at the top while the
 run is live. Background work is reported by Claude runs; other harnesses show none. Only the file or program a call
 touches is shown, never its arguments. An attempt is left out unless you can read its bot, the conversation it
@@ -461,13 +485,14 @@ changed it since. The same three are `hub_rule_suggestions`, `hub_rule_apply` an
 ## Snoozing a task
 
 **Snooze** sets a task aside until a date: it tells its bot or person that nobody plans to get to it
-before then. Its requester, its owner, anyone on it by role, or a mover snoozes it from the task's
+before then. Its requester, its owner, their managers, anyone on it by role, or a mover snoozes it from the task's
 **…** menu (Tomorrow, Next week, In two weeks, In a month, or a typed date), with
 `hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
 `snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
-When someone other than its requester snoozes a task, the requester is told.
+When someone other than its requester snoozes a task, the requester is told. A role holder's
+manager gains no snooze permission unless they also manage the owner or requester.
 
 Until that moment:
 
@@ -502,8 +527,16 @@ task's box. The bot that asked is told either way, as *<name> marked this done: 
 comment on the next line when there is one. When a bot needs a specific answer it asks a yes/no
 or choice question instead.
 
-Done stays Done, including tasks the owner requested for itself, old bot-requested tasks,
-and completed routine runs. Closing is a separate decision; it records `closed_at` and
+An owner can reopen a Done task with `hub task update <id> --status doing`, or put it back
+with `hub task update <id> --status open --note "why it goes back"`. On Dev tickets, open is
+On Deck. A bot owner must include a note when returning work to open. Automatic starts wait
+60 minutes after an owner puts work back, unless the task gets a comment, a new link, or a
+blocker finishes. Ordinary note edits and automatic notices do not end that wait. A linked
+blocker still holds the task. If a blocker arrives after Tico automatically started it and
+no run has finished on it yet, Tico returns it to the queue as part of linking the blocker;
+the owner does not need to take a turn.
+
+Closing is a separate decision; it records `closed_at` and
 `closed_by`, preserving the completion time if the work was already Done. Earlier history
 is preserved, including tasks that older versions closed automatically. Use **Close task** in the
 Done task’s menu, or bulk **Close**, to accept completion. A waking comment delegates further
@@ -561,15 +594,44 @@ The digits alone are not read as a number, since a cut-short id can look the sam
 
 Numbers range from 1 to 999999999; an exhausted sequence refuses a new number without creating a task.
 
-A mover can also make a custom type **steps only**: its tasks are finished or brought back only by
+A mover can also make a custom type **steps only**: its tasks are finished or brought back by
 moving to a step. Closing, declining, reopening or finishing one directly (`close`, or a `status`
-without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`) for every
-person and bot, and the task window offers no Done, Close or Reopen on them. A task that should not
+without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`), except
+that an owner may reopen Done with doing or open (with a note for open). The task window offers
+no Done, Close or Reopen on them. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
 are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
-rather than marking them done or closed. Without it, a bare status lands the task in the first step
+rather than marking them done or closed. Without steps only, a bare status lands the task in the first step
 with that status, which on a board is rarely the one anyone meant.
+
+Engineering boards include **Blocked** immediately before In Progress. Its status is `waiting`;
+it does not change a task's labels. The owner can select Blocked and write the reason in its note:
+
+```sh
+hub task update <task-id> --step "Blocked" --note "Waiting for a test machine"
+```
+
+A refused software review gate, an open dependency or a person/milestone wait also blocks the task.
+Review, QA and Security check children keep the ticket in its pipeline step; only an explicit
+dependency on one of those checks holds it. A Review or QA check that is itself Waiting, or blocked by
+an open task, holds its ticket Blocked with the check's reason ("QA blocked: GitHub refused the remote
+test run, waiting on Ana"), and the ticket's builder gets one notice in the ticket's room for that
+hold. When the check works again, the ticket returns to its step.
+
+A task filed to DevOps or a person about a blocker can name it: `--blocker <repo> <status> <endpoint>`,
+for example `--blocker acme/app 403 workflow_dispatch`. When an open ask names the same repository, HTTP
+status and endpoint, the new task is not a second ask: it stays with the bot that filed it, blocked by
+the open ask, and the reply says so. Every task it blocks wakes when the ask is done. Unlinking it
+(`hub task relate <id> <ask> --kind blocked_by --remove`) hands it to the owner it was filed for, as its
+own ask. Endpoint case and slashes are significant; only surrounding whitespace is ignored. A different
+endpoint is a different blocker. Private tasks never join or are joined. When DevOps
+files the person ask for a blocker, its own open tasks for that blocker wait on it.
+The card and task show what it waits for and since when. When an automatic hold clears, the task
+returns to the step it left, without advancing through the refused gate. An owner-declared hold
+is cleared by moving back to a working step. The active Building clock pauses while blocked;
+a separate blocked age alerts the type's manager after four hours, once per hold. The bot rail's
+Blocked filter uses waiting tasks, and its default Doing list excludes them and Needs You tasks.
 
 A task also has a place within its step, `step_rank`, lower first, apart from `rank`, its place in
 its owner's queue. A task that enters a step, when it is created or its step, type or status
@@ -634,10 +696,15 @@ tickets the board shows the caller: per working step the count, how many are sno
 since tickets entered the step, owners, whom they wait on (a bot, a person, something external or nothing) and their
 open pull requests. It also gives each bot the caller may read its running, queued, held, `dead` and uncertain jobs
 (a dead job is queued behind an interrupted run nobody has reviewed, so it never runs until that run is resumed or
-dismissed; a bot's page counts its queued work the same way) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
+dismissed; a bot's page and Health's queue line count its work the same way, and Health names each part) and failed runs since `since` by cause (quota, capacity, restart, timeout, crash, stopped); past
 5000 readable failures it stops, sets `truncated` and says in `complete_after` from when the counts are whole. Filters:
 `type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
-`bot`, and `since` up to 7 days. Counts and ids only; no titles or bodies.
+`bot`, and `since` up to 7 days. Each bot also lists, in `decisions`, its stopped runs with a resume or dismiss
+decision that still hold it or were made since `since` (newest first, 20 at most): the job's state, the decision, who
+made it, when, the note and a `label` like "Cancelled: dismissed by BotOps at 09:50Z, <note>"; once the job has run
+again the decision is history (`current` false, no `state`: "Resumed by BotOps at 09:50Z, <note>"). Counts and ids
+only; no titles or bodies, except that a decision's note, which can name the task, is shown to a reader who may open
+the run's conversation.
 
 Type create and update also accept `bots` (`parties`, `read` or `work`). With `work`, any bot may
 change a task of that type and close it once it is in a ready step, so a deploy bot can move shipped
@@ -651,8 +718,12 @@ using `tasks.type_id` and `tasks.step_id`; the task visibility rules still apply
 Subtasks can nest to any depth. Whoever files a subtask, person or bot, is its requester. When a
 worker finishes a subtask under a bot-owned task, its result returns directly to the immediate
 parent's owning bot, in that parent's task session. An active turn takes it as an input; otherwise
-the parent's next turn resumes there. There is no requester delivery session on the completed
-subtask and no relay or `hub task run` needed. The worker keeps its own independent task session.
+the parent's next turn resumes there. That holds while the parent is Waiting on its other open subtasks: they
+do not hold one subtask's result back. Its other waits still do: a snooze, a person it waits on, an unanswered
+question, an undecided approval, a worktree, or a blocker that is not one of its subtasks. The result does not move
+the parent out of Waiting. There is no requester delivery session on the completed
+subtask and no relay or `hub task run` needed. The worker keeps its own independent task session. A manager completing the worker's delegated
+subtask returns its result to the parent in the same way.
 A bot that filed the subtask may close it explicitly; until then it stays Done. The parent's
 requester hears when the parent itself finishes, so a manager's task → builder task → review
 subtask sends the review back to the builder, and the completed build back to the manager.
@@ -668,9 +739,9 @@ Subtasks never inherit a human's delegation anchor from a bot's request. BotOps 
 filing bot's rights when that bot asks it to work on a subtask.
 
 Parent owners can track descendants they can read, without gaining Read on hidden bots.
-Only the task's owner or requester, or a human mover, can re-parent it; bots must also own,
+Only the task's owner, requester, their managers or a human mover can re-parent it; bots must also own,
 request or manage the new parent. Moving or detaching a subtask also requires its current
-parent's owner or requester, or a human mover. Moving a task moves its whole subtree,
+parent's owner, requester, their managers or a human mover. Moving a task moves its whole subtree,
 and cycles are refused.
 A parent may be marked Done or closed, by a bot or a person, while subtasks are still open. The
 subtasks stay open, and the parent's history and its Finished or Closed notice end with
@@ -763,8 +834,8 @@ hub task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the mi
 `--check-model` takes a runtime (its provider's recommended model) or `runtime:model`. With no value (`auto` in the
 API) it takes the company's check model (Settings > Computers > Models, [How it works](how-it-works.md)): the first in its
 order from a provider other than the parent's authors and runnable on the bot's computer. The authors are every
-maker on the parent's finished runs (a fallback counts) and the provider its owner runs on; with no other provider it
-is refused, never run on an author's own. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
+maker on the parent's finished runs (a fallback counts) and the provider its owner runs on. Another provider is a
+preference: with none that can run, it runs on an author's own, and the subtask's history says so. `--role` is `review` or `check` (the default). The API takes `check_model` and `check_role` on task create; the MCP tool is
 `hub_task_child_create` with the same fields.
 
 - The subtask is the filing bot's own, under a task it owns. Its turns run on the named runtime and model with no
@@ -800,8 +871,9 @@ is refused, never run on an author's own. `--role` is `review` or `check` (the d
 - A reviewer bot set to `review_model: check` (`hub bot update <slug> --review-model check`, `hub_bot_update`, or the
   bot definition API) runs every subtask it is handed under another's task as a `review` on the company's check
   model, chosen against the parent's authors the same way, and its verdict comes back the same way. When the authors
-  are unknown (a person's task with no runs) or no other provider can run it, the subtask is filed as usual on the
-  reviewer's own model, and its history says why. Subtasks under its own tasks, and its top-level tasks, keep its
+  are unknown (a person's task with no runs) or no check model can run it, the subtask is filed as usual on the
+  reviewer's own model, and its history says why. With no other provider able to run it, it runs on the authors'
+  own provider rather than waiting: another provider is preferred, never required. Subtasks under its own tasks, and its top-level tasks, keep its
   own model.
 
 Every task a bot owns has its own room (a `kind: task` conversation), even one filed from a chat: its comments,
@@ -1069,13 +1141,14 @@ New ordinary tasks are readable by active company people and bots. Reading does 
 permission to change, reassign or complete work. Type bot settings continue to grant comment,
 subtask and work permissions; they cannot override Private or restricted bot activity.
 
-Turn on **Private** in the existing task controls to limit future reads to the requester and
-current assignee, human or bot. The assignee may tighten visibility; only the human requester
+Turn on **Private** in the existing task controls to limit future reads to the requester,
+current assignee and the managers of any bot party. Tasks with only person parties remain
+private to those parties and their guest. The assignee or its managers may tighten visibility; only the human requester
 can publish again. Bots cannot publish a private task, including when acting for a person.
 Bot-requested private work stays private until a future explicit human publication mechanism
-exists. Mentions, administrators, managers, parent ownership and delegations grant no access.
+exists. Mentions, administrator status, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester. Reassignment never clears Private.
+future access unless they remain its requester or manage a current bot party. Reassignment never clears Private.
 
 ### A private task with no person on it: its guest
 
@@ -1091,7 +1164,7 @@ who it reached, and its Private row names them.
 - A run that also carries private work the person cannot read reaches nobody: the subtask, the question and the
   wait are all refused.
 - There is one guest. A hand-off to a different person is refused, naming the guest; hand the work to them instead.
-- Only the bot that owns the task brings a guest in; the requesting bot cannot. Reassigning the task ends the
+- Only the bot that owns the task or its managers bring a guest in; the requesting bot cannot. Reassigning the task ends the
   guest's access; a new bot owner may then bring in one person of its own.
 - When a private task above it has a person on it, only someone who reads that task above can become the guest. From
   the task's own private work the hand-off is refused; otherwise the person gets their subtask alone, as before, and
@@ -1230,3 +1303,7 @@ whoever attached them, unless the same file is also attached somewhere they can 
 says so: its answer lists them under `files_left` (how many, their versions, file bytes, the ids of
 files added to the task and, under `attachments`, the files attached when it was created), before
 and after `--apply`, and each `task.purged` event names the ones its task left.
+
+## Task settings
+
+Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.

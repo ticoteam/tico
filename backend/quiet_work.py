@@ -295,8 +295,8 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
     if not row:
         H.refuse(conn, actor, "not-found", f"no task {task_id}")
     H._task_private_writer(conn, actor, row)
-    if H.is_bot(actor) and actor != row["owner"]:
-        H.refuse(conn, actor, "identity", "only the task's own bot, or a person, says when it is picked up again")
+    if H.is_bot(actor) and not H.task_represents(conn, actor, row["owner"]):
+        H.refuse(conn, actor, "identity", "only the task's own bot, its managers or a person say when it is picked up again")
     if sum(bool(x) for x in (after, at, next_run, handled)) != 1:
         H.refuse(conn, actor, "defer", "give one of --after <task>, --at <time>, --next-run or --handled")
     if not row.get("next_run") or row["status"] != "open":

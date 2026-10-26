@@ -137,6 +137,9 @@ def add(c, actor, task_row, spec, release_repo="", resolve_task=None):
         c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
         H.event(c, actor, "task.milestone_wait", task_row["id"], {"kind": kind, "target": target})
     reconcile(c, task_id=task_row["id"])
+    if pending(c, task_row["id"]):
+        from .task_blocked import hold
+        hold(c, task_row["id"], "Waiting for " + sentence(kind, label))
     row = c.execute("SELECT * FROM task_milestone_waits WHERE task_id=? AND kind=? AND target=?",
                     (task_row["id"], kind, target)).fetchone()
     return {**view(c, dict(row)), "added": added}
@@ -152,6 +155,8 @@ def remove(c, actor, task_row, spec, release_repo="", resolve_task=None):
         H.refuse(c, actor, "not-found", f"{task_row['id']} does not wait on {spec}")
     H._task_event(c, task_row["id"], actor, "milestone_wait", f"{kind}:{target}", None, "")
     c.execute("UPDATE tasks SET version=version+1, updated=? WHERE id=?", (H.now(), task_row["id"]))
+    from .task_blocked import reconcile as reconcile_blocked
+    reconcile_blocked(c, task_row["id"])
     return sentence(kind, label)
 
 
@@ -200,6 +205,9 @@ def _fire(c, wait, why):
     if c.execute("UPDATE task_milestone_waits SET woke_at=? WHERE task_id=? AND kind=? AND target=? AND woke_at IS NULL",
                  (H.now(), wait["task_id"], wait["kind"], wait["target"])).rowcount != 1:
         return None
+    from .task_blocked import reconcile as reconcile_blocked
+    reconcile_blocked(c, row["id"])
+    row = H.task(c, row["id"])
     H._task_event(c, row["id"], H.KEEPER, "milestone_met", None, f"{wait['kind']}:{wait['target']}", why)
     if row["status"] == "waiting" and not H.waiting_for(c, row):
         # Resume the retained working step without the generic assignment wake: the milestone tells it once.

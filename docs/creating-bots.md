@@ -23,7 +23,7 @@ For another template, a task goes to BotOps to build the repository, apply the r
 You can also ask BotOps for a custom bot in chat; it takes the bot through placement and setup as you.
 Assistant, BotOps, Librarian and CEO Bot are the four Built-in bots; they cannot be archived or deleted.
 
-The 98 templates, in nine groups with a Leadership extra and one message bot, are described in
+The 98 role templates, in nine groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -616,7 +616,7 @@ Levers set in **Settings → Bots**, not in the repository:
 - **Reasoning effort**: how hard it thinks. The main cost control, and the one to reach for first.
 - **Fallback**: one optional harness/model if the primary is unavailable (billing, capacity,
   the runtime refused). **None (fail)** is the default. A pick is saved with
-  **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop starts a fresh session. OpenRouter
+  **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
   the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
 - **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context

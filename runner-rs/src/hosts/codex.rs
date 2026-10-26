@@ -13,12 +13,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::oneshot;
 
-use super::{command_program, event, failed, hub_mcp_server, is_limit, tool_summary, Events, HostError, Settings};
+use super::{command_program, event, failed, hub_mcp_server, is_limit, shell_outside_actions, tool_summary, Events, HostError, Settings};
 use crate::env::Env;
 use crate::util::{iso, log, py_dumps, text_of};
 
 const REQUEST_TIMEOUT: u64 = 120;
 const START_TIMEOUT: u64 = 60;
+/// How long a compaction may take (it summarises the whole transcript with the model).
+const COMPACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(540);
 const ENV_SKIP: &[&str] = &[
     "PWD", "OLDPWD", "SHLVL", "_", "TMPDIR", "XPC_SERVICE_NAME", "XPC_FLAGS", "__CF_USER_TEXT_ENCODING", "TERM_SESSION_ID", "SSH_AUTH_SOCK",
 ];
@@ -119,6 +121,9 @@ struct Shared {
     /// alone lives only in this app-server process, and a resume of it after the process is gone finds nothing.
     confirmed: Mutex<HashSet<String>>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
+    /// Threads being compacted before a turn (`compact`): None until the app server says how it ended.
+    compacting: Mutex<HashMap<String, Option<Result<(), String>>>>,
+    compacted: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -145,6 +150,8 @@ impl CodexHost {
             tools_sent: Mutex::new(HashSet::new()),
             confirmed: Mutex::new(HashSet::new()),
             capture: Mutex::new(None),
+            compacting: Mutex::new(HashMap::new()),
+            compacted: tokio::sync::Notify::new(),
         }))
     }
 
@@ -376,6 +383,9 @@ impl CodexHost {
             "item/completed" => {
                 self.on_item(true, p);
                 let item = &p["item"];
+                if item["type"] == "contextCompaction" {
+                    self.compaction_ended(t, Ok(()));
+                }
                 if item["type"] == "agentMessage" {
                     self.emit(event(
                         "message",
@@ -434,6 +444,12 @@ impl CodexHost {
                 if !self.0.done_turns.lock().unwrap().insert(key) {
                     return;
                 }
+                // The turn a compaction runs as ends it: well, or with the reason it did not.
+                match done["status"].as_str().unwrap_or("completed") {
+                    "failed" => self.compaction_ended(t, Err(done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the compaction failed").to_string())),
+                    "interrupted" => self.compaction_ended(t, Err("the compaction was interrupted".into())),
+                    _ => self.compaction_ended(t, Ok(())),
+                }
                 if done["status"] == "failed" {
                     let msg = with_kind(&done["error"], done["error"]["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("the turn failed").to_string());
                     self.emit(event("turn_failed", t, finished.as_deref(), json!({"limit": is_limit(&msg), "error": msg})));
@@ -468,6 +484,7 @@ impl CodexHost {
                 }
             }
             "thread/goal/cleared" => self.emit(event("goal", t, None, json!({"status": "cleared", "note": ""}))),
+            "thread/compacted" => self.compaction_ended(t, Ok(())),
             _ => {} // hook/*, mcpServer/*, turn/plan, warnings: nothing to do
         }
     }
@@ -535,6 +552,9 @@ impl CodexHost {
         let mut fields = json!({"tool": name, "status": status, "item_id": id, "parent_id": sub});
         if !done {
             fields["summary"] = json!(summary);
+        }
+        if kind == "commandExecution" && item["command"].is_string() {
+            fields["outside_actions"] = json!(shell_outside_actions(item["command"].as_str().unwrap()));
         }
         self.emit(event("tool", t, u, fields));
     }
@@ -645,6 +665,44 @@ impl CodexHost {
         self.start_turn(thread_id, text, effort).await
     }
 
+    /// A compaction this host asked for has ended (the first word on a thread counts; a later one changes nothing).
+    fn compaction_ended(&self, thread: Option<&str>, result: Result<(), String>) {
+        let Some(thread) = thread else { return };
+        if let Some(slot) = self.0.compacting.lock().unwrap().get_mut(thread).filter(|slot| slot.is_none()) {
+            *slot = Some(result);
+            self.0.compacted.notify_waiters();
+        }
+    }
+
+    /// Compacts a resumed thread (`thread/compact/start`) and returns once the app server says it is done, so the
+    /// turn that follows runs on the shorter transcript. The thread's turn_completed ends the caller's wait.
+    pub async fn compact(&self, thread_id: &str) -> Result<String, HostError> {
+        self.0.compacting.lock().unwrap().insert(thread_id.into(), None);
+        let waiting = self.0.compacted.notified();
+        tokio::pin!(waiting);
+        waiting.as_mut().enable();
+        let started = self.request("thread/compact/start", json!({"threadId": thread_id}), REQUEST_TIMEOUT).await;
+        let ended = match started {
+            Err(e) => Err(e.to_string()),
+            Ok(_) => {
+                let end = tokio::time::Instant::now() + COMPACT_TIMEOUT;
+                loop {
+                    if let Some(result) = self.0.compacting.lock().unwrap().get(thread_id).cloned().flatten() {
+                        break result;
+                    }
+                    if tokio::time::timeout_at(end, waiting.as_mut()).await.is_err() {
+                        break Err("the compaction did not finish in time".into());
+                    }
+                    waiting.set(self.0.compacted.notified());
+                    waiting.as_mut().enable();
+                }
+            }
+        };
+        self.0.compacting.lock().unwrap().remove(thread_id);
+        ended.map_err(failed)?;
+        Ok(self.control_completed(thread_id))
+    }
+
     /// A control call that runs no model turn still ends one, so the runner's loop finishes as for any turn.
     fn control_completed(&self, thread_id: &str) -> String {
         let turn = uuid::Uuid::new_v4().to_string();
@@ -710,7 +768,7 @@ mod tests {
 
     #[tokio::test]
     async fn every_codex_fixture_gives_the_python_hosts_events() {
-        for (path, expected) in crate::hosts::fixtures::cases("codex") {
+        for (path, mut expected) in crate::hosts::fixtures::cases("codex") {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let host = CodexHost::on_home(Env::new(), tx, None);
             for line in std::fs::read_to_string(&path).unwrap().lines().filter(|l| !l.trim().is_empty()) {
@@ -720,7 +778,27 @@ mod tests {
             while let Ok(ev) = rx.try_recv() {
                 got.push(ev);
             }
+            // These shared Python snapshots contain read-only shell commands. Rust adds recovery labels.
+            for event in &mut expected {
+                if event["tool"] == "shell" {
+                    event["outside_actions"] = json!([]);
+                }
+            }
             assert_eq!(got, expected, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn recovery_shell_events_match_the_shared_api_fixture() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/recovery-shell-events.json")).unwrap();
+        for case in cases {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = CodexHost::on_home(Env::new(), tx, None);
+            host.on_item(false, &json!({"threadId": "th", "turnId": "tu", "item": {
+                "type": "commandExecution", "id": "tool-1", "command": case["command"]}}));
+            let got = rx.try_recv().unwrap();
+            assert_eq!(got, case["codex"], "{}", case["command"]);
+            assert!(!got.to_string().contains("synthetic-private-marker"));
         }
     }
 

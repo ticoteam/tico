@@ -119,6 +119,19 @@ def only_lowers(c, bot, body):
     return True
 
 
+def pool_only_lowers(c, scope, body):
+    """`only_lowers` for a team or group pool: no cap is the highest there is."""
+    body = body if isinstance(body, dict) else {}
+    now = pool(c, scope)
+    for key in KEYS:
+        value = _amount(body.get(key)) if body.get(key) is not None else None
+        if body.get(key) is not None and value is None:
+            return False
+        if value is None and now[key] is not None or value is not None and now[key] is not None and value > now[key]:
+            return False
+    return True
+
+
 # ------------------------------------------------------------------------------------------------ pools
 def pools(c, default=None):
     """{scope: caps} for every pool with a cap set: `company` and `group:<id>`."""

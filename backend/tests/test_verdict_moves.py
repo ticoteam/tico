@@ -288,7 +288,10 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
     verdict(api, check(api, task), "changes")
     hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
     _suite(api, "github-actions", "completed", "success", sha=NEW)
-    assert step(api, task) == "Review 1 Fixes", "no receipt at the new head: the gate keeps it"
+    assert step(api, task) == "Blocked", "no receipt at the new head: the gate holds the ticket"
+    with api.app.state.store.read() as c:
+        held = H.task(c, task["id"])
+        assert V.step_of(c, {"step_id": held["blocked_from_step"]}) == "Review 1 Fixes", "clearing the hold returns it to its Fixes step"
     with api.app.state.store.read() as c:
         told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()

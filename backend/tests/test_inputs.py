@@ -108,6 +108,9 @@ def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(a
     from backend.store import H
     from backend.tests.test_task_privacy_reads import sql
     r = two_bots(api)
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued'")

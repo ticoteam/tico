@@ -43,7 +43,7 @@ def test_refused_for_missing_receipt_moves_itself_when_the_receipt_is_posted(api
     assert 'Tico retries this move itself when a passing test receipt' in refused.text
     assert [r['step'] for r in retries(api, task)] == ['Review 1']
     # Nothing changed: no retry, no new refusal.
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert tick(api) == [task['id']]
@@ -74,7 +74,7 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     assert move(api, task).status_code == 422
     with api.app.state.store.transaction() as c:   # a change, but not a receipt
         c.execute('UPDATE tasks SET note=? WHERE id=?', ('Still building the fix.', task['id']))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     tries = retries(api, task)
     assert len(tries) == 2 and tries[-1]['tries'] == 1 and tries[-1]['state'] == 'waiting'
     assert tick(api) == [] and len(retries(api, task)) == 2      # same inputs: not tried again
@@ -83,7 +83,7 @@ def test_a_retry_still_refused_waits_for_the_next_change_and_stops_when_the_tick
     with api.app.state.store.transaction() as c:
         H.task_update(c, H.KEEPER, task['id'], step='Done')
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
-    assert fresh['step']['name'] == 'In Progress'
+    assert fresh['step']['name'] == 'Blocked'
     assert tick(api) == [] and step(api, task) == 'Done'
 
 
@@ -93,35 +93,42 @@ def test_hint_names_what_clears_each_refusal():
     assert move_retry.hint('other') == ''
 
 
-TEMPORARY = {'problem_code': 'github_unreachable', 'temporary': True, 'devops': False}
-PERMANENT = {'problem_code': 'github_app_permissions', 'temporary': False, 'devops': True}
-UNEXPECTED = {'problem_code': 'github_read', 'temporary': False, 'devops': False}
-
-
-def unreadable(api, monkeypatch, cause=None):
-    """GitHub cannot be read at a review move; `cause` is what the gate's read reported about why. Returns a
-    switch that makes GitHub readable again."""
-    from datetime import datetime, timezone
-    from backend import review_gate
+def unreadable(api, monkeypatch, mode):
+    """GitHub cannot be read at a review move through the real snapshot and refusal path. `mode` is what the
+    read reports: 'temporary' (the token mint times out), 'permission' (the mint is refused for access), or a
+    read failure with no cause ('read-422', 'read-boom'). Only the HTTP boundary is stubbed; snapshot,
+    problem, reject and remember all run production code. Returns a switch that makes GitHub readable again."""
+    from types import SimpleNamespace
+    from backend.store import Problem
     state = {'down': True}
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug, display_name, runtime, state) VALUES('devops-engineer','DevOps','fake','active')")
+    service = api.app.state.github_app
+    # A configured app row: truthy for the gate's snapshot, mapping-shaped for link refreshes.
+    monkeypatch.setattr(service, 'row', lambda c=None: {"org": "ticoteam"})
 
-    def snapshot(service, prs):
-        if state['down']:
-            return {pr['id']: {'error': True, 'why': 'GitHub did not answer'} for pr in prs}
-        return {pr['id']: {'head_sha': HEAD, 'checks': {'check:python': 'passing'},
-                           'at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'} for pr in prs}
-    real = review_gate.reject
+    def mint(repos, scopes):
+        if state['down'] and mode == 'temporary':
+            raise TimeoutError('synthetic GitHub timeout')
+        if state['down'] and mode == 'permission':
+            raise Problem('github_app_permissions', 'synthetic permission refusal', 409)
+        return ('synthetic-token', '2030-01-01T00:00:00Z')
 
-    def reject(c, actor, row, kind, head, pr, text, *rest, **options):
-        try:
-            real(c, actor, row, kind, head, pr, text, *rest, **options)
-        except H.Refused as exc:
-            exc.review_gate.update(cause or {})
-            raise
-    monkeypatch.setattr(review_gate, 'snapshot', snapshot)
-    monkeypatch.setattr(review_gate, 'reject', reject)
+    def call(method, path, **kw):
+        if state['down'] and mode == 'read-422':
+            return SimpleNamespace(status_code=422, json=lambda: {})
+        if state['down'] and mode == 'read-boom':
+            raise RuntimeError('synthetic transport failure')
+        if 'check-runs' in path:
+            payload = {'check_runs': []}
+        elif 'statuses' in path:
+            payload = []
+        else:
+            payload = {'head': {'sha': HEAD}}
+        return SimpleNamespace(status_code=200, json=lambda: payload)
+
+    monkeypatch.setattr(service, 'mint', mint)
+    monkeypatch.setattr(service, '_call', call)
     return lambda: state.update(down=False)
 
 
@@ -136,13 +143,14 @@ def devops_tasks(api):
 
 def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api, monkeypatch):
     task = ticket(api, RECEIPT)
-    back = unreadable(api, monkeypatch, TEMPORARY)
+    back = unreadable(api, monkeypatch, 'temporary')
     assert move(api, task).status_code == 422
     assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == []   # inside the 5 minutes
     for minutes in (6, 12):
         assert move_retry.tick(api.app.state.github_app, at=later(minutes), force=True) == []
-    assert step(api, task) == 'In Progress' and devops_tasks(api) == []
-    assert retries(api, task)[-1]['problem_code'] == 'github_unreachable'
+    assert step(api, task) == 'Blocked' and devops_tasks(api) == []
+    remembered = retries(api, task)[-1]
+    assert remembered['temporary'] is True and remembered['devops'] is False
     back()
     assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == [task['id']]
     assert step(api, task) == 'Review 1' and devops_tasks(api) == []
@@ -150,9 +158,10 @@ def test_temporary_github_failure_retries_on_the_timer_and_never_asks_devops(api
 
 def test_permission_failure_asks_devops_once_and_moves_when_github_reads_again(api, monkeypatch):
     task = ticket(api, RECEIPT)
-    back = unreadable(api, monkeypatch, PERMANENT)
+    back = unreadable(api, monkeypatch, 'permission')
     assert move(api, task).status_code == 422
     assert devops_tasks(api) == ['GitHub cannot be read for review moves']    # on the first refusal
+    assert retries(api, task)[0]['devops'] is True
     fresh = get(api, 'tasks/' + task['id'])['task']
     assert move(api, fresh).status_code == 422                                # the builder tries again
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
@@ -162,14 +171,110 @@ def test_permission_failure_asks_devops_once_and_moves_when_github_reads_again(a
     assert step(api, task) == 'Review 1'
 
 
-@pytest.mark.parametrize('cause', [None, UNEXPECTED], ids=['no-cause', 'unexpected-cause'])
-def test_unreadable_without_a_temporary_cause_asks_devops_only_when_it_repeats(api, monkeypatch, cause):
+@pytest.mark.parametrize('mode', ['read-422', 'read-boom'], ids=['answered-422', 'transport-boom'])
+def test_unreadable_without_a_temporary_cause_asks_devops_only_when_it_repeats(api, monkeypatch, mode):
     task = ticket(api, RECEIPT)
-    unreadable(api, monkeypatch, cause)
+    unreadable(api, monkeypatch, mode)
     assert move(api, task).status_code == 422
     assert devops_tasks(api) == []
     assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
     assert devops_tasks(api) == ['GitHub cannot be read for review moves']
+
+
+@pytest.mark.parametrize('record', ['unresolved', 'no-head'])
+def test_a_pr_link_tico_cannot_resolve_is_never_routed_as_a_github_outage(api, monkeypatch, record):
+    """An unresolved link or a link with no recorded head is Tico's own record: relinking clears it, so it never
+    asks DevOps, however long it stays refused."""
+    task = ticket(api, RECEIPT)
+    unreadable(api, monkeypatch, 'read-422')
+    if record == 'unresolved':
+        sql = "UPDATE task_links SET number=NULL WHERE task_id=? AND kind='pr'"
+    else:
+        # No GitHub App configured: the gate reads the cached link, which has no head yet.
+        monkeypatch.setattr(api.app.state.github_app, 'row', lambda c=None: None)
+        sql = "UPDATE task_links SET detail_json=json_remove(detail_json,'$.head_sha') WHERE task_id=? AND kind='pr'"
+    with api.app.state.store.transaction() as c:
+        c.execute(sql, (task['id'],))
+    refused = move(api, task)
+    assert refused.status_code == 422 and 'cannot verify the current head and CI' in refused.text, refused.text
+    assert retries(api, task)[0]['local'] is True
+    assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
+    assert move_retry.tick(api.app.state.github_app, at=later(12), force=True) == []
+    assert len(retries(api, task)) == 3 and devops_tasks(api) == []
+
+
+def test_the_install_owners_receipt_counts_on_ticos_retry(api):
+    """Tico's retry counts the install owner's receipt as a person's move does, owner set only in the environment."""
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    api.app.state.store.settings.owner_email = 'editor@acme.example'
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='owner'")
+        c.execute("INSERT INTO humans(id,name,email,teams_json) VALUES('editor','Editor','editor@acme.example','[]')")
+        H.task_comment(c, 'human:editor', task['id'], RECEIPT, wake=False)
+    assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
+
+
+def test_a_retry_that_raises_waits_five_minutes_before_reading_github_again(api, monkeypatch):
+    """A retry that raises instead of being refused must not re-read GitHub on every pass: it waits like a
+    refused outage retry. (`snapshot` raising here simulates the crash; the cause path is covered above.)"""
+    from backend import review_gate
+    task = ticket(api, RECEIPT)
+    unreadable(api, monkeypatch, 'temporary')
+    assert move(api, task).status_code == 422
+    calls = []
+
+    def snapshot(service, prs):
+        calls.append(1)
+        raise RuntimeError('synthetic snapshot crash')
+
+    monkeypatch.setattr(review_gate, 'snapshot', snapshot)
+    assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
+    assert len(calls) == 1 and step(api, task) == 'Blocked'
+    assert tick(api) == [] and len(calls) == 1     # still inside the five minutes: no re-read
+    assert devops_tasks(api) == []
+
+
+def test_a_permission_failure_after_a_temporary_one_asks_devops_once(api, monkeypatch):
+    """The first refusal was temporary; a later retry is refused for access. That retry asks DevOps, and the
+    retries after it reuse the ask."""
+    from backend.store import Problem
+    task = ticket(api, RECEIPT)
+    unreadable(api, monkeypatch, 'temporary')
+    assert move(api, task).status_code == 422
+    assert devops_tasks(api) == []
+
+    def refused(repos, scopes):
+        raise Problem('github_app_permissions', 'synthetic permission refusal', 409)
+
+    monkeypatch.setattr(api.app.state.github_app, 'mint', refused)
+    assert move_retry.tick(api.app.state.github_app, at=later(6), force=True) == []
+    assert devops_tasks(api) == ['GitHub cannot be read for review moves']
+    assert move_retry.tick(api.app.state.github_app, at=later(12), force=True) == []
+    assert move_retry.tick(api.app.state.github_app, at=later(18), force=True) == []
+    assert len(retries(api, task)) == 4 and devops_tasks(api) == ['GitHub cannot be read for review moves']
+
+
+def test_a_retry_that_raises_on_a_receipt_refusal_waits_five_minutes_then_moves(api, monkeypatch):
+    """A refusal that is not an outage is due when its inputs change; a retry of it that raises must still wait
+    before it is tried again, not stay due on every pass."""
+    from backend import review_gate
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+    real, calls = review_gate.snapshot, []
+
+    def crash(service, prs):
+        calls.append(1)
+        raise RuntimeError('synthetic snapshot crash')
+
+    monkeypatch.setattr(review_gate, 'snapshot', crash)
+    assert move_retry.tick(api.app.state.github_app, at=later(1), force=True) == [] and len(calls) == 1
+    assert move_retry.tick(api.app.state.github_app, at=later(5), force=True) == [] and len(calls) == 1
+    monkeypatch.setattr(review_gate, 'snapshot', real)
+    assert move_retry.tick(api.app.state.github_app, at=later(7), force=True) == [task['id']]
+    assert step(api, task) == 'Review 1'
 
 
 def test_one_tickets_failing_retry_does_not_hold_back_the_others(api, monkeypatch):
@@ -200,14 +305,14 @@ def test_retries_refused_again_expire_three_days_after_the_first_refusal(api):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert move_retry.tick(api.app.state.github_app, at=later(13 * 60), force=True) == []
-    assert step(api, task) == 'In Progress'
+    assert step(api, task) == 'Blocked'
 
 
 def test_a_private_tickets_blocker_is_private_to_devops_and_does_not_name_it(api, monkeypatch):
     task = ticket(api, RECEIPT)
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
-    unreadable(api, monkeypatch, PERMANENT)
+    unreadable(api, monkeypatch, 'permission')
     assert move(api, task).status_code == 422
     with api.app.state.store.read() as c:
         blocker = dict(c.execute("SELECT * FROM tasks WHERE owner=?", (H.bot_actor('devops-engineer'),)).fetchone())
@@ -238,6 +343,11 @@ def test_a_private_tickets_receipt_comment_moves_it(api):
 def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     task = ticket(api)
     with api.app.state.store.transaction() as c:      # a private review child only the owner reads, holding a receipt
+        # Ana heads every bot that reports to no one, so cpo reports to another root person she does not manage.
+        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster['people'].append({'id': 'zed', 'email': 'zed@acme.example'})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE bot_config SET reports_to='human:zed' WHERE bot='cpo'")
         child = H.task_create(c, H.bot_actor('cpo'), 'Evidence', 'x', H.bot_actor('cpo'), parent_id=task['id'])
         c.execute("UPDATE tasks SET private=1, title='Review 1' WHERE id=?", (child['id'],))
         H._write_message(c, H.bot_actor('cpo'), H.bot_actor('cpo'), RECEIPT, H.conversation(c, child['conversation_id']),
@@ -245,7 +355,7 @@ def test_a_retry_does_not_pass_on_evidence_the_mover_cannot_read(api):
     assert move(api, task).status_code == 422           # ana cannot read it
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET note='unrelated' WHERE id=?", (task['id'],))
-    assert tick(api) == [] and step(api, task) == 'In Progress'
+    assert tick(api) == [] and step(api, task) == 'Blocked'
     assert retries(api, task)[-1]['by'] == 'human:ana'  # a refused retry keeps the mover it reads as
 
 
@@ -256,3 +366,105 @@ def test_a_refused_move_is_retried_as_the_actor_it_was_made_as_not_the_caller(ap
             H.task_update(c, 'human:ana', task['id'], step='Review 1', review_prs={})
         move_retry.remember(c, H.bot_actor('botops'), refused.value.review_gate)
     assert retries(api, task)[-1]['by'] == 'human:ana'
+
+
+def test_a_refused_move_held_blocked_is_retried_even_when_the_blocked_sweep_runs_first(api):
+    """A refused move holds the ticket on Blocked (backend/task_blocked.py). When what refused it clears, the move is
+    made, not undone: the blocked sweep must not send it back to its earlier step and drop the remembered move."""
+    from backend import task_blocked
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    assert step(api, task) == 'Blocked'
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+        task_blocked.sweep(c, H.now())
+    assert step(api, task) == 'Blocked'
+    assert tick(api) == [task['id']] and step(api, task) == 'Review 1'
+    with api.app.state.store.read() as c:
+        assert H.task(c, task['id'])['blocked_since'] is None
+
+
+def test_a_gate_hold_with_no_live_retry_goes_back_to_its_earlier_step(api):
+    """Once Tico no longer retries the move (it expired), the blocked sweep clears the gate hold as before."""
+    from datetime import datetime, timezone
+    from backend import task_blocked
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+        task_blocked.sweep(c, datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z')
+    assert step(api, task) == 'In Progress'
+
+
+def test_a_retry_that_another_wait_keeps_on_blocked_claims_no_move_and_waits_for_a_change(api):
+    """A gate hold with another wait beside it (here a person's child task) stays Blocked when Tico retries the move:
+    that is no move, so Tico says nothing and does not try again until something changes."""
+    task = ticket(api)
+    assert move(api, task).status_code == 422
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, 'human:ana', 'Choose a machine', 'Choose one.', 'human:ana', parent_id=task['id'])
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+
+    def claimed():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE body LIKE 'Tico moved this ticket%'").fetchone()[0]
+    for _ in range(3):
+        assert tick(api) == []
+    assert step(api, task) == 'Blocked' and claimed() == 0
+    assert len(retries(api, task)) == 2 and retries(api, task)[-1]['state'] == 'waiting'
+    # The other wait ends: that is a change, and the remembered move is made.
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'human:ana', child['id'], status='done')
+    assert tick(api) == [task['id']] and step(api, task) == 'Review 1' and claimed() == 1
+
+
+def general(api, task):
+    """The ticket moved back to the General board, so a review move is a move onto another board."""
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'human:ana', task['id'], type=H.GENERAL_TYPE, status='doing')
+    return get(api, 'tasks/' + task['id'])['task']
+
+
+def cross_move(api, task, review_step='Review 1'):
+    return api.post('/api/v2/tasks/' + task['id'], headers=headers(),
+                    json={'version': get(api, 'tasks/' + task['id'])['task']['version'], 'type': 'Dev tickets',
+                          'step': review_step})
+
+
+@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
+def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, review_step):
+    """Its step names exist only on the destination board: a retry that names the step alone is refused there."""
+    task = general(api, ticket(api))
+    assert cross_move(api, task, review_step).status_code == 422
+    held = get(api, 'tasks/' + task['id'])['task']
+    assert held['type_id'] == H.GENERAL_TYPE and held['blocked_since']
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
+    assert tick(api) == [task['id']]
+    moved = get(api, 'tasks/' + task['id'])['task']
+    assert moved['type_id'] == task_type(api) and moved['step']['name'] == review_step
+    assert not moved.get('blocked_since')
+
+
+def task_type(api):
+    with api.app.state.store.read() as c:
+        return H.type_get(c, 'Dev tickets')['id']
+
+
+@pytest.mark.parametrize('review_step', ['Review 1', 'Review 2'])
+def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry_will(api, review_step):
+    """Only engineering tickets have reconciliation; on another board the retry is what clears a gate hold, so the
+    hourly sweep leaves it while Tico still retries and releases it after, or it would be held forever."""
+    from datetime import datetime, timedelta, timezone
+    task = general(api, ticket(api))
+    assert cross_move(api, task, review_step).status_code == 422
+    stamp = (datetime.now(timezone.utc) + timedelta(hours=3)).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+    with api.app.state.store.transaction() as c:
+        assert H.sweep_stranded(c, stamp) == []     # past the sweep's grace, inside the retry's
+        c.execute("UPDATE task_events SET new=json_set(new,'$.since','2020-01-01T00:00:00.000000Z') "
+                  "WHERE task_id=? AND field='move_retry'", (task['id'],))
+        assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
+    released = get(api, 'tasks/' + task['id'])['task']
+    assert released['status'] == 'open' and not released.get('blocked_since')

@@ -19,7 +19,7 @@ const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bo
 const TASKS = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: 'bot:qa'}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: 'bot:qa', blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
   task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
   task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
   task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
@@ -142,6 +142,12 @@ async function open(browser, viewport, colorScheme, server) {
       await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
       assert.deepEqual(await tabTexts(), ['Needs You 1', 'Doing 2', 'Blocked 1', 'Assigned to Others 1'], at);
+      await pill('Blocked').click();
+      assert.deepEqual(await rail.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for QA']);
+      assert.match(await rail.locator('#t-blocked .trow-waits').innerText(), /Waiting for the test machine.*since/);
+      await pill('Doing').click();
+      // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
+      assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
       assert.deepEqual(await order(), ['tasks', 'updates', 'files', 'routines']);
       await pill('Assigned to Others').click();
       assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);

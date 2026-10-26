@@ -69,6 +69,8 @@ def claim(c):
     # A Dev tickets type gets its hand-off wake rules once (rules.seed_dev); they are rows a person can edit.
     from .rules import seed_dev
     seed_dev(c)
+    from .task_blocked import ensure_steps
+    ensure_steps(c)
 
 
 def ensure(c):

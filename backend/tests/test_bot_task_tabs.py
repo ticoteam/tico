@@ -315,12 +315,15 @@ def test_all_legacy_builtins_keep_order_names_counts_and_receive_default_conditi
 def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_private_tasks(api, monkeypatch):
     from backend import bot_task_tabs
     monkeypatch.setattr(bot_task_tabs, "ROWS", 1)
-    older = task(api, "Older question", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana", created=5)
-    newer = task(api, "New wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana", created=1)
-    secret = task(api, "Private", "bot:ops", "human:ben", status="waiting", waiting_on="human:ana")
+    older = task(api, "Older question", "bot:ops", "human:ana", status="waiting", waiting_on="human:cara", created=5)
+    newer = task(api, "New wait", "bot:ops", "human:ana", status="waiting", waiting_on="human:cara", created=1)
+    secret = task(api, "Private", "bot:ops", "human:ben", status="waiting", waiting_on="human:cara")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (secret,))
-    out = get(api, f"bots/ops/task-tabs/tasks?tab=needs&match_ids={older},{secret}")
+    # Ops reports to no one, so it hangs under the founder: Ana reads its private task; Cara is no party and no manager.
+    assert get(api, f"tasks/{secret}")["task"]["title"] == "Private"
+    get(api, f"tasks/{secret}", "cara-test", expected=404)
+    out = get(api, f"bots/ops/task-tabs/tasks?tab=needs&match_ids={older},{secret}", "cara-test")
     [tab] = out["tabs"]
     assert tab["ids"] == [newer] and tab["count"] == 2 and tab["next"]
     assert tab["matched_ids"] == [older]
