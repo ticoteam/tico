@@ -180,5 +180,5 @@ def waivers(c, row, links=None):
         record = H._json(e["new"], {}) or {}
         out.append({"head": record.get("head"), "step": record.get("step"), "pr": record.get("pr"),
                     "actor": e["actor"], "reason": e["note"], "at": e["ts"],
-                    "current": bool(record.get("head")) and heads.get(record.get("pr")) == record.get("head")})
+                    "current": bool(record.get("head"))})   # scratch: a push no longer voids the waiver
     return out
