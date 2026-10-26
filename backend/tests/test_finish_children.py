@@ -90,6 +90,18 @@ def test_detach_leaves_open_subtasks_open_and_standalone_with_their_own_subtrees
     assert children_said(c, parent) == ["Made standalone: Book the venue; Order the wine"]
 
 
+def test_a_private_subtask_the_closer_cannot_read_goes_standalone_unnamed(tmp_path):
+    c = hub(tmp_path / "hub.db")
+    parent = make(c, ANA, "Plan the offsite", CMO)
+    secret = H.task_create(c, CMO, "Compare the venue salaries", "", CMO, parent_id=parent["id"], private=True, lint=False)
+    assert not H.task_private_readable(c, ANA, H.task(c, secret["id"]))
+    # Ana's close is not held up by a task she cannot see, and does not end it either.
+    H.task_close(c, ANA, parent["id"])
+    assert (status(c, parent), status(c, secret), TR.parent_of(c, secret["id"])) == ("closed", "open", None)
+    assert children_said(c, parent) == ["Made standalone: a private subtask"]
+    assert open_under_finished(c) == []
+
+
 def test_a_bot_may_not_end_a_subtask_it_may_not_close_and_the_finish_rolls_back(api):
     _, _, attempt = setup_attempt(api, "ops")
     parent = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x"})

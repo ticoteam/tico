@@ -6394,6 +6394,12 @@ def _finish_children(conn, actor, parent, children=None, mover=None, quiet=False
             if not kid:
                 continue
             if kid["status"] not in ("done", "closed", "declined"):
+                if actor != KEEPER and not task_private_readable(conn, actor, kid):
+                    # A private subtask the actor cannot read is neither theirs to close nor a reason their own task
+                    # stays open: it leaves the tree as it is, a standalone task its own parties still have.
+                    TR.set_parent(conn, KEEPER, kid_id, None, note="Made standalone when its parent task finished")
+                    changed["detached"].append(_child_name(conn, parent, kid))
+                    continue
                 try:
                     if children == "detach":
                         TR.set_parent(conn, actor, kid_id, None, mover=mover,
@@ -6401,7 +6407,7 @@ def _finish_children(conn, actor, parent, children=None, mover=None, quiet=False
                     else:
                         task_close(conn, actor, kid_id, note=said, quiet=quiet, mover=mover, with_parent=parent["id"])
                 except Refused as exc:
-                    shown = _child_name(conn, parent, kid) if task_private_readable(conn, actor, kid) else "a private subtask"
+                    shown = _child_name(conn, parent, kid)
                     other = ("close it with this task (children: close)" if children == "detach"
                              else "keep it as a standalone task (children: detach)")
                     why = "" if task_private(conn, kid) else f" ({exc.detail})"

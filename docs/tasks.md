@@ -783,7 +783,8 @@ or a step whose status is done or closed), closes every open task below it, each
 standalone task, keeping its own subtasks, and the record says "Made standalone:". The task window
 asks which when the task has open subtasks. Each is the actor's own close or detach of that subtask,
 under the usual rules: a bot closes only subtasks it asked for, and one it may neither close nor
-detach refuses the whole finish, naming it, with nothing changed. Reopening the parent does not
+detach refuses the whole finish, naming it, with nothing changed. A private subtask the actor
+cannot read is made standalone either way, and named only "a private subtask". Reopening the parent does not
 reopen them; its history says which are "Still closed from when it closed", to reopen by hand.
 Finishing or moving away the last open subtask wakes the
 immediate parent's owner with “All subtasks done”, unless its result already resumed that parent or
