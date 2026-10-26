@@ -47,8 +47,9 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     const page = await browser.newPage({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    let needs = NEEDS;
-    await page.route('**/*', route => {
+    let needs = NEEDS, filterExtras = null, releaseFilterRead = null;
+    const filterURLs = [];
+    await page.route('**/*', async route => {
       const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
       if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: 'window.marked={parse:s=>String(s)}'});
@@ -78,19 +79,32 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
       }
       // The built-in tabs and Assigned to Others, which Ana may change on Head of Engineering only.
       const tabs = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
-      if (tabs) return json({bot: tabs[1], tabs: LAYOUT, widgets: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
+      if (tabs) {
+        if (route.request().method() === 'PUT') LAYOUT.splice(0, LAYOUT.length, ...route.request().postDataJSON().tabs);
+        return json({bot: tabs[1], tabs: LAYOUT, widgets: null, saved: false, personal: false, can_edit: tabs[1] === 'lead'});
+      }
       // What the server counts for Ana: what Head of Engineering asked of anyone but her and itself, still open.
       if (p === '/api/v2/bots/lead/task-tabs/tasks') {
+        if (filterExtras) {
+          filterURLs.push(url.href);
+          if (releaseFilterRead) await releaseFilterRead;
+          const requested = (q.get('match_ids') || '').split(',');
+          return json({bot: 'lead', tabs: [{key: 'needs', name: 'Needs You', count: filterExtras.length,
+            ids: [], next: null, matched_ids: filterExtras.filter(it => requested.includes(it.id)).map(it => it.id)}], tasks: []});
+        }
         const others = Object.values(T).filter(t => t.requester === 'bot:lead' && !['human:ana', 'bot:lead'].includes(t.owner)
           && ['open', 'doing', 'waiting'].includes(t.status));
         const owned = Object.values(T).filter(t => t.owner === 'bot:lead');
         const groups = [
-          {key: 'needs', name: 'Needs You', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on === 'human:ana')},
+          {key: 'needs', name: 'Needs You', rows: (LAYOUT[0].conditions?.[0]?.field === 'status'
+            ? Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead') && LAYOUT[0].conditions[0].value.includes(t.status))
+            : Object.values(T).filter(t => (t.owner === 'bot:lead' || t.requester === 'bot:lead')
+              && ((t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana'))))},
           {key: 'active', name: 'Doing', rows: owned.filter(t => ['open', 'doing'].includes(t.status)).sort((a,b) => b.created.localeCompare(a.created))},
           {key: 'blocked', name: 'Blocked', rows: owned.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:ana').sort((a,b) => b.created.localeCompare(a.created))},
           {key: 'c4', name: 'Assigned to Others', rows: others},
         ];
-        return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: [...owned, ...others]});
+        return json({bot: 'lead', tabs: groups.map(({key, name, rows}) => ({key, name, count: rows.length, ids: rows.map(t => t.id), next: null})), tasks: Object.values(T)});
       }
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -107,19 +121,60 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     assert.deepEqual(order, ['bot-tasks', 'bot-latest', 'bot-files', 'bot-recurring'], JSON.stringify(order));
     assert.equal(await rail.locator('#bot-assigned').count(), 0);
     assert.equal(await rail.locator('#bot-tasks .rail-h').innerText().then(s => s.trim().toLowerCase()), 'tasks');
-    await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1');
+    await page.waitForFunction(() => document.querySelector('#cnt-c4')?.textContent.trim() === '1'
+      && document.querySelector('#cnt-needs')?.textContent.trim() === '5');
     const tabs = (await rail.locator('[data-bot-task-tab]').allInnerTexts()).map(s => s.replace(/\s+/g, ' ').trim());
-    assert.deepEqual(tabs, ['Needs You 4', 'Doing 2', 'Blocked 2', 'Done Recently 1', 'Assigned to Others 1'], JSON.stringify(tabs));
+    assert.deepEqual(tabs, ['Needs You 5', 'Doing 2', 'Blocked 2', 'Done Recently 1', 'Assigned to Others 1'], JSON.stringify(tabs));
     assert.equal(await tab('needs').getAttribute('aria-selected'), 'true', 'Needs You leads while it has rows');
 
     // Needs You keeps matching waits, questions and approvals; ordinary assigned tasks obey its conditions.
     const rows = await rail.locator('#t-needs .trow .ttl, #t-needs .req-text').allInnerTexts();
     assert.deepEqual(rows.map(r => r.trim()).sort(), ['Head of Engineering: Is Friday fine for the summary?', 'Head of Engineering: Approve the announcement',
-      'Support access fixes', 'Turn on the screen default'].sort(), JSON.stringify(rows));
+      'Support access fixes', 'Turn on the screen default', 'Pick the release day'].sort(), JSON.stringify(rows));
     assert.equal(await rail.locator('#bot-active').isHidden(), true, 'one tab at a time');
     const badge = page.locator('#tree a[href="#/bot/lead"] .cnt.needs');
-    assert.equal((await badge.innerText()).trim(), '4', 'the tree number is the Needs you rows');
-    assert.equal(await page.evaluate(() => needsMeCount('lead')), 4);
+    assert.equal((await badge.innerText()).trim(), '5', 'the tree number is the Needs you rows');
+    assert.equal(await page.evaluate(() => needsMeCount('lead')), 5);
+    assert.equal(await badge.getAttribute('title'), '5 things Head of Engineering needs from you');
+    assert.ok(!(await titles('#t-open')).includes('Pick the release day'));
+    assert.ok(!(await titles('#t-blocked')).includes('Pick the release day'));
+    assert.ok(!(await titles('#t-c4')).includes('Pick the release day'));
+
+    // Editing Needs You changes its task filter, while the org number stays a fixed attention count.
+    await rail.locator('#bot-sidebar-edit').click();
+    await tab('needs').click();
+    const dialog = page.locator('#bot-filter-dialog');
+    await dialog.waitFor();
+    assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
+    assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
+    await dialog.locator('[data-cond-field]').selectOption('status');
+    assert.ok((await dialog.innerText()).includes('The org chart number still counts everything Head of Engineering needs from you, not this tab.'));
+    await dialog.locator('[data-cond-value="0"][value="open"]').uncheck();
+    await dialog.locator('[data-cond-value="0"][value="waiting"]').uncheck();
+    await dialog.getByRole('button', {name: 'Save'}).click();
+    await rail.locator('#bot-sidebar-done').click();
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '5'
+      && document.querySelector('#t-needs')?.textContent.includes('Ship the release notes'));
+    assert.ok(!(await titles('#t-needs')).includes('Pick the release day'));
+    assert.equal((await badge.innerText()).trim(), '5', 'editing a tab does not change fixed attention');
+    // Pick a different count, then Reset visibly restores the single Needs: You condition.
+    await rail.locator('#bot-sidebar-edit').click();
+    await tab('needs').click(); await dialog.waitFor();
+    await dialog.locator('[data-cond-value="0"][value="open"]').check();
+    await dialog.getByRole('button', {name: 'Save'}).click();
+    await rail.locator('#bot-sidebar-done').click();
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '7');
+    assert.equal((await badge.innerText()).trim(), '5');
+    await rail.locator('#bot-sidebar-edit').click();
+    await tab('needs').click(); await dialog.waitFor();
+    await dialog.getByRole('button', {name: 'Reset to default'}).click();
+    assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
+    assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
+    assert.ok(!(await dialog.innerText()).includes('The org chart number still counts'));
+    await dialog.getByRole('button', {name: 'Save'}).click();
+    await rail.locator('#bot-sidebar-done').click();
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '5');
+
 
     // Doing defaults to Open/Doing; waiting tasks have their own tabs.
     await tab('active').click();
@@ -175,18 +230,46 @@ const LAYOUT = [{builtin: 'needs', name: 'Needs You'}, {builtin: 'active', name:
     // The question answered elsewhere leaves Needs You: the tab's count and the tree's number move together.
     needs = needs.filter(it => !['t-asked', 'm-loose', 'approval-1'].includes(it.id));
     await page.evaluate(async () => { await v2Refresh(); renderTree(); });
-    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '1');
+    await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '2');
     assert.equal((await badge.innerText()).trim(), '2');
-    assert.equal(await rail.locator('#t-needs .trow, #t-needs [data-ask]').count(), 1);
+    assert.equal(await rail.locator('#t-needs .trow, #t-needs [data-ask]').count(), 2);
 
     // Nothing needs Ana: the tab says so, and the tree's number goes.
     needs = [];
-    T.waits.status = 'done';
+    T.waits.status = T.forAna.status = 'done';
     await page.evaluate(async () => { await v2Refresh(); await loadBotTasksV2('lead'); renderTree(); });
     await page.waitForFunction(() => document.querySelector('#cnt-needs')?.textContent.trim() === '0');
     assert.equal(await page.locator('#tree a[href="#/bot/lead"] .cnt.needs').count(), 0);
     assert.equal((await rail.locator('#t-needs').innerText()).trim(), 'Nothing needs you.');
     assert.deepEqual((await rail.locator('#t-c4 .trow .ttl').allTextContents()).map(s => s.trim()), ['Run the release check']);
+
+    // Many supplemental questions keep requests bounded and deduplicate beyond the first chunk.
+    // A question arriving during the read must not be added twice to that read's total.
+    filterExtras = Array.from({length: 240}, (_, i) => ({...T.asked, kind: 'question',
+      id: 'question-' + String(i).padStart(36, '0')}));
+    await page.evaluate(items => {
+      S.v2.needs = items; window.needCountsSeen = [];
+      window.needCountObserver = new MutationObserver(() => needCountsSeen.push(document.querySelector('#cnt-needs').textContent.trim()));
+      needCountObserver.observe(document.querySelector('#cnt-needs'), {childList: true, subtree: true});
+    }, filterExtras);
+    let release;
+    releaseFilterRead = new Promise(resolve => { release = resolve; });
+    const requested = page.waitForRequest(r => r.url().includes('/task-tabs/tasks?match_ids='));
+    const reading = page.evaluate(() => botTaskFilterRead('lead'));
+    await requested;
+    const late = {...T.asked, kind: 'question', id: 'question-late'};
+    filterExtras.push(late);
+    await page.evaluate(item => { S.v2.needs.push(item); }, late);
+    releaseFilterRead = null; release();
+    await reading;
+    assert.ok(filterURLs.length > 1, 'a large supplement list uses more than one bounded read');
+    assert.ok(filterURLs.every(url => url.length < 4200), 'no request exceeds common proxy header limits');
+    assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '241', 'late question is already in the task total');
+    await page.evaluate(() => botTaskFilterRead('lead'));
+    assert.equal((await tab('needs').locator('.cnt').innerText()).trim(), '241');
+    assert.equal(await rail.locator('#t-needs .trow').count(), 241, 'the next read includes the new question once');
+    assert.ok(!(await page.evaluate(() => { needCountObserver.disconnect(); return needCountsSeen; })).includes('242'), 'no transient double count');
+    filterExtras = null;
 
     // Done Recently pages 50 rows at a time.
     await tab('done').click();

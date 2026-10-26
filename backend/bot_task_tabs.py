@@ -37,7 +37,7 @@ RECENT_DAYS = 14
 ROWS = 200
 
 DEFAULT_CONDITIONS = {
-    "needs": [{"field": "waiting_on", "value": "me"}],
+    "needs": [{"field": "needs", "value": "you"}],
     "active": [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": ["open", "doing"]}],
     "blocked": [{"field": "assigned_to", "value": "this_bot"}, {"field": "status", "value": ["waiting"]},
                 {"field": "waiting_on", "value": "not_me"}],
@@ -54,7 +54,7 @@ DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 
 # field -> what its value is. Lists are "any of"; every row of a tab must match.
 FIELDS = {"status": "statuses", "step": "steps", "type": "types", "assigned_to": "party", "asked_by": "party",
-          "waiting_on": "waiting", "created_within": "days", "updated_within": "days", "done_within": "days",
+          "waiting_on": "waiting", "needs": "attention", "created_within": "days", "updated_within": "days", "done_within": "days",
           "due": "due", "label": "label"}
 WAITING = ("any", "person", "bot", "me", "not_me")
 
@@ -164,6 +164,9 @@ def condition(c, row):
     elif kind == "waiting":
         if value not in WAITING:
             raise bad("Waiting on is any, person, bot, me or not_me")
+    elif kind == "attention":
+        if value != "you":
+            raise bad("Needs is you")
     elif kind == "days":
         value = days(value, field.replace("_", " ").capitalize())
     elif kind == "due":
@@ -245,6 +248,8 @@ def tab_sql(tab, bot, viewer):
             part = party_sql("owner", value, bot, viewer)
         elif field == "asked_by":
             part = party_sql("requester", value, bot, viewer)
+        elif field == "needs":
+            part = "((owner=? AND status IN ('open','doing','waiting')) OR (status='waiting' AND waiting_on=?))", [viewer, viewer]
         elif field == "waiting_on":
             part = {"any": ("status='waiting'", []),
                     "person": ("status='waiting' AND waiting_on LIKE 'human:%'", []),

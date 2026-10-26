@@ -152,7 +152,7 @@ const BOT_TASK_TABS = [['needs', 'Needs You', 'cnt-needs'], ['active', 'Doing', 
                        ['blocked', 'Blocked', 'cnt-blocked'], ['done', 'Done Recently', 'cnt-done']];
 const BOT_DONE_RECENT_DAYS = 14;
 const BOT_TASK_DEFAULT_CONDITIONS = {
-  needs: [{field: 'waiting_on', value: 'me'}],
+  needs: [{field: 'needs', value: 'you'}],
   active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
   blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
 };
@@ -265,12 +265,28 @@ function botTaskFilterTurn(slug, job) {
 }
 const botTaskFilterRead = slug => botTaskFilterTurn(slug, () => botTaskFilterReadNow(slug));
 async function botTaskFilterReadNow(slug) {
-  const extraIds = botNeedsExtras(slug).map(it => String(it.id)).join(',');
-  const got = await v2Get(botTaskFilterPath(slug) + (extraIds ? '?match_ids=' + encodeURIComponent(extraIds) : ''));
+  // Keep each URL below common proxy limits even after many Needs You pages have been read.
+  const extras = botNeedsExtras(slug), chunks = [];
+  let query = '';
+  for (const id of new Set(extras.map(it => String(it.id)))) {
+    const encoded = encodeURIComponent(id);
+    if (query && query.length + encoded.length + 3 > 4000) { chunks.push(query); query = ''; }
+    query += (query ? '%2C' : '') + encoded;
+  }
+  if (query) chunks.push(query);
+  const first = chunks.shift();
+  const got = await v2Get(botTaskFilterPath(slug) + (first ? '?match_ids=' + first : ''));
   if (!got || BOT?.slug !== slug) return;
+  const needs = got.tabs?.find(tab => tab.key === 'needs');
+  for (const chunk of needs ? chunks : []) {
+    const more = await v2Get(botTaskFilterPath(slug) + '?tab=needs&match_ids=' + chunk);
+    const matched = more?.tabs?.find(tab => tab.key === 'needs');
+    if (!matched || BOT?.slug !== slug) return;
+    needs.matched_ids = [...new Set([...(needs.matched_ids || []), ...(matched.matched_ids || [])])];
+  }
   const was = BOT_TASK_FILTERED.get(slug)?.tabs || {};
   const read = {tabs: Object.fromEntries((got.tabs || []).map(tab => [tab.key, tab])),
-                tasks: new Map((got.tasks || []).map(t => [String(t.id), t]))};
+                tasks: new Map((got.tasks || []).map(t => [String(t.id), t])), extras};
   // A tab someone read further into stays that far on a refresh: its later pages are read again after the fresh first.
   for (const tab of Object.values(read.tabs)) {
     const before = was[tab.key];
@@ -280,6 +296,9 @@ async function botTaskFilterReadNow(slug) {
   if (BOT?.slug !== slug) return;
   BOT_TASK_FILTERED.set(slug, read);
   botTaskFilterPaint(slug);
+  // The initial Needs You read or a live event may finish while this request is in flight.
+  const latest = botNeedsExtras(slug).map(it => String(it.id)).sort().join(',');
+  if (latest !== extras.map(it => String(it.id)).sort().join(',')) void botTaskFilterRead(slug);
 }
 // The tab's next page onto the rows it holds; false when it could not be read or the tab is no longer the one asked.
 async function botTaskFilterPage(slug, tab, tasks) {
@@ -329,13 +348,14 @@ function botTaskWaitsOn(t) {
 }
 // Questions and approvals remain in Needs You even when its task filter is changed.
 function botNeedsExtras(slug) {
-  return [...botNeeds(slug).filter(it => it.kind === 'question' || it.kind === 'ask' || it.ask?.to_actor === myActor()),
-    ...(S.v2?.needs || []).filter(it => it.kind === 'approval' && (it.requested_by || it.requester) === 'bot:' + slug)];
+  return botNeeds(slug).filter(it => ['question', 'ask', 'approval'].includes(it.kind) || it.ask?.to_actor === myActor());
 }
 // Keep questions, approvals and matching tasks once each; preserve half-written question replies on refresh.
 function botNeedsPaint(slug) {
   const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
-  const extras = botNeedsExtras(slug);
+  // Supplemental rows and their overlap count belong to the same completed filter read.
+  // New questions wait for that read instead of being added again to its task count.
+  const extras = counted && filtered.extras ? filtered.extras : botNeedsExtras(slug);
   const tasks = counted ? counted.ids.map(id => filtered.tasks.get(String(id))).filter(Boolean) : [];
   const items = counted ? [...extras, ...tasks.filter(t => !extras.some(it => String(it.id) === String(t.id)))]
     : [...extras, ...botNeeds(slug).filter(it => it.kind === 'waiting' && !extras.some(extra => extra.id === it.id))];

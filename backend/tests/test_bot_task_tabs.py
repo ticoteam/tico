@@ -15,7 +15,7 @@ OTHERS = {"name": "Assigned to Others", "show_count": True, "conditions": [
 DEFAULT = [{"builtin": "needs", "name": "Needs You", "show_count": True},
            {"builtin": "active", "name": "Doing", "show_count": True},
            {"builtin": "blocked", "name": "Blocked", "show_count": True}, OTHERS]
-DEFAULT[0]['conditions'] = [{'field': 'waiting_on', 'value': 'me'}]
+DEFAULT[0]['conditions'] = [{'field': 'needs', 'value': 'you'}]
 DEFAULT[1]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['open', 'doing']}]
 DEFAULT[2]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['waiting']},
                             {'field': 'waiting_on', 'value': 'not_me'}]
@@ -132,6 +132,7 @@ def test_every_field_and_value_is_checked(api):
     refused([{"field": "assigned_to", "value": "ben"}], "Unknown person or bot: ben")
     refused([{"field": "asked_by", "value": "others"}], "Unknown person or bot: others")
     refused([{"field": "waiting_on", "value": "someone"}], "Waiting on is any, person, bot, me or not_me")
+    refused([{"field": "needs", "value": "everyone"}], "Needs is you")
     refused([{"field": "created_within", "value": 0}], "number of days")
     refused([{"field": "done_within", "value": "3"}], "number of days")
     refused([{"field": "due", "value": "soon"}], "Due within")
@@ -272,10 +273,13 @@ def test_default_filters_are_disjoint_and_viewer_relative(api):
     task(api, "Waits on Ana", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
     task(api, "Unspecified wait", "bot:ops", "human:ana", status="waiting", waiting_on=None)
     task(api, "Review", "bot:ops", "human:ana", status="review")
+    task(api, "Viewer owns open", "human:ana", "bot:ops", status="open")
+    task(api, "Viewer owns finished", "human:ana", "bot:ops", status="done")
+    task(api, "Viewer owns unrelated", "human:ana", "bot:cpo", status="open")
     seen = shown(api, "ops")
     assert seen["Doing"] == (2, ["Doing", "Open"])
     assert seen["Blocked"] == (2, ["Unspecified wait", "Waits on bot"])
-    assert seen["Needs You"] == (1, ["Waits on Ana"])
+    assert seen["Needs You"] == (2, ["Viewer owns open", "Waits on Ana"])
     assert shown(api, "ops", "ben-test")["Blocked"] == (3, ["Unspecified wait", "Waits on Ana", "Waits on bot"])
 
 
@@ -321,3 +325,27 @@ def test_needs_you_supplements_deduplicate_beyond_first_page_without_leaking_pri
     assert tab["ids"] == [newer] and tab["count"] == 2 and tab["next"]
     assert tab["matched_ids"] == [older]
     assert secret not in {t["id"] for t in out["tasks"]}
+
+
+def test_attention_counts_include_approvals_in_whole_list():
+    from backend import views
+    items = [{"kind": "task", "id": "owned", "owner": "human:ana", "requester": "bot:ops", "status": "open"},
+             {"kind": "waiting", "id": "wait", "owner": "bot:ops", "requester": "human:ana", "status": "waiting", "waiting_on": "human:ana"},
+             {"kind": "approval", "id": "approval", "requested_by": "bot:ops"},
+             {"kind": "approval", "id": "other", "requested_by": "human:ben"}]
+    assert views.needs_bots(items, "human:ana") == {"bot:ops": 3}
+
+
+def test_needs_condition_can_be_removed_changed_and_restored(api):
+    task(api, "Mine", "human:ana", "bot:ops", status="open")
+    task(api, "Wait on viewer", "bot:ops", "human:ana", status="waiting", waiting_on="human:ana")
+    task(api, "Bot work", "bot:ops", "human:ana", status="doing")
+    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])
+    changed = {**DEFAULT[0], "conditions": [{"field": "status", "value": ["doing"]}]}
+    save(api, "ops", [changed])
+    assert tabs(api, "ops")["tabs"] == [changed]
+    assert shown(api, "ops")["Needs You"] == (1, ["Bot work"])
+    save(api, "ops", [{**DEFAULT[0], "conditions": []}])
+    assert shown(api, "ops")["Needs You"] == (3, ["Bot work", "Mine", "Wait on viewer"])
+    save(api, "ops", [DEFAULT[0]])
+    assert shown(api, "ops")["Needs You"] == (2, ["Mine", "Wait on viewer"])

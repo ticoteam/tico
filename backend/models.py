@@ -1723,7 +1723,7 @@ class BotWakePreset(Contract):
 class BotTaskCondition(Contract):
     """One row of a filter tab (backend/bot_task_tabs.py FIELDS): a task must match every row. A list value is "any
     of"; days are whole numbers. bot_task_tabs.condition checks each value against the field."""
-    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "created_within",
+    field: Literal["status", "step", "type", "assigned_to", "asked_by", "waiting_on", "needs", "created_within",
                    "updated_within", "done_within", "due", "label"]
     value: int | str | list[str]
 

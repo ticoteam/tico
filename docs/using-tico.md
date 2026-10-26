@@ -37,9 +37,10 @@ If you manage the bot, you see a pencil at the top right of its rail. The bot ca
 1. Choose the pencil. The rail switches to edit mode with **Cancel** and **Done** at the top.
 2. Drag a section by its handle to move it, use its eye to hide or show it, and drag its bottom edge to set how tall it may grow (**Reset** goes back).
 3. Drag a tab to reorder it. Choose **+** to add a tab, or choose a tab to edit it: its **Name**, **Show count** and its conditions, including **Needs You**, **Doing** and **Blocked**. **Reset to default** restores each of those tabs’ conditions.
-   A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Waiting on**,
+   A task shows in the tab only when it matches every condition: **Status**, **Step**, **Assigned to**, **Asked by**, **Type**, **Needs**, **Waiting on**,
    **Created**, **Updated** or **Done within** a number of days, **Due** (overdue or within days) and **Label**.
-   **Needs You** defaults to **Waiting on Me** and also shows this bot’s approvals and questions for you.
+   **Needs You** defaults to **Needs: You** (assigned to you, or waiting on you) and also shows this bot’s approvals and questions for you.
+   The org chart number always counts everything the bot needs from you; changing a tab’s conditions does not change that number.
    **Blocked** includes **Waiting on Someone else**, so its default does not repeat tasks waiting on you.
    **Me** and **Others** mean whoever is looking, and a tab only lists tasks that person may read. **Delete** removes the tab.
 4. Choose **Done** to save it all at once, or **Cancel** to drop the changes.

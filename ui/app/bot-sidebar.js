@@ -281,13 +281,13 @@ function botSidebarBind(slug) {
 
 // ---- a tab's pop-up: Name, Show count, its rows (a filter's), Delete and Save. Nothing else.
 const BOT_FILTER_FIELDS = [['status', 'Status'], ['step', 'Step'], ['assigned_to', 'Assigned to'], ['asked_by', 'Asked by'],
-  ['type', 'Type'], ['waiting_on', 'Waiting on'], ['created_within', 'Created within'], ['updated_within', 'Updated within'],
+  ['type', 'Type'], ['needs', 'Needs'], ['waiting_on', 'Waiting on'], ['created_within', 'Created within'], ['updated_within', 'Updated within'],
   ['done_within', 'Done within'], ['due', 'Due'], ['label', 'Label']];
 const BOT_FILTER_STATUSES = [['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['review', 'In review'], ['ready', 'Ready'],
   ['done', 'Done'], ['closed', 'Closed'], ['declined', 'Declined']];
 const BOT_FILTER_WAITING = [['any', 'Anyone'], ['person', 'A person'], ['bot', 'A bot'], ['me', 'Me'], ['not_me', 'Someone else']];
 const BOT_FILTER_START = {status: ['open', 'doing', 'waiting'], step: '', assigned_to: 'this_bot', asked_by: 'this_bot', type: ['general'],
-  waiting_on: 'any', created_within: 7, updated_within: 7, done_within: 14, due: 'overdue', label: ''};
+  needs: 'you', waiting_on: 'any', created_within: 7, updated_within: 7, done_within: 14, due: 'overdue', label: ''};
 function botFilterParties(slug, others) {
   const people = (S.people || []).map(p => [actorOf('human', p.id), p.id === S.me?.id ? `${p.name || p.id} (you)` : p.name || p.id]);
   const bots = (S.emps || []).map(e => [`bot:${e.name}`, e.display_name || e.name]);
@@ -307,6 +307,7 @@ function botFilterValueHTML(slug, row, at) {
       `<optgroup label="${esc(t.name)}">${options((t.steps || []).map(s => [s.id, s.name]), [].concat(v)[0])}</optgroup>`).join('')}</select>`;
     case 'assigned_to': case 'asked_by':
       return `<select ${name} aria-label="Who">${options(botFilterParties(slug, row.field === 'assigned_to'), v)}</select>`;
+    case 'needs': return `<select ${name} aria-label="Who">${options([['you', 'You (assigned to you, or waiting on you)']], v)}</select>`;
     case 'waiting_on': return `<select ${name} aria-label="Who">${options(BOT_FILTER_WAITING, v)}</select>`;
     case 'due': return `<select data-cond-due="${at}" aria-label="Due">${options([['overdue', 'Overdue'], ['within', 'Within']], v === 'overdue' ? 'overdue' : 'within')}</select>${
       v === 'overdue' ? '' : ` <input type="number" ${name} min="0" max="3650" step="1" value="${esc(v)}" aria-label="Days" required> days`}`;
@@ -353,6 +354,8 @@ async function botFilterOpen(slug, at) {
         <button type="button" class="ghost bot-cond-x" data-cond-remove="${i}" aria-label="Remove condition" title="Remove">✕</button></li>`).join('')}</ol>
       <button type="button" class="ghost bot-cond-add" data-cond-add>+ Condition</button>`}
       ${draft.builtin === 'needs' ? '<p>Also shows this bot’s approvals and questions for you</p>' : ''}
+      ${draft.builtin === 'needs' && JSON.stringify(draft.conditions) !== JSON.stringify(BOT_TASK_DEFAULT_CONDITIONS.needs)
+        ? `<p>The org chart number still counts everything ${esc(empName(slug))} needs from you, not this tab.</p>` : ''}
       ${BOT_TASK_DEFAULT_CONDITIONS[draft.builtin] ? '<button type="button" class="ghost" data-filter-reset>Reset to default</button>' : ''}
       <div class="row bot-filter-actions"><button type="button" class="ghost" data-filter-delete${BOT_EDIT.tabs.length > 1 || adding ? '' : ' disabled'}>Delete</button><span class="spacer"></span>
         <span class="err" data-filter-error role="alert"></span><button type="submit" class="primary">Save</button></div></form>`;

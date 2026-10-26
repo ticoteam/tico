@@ -30,7 +30,7 @@ const OTHERS = {name: 'Assigned to Others', show_count: true, conditions: [{fiel
 const DEFAULT = [{builtin: 'needs', name: 'Needs You', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
                  {builtin: 'blocked', name: 'Blocked', show_count: true}, OTHERS];
 const CONDITIONS = {
-  needs: [{field: 'waiting_on', value: 'me'}],
+  needs: [{field: 'needs', value: 'you'}],
   active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
   blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
 };
@@ -40,6 +40,7 @@ const WIDGETS = ['tasks', 'updates', 'files', 'routines'].map(id => ({id, hidden
 const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'bot:' + bot) && tab.conditions.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
+  if (field === 'needs') return (t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
   if (field === 'waiting_on') return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana' : true);
   if (field === 'type') return value.includes(t.type_id || 'general');
   if (field === 'asked_by') return t.requester === who;
@@ -61,6 +62,7 @@ async function open(browser, viewport, colorScheme, server) {
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
+    if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', path: uiFile('vendor/fonts/material-symbols-outlined.woff2')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
@@ -321,6 +323,8 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
       assert.equal(await dialog.locator('[data-cond-value="2"]').inputValue(), 'not_me');
+      await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({path: `/tmp/dev511-blocked-${scheme}-${viewport.width}.png`});
       await dialog.locator('[data-cond-remove="2"]').click();
       await dialog.locator('[data-cond-value="1"][value="waiting"]').uncheck();
       await dialog.locator('[data-cond-value="1"][value="open"]').check();
@@ -340,8 +344,8 @@ async function open(browser, viewport, colorScheme, server) {
       await dialog.getByRole('button', {name: 'Save'}).click();
       await pill('Needs You').click();
       await dialog.waitFor();
-      assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'waiting_on');
-      assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'me');
+      assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
+      assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
       assert.ok((await dialog.innerText()).includes('approvals and questions for you'));
       await dialog.getByRole('button', {name: 'Save'}).click();
       await rail.locator('#bot-sidebar-done').click();
@@ -351,6 +355,7 @@ async function open(browser, viewport, colorScheme, server) {
       assert.equal(await widget('files').isHidden(), true);
       assert.deepEqual(await order(), ['tasks', 'routines', 'files', 'updates']);
       assert.equal(await widget('updates').locator('.rail-sec').evaluate(el => getComputedStyle(el).maxHeight), updatesHeight + 'px');
+      await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}.png`});
 
       // Next visit: drawn from this browser's copy at once, while the server's answer is still on its way.
@@ -369,6 +374,7 @@ async function open(browser, viewport, colorScheme, server) {
       // The edit view, for the record.
       await goto('#/bot/lead');
       await rail.locator('#bot-sidebar-edit:not([hidden])').click();
+      await page.evaluate(() => document.fonts.ready);
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}-edit.png`});
       await context.close();
     }
