@@ -201,6 +201,17 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
 
 
+def test_a_queued_reset_deferral_does_not_create_a_held_review(api):
+    """A known-empty retry deferred to the primary reset is queued work, not an unresolved held attempt (Dev 545)."""
+    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='queued' WHERE id=?", (attempt['job_id'],))
+    assert sweep(api) == []
+    assert job_state(api, attempt['job_id']) == 'queued'
+    assert reviews(api) == []
+    assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
+
+
 def task_held(api, private=False):
     """ops's run on a task stops partway after a shell call; a verdict queues behind it on that task, and a notice on
     another task of ops queues too."""
