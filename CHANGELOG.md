@@ -7,6 +7,31 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.13] - 2026-10-26
+
+### Added
+- **Post an update on a goal.** Add a check-in to a live goal from its owner's Goals panel. Its colour follows the goal's measures when they set one, while your words stay with the goal ([Goals](docs/goals-and-kpis.md)).
+- **See task automation in Settings.** Settings > Tasks groups automatic actions by task stage and type, with each rule's scope, wake behavior, state and recent usage. Edit a rule or switch it on from the list ([Tasks](docs/tasks.md#task-settings)).
+
+### Changed
+- **Managers can work on their reports' tasks.** Task access follows the current org chart, including managers above a report and department groups. Private person-only tasks and approval, verdict, comment and publishing rights keep their own rules ([Tasks](docs/tasks.md)).
+- **Sub-goals get colours from their measures.** A sub-goal can receive an automatic colour without a person setting one first; personal colours and existing checks still take precedence ([Goals](docs/goals-and-kpis.md)).
+- **Archived measures remain visible on linked goals.** Goal panels show archived KPIs as muted links and explain what they no longer count toward. Restoring or archiving a KPI recalculates linked goals ([Goals](docs/goals-and-kpis.md)).
+- **A person can waive a Dev ticket's QA step.** The ticket owner or a manager can record a reasoned waiver for one exact pull-request revision. The waiver does not count as a QA pass ([Tasks](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Held and dismissed runs show their decision.** The run page and Pipeline identify who made the decision, when and why ([Sessions](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Quarantine stops a running turn with its reason.** Its jobs stay owned and can resume when the bot is active again ([How it works](docs/how-it-works.md)).
+- **Reviewers prefer another model family when available.** If no other provider or family can run, a review can use the author's provider instead of waiting ([Tasks](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Recruit links to LinkedBots and names rehearsal mode.** The third-party options link opens LinkedBots, and the builder explains when `TICO_REHEARSAL=1` turns off HQ suggestions ([Recruit a bot](docs/onboarding.md)).
+
+### Fixed
+- **Blocked checks now explain the task hold.** A Review or QA check that waits or is blocked by another task puts its Dev ticket in Blocked with the reason. A matching open blocker ask is reused instead of sending another request ([Blocked tasks](docs/tasks.md#numbers-and-the-order-within-a-step)).
+- **Green checks clear review holds.** Fresh all-green pull-request checks can satisfy Review questions and clear a review-gate hold ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Review moves retry on the right board.** A refused cross-board move retries on its destination board, and an expired hold clears when no retry can resolve it ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Actionable notices release stale task deferrals.** Due, snooze, resume and completed-check notices can restart an Open task held only by an outdated next-run deferral; real waits still hold it ([Picking work back up](docs/tasks.md#picking-work-back-up)).
+- **Subtask results reach a Waiting parent sooner.** An unrelated open subtask no longer delays a result the parent is waiting for; other waits still apply ([Subtasks and PRs](docs/tasks.md#subtasks-and-pull-requests)).
+- **Review results survive varied note formats.** Valid verdicts in notes, comments and final replies are recognized for the current review cycle. A person can also finish their own check-titled child task without a review verdict ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Status pages skip finished company tasks.** They continue to include live tasks and private tasks while avoiding unnecessary reads of old completed work ([Status](docs/health-monitor.md)).
+
 ## [0.4.12] - 2026-10-26
 
 ### Added
