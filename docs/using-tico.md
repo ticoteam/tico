@@ -250,6 +250,13 @@ ordinary task states and needs a completion result. Close it with
 **Run now** on the task to start it sooner. Deferred does not mean delayed forever: the stalled-task
 check can wake an idle bot after 30 minutes when no other work or Routine will move it.
 
+When a deferred task moves from Waiting back to Open, its existing queued notice can start its own run.
+That reopening supersedes an earlier next-run choice. A later deferral, a stored resume condition,
+snooze or prerequisite still holds it. A run already carrying it finishes first; if a run picked it up
+and worked it after the reopening, the queued notice does not start duplicate work. Health shows
+`task_next_run` while a deferral or carrier holds it. The normal automatic-start switch and task cap
+still apply, and only the requester, a person or BotOps may choose **Run now** early.
+
 The task shows where it stands, under **Quiet work** on the task and as `quiet` in `hub task show`:
 
 - **Eligible**: the bot's next run carries it.

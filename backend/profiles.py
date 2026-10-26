@@ -5,7 +5,7 @@ bot-scope built-in wake rows (rules.PROFILE_RULES) and a few numbers and flags:
 
     profile    wakes now                               everything else      pulls open tasks  sweeps  takes
     doer       people, hand-offs, asks, results        batched 15 min       yes               yes     any
-    reviewer   its review/QA request, verdicts, people note                 its children      no      review/QA subtasks
+    reviewer   its review/QA request, verdicts, people note                 review/QA tasks   no      review/QA requests
     lead       people, escalations, approvals, tickets daily digest         no                no      any
                it asked for that ended
     responder  people                                  note                 no                no      none
@@ -43,8 +43,11 @@ MAX_SECONDS = 7 * 86400
 TOKEN_SAVER_SECONDS = 30 * 60           # a window this long or longer is what older clients call Token saver
 DIGEST_HOUR = 9                         # a lead's digest, in the team's time zone
 MATERIALISED = "profile"                # `created_by` of the rows a custom profile copied into the rules table
-# A review, QA or Security request is a subtask titled so, filed under the ticket it checks (backend/review_gate.py).
-REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Post Release QA|Security)\b", re.I)
+# Traditional gate requests require a parent; explicit release QA can cover an entire release.
+REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Security)\b", re.I)
+RELEASE_QA_TITLE = re.compile(
+    r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
+ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -185,16 +188,25 @@ def sweeps_on(c, bot):
 
 
 # ---------------------------------------------------------------------------------------------------- the tasks it takes
-def is_review_task(c, row):
-    """A review, QA or Security request: a subtask of someone else's ticket that sits in a review step
-    (auto_tasks.review), or one titled so under a parent."""
+def is_review_task(c, row, *, parent_id=None):
+    """One classification for creation, assignment, pull, wakes and Health.
+
+    Explicit release QA may be top-level. Gate and acceptance requests need a parent;
+    an untitled delegated child also qualifies while its parent is in a review/QA step.
+    `parent_id` lets creation check the same rule before the child row exists.
+    """
     from . import auto_tasks
-    if auto_tasks.review(c, row):
+    title = str(row.get("title") or "").strip()
+    if RELEASE_QA_TITLE.match(title):
         return True
-    return bool(REVIEW_TITLE.match(str(row.get("title") or "").strip()) and H.TR.parent_of(c, row["id"]))
+    parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
+    if not parent_id:
+        return False
+    return bool(REVIEW_TITLE.match(title) or ACCEPTANCE_TITLE.search(title)
+                or auto_tasks.review(c, row, parent_id=parent_id))
 
 
-def refusal(name, config, actor, title=None, parent=None, routine=False):
+def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):
     """(rule, why): the refusal rule and the words saying what to do instead, when the bot's profile means it takes no
     such task; None when it does. A Responder is refused like a synced bot (`external-bot`).
     A task its watcher (Tico's own actor) opens or a routine runs is its own work; a Responder takes no task at
@@ -209,10 +221,10 @@ def refusal(name, config, actor, title=None, parent=None, routine=False):
     if actor == H.KEEPER or routine:
         return None
     if takes == "review":
-        if parent and REVIEW_TITLE.match(str(title or "").strip()):
+        if is_review_task(c, {"title": title, "owner": owner}, parent_id=parent):
             return None
-        return ("profile", f"{name} is a reviewer: it takes review and QA requests only, as a subtask titled 'Review 1:', "
-                "'Review 2:', 'QA:' or 'Security:' under the ticket it checks. File this that way, or give the task to a "
+        return ("profile", f"{name} is a reviewer: it takes review and QA requests only: explicit release QA, "
+                "or review, QA and acceptance subtasks under the ticket they check. File this that way, or give the task to a "
                 f"bot that does the work. If {name} should do ordinary tasks, change its profile.")
     return ("profile", f"{name} is a monitor: its watcher files its tasks. Give this task to a bot that does the work, "
             f"or change {name}'s profile.")

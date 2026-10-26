@@ -9,10 +9,6 @@ from jwt.exceptions import InvalidKeyError
 from . import test_receipts
 
 REVIEW = re.compile(r"^Review [12](?:\b|:)", re.I)
-# A request to a reviewer, to QA or to Security: a subtask of the ticket, titled by what it asks.
-GATE_CHILD = re.compile(r"^(?:Review [12]|QA|Post Release QA|Security)(?:\b|:)", re.I)
-
-
 # The children whose owners only review: they comment and give a verdict, and never move the ticket. QA is not one: QA
 # sends a ticket back to QA Fixes and on to Pending Release and Done (docs/software-factory.md).
 REVIEWER_CHILD = re.compile(r"^(?:Review [12]|Security)(?:\b|:)", re.I)

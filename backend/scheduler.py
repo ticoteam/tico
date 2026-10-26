@@ -93,7 +93,7 @@ def run_kpi_asks(store, auth, at, failures=None):
     with SR.recording(store, "kpi_asks", failures, "goal_asks") as run:
         from . import goal_asks
         with store.transaction() as c:
-            found = goal_asks.sync(c, auth.owner_id(c), at)
+            found = goal_asks.sync(c, auth.owner_id(c), at, goal_asks.readers(c, auth))
         run.did(SR.words_of({"asked": (found or {}).get("created") or [],
                              "closed": (found or {}).get("closed") or []}, none="Nothing to ask"))
 
