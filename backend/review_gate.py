@@ -215,7 +215,9 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
     if H.is_human(actor) or not engineering(c, row):
         return
     prs = judged_links(c, row)
-    if not prs:
+    # A board with no Review 1 step and no review asked has no slot to approve anything: an unknown or unreadable
+    # head would refuse a move nothing judges.
+    if not prs or not slots(c, row):
         return
     heads = {}
     for pr in prs:
