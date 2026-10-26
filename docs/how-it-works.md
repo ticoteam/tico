@@ -51,7 +51,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a `lane` (`company` or `product`), a `rank` in its owner's queue, labels, links (a pull
   request first), and relations to other tasks (a parent, blockers, related, duplicates, follow-ups). States: `open`, `doing`,
   `waiting`, `review`, `ready`, `done`, `closed`, `declined` (`review` and `ready` belong to the
-  product lane). The owner marks it `done`; only the requester, a person who can edit it, or the person it waits on closes it. Every
+  product lane). The owner marks it `done`; only the requester or owner, a party to a task above it, a current delegate, or someone who may move tasks closes it. Every
   task has a comment thread, on the record with the author.
 - **Message** — one line in a conversation. Kinds: `say`, `ask`, `answer`, `notice`, `steer`. A message sent while
   its bot answers in the same conversation goes into that turn when the harness can steer (`steer` in its manifest)
@@ -261,13 +261,18 @@ that only read) and consumed no approval, is resumed once, each with a note in t
 record (`job.auto_reconcile` in the event log). A busy bot's runs are settled too: the scheduler waits only
 while a live run of the bot is on the same task (or the same chat, or the same task session). An operator can choose
 **Try again** or **Don’t retry** in Stopped runs; while such a run is still live, Tico saves the choice and applies it
-when that run ends. When the runner itself reported the run interrupted
+when that run ends. Each stopped run is one line in **Needs you**, with its own **Try again** and **Don’t retry**
+buttons and a plain reason: the computer restarted, a usage limit, a busy AI service, a computer that stopped answering,
+or a person's Stop. A restart or a limit is not a bug. The button Tico recommends comes first. When the runner itself reported the run interrupted
 (it restarted), such a run resumes at once; when the same computer picks it up again it continues
 the same provider session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 Other runs stay *owner review needed*, because Tico cannot see what a
 tool did on the Mac: BotOps is given the review unless the task is private, Settings names the held task and its owner to those
 who may read that task, the review lists each tool call the run made, and the bot's operator or
 BotOps resumes or dismisses it after checking what already happened. Nothing is lost or re-sent.
+Each held run keeps an open review task until someone decides. After two hours with no decision, the run shows on
+**Health** and in the bot operator's **Needs you**. When the run is resumed, queued work on the same task joins its
+turn instead of staying a separate queued job.
 While such a review is owed the bot's tasks and routines wait, but a human's own chat
 messages still run: nothing about them is uncertain.
 

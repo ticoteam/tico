@@ -154,6 +154,7 @@ hub task wait <task> --on pr:<url> --remove                                # tak
 
 The task shows it ("Waits for PR #943 to merge"). When the pull request merges or the release is published (the
 GitHub webhook), the owner gets one wake; the task it came from keeps its own step, and nothing is closed or moved.
+The woken task resumes the working step it had.
 A wait made after the milestone is woken once by the minute sweep instead, and a merge or release whose webhook
 never arrived (the server was down) is checked with GitHub every few minutes, in repositories the GitHub App reaches. Replays and the sweep never wake it twice. `release:` takes the server's release repository unless
 named (`release:<owner>/<repo>@v0.3.64`), and a version tag only (major.minor at least). Who may add or remove a
@@ -215,7 +216,8 @@ item's `from_person` and `pressing` fields carry the same facts.
 A bot may do this for its own task, including a task it requested itself. The blocker must exist
 and be accessible; a finished blocker does not justify waiting. An unanswered question, an open
 child task, a pending approval or a person named with `--on` can also justify waiting. Finishing a blocker clears the dependency
-and wakes the waiting bot. **Waiting** does not mean a person must review the code.
+and wakes the waiting bot. A task cannot be blocked by its own parent or any ancestor, whichever was created first;
+the link is refused. **Waiting** does not mean a person must review the code.
 
 When another bot must act, file a subtask for it; finishing the subtask wakes the waiting task:
 
@@ -511,6 +513,12 @@ work, not permission for the assignee bot to accept its own result.
 Completed work does not block a new task with the same requester, owner and title; unfinished
 duplicates are still refused, ignoring case and extra spaces, on create and on rename alike.
 
+A person can close a task only if they are its requester or owner, a party to a task above it, a current delegate,
+or someone who may move tasks. A bot cannot reassign a task a person has closed. Marking a closed task Done or Declined
+clears its close time. For a Done task, the 24-hour close rule runs again from that completion. Opening a task refreshes
+its GitHub links without changing its activity time or restarting that 24-hour timer; a real change on GitHub is
+recorded in the task's history.
+
 ## Types bots work on
 
 Every bot can read company-visible tasks subject to existing bot activity restrictions. Types
@@ -564,7 +572,8 @@ Numbers range from 1 to 999999999; an exhausted sequence refuses a new number wi
 A mover can also make a custom type **steps only**: its tasks are finished or brought back only by
 moving to a step. Closing, declining, reopening or finishing one directly (`close`, or a `status`
 without a `step` that enters or leaves done, closed or declined) is refused (`422 kind`) for every
-person and bot, and the task window offers no Done, Close or Reopen on them. A task that should not
+person and bot, and the task window offers no Done, Close or Reopen on them. Decide and Needs you offer none of those either: Decide
+shows **Open to move it**. A declined one stays on its Declined step and off its requester's Needs you. A task that should not
 be on the board is deleted instead. Working statuses still change without a step (a bot's ask sets
 waiting), and filing a task onto the type and the keeper's own automation are unaffected. Such tasks
 are not asked "Still wanted?", their goal asks the bot to move them to a step and a met goal does not finish them, and Needs you says to move them
@@ -1091,7 +1100,8 @@ can publish again. Bots cannot publish a private task, including when acting for
 Bot-requested private work stays private until a future explicit human publication mechanism
 exists. Mentions, administrators, managers, parent ownership and delegations grant no access.
 Reassigning a private task gives the new assignee access and removes the previous assignee's
-future access unless they remain its requester. Reassignment never clears Private.
+future access unless they remain its requester. Reassignment never clears Private. Making a task private also makes
+every task below it private, and attaching a task under a private parent makes that task's own subtasks private.
 
 ### A private task with no person on it: its guest
 
@@ -1219,7 +1229,8 @@ service key's mapping, and its conversation with every message in it. Nothing re
 leaves lists, boards, search and every bot's context at once. Its number stays with it, so no new
 task takes it. Restoring puts the same rows back; a link to a task that is still deleted comes back
 unset, and the answer says which. Whoever deleted the task, its requester, or anyone who may move any
-task can restore it.
+task can restore it. A task filed with a check model deletes and restores with it. If its type was deleted while the
+task was in the trash, a restore puts the task on General with no step, and the answer lists `type` among its unlinked fields.
 
 A task carrying work is refused (`409 has_work`, close it instead), so deleting never touches what
 someone did: a bot turn, a job, an approval, a bot's own file, a routine occurrence, a meeting

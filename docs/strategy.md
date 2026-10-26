@@ -98,7 +98,9 @@ If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapp
 A failed bet move also reloads the list; check the order before trying again.
 
 The CEO Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
-any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
+any of the summary, the vision, sections and bets. Its card shows each change as **Now** and **Proposed** rows, and its
+yes button says what it does: **Add to draft** writes those into the draft as the owner, and **No, leave it** drops
+it. A card whose rows the draft already holds says "Your draft already says this." and has one **Got it** button. Nothing is
 published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
 owner's level choice for the CEO Bot is on [Your CEO Bot](ceo-bot.md#the-three-levels).
 
@@ -193,7 +195,9 @@ from it. Then:
 - **A `strategy.published` routine event**, subject `v{n}`, for a routine that should run at once
   ([Routines](routines.md)).
 - **One realignment card** in the owner's Needs you, when a bet was retired or its statement changed: it lists the
-  goals tied to those bets, with **retire goal**, **move to bet N** or **keep** for each. Bot instructions that still
+  goals tied to those bets, with **Keep as it is**, **Retire goal** or **Move to** a bet for each. One button names
+  what those choices change, such as **Retire 2 goals, move 1**, or **Keep all 3 goals as they are** when every goal
+  stays. Nothing changes until you press it, and there is no Reject. Bot instructions that still
   say the old positioning are the owner's to fix for now.
 
 ## The fit check

@@ -56,7 +56,8 @@ For anything across the team, ask your own external agent: **Connect an external
 your email) gives it a token and Tico's MCP ([Connect an external agent](connect-an-agent.md)).
 
 **Why is Chat still sending?**
-**Unreleased.** While your message is sending, **Send** shows a spinner and stays disabled to prevent another press.
+While your message is sending, **Send** shows a spinner and stays disabled to prevent another press. The press
+shows at once, and **Send** and **Stop** have a larger tap area on a phone.
 After about five seconds, **Still sending…** appears by the message box.
 If Tico retries on a slow connection, the line says **Still sending… the connection is slow, trying again.**
 When the send finishes, the spinner and line disappear.
@@ -65,8 +66,21 @@ When the send finishes, the spinner and line disappear.
 
 *Slow-send example with synthetic message text.*
 
+**Why did Chat say Not sent?**
+Tico names the reason in the message. A refused send keeps your draft and its files, so fix the cause and press **Send** again:
+
+- The attachments are too large. Remove or shrink a file and try again.
+- This message is too long. Shorten it and try again.
+- You've been signed out. Sign in again, then try again.
+- This bot is unavailable. Refresh the page or choose another bot.
+- The server is busy (HTTP 429 or 503). Try again shortly.
+- The server could not send this message (any other 5xx). Try again shortly.
+- Otherwise, the server's reason, or "The server refused this message. Try again."
+
+When the connection drops, Tico says **Offline or connection lost. Your message will send by itself when you are back online.**
+
 **What should I do if Chat says Not confirmed?**
-**Unreleased.** A text send without attachments has a 30-second deadline, including connection retries and sign-in checks.
+A text send without attachments has a 30-second deadline, including connection retries and sign-in checks.
 If it times out, Tico says **Not confirmed** and **It may still arrive.** Your draft stays in the message box.
 
 1. Leave the draft unchanged.
@@ -101,7 +115,7 @@ After signing in again or regaining access, press **Send** with the draft unchan
 The expiry guard and deliberate draft changes described above still apply.
 
 **Do file uploads have the same deadline?**
-**Unreleased.** Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
+Messages with attachments have no 30-second deadline: a large upload on a slow connection can take minutes.
 The slow-send line says **Still sending… uploading the file.** or gives the file count.
 If Tico retries the upload, the line adds **trying again**.
 

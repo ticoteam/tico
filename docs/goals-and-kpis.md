@@ -231,6 +231,12 @@ a Why line", never one per goal. It closes by itself once every one is settled.
 A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
 their own click) or rejects it; confirming makes the change as that human.
 
+On a goal or KPI card, the yes button says what it does: **Add measure** for a new KPI, **Use this target**,
+**Use new definition**, **Use new wording**, or **Got it** for a flag. **No, leave it** is the no button. An **Add a KPI**
+card reads "Add the measure *name* to *goal*", then what the measure counts, its target or "No target yet", and a warning
+when it has no data source. The target is optional: **Set a target (optional)** opens the target fields, and blank fields
+send no target.
+
 | Kind | Payload | Confirmed by |
 |---|---|---|
 | `goal_wording` | `title`, `body`, `bet_id` | the goal's owner |
@@ -313,6 +319,12 @@ Someone with no goal opens on a new one; the team line opens the team goal. The
 top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
 waiting for your confirmation. Each line links to its task. Initial page load makes two requests, the tree and Needs you; the CEO Bot panel and
 the historical KPI view load only when opened.
+Each owner's panel and the bot page's Goals card have **Finished (N)** under the live goals, collapsed. It lists the goals
+that are done or dropped, newest first, with each one's Done or Dropped, its date and who set it. It shows the latest 20;
+**Show all** lists the rest. Opening a row shows its measures, check-ins and colour history, read only. Whoever may set a
+goal's colour sees **Reopen** on its row: pick a colour (or **Let CEO Bot set it**), write one line saying why it is back,
+and press **Reopen**. After a goal is removed (clearing its title on the bot page, or **Remove** on the Goals page), its
+**Goal removed** message has **Undo**, which restores the goal as it was, including its colour and note.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
 
