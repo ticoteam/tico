@@ -758,9 +758,9 @@ class Auth:
         return False
 
     def task_sql(self, c, who, delegations="task_delegations", unreadable=None):
-        """Company tasks are readable subject to bot activity controls; private tasks have two parties, and a guest.
+        """Company tasks respect bot activity controls; private tasks admit parties, their managers and a guest.
 
-        Ownership, type-wide work, ancestry and delegation never widen private visibility.
+        Type-wide work, task ancestry and delegation never widen private visibility.
         `delegations` stays accepted for compatibility with the guarded SQL caller.
         """
         self.task_snapshot(c)
@@ -768,13 +768,18 @@ class Auth:
             return "0"
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
         clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
+        from .task_rights import subjects, private_subjects
+        inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
+        parties = A.qlist(sorted(subjects(c, who.actor)))
         me = A.q(who.actor)
         # A private task's guest (hubdb.task_reach) reads it as its two parties do.
-        audience = (f"({me} IN (owner,requester) OR (coalesce(private,1)<>0 AND guest={me}) "
-                    f"OR (coalesce(private,1)=0 AND ({clear})))")
+        audience = (f"(owner IN {inherited_private} OR requester IN {inherited_private} "
+                    f"OR (coalesce(private,1)<>0 AND guest={me}) "
+                    f"OR (coalesce(private,1)=0 AND (owner IN {parties} OR requester IN {parties} OR ({clear}))))")
         if who.task_actor:
             actor = A.q(who.task_actor)
-            audience += f" AND (coalesce(private,1)=0 OR {actor} IN (owner,requester) OR guest={actor})"
+            carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
+            audience += f" AND (coalesce(private,1)=0 OR owner IN {carried} OR requester IN {carried} OR guest={actor})"
         return audience
 
     def operator(self, c, who, bot):
@@ -852,6 +857,13 @@ class Auth:
         declared = json.loads(row["config_json"]) if row["config_json"] else {}
         mode = declared.get("bot_contact", "open")
         manager = H.bot_actor(row["reports_to"] or declared.get("reports_to") or "")
+        # Task comments/questions inherit a party's authority through the whole chart;
+        # this does not grant chat, credentials or other bot-wide access.
+        if task_id and kind in ("comment", "question"):
+            task = H.task(c, task_id)
+            if task and H.task_participant(c, sender, task):
+                if H.task_represents(c, sender, "bot:" + slug) and sender != "bot:" + slug:
+                    return True
         if mode == "tasks":
             return kind == "task" or sender in (manager, "bot:" + H.FLEET_MAINTAINER)
         if mode != "replies":
@@ -1013,7 +1025,7 @@ class Auth:
         if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner"], row["requester"])
-        if who.actor not in participants and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
+        if not H.task_participant(c, who.actor, row) and not (H.task_private(c, row) and H.task_private_readable(c, who.actor, row)):
             # A party to a task, or a private task's guest, always sees it; anyone else needs Read on every bot it
             # involves.
             bots = [H.actor_id(a) for a in participants if str(a).startswith("bot:")]

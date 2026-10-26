@@ -41,6 +41,7 @@ CAUSE = contextvars.ContextVar("wake_cause", default="")
 # Never filtered. Each entry: (key, what it is). `always_wakes` returns the key that matched.
 ALWAYS_WAKE = (
     ("person", "a person's message or comment, or a notice of a person's own act (an approval, a step move)"),
+    ("manager", "a task comment from a party’s org-chart manager"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
     ("approval", "an approval decided, withdrawn or asked about, or a structured question"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
@@ -100,6 +101,12 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
     cause = CAUSE.get() if cause is None else cause
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
         return "person"
+    if refs.get("comment") and str(actor).startswith("bot:") and str(target).startswith("bot:"):
+        from . import hubdb as H
+        row = H.task(conn, H._task_ref(refs.get("task")) or "")
+        if (row and actor not in (row["owner"], row["requester"])
+                and H.task_participant(conn, actor, row)):
+            return "manager"
     if kind in ALWAYS_KINDS:
         return "ask"
     if set(refs) & ALWAYS_REFS:

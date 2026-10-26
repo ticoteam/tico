@@ -78,6 +78,7 @@ from pathlib import Path
 from .batch_work import isolated
 from . import idempotency_messages
 from . import task_relations as TR
+from .task_rights import represents as task_represents, participant as task_participant, mover as task_mover
 from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
@@ -3103,7 +3104,7 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
-    """A private task is read by its requester and owner, and by its guest when it has one (task_reach)."""
+    """Private tasks are read by their parties, their org-chart managers, and their one guest (task_reach)."""
     if not row:
         return False
     row = dict(row)
@@ -3114,6 +3115,10 @@ def task_private_readable(conn, actor, row):
         if not row:
             return False
     if actor in (row["owner"], row["requester"]):
+        return True
+    from .task_rights import private_subjects
+    inherited = private_subjects(conn, actor)
+    if any(row[k] in inherited for k in ("owner", "requester")):
         return True
     if "guest" not in row:
         row = _one(conn, "SELECT guest FROM tasks WHERE id=?", (row["id"],)) or {}
@@ -3146,8 +3151,8 @@ def task_reach_refusal(conn, actor, row, person):
                 f"hand this to {actor_id(row['guest'])}, or ask a person on the task to make it company-visible")
     if not bot_only(row):
         return "Private task content stays with its requester and current owner"
-    if actor != row["owner"]:
-        return "Only the bot that owns a private task brings a person into it"
+    if not task_represents(conn, actor, row["owner"]):
+        return "Only the bot that owns a private task or its managers bring a person into it"
     for parent_id in TR.ancestors(conn, row["id"]):
         parent = task(conn, parent_id)
         if parent and task_private(conn, parent) and not bot_only(parent) and not task_private_readable(
@@ -3834,9 +3839,9 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     if not changed:
         return False
     slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
-    if actor not in (row["owner"], row["requester"]) and type_manager(conn, row) != slug:
+    if not task_participant(conn, actor, row) and type_manager(conn, row) != slug:
         refuse(conn, actor, "label",
-               f"{slug} changes labels only on a task it owns, asked for or whose type it manages; labels on "
+               f"{slug} changes labels only on a task it owns, asked for, whose party it manages or whose type it manages; labels on "
                f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
     settings = roadmap_settings(conn)
     public = [k for k in changed if k in settings["labels"]]
@@ -4270,10 +4275,11 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
     delegated = _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                      (row["id"], actor, now()))
-    if (not mover and actor not in (row["owner"], row["requester"]) and not delegated
+    mover = task_mover(conn, actor, row, mover)
+    if (not mover and not task_participant(conn, actor, row) and not delegated
             and not task_ancestor_party(conn, actor, row) and not type_bot_works(conn, actor, row)
             and not (kind is None and task_manager_acts(conn, actor, row))):     # relations only, never pull request links
-        refuse(conn, actor, "identity", "This task is not yours to change")
+        refuse(conn, actor, "identity", "Only the owner, requester, their managers, delegates or task movers change this task")
 
 
 @private_task_write
@@ -4313,7 +4319,7 @@ def task_ancestor_party(conn, actor, row):
         parent = task(conn, parent_id)
         if not parent:
             break
-        if actor in (parent["owner"], parent["requester"]):
+        if task_participant(conn, actor, parent):
             return True
     return False
 
@@ -4323,7 +4329,7 @@ def _task_parent(conn, actor, task_id, parent_id):
     if not parent:
         refuse(conn, actor, "not-found", f"no task {parent_id} to file this under")
     _task_private_writer(conn, actor, parent)
-    if (is_bot(actor) and actor not in (parent["owner"], parent["requester"])
+    if (is_bot(actor) and not task_participant(conn, actor, parent)
             and not type_bot_reads(conn, actor, parent) and not task_ancestor_party(conn, actor, parent)
             and not _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>?",
                          (parent["id"], actor, now()))):
@@ -4662,7 +4668,9 @@ def bot_reads_task(conn, bot, row):
 
 
 def task_ask_recipient(conn, actor, row, ask):
-    target = ask.get("who") or (row["owner"] if actor == row["requester"] else row["requester"])
+    directing = actor == row["requester"] or (
+        actor not in (row["owner"], row["requester"]) and task_participant(conn, actor, row))
+    target = ask.get("who") or (row["owner"] if directing else row["requester"])
     target = resolve_actor(conn, target)
     if task_private(conn, row) and target not in (row["owner"], row["requester"]):
         refuse(conn, actor, "private", "Only the requester and assignee can receive private task questions")
@@ -4770,13 +4778,13 @@ def comment_wakes(conn, actor, row, text, *, mover=False):
     on that person; otherwise it is saved for the bot's next turn on the task."""
     if is_bot(actor):
         return not TS.snoozed(row)
-    if not (mover or actor in (row["owner"], row["requester"])):
+    if not (mover or task_participant(conn, actor, row)):
         return False
     if not any(is_bot(a) for a in (row["owner"], row["requester"], task_origin(conn, row))):
         return True
     if is_bot(row["owner"]):
         return True
-    if actor == row["owner"] and is_bot(row["requester"]):
+    if task_represents(conn, actor, row["owner"]) and is_bot(row["requester"]):
         return True
     if row.get("waiting_on") == actor:
         return True
@@ -5081,10 +5089,11 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
     if not asked or asked.get("deleted_at") or asked.get("kind") != "ask":
         refuse(conn, actor, "not-found", f"no question {message_id} on task {task_id}")
     asker, person = asked["from_actor"], asked["to_actor"]
-    if quote is None and actor != asker:
-        refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they withdraw it")
-    if quote is not None and actor != asker and not (is_bot(actor) and actor == row["owner"]) and not relay:
-        refuse(conn, actor, "identity", "only the question's asker or the task's owner bot records an answer given elsewhere")
+    if quote is None and not task_represents(conn, actor, asker):
+        refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they or their managers withdraw it")
+    if (quote is not None and not task_represents(conn, actor, asker)
+            and not (is_bot(row["owner"]) and task_represents(conn, actor, row["owner"])) and not relay):
+        refuse(conn, actor, "identity", "only the question's asker, the task's owner bot or their managers record an answer given elsewhere")
     if not _one(conn, f"SELECT 1 FROM messages m WHERE m.id=? AND {OPEN_ASK_SQL}", (message_id,)):
         refuse(conn, actor, "kind", "this question was already answered or withdrawn")
     ts = now()
@@ -5423,8 +5432,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         refuse(conn, actor, "not-found", f"no task {task_id}")
     _task_private_writer(conn, actor, row)
     if private is not None and bool(private) != task_private(conn, row):
-        if actor not in (row["owner"], row["requester"]):
-            refuse(conn, actor, "private", "Only the requester or assignee can change task privacy")
+        if not task_participant(conn, actor, row):
+            refuse(conn, actor, "private", "Only the requester, assignee or their managers can change task privacy")
         if not private and (actor != row["requester"] or not is_human(actor) or VIA.get()):
             refuse(conn, actor, "private", "Only the human requester can publish a private task")
         parent = task(conn, TR.parent_of(conn, task_id) or "")
@@ -5449,6 +5458,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                                             f"not {', '.join(beyond or ['size'])}")
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
+    mover = task_mover(conn, actor, row, mover)
     labels_only = labels is not None and not clear_size and all(v is None for v in (
         status, note, owner, due, body, lane, rank, goal_id, type, step, step_rank, number, title, private,
         waiting_on, roles, visibility, public_title, public_summary, size, verdict, verdict_head))
@@ -5466,7 +5476,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                    f"your verdict (hub task done {check['id']} --verdict approve|changes --head <sha>); the Builder "
                    "moves the ticket.")
     if not mine and not mover and actor != KEEPER:
-        refuse(conn, actor, "identity", f"{task_id} is not yours to change")
+        refuse(conn, actor, "identity", f"{task_id} is changed by its owner, requester, their managers, delegates or task movers")
     type_id = row.get("type_id") or GENERAL_TYPE
     if state_change:
         type_id, step_id, effective = _task_state(conn, actor, row, status, type, step)
@@ -5496,7 +5506,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # completion, a late note over the close note, or a hand-off to a new owner) must not undo it. A person
     # reopens a closed task; a requester bot reopens only what no person closed.
     closer = row.get("closed_by") or row["requester"]
-    if (row["status"] == "closed" and is_bot(actor) and (actor != row["requester"] or is_human(closer))
+    if (row["status"] == "closed" and is_bot(actor)
+            and (not task_represents(conn, actor, row["requester"])
+                 or is_human(closer) and not task_represents(conn, actor, closer))
             and (status is not None and status != "closed" or note is not None and note != row.get("note")
                  or owner is not None)):
         refuse(conn, actor, "close",
@@ -5507,7 +5519,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             refuse(conn, actor, "kind", f"a status is {'|'.join(TASK_STATUSES)}, not {status}")
         if status == "closed":
             refuse(conn, actor, "close", "close a task with task_close; the requester closes it")
-        if actor == row["owner"] and not is_human(actor) and status not in OWNER_STATUSES:
+        if (task_represents(conn, actor, row["owner"]) and is_bot(row["owner"])
+                and not is_human(actor) and status not in OWNER_STATUSES):
             refuse(conn, actor, "close",
                    f"the owner may set {'|'.join(OWNER_STATUSES)}, not {status}")
         if status == "ready" and is_bot(actor):
@@ -5536,7 +5549,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # stays the bot's, blocked on it, and is never itself a card in their Needs you. An open question to them on the
     # task (`hub task question`) is already that card, so the task waits on them as before.
     asked_in = None
-    if (waiting_on and is_bot(actor) and actor == row["owner"] and is_human(waiting_on)
+    if (waiting_on and is_bot(row["owner"]) and task_represents(conn, actor, row["owner"]) and is_human(waiting_on)
             and not any(a["to_actor"] == waiting_on for a in open_task_asks(conn, row))):
         said = str(note if note is not None else row.get("note") or "").strip()
         if said.startswith(BLOCKED_ON.format(name=person_name(conn, waiting_on), ask="")):
@@ -5547,7 +5560,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if number is not None and number == row.get("number"):
         number = None               # sent back unchanged
     wanted = [k for k, v in (("lane", lane), ("number", number)) if v is not None]
-    if not is_bot(actor) and labels is not None:
+    if not is_bot(actor) and labels is not None and not any(
+            is_bot(row[k]) and task_represents(conn, actor, row[k]) for k in ("owner", "requester")):
         wanted.insert(1, "labels")  # a person who is not a mover changes no label, as before
     if wanted and not mover:
         refuse(conn, actor, "identity",
@@ -5996,8 +6010,8 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
     if not value:
         return ""
     # The Needs-you item is the owner's ask: nobody else names who the owner waits on.
-    if actor != row["owner"] or not is_bot(actor):
-        refuse(conn, actor, "identity", "Only the bot that owns a task says who it waits on")
+    if not is_bot(row["owner"]) or not task_represents(conn, actor, row["owner"]):
+        refuse(conn, actor, "identity", "Only the bot that owns a task or its managers say who it waits on")
     if owner is not None and resolve_actor(conn, owner) != row["owner"]:
         refuse(conn, actor, "kind", "Hand the task over first; its new owner says who it waits on")
     if (status if status is not None else row["status"]) != "waiting":
@@ -6020,9 +6034,9 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
 
 
 def _task_party(conn, actor, row):
-    """Whether `actor` is on the task as a change to it counts (task_update): its requester or owner, a delegate it
+    """Whether `actor` is on the task as a change to it counts (task_update): its requester, owner or their managers, a delegate it
     lent its rights to for now, or a party to a task above it."""
-    if actor in (row["owner"], row["requester"]):
+    if task_participant(conn, actor, row):
         return True
     if _one(conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
             (row["id"], actor, now())):
@@ -6035,6 +6049,7 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     # A person closes a task they can edit, as task_update decides: on it (_task_party), or a mover. The person it
     # waits on may close it too: it asked them to decide, and "not now" is a decision. Reading it is not enough:
     # someone refused its status and note must not be able to end it.
+    mover = task_mover(conn, actor, row, mover)
     if is_human(actor) and not _task_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
             refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
@@ -6045,8 +6060,8 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     shipped = shipped or task_manager_acts(conn, actor, row)       # it closes with a note: the one rule below, not a mover
     if actor == TASK_MANAGER and actor != row["requester"] and not (note or "").strip():
         refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
-    if actor != row["requester"] and not is_human(actor) and actor != KEEPER and not shipped:
-        refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they close it")
+    if not task_represents(conn, actor, row["requester"]) and not is_human(actor) and actor != KEEPER and not shipped:
+        refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
 
@@ -6209,9 +6224,10 @@ def task_ask(conn, actor, task_id, body):
     row = task(conn, task_id)
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
-    if actor != row["owner"]:
-        refuse(conn, actor, "identity", "only the task owner can ask its requester")
-    if actor == row["owner"]:
+    _task_private_writer(conn, actor, row)
+    if not task_represents(conn, actor, row["owner"]):
+        refuse(conn, actor, "identity", "only the task owner or its managers can ask its requester")
+    if task_represents(conn, actor, row["owner"]):
         unanswered = unanswered_ask(conn, row)
         if unanswered:
             refuse(conn, actor, "one-question",

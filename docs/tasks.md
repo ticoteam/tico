@@ -50,7 +50,7 @@ description it was written with. The plain-English check on a title a bot writes
 numbers, no all-caps words) also applies to General tasks only, so a bot can file "#18945 (B/F)
 Fix the account page" as written. It still needs a title. A decision for a person stays on General.
 
-Whoever may change a task's other fields (its owner, its requester, the owner or requester of a task
+Whoever may change a task's other fields (its owner, its requester, their managers, the owner or requester of a task
 above it, a delegate or a mover) may also rename it. A new title gets the checks a new task's title
 would: never empty, at most 300 characters, a verb first and no internal codes on a General task for
 a person, plain English when a bot writes it on General, and no other live task between the same
@@ -59,6 +59,24 @@ new title as its subject.
 
 A linked pull request never moves a task, on any type: opening, merging or closing the PR, a
 release tag and a deploy only change the link's state. A person (or a bot) moves the task.
+
+## Managers acting on tasks
+
+A bot or person above a task's owner or requester on the org chart inherits that
+party's task permissions through the entire chain, including department groups.
+Managers can read a bot report's private tasks, change its work, manage blockers and
+links, comment, ask questions, snooze and manage the owner's worktrees. A manager's
+comment or question wakes the owner bot as a requester's does. History and comment
+authorship name the manager who acted.
+
+The two sides keep their distinct rights: an owner bot's manager can complete work;
+a requester bot's manager can close and reopen it. The existing rule protecting a
+person's closure still applies. Managers gain no rights on unrelated private tasks;
+person-only private tasks stay with their parties and guest. Managers gain
+no right to edit or delete someone else's comments or decide a named approval, and
+no new credential, sending, spending, merge or bot administration permissions.
+Publishing a private task still requires its human requester. Task types, labels
+that trigger workflows and review handoff checks retain their existing restrictions.
 
 ## Software review handoffs and QA defaults
 

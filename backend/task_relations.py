@@ -311,13 +311,14 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
 def _mine(conn, actor, row, mover):
     """task_update's gate: a party, a delegate, an ancestor's party, a type's working bot, or a mover."""
     H = _H()
-    mine = actor in (row["owner"], row["requester"]) or bool(H._one(
+    mover = H.task_mover(conn, actor, row, mover)
+    mine = H.task_participant(conn, actor, row) or bool(H._one(
         conn, "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires>? LIMIT 1",
         (row["id"], actor, H.now())))
     mine = (mine or H.task_ancestor_party(conn, actor, row) or H.type_bot_works(conn, actor, row)
             or H.task_manager_acts(conn, actor, row))
     if not mine and not mover and actor != H.KEEPER:
-        H.refuse(conn, actor, "identity", f"{row['id']} is not yours to change")
+        H.refuse(conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers")
 
 
 def _mover(conn, actor, mover):
@@ -432,7 +433,8 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
     H._task_private_writer(conn, actor, row)
     mover = _mover(conn, actor, mover)
     _mine(conn, actor, row, mover)
-    if actor not in (row["owner"], row["requester"]) and not mover:
+    mover = H.task_mover(conn, actor, row, mover)
+    if not H.task_participant(conn, actor, row) and not mover:
         _need_mover(conn, actor, "parent")
     old = parent_of(conn, child_id)
     new = str(parent_id or "").strip() or None
@@ -440,15 +442,15 @@ def set_parent(conn, actor, child_id, parent_id, mover=None, note="", private=No
         return False
     if old and not mover:
         old_parent = H.task(conn, old)
-        if old_parent and actor not in (old_parent["owner"], old_parent["requester"]):
-            H.refuse(conn, actor, "identity", "Only the parent's owner, requester or a mover can move a subtask away")
+        if old_parent and not H.task_participant(conn, actor, old_parent):
+            H.refuse(conn, actor, "identity", "Only the parent's owner, requester, their managers or a mover can move a subtask away")
     target = None
     if new:
         target = H._task_parent(conn, actor, child_id, new)
         if H.task_private(conn, target) and private is False:
             H.refuse(conn, actor, "private", "A task under a private parent stays private")
-        if not mover and actor not in (target["owner"], target["requester"]) and not H.task_ancestor_party(conn, actor, target):
-            H.refuse(conn, actor, "identity", "Re-parent under a task you own or requested")
+        if not mover and not H.task_participant(conn, actor, target) and not H.task_ancestor_party(conn, actor, target):
+            H.refuse(conn, actor, "identity", "Re-parent under a task you own, requested or whose party you manage")
     at = H.now()
     if old:
         _delete(conn, child_id, old, "parent")
@@ -503,7 +505,9 @@ def _blocker_gate(conn, actor, row, mover):
     """The owner says what its own task waits on; anyone else who may change it must be a mover (or the Task Manager,
     whose grant covers relations)."""
     _mine(conn, actor, row, mover)
-    if actor != row["owner"] and not mover and not _H().task_manager_acts(conn, actor, row):
+    H = _H()
+    mover = H.task_mover(conn, actor, row, mover)
+    if not H.task_represents(conn, actor, row["owner"]) and not mover and not H.task_manager_acts(conn, actor, row):
         _need_mover(conn, actor, "blocked_by")
 
 

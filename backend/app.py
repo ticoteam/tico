@@ -3667,8 +3667,10 @@ def create_app(settings=None):
                     raise Problem("forbidden", "This task involves a bot whose activity BotOps may not read", 403)
             else:
                 row = auth.task(c, who, task_id)
-                if who.role not in ("human", "owner") and who.actor != row["requester"]:
-                    raise Problem("forbidden", "Only a person, the task's requester or BotOps starts it early", 403)
+                if (who.role not in ("human", "owner")
+                        and not H.task_represents(c, who.actor, row["requester"])
+                        and not (who.actor != row["owner"] and H.task_represents(c, who.actor, row["owner"]))):
+                    raise Problem("forbidden", "Only a person, the task's requester, a party's manager or BotOps starts it early", 403)
                 # Running it wakes the bot: that is a request to it.
                 if str(row["owner"]).startswith("bot:") and who.actor != row["owner"]:
                     auth.require_write(c, who, H.actor_id(row["owner"]))
@@ -3752,7 +3754,7 @@ def create_app(settings=None):
             if people and not wakes_bot:
                 ask, people = H.mention_ask(body.text, people[0]), people[1:]
             if ask:
-                wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or moves
+                wake = who.role == "bot" or H.task_participant(c, who.actor, row) or moves
             else:
                 wake = H.comment_wakes(c, who.actor, row, body.text, mover=moves) or (
                     who.role == "bot" and body.needs_action)
@@ -3802,7 +3804,7 @@ def create_app(settings=None):
             from .task_review import answer_task
             task_id = auth.resolve_task(c, who, tid)
             row = auth.task(c, who, task_id)
-            wake = who.role == "bot" or who.actor in (row["owner"], row["requester"]) or mover(c, who)
+            wake = who.role == "bot" or H.task_participant(c, who.actor, row) or mover(c, who)
             return answer_task(c, auth, who, task_id, body, wake=wake)
         return mutate(request, body, work)
 
