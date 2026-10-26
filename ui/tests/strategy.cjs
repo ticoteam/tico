@@ -485,12 +485,12 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
     // After a publish retired or reworded bets: each of their goals is kept, retired or moved, sent together by one button
     // that counts what changes (no Reject); a reworded bet shows its wording before and now (Dev 533).
     {
-      const realign = (closed = []) => ({id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',
+      const realign = (closed = [], old = false) => ({id: 'p-realign', kind: 'strategy_realign', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'keeper',
         proposed_at: new Date().toISOString(), reason: 'strategy v2 retired or rewrote the bets these goals serve', closed_goals: closed,
         payload: {n: 2, goals: [
           {goal_id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', bet_id: 'b-price', change: 'retired', statement: bets()[0].statement},
           {goal_id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', bet_id: 'b-offices', change: 'rewritten', statement: 'Sell to offices through managers and agents.',
-           was: bets()[1].statement}],
+           ...(old ? {} : {was: bets()[1].statement})}],
           bets: [{id: 'b-offices', number: 1, statement: 'Sell to offices through managers and agents.'}, {id: 'b-weekly', number: 2, statement: bets()[2].statement}]}});
       const proposal = realign();
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal}]});
@@ -537,6 +537,15 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
         assert.deepEqual(again.sent.find(x => x[1] === '/proposals/p-realign')[2], {decision: 'confirm', moves: closed.length === 2 ? {} : {'g-cmo': 'keep'}});
         assert.deepEqual(again.errors, []);
         await again.page.close();
+      }
+      // A card filed before the earlier wording was carried shows the reworded bet's Now only, with no empty Before row.
+      {
+        const old = await open(browser, {route: '#/goals', needs: [{kind: 'proposal', ref: 'p-realign', owner: 'human:ana', proposal: realign([], true)}]});
+        const row = old.page.locator('#goal-needs [data-proposal="p-realign"] .strat-realign-goal').nth(1);
+        await row.waitFor();
+        assert.deepEqual(await row.locator('.prop-np-k').allInnerTexts(), ['Now']);
+        assert.deepEqual(old.errors, []);
+        await old.page.close();
       }
     }
     // A member has no Bet flag on a group.
