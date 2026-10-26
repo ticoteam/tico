@@ -220,6 +220,17 @@ def github(api, monkeypatch, head_now, diffs, posted, status=201, mint=None, mer
     return service
 
 
+def not_blocked(api, row):
+    """A refused move past review leaves the ticket where it was: what clears it is a review, not a check Tico watches."""
+    with api.app.state.store.read() as c:
+        now = H.task(c, row["id"])
+        assert now["blocked_kind"] is None and not now.get("blocked_since") and step(c, row) == "In Progress"
+        from backend import move_retry
+        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field=?", (row["id"], move_retry.FIELD)).fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.task')=? "
+                             "AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (row["id"],)).fetchone()
+
+
 DIFF = "diff --git a/x.py b/x.py\nindex {0}..{0} 100644\n--- a/x.py\n+++ b/x.py\n@@ -{1},2 +{1},2 @@\n-old\n+{2}\n"
 
 
@@ -243,6 +254,7 @@ def test_a_bot_move_reads_the_fresh_head_and_compares_changes_on_github(api, mon
     assert r.status_code == (200 if allowed else 422), r.text
     if not allowed:
         assert "Review 1 approved aaaaaaaaaaaa" in r.text and B in r.text
+        not_blocked(api, row)
 
 
 def test_the_reviews_status_follows_the_slots_on_the_current_head(api, monkeypatch):
@@ -311,6 +323,7 @@ def test_a_merged_pr_compares_from_the_merge_commits_first_parent(api, monkeypat
     assert r.status_code == (200 if same_change else 422), r.text
     if not same_change:
         assert "differs from it" in r.text
+        not_blocked(api, row)  # merged: no check Tico watches could ever clear a Blocked hold here
 
 
 def test_the_tickets_owner_never_fills_its_own_review_slot(api):
@@ -399,3 +412,28 @@ def test_a_failed_post_is_tried_again_after_a_wait(api, monkeypatch):
     github(api, monkeypatch, [A], {}, posted)
     review_status.tick(service)
     assert len(posted) == 2 and posted[-1][1]["state"] == "success" and row["id"] not in review_status._retry
+
+
+def test_a_linked_pr_with_no_known_head_refuses_instead_of_being_skipped(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        approved(c, row)
+        H.task_link(c, "human:ana", row["id"], "https://github.com/acme/app/pull/8")  # linked, never refreshed
+        with pytest.raises(Refused, match="pull/8 is not known yet") as refused:
+            H.task_update(c, "bot:cpo", row["id"], step="Pending Release")  # e.g. a rule's move, no preflight
+        assert refused.value.retryable
+        H.task_update(c, "human:ana", row["id"], step="Pending Release")  # a person still may
+        assert step(c, row) == "Pending Release"
+
+
+def test_a_pr_missing_from_the_preflight_read_refuses(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        approved(c, row)
+        link = H.task_links(c, row["id"])[0]["id"]
+        H.task_update(c, "bot:cpo", row["id"], step="In QA", review_prs={link: {"head_sha": A, "at": H.now()}})
+        H.task_update(c, "human:ana", row["id"], step="In Progress")
+        H.task_link(c, "human:ana", row["id"], "https://github.com/acme/app/pull/8")
+        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND url LIKE '%/8'", (json.dumps({"head_sha": A}), row["id"]))
+        with pytest.raises(Refused, match="the PR was linked after GitHub was read"):
+            H.task_update(c, "bot:cpo", row["id"], step="In QA", review_prs={link: {"head_sha": A, "at": H.now()}})

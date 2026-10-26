@@ -97,6 +97,8 @@ def links(c, row):
 # A move into one of these steps passes review: every required review slot must approve the change the PR makes now.
 PAST_REVIEW = ("In QA", "Pending Release", "Post Release QA", "Done")
 SLOT = re.compile(r"^Review ([12])(?:\b|:)", re.I)
+# The commit status context review_status posts.
+REVIEW_STATUS = "tico/reviews"
 # Where the move-time preflight leaves the changes it read from GitHub, beside the PR snapshots (keyed by link id).
 CHANGES = "changes"
 
@@ -219,21 +221,26 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
     for pr in prs:
         detail = (snapshots or {}).get(pr["id"]) if snapshots is not None else None
         cached = H._json(pr.get("detail_json"), {}) or {}
+        if snapshots is not None and detail is None:
+            detail = {"error": True, "why": "the PR was linked after GitHub was read"}
         head = str((detail or cached).get("head_sha") or "").lower()
         # A webhook that moved the head after the preflight read GitHub leaves a head nobody compared.
         changed = detail is not None and not detail.get("error") and (pr.get("updated") or "") > detail.get("at", "") \
             and str(cached.get("head_sha") or "").lower() != head
         if detail is not None and detail.get("error") or changed:
             why = detail.get("why") or "GitHub read failed" if detail.get("error") else "the PR link changed while GitHub was read"
-            reject(c, actor, row, "reviews", "unknown", pr,
-                   f"Move refused: cannot read the current head of {pr['url']} ({why}). "
-                   "Retry the move.", retryable=bool(changed) or detail.get("retryable", False))
-        heads[pr["id"]] = head if test_receipts.SHA.fullmatch(head) else ""
+            _refuse(c, actor, row, f"Move refused: cannot read the current head of {pr['url']} ({why}). "
+                                   "Retry the move.", retryable=bool(changed) or detail.get("retryable", False))
+        if not test_receipts.SHA.fullmatch(head):
+            # A head nobody knows has no approval to match: refuse rather than skip that PR.
+            _refuse(c, actor, row, f"Move to {step} refused: the current head of {pr['url']} is not known yet, so no "
+                                   "review approval can be matched to it. Refresh the PR link (or wait for GitHub's "
+                                   "next update) and retry the move.", retryable=True)
+        heads[pr["id"]] = head
     read = (snapshots or {}).get(CHANGES) or {}
     missing = unapproved(c, row, heads, comparer(read))
     if not missing:
         return
-    urls = {pr["id"]: pr["url"] for pr in prs}
     lines = []
     for m in missing:
         who = H.actor_id(m["reviewer"]) if m["reviewer"] else "its reviewer"
@@ -243,11 +250,19 @@ def passed(c, actor, row, snapshots=None, step="the next step"):
         else:
             lines.append(f"{m['slot']} {m['why']}: ask {who} to re-review{at} (the delta since its last verdict) "
                          f"and move once it approves.")
-    pr = prs[0]
-    head = missing[0]["head"] or "unknown"
-    reject(c, actor, row, "reviews", head, pr,
-           f"Move to {step} refused: a required review has not approved the current change. " + " ".join(lines)
-           + " A person may still move the ticket.")
+    _refuse(c, actor, row, f"Move to {step} refused: a required review has not approved the current change. "
+                           + " ".join(lines) + " A person may still move the ticket.")
+
+
+def _refuse(c, actor, row, text, retryable=False):
+    """A plain refusal, unlike reject(): the ticket stays at its step rather than going Blocked, since what clears it
+    is a review the mover asks for (or a person's move), not a check Tico can watch, and nothing retries it."""
+    from . import hubdb as H
+    try:
+        H.refuse(c, actor, "review_gate", text, task=row["id"])
+    except H.Refused as exc:
+        exc.retryable = retryable
+        raise
 
 
 def comparer(read):
@@ -414,6 +429,8 @@ def snapshot(service, prs):
                     data = read(f"/commits/{head}/{endpoint}", params)
                     rows = data[field] if field else data
                     for check in rows:
+                        if not field and check.get("context") == REVIEW_STATUS:
+                            continue  # Tico's own review result, not CI (a webhook of it is dropped too, github.pr_signal)
                         name = check.get("name") or check.get("context") or "Checks"
                         result = check.get("conclusion") if field else check.get("state")
                         # Keep the latest status, and any earlier failure. A

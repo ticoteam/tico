@@ -427,6 +427,10 @@ def pr_signal(c, event, payload):
     links = []
     for url in urls:
         links.extend(_links_for(c, url))
+    if event == "status" and payload.get("context") == "tico/reviews":
+        # Tico's own review status (backend/review_status.py) is a review result, not CI: counting its failure as a
+        # failing check would refuse the very review request that clears it.
+        return {"tasks": 0}
     if event == "status" or event in ("check_run", "check_suite") and not prs:
         # Fork checks and commit statuses can omit the PR list.
         sha = payload.get("sha") if event == "status" else signal.get("head_sha")
