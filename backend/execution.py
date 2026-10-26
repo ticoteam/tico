@@ -2888,10 +2888,13 @@ class Execution:
             if lanes and job_lane(c, row["bot"], followed, message, H.conversation(c, queued["conversation_id"]),
                                   lanes, roots) != lane:
                 continue
-            prior = c.execute("SELECT a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
+            prior = c.execute("SELECT i.attempt_id,a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
                               "WHERE i.message_id=?", (queued["id"],)).fetchone()
             if prior and prior["state"] in ("leased", "running"):
                 continue
+            if prior and prior["attempt_id"] != aid:
+                # As in inputs(): the run that already read this message keeps its tasks for privacy.
+                privacy.record_moved_input(c, prior["attempt_id"], aid, queued)
             c.execute("INSERT INTO attempt_inputs VALUES(?,?,?) ON CONFLICT(message_id) DO UPDATE SET "
                       "attempt_id=excluded.attempt_id,acked_at=excluded.acked_at", (aid, queued["id"], H.now()))
             c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, queued["conversation_id"]))
