@@ -173,3 +173,25 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
 
+
+
+def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
+    from backend.tests.test_api import post
+    from backend.store import H
+    from backend.tests.test_task_lanes import task_bot
+    from backend.tests.test_subtask_results import start
+    machine = task_bot(api, lanes=True)
+    task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner": "bot:ops"})
+    checking = start(api, machine, task["id"], "closure-task")
+    task = checking["task"]
+    path = f"tasks/{task['id']}"
+    refused = post(api, path, {"version": task["version"], "status": "closed"}, checking["token"], expected=403)
+    assert refused["error"]["code"] == "close"
+    post(api, path, {"version": task["version"], "status": "closed", "title": "Changed"}, expected=422)
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+        assert (row["status"], row["title"], row["version"]) == ("doing", task["title"], task["version"])
+    closed = post(api, path, {"version": task["version"], "status": "closed", "note": "Accepted."})
+    assert closed["status"] == "closed" and closed["closed_by"] == "human:ana"
+    assert closed["version"] == task["version"] + 1
+    post(api, path, {"version": task["version"], "status": "closed"}, expected=409)

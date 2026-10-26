@@ -112,8 +112,8 @@ is one team; several can run side by side on one Mac.
 
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
-computer and sign in to your model provider. All four built-in repositories are created automatically. Starters are parked
-in **Needs setup** until you open one and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
+computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
+when you recruit one, and it is parked in **Needs setup** until you open it and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.

@@ -316,3 +316,24 @@ def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, 
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='job.fold_behind' AND target=?",
                          (turn['id'],)).fetchone()[0] == 1
+
+
+def test_a_folded_input_another_run_already_read_keeps_that_runs_task(api):
+    """A message the held run read before it stopped moves to the resumed turn; the held run must still close when
+    the task later turns private, as it does when inputs() moves a deferred input."""
+    machine, attempt, task_id, _ = task_held(api)
+    with api.app.state.store.transaction() as c:
+        verdict = c.execute("SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
+                            "AND j.state='queued' AND m.body LIKE 'VERDICT:%'").fetchone()[0]
+        c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt['id'], verdict, H.now()))
+    ready(api, machine, ['ops'])
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+         'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
+    turn = claim(api, machine)
+    assert turn['id'] != attempt['id'] and 'VERDICT: changes PR #12' in turn['message']['body']
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT attempt_id FROM attempt_inputs WHERE message_id=?", (verdict,)).fetchone()[0] == turn['id']
+        moved = c.execute("SELECT count(*) FROM events WHERE action=? AND target=?",
+                          (privacy.INPUT_MOVED, attempt['id'])).fetchone()[0]
+        assert moved == 1
+        assert task_id in privacy.attempt_tasks(c, attempt['id'])

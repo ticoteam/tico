@@ -16828,7 +16828,7 @@
         ]
       },
       "post": {
-        "summary": "Change a task; send the version you read (409 version_conflict otherwise)",
+        "summary": "Change a task; send the version you read (409 version_conflict otherwise). status closed is close:true; closing and editing are separate operations",
         "operationId": "updateTask",
         "parameters": [
           {
@@ -36364,7 +36364,8 @@
                   "review",
                   "ready",
                   "done",
-                  "declined"
+                  "declined",
+                  "closed"
                 ]
               },
               {

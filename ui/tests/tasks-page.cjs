@@ -726,8 +726,17 @@ async function properties(browser) {
   await menu.locator('.tl-mi', {hasText: 'Open full'}).click();
   const modal = page.locator('#task-modal');
   await modal.locator('.task-subs .sub-row').first().waitFor();
-  const [p, c, s, m] = await Promise.all(['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].map(sel => modal.locator(sel).boundingBox()));
-  assert.ok(p.y < c.y && c.y < s.y && p.x > m.x + m.width - 1, 'Properties, Code, Subtasks, beside the details');
+  // The rail re-renders as its links load, so four separate boundingBox calls could catch one replaced or not yet
+  // shown; the layout is read in one pass once all four are rendered.
+  const layout = () => page.evaluate(() => {
+    const box = sel => { const el = document.querySelector('#task-modal ' + sel); const r = el?.getBoundingClientRect();
+      return r && r.width && r.height ? {x: r.x, y: r.y, width: r.width} : null; };
+    const [p, c, s, m] = ['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].map(box);
+    return p && c && s && m ? p.y < c.y && c.y < s.y && p.x > m.x + m.width - 1 : null;
+  });
+  await page.waitForFunction(() => ['[data-task-props]', '.task-code', '.task-subs', '.tmodal-main'].every(sel => {
+    const r = document.querySelector('#task-modal ' + sel)?.getBoundingClientRect(); return r && r.width && r.height; }));
+  assert.equal(await layout(), true, 'Properties, Code, Subtasks, beside the details');
   await shot(page, 'modal-dark');
   await modal.locator('[data-task-more]').click();
   await modal.locator('.prop-pop .tl-mi', {hasText: 'Close task'}).click();
