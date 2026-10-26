@@ -1729,8 +1729,9 @@ class BotTaskCondition(Contract):
 
 
 class BotTaskTab(Contract):
-    """One tab over a bot's task list (backend/bot_task_tabs.py): a built-in view, or a filter of rows that a task must
-    all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's filter, still accepted and stored as rows."""
+    """One tab over a bot's task list (backend/bot_task_tabs.py): an editable default filter, Done Recently, or a
+    custom filter of rows that a task must all match. `types`, `states` and `waiting_on` are Task-list tabs 2/3's
+    filter, still accepted and stored as rows."""
     name: str = Field(min_length=1, max_length=40)
     builtin: Literal["needs", "active", "blocked", "done"] | None = None
     show_count: bool = True

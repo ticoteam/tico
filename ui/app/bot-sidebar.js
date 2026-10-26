@@ -109,7 +109,7 @@ const botLayoutCopy = value => JSON.parse(JSON.stringify(value));
 function botSidebarEdit(slug) {
   const layout = botSidebarLayout(slug);
   if (!layout?.can_edit || BOT_EDIT) return;
-  BOT_EDIT = {slug, tabs: botLayoutCopy(layout.tabs), widgets: botLayoutCopy(layout.widgets || BOT_WIDGET_DEFAULT)};
+  BOT_EDIT = {slug, tabs: botLayoutCopy(layout.tabs.map(botTaskTabDefaults)), widgets: botLayoutCopy(layout.widgets || BOT_WIDGET_DEFAULT)};
   void taskTypesLoad().catch(() => TASK_TYPES);
   botTaskTabsPaint(slug);
   botSidebarApply(slug);
@@ -285,7 +285,7 @@ const BOT_FILTER_FIELDS = [['status', 'Status'], ['step', 'Step'], ['assigned_to
   ['done_within', 'Done within'], ['due', 'Due'], ['label', 'Label']];
 const BOT_FILTER_STATUSES = [['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['review', 'In review'], ['ready', 'Ready'],
   ['done', 'Done'], ['closed', 'Closed'], ['declined', 'Declined']];
-const BOT_FILTER_WAITING = [['any', 'Anyone'], ['person', 'A person'], ['bot', 'A bot'], ['me', 'Me']];
+const BOT_FILTER_WAITING = [['any', 'Anyone'], ['person', 'A person'], ['bot', 'A bot'], ['me', 'Me'], ['not_me', 'Someone else']];
 const BOT_FILTER_START = {status: ['open', 'doing', 'waiting'], step: '', assigned_to: 'this_bot', asked_by: 'this_bot', type: ['general'],
   waiting_on: 'any', created_within: 7, updated_within: 7, done_within: 14, due: 'overdue', label: ''};
 function botFilterParties(slug, others) {
@@ -320,7 +320,8 @@ async function botFilterOpen(slug, at) {
   if (!botDrafting(slug)) return;
   const adding = at < 0, was = adding ? {name: '', show_count: true, conditions: [{field: 'status', value: BOT_FILTER_START.status}]} : BOT_EDIT.tabs[at];
   if (!was) return;
-  const draft = botLayoutCopy({show_count: true, ...was});
+  const draft = botLayoutCopy({show_count: true, ...botTaskTabDefaults(was)});
+  const editable = draft.builtin !== 'done';
   let dialog = $('#bot-filter-dialog');
   if (!dialog) {
     dialog = document.createElement('dialog');
@@ -332,7 +333,7 @@ async function botFilterOpen(slug, at) {
   const read = () => {
     draft.name = dialog.querySelector('[data-filter-name]').value.trim();
     draft.show_count = dialog.querySelector('[data-filter-count]').checked;
-    if (draft.builtin) return;
+    if (!editable) return;
     draft.conditions = draft.conditions.map((row, i) => {
       const inputs = [...dialog.querySelectorAll(`[data-cond-value="${i}"]`)];
       if (['status', 'type'].includes(row.field)) return {field: row.field, value: inputs.filter(x => x.checked).map(x => x.value)};
@@ -346,13 +347,18 @@ async function botFilterOpen(slug, at) {
     dialog.innerHTML = `<form class="bot-filter-form" novalidate>
       <label class="bot-filter-name">Name <input type="text" data-filter-name value="${esc(draft.name)}" maxlength="40" required></label>
       <label class="bot-filter-count"><input type="checkbox" data-filter-count${draft.show_count !== false ? ' checked' : ''}> Show count</label>
-      ${draft.builtin ? '' : `<ol class="bot-cond-list">${draft.conditions.map((row, i) => `<li class="bot-cond" data-cond="${i}">
+      ${!editable ? '' : `<ol class="bot-cond-list">${draft.conditions.map((row, i) => `<li class="bot-cond" data-cond="${i}">
         <select data-cond-field="${i}" aria-label="Field">${BOT_FILTER_FIELDS.map(([value, word]) => `<option value="${value}"${row.field === value ? ' selected' : ''}>${word}</option>`).join('')}</select>
         <span class="bot-cond-value">${botFilterValueHTML(slug, row, i)}</span>
         <button type="button" class="ghost bot-cond-x" data-cond-remove="${i}" aria-label="Remove condition" title="Remove">✕</button></li>`).join('')}</ol>
       <button type="button" class="ghost bot-cond-add" data-cond-add>+ Condition</button>`}
+      ${draft.builtin === 'needs' ? '<p>Also shows this bot’s approvals and questions for you</p>' : ''}
+      ${BOT_TASK_DEFAULT_CONDITIONS[draft.builtin] ? '<button type="button" class="ghost" data-filter-reset>Reset to default</button>' : ''}
       <div class="row bot-filter-actions"><button type="button" class="ghost" data-filter-delete${BOT_EDIT.tabs.length > 1 || adding ? '' : ' disabled'}>Delete</button><span class="spacer"></span>
         <span class="err" data-filter-error role="alert"></span><button type="submit" class="primary">Save</button></div></form>`;
+    dialog.querySelector('[data-filter-reset]')?.addEventListener('click', () => {
+      read(); draft.conditions = botLayoutCopy(BOT_TASK_DEFAULT_CONDITIONS[draft.builtin]); paint();
+    });
     dialog.querySelectorAll('[data-cond-field]').forEach(select => select.onchange = () => {
       read();
       const i = Number(select.dataset.condField);
@@ -384,7 +390,7 @@ async function botFilterOpen(slug, at) {
       const problem = !draft.name ? 'Name it.' : (draft.conditions || []).some(row => row.value === '' || (Array.isArray(row.value) && !row.value.length)
         || (typeof row.value === 'number' && !(row.value >= (row.field === 'due' ? 0 : 1) && row.value <= 3650))) ? 'Fill in every condition.' : '';
       if (problem) { dialog.querySelector('[data-filter-error]').textContent = problem; return; }
-      const tab = draft.builtin ? {builtin: draft.builtin, name: draft.name, show_count: draft.show_count}
+      const tab = draft.builtin ? {builtin: draft.builtin, name: draft.name, show_count: draft.show_count, ...(editable ? {conditions: draft.conditions} : {})}
         : {name: draft.name, show_count: draft.show_count, conditions: draft.conditions};
       if (adding) BOT_EDIT.tabs.push(tab); else BOT_EDIT.tabs[at] = tab;
       dialog.close();
