@@ -3602,6 +3602,11 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         # A step entered is news a type's rules may route (QA Fixes to the Builder, In QA to QA, ...).
         from . import rules as wake_rule_engine
         wake_rule_engine.step_entered(conn, actor, task(conn, row["id"]), skip=skip_step_wake)
+        # ...and a task trigger rules act on: a task filed straight into a later step runs them as it is made.
+        wake_rule_engine.task_trigger(conn, "task.step_changed", row["id"], actor)
+    if row.get("status") is not None and row.get("status") != effective and effective in ("done", "declined", "closed"):
+        from . import rules as wake_rule_engine
+        wake_rule_engine.task_trigger(conn, f"task.{effective}", row["id"], actor)
     return effective
 
 
@@ -5444,6 +5449,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
+    from . import rules as wake_rule_engine
+    wake_rule_engine.task_trigger(conn, "task.created", row["id"], actor)
     _recount(conn, target)
     _recount(conn, actor)
     made = task(conn, row["id"])

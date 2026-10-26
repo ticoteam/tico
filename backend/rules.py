@@ -40,6 +40,10 @@ An event that is not a message to a bot (an incoming webhook, a release) has no 
 `judge_event` runs its rows instead (team, department and bot scopes), writes what they say, and never fails open: an
 error or no match does nothing. See "Events without a task" below.
 
+A change to a task (it is created, enters a step, is done, declined or closed) runs the rows that name it as their
+trigger (`task_trigger`, TASK_TRIGGERS): every matching row's action, once, after the change is written. See "Task
+triggers" below.
+
 Fail open: anything the engine cannot read wakes, under `fail_open`. The hot path costs one indexed read of the
 rules table for a message that no built-in always-wakes, and nothing more when the table is empty.
 """
@@ -157,6 +161,19 @@ EVENT_WHEN_KEYS = ("trigger", "type")
 # The events without a task, and the only scopes a row for one can have (there is no task and no task type).
 SOURCELESS = frozenset(CAT.sourceless())
 EVENT_SCOPES = ("team", "department", "bot")
+# A change to a task (backend/hubdb.py raises the same names for outgoing webhooks): a row naming one runs its action
+# on the task (`task_trigger`). The words are what the editor and the Task settings card say.
+TASK_TRIGGERS = {
+    "task.created": "a task is created",
+    "task.step_changed": "a task enters a step",
+    "task.done": "a task is done",
+    "task.declined": "a task is declined",
+    "task.closed": "a task is closed",
+}
+# A bot row is for the tasks that bot owns; a department row for the tasks of the department's people and bots.
+TASK_TRIGGER_SCOPES = ("team", "type", "department", "bot")
+TASK_TRIGGER_WHEN_KEYS = ("type", "step", "tag", "owner", "requester")
+TASK_TRIGGER_ACTIONS = TASK_ACTIONS + ("wake_bot", "create_task", "send_webhook")
 WHEN_ACTORS = ("human", "bot", "keeper")
 WHEN_ROLES = ("owner", "requester", "qa", "release_manager", "other")
 
@@ -652,8 +669,9 @@ def claimed_rule(msg, job=None):
 
 
 # ----------------------------------------------------------------------------- ask and action
-# While a rule's action runs, what it writes is judged as news: an action never starts another action or ask.
-_CARRYING = contextvars.ContextVar("rule_carrying", default=False)
+# While a rule's action runs, what it writes is judged as news: an action never starts another action or ask. It holds
+# the id of the rule acting, so a task trigger it sets off can say which rule that was (`task_trigger`).
+_CARRYING = contextvars.ContextVar("rule_carrying", default="")
 ASKED = "rule.ask"
 
 
@@ -667,7 +685,7 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         return decision
     if _CARRYING.get():
         return Decision(NOTE, decision.rule, HOLD_ROW, decision.params)
-    token = _CARRYING.set(True)
+    token = _CARRYING.set(decision.rule or "rule")
     conn.execute("SAVEPOINT rule_carry")
     try:
         tid = H.message_task_id({"refs": refs or {}}, conv)
@@ -875,6 +893,11 @@ def _tell_bot(conn, rule_id, slug, text, refs, *, wake, task=None):
 
 
 def _default_text(event, values):
+    if event in TASK_TRIGGERS:
+        task = values.get("task") or {}
+        happened = {"task.created": "was created", "task.step_changed": f"entered {task.get('step') or 'a step'}",
+                    "task.done": "is done", "task.declined": "was declined", "task.closed": "was closed"}[event]
+        return f"{task.get('title') or 'A task'} {happened}."
     if event == "webhook.received":
         return f"{(values.get('trigger') or {}).get('name') or 'A webhook'}: {values.get('type') or 'a call'} arrived."
     return f"{event}: a rule sent you this."
@@ -941,7 +964,8 @@ def _run_forward(conn, rule_id, by, params, values, *, event, subject, revision,
 
 def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revision, task=None, ctx=None):
     """A task for the bot `params.owner`, titled and told from the templates, filed in the rule maker's name. The body
-    carries the call's content and the line that says how to read all of it, as a wake does."""
+    carries the call's content and the line that says how to read all of it, as a wake does. `ctx.private` files it
+    private (a task trigger on a private task); the result names the new task as `task_id`."""
     ctx = ctx or {}
     slug = _slug(params.get("owner"))
     result = {"outcome": "create_task", "target": slug, "ok": False, "detail": ""}
@@ -957,14 +981,15 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
     body = _wake_text({"text": params.get("body")}, values, ctx, _default_text(event, values))
     conn.execute("SAVEPOINT rule_task")
     try:
-        row = H.task_create(conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False)
+        row = H.task_create(conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False,
+                            private=True if ctx.get("private") else None)
         conn.execute("RELEASE rule_task")
     except Exception as exc:  # noqa: BLE001 - the rule's other rows still run
         conn.execute("ROLLBACK TO rule_task")
         conn.execute("RELEASE rule_task")
         result["detail"] = (str(getattr(exc, "message", "") or exc) or type(exc).__name__)[:300]
         return result
-    return {**result, "ok": True, "detail": f"task {row['id']}"}
+    return {**result, "ok": True, "detail": f"task {row['id']}", "task_id": row["id"]}
 
 
 # The event actions: `wake_bot {bot, text}`, `send_webhook {webhook, type, data}`, `create_task {owner, title, body}`
@@ -1109,6 +1134,207 @@ def prune_events(conn):
                         (H.shift(H.now(), days=-EVENT_KEEP_DAYS),)).rowcount
 
 
+# ----------------------------------------------------------------------------- task triggers
+# A change to a task runs the rows that name it (TASK_TRIGGERS): every row that matches, team rows first, then type,
+# department and bot rows, by position, each once. backend/hubdb.py calls `task_trigger` once the change is written:
+# task_create for task.created, _set_status for a step entered and for done, declined and closed. A task filed straight
+# into a step that is not its type's first runs that step's rows while it is made, before task.created; one filed into
+# the first step, or with no step, runs none (as the step_entered news does).
+#
+# A row's action runs as `_act` runs one (a task action as the keeper, an event action with its maker's rights) inside
+# its own savepoint: an action that fails is undone, the task change still saves, and the task's history and the rule's
+# last run (`rule.task`, which the Task settings card shows with its time) say what went wrong. Three guards:
+# - privacy: a row runs only on a task its maker may read, and a task it makes from a private task is private;
+# - the chain: what a rule's action changes sets off no rule at all (no chains deeper than one). The task's history
+#   names each row that did not run and why;
+# - the run cap: a row that ran RUN_CAP times in the last hour is switched off instead of running again
+#   (`rule.paused`), and reads "Paused: too many runs" until someone switches it back on.
+RUN_CAP = 50
+RAN, PAUSED = "rule.task", "rule.paused"
+PRIVATE_FAILURE = "It failed on a private task; that task's history says why."
+TASK_ACTION_WORDS = {"close": "close it", "move_step": "move its step", "set_wait": "set a wait", "relate": "relate it",
+                     "note": "add a note", "wake_bot": "wake a bot", "create_task": "make a task",
+                     "send_webhook": "send a webhook"}
+
+
+def _rule_label(conn, rule):
+    """How the task's history names a rule: its note, else its id."""
+    if isinstance(rule, str):
+        found = conn.execute("SELECT id,note FROM rules WHERE id=?", (rule,)).fetchone()
+        rule = found or {"id": rule, "note": ""}
+    note = " ".join(str(rule["note"] or "").split())
+    return f"Rule “{note[:80]}”" if note else f"Rule {rule['id']}"
+
+
+def _task_when(conn, when, row):
+    """Whether a task trigger row's conditions hold for the task: its type (id or name), step (id or name), tags,
+    owner and requester (an actor, or a bot's slug or a person's id)."""
+    def names(table, ident):
+        found = conn.execute(f"SELECT name FROM {table} WHERE id=?", (ident,)).fetchone() if ident else None
+        return {str(ident or "").lower()} | ({str(found[0]).lower()} if found else set())
+
+    for key, want in when.items():
+        wanted = {str(w).lower() for w in (want if isinstance(want, list) else [want])}
+        if key == "type":
+            mine = names("task_types", row.get("type_id"))
+        elif key == "step":
+            mine = names("task_steps", row.get("step_id"))
+        elif key in ("owner", "requester"):
+            who = str(row.get(key) or "")
+            mine = {who.lower(), H.actor_id(who).lower()} if who else set()
+        elif key == "tag":
+            for tag in wanted:
+                if not conn.execute("SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.task_id=? "
+                                    "AND lower(g.key)=? LIMIT 1", (row["id"], tag)).fetchone():
+                    return False
+            continue
+        else:
+            return False                # a condition this release does not know never matches
+        if not mine & wanted:
+            return False
+    return True
+
+
+def _task_values(conn, row, name, actor):
+    """What a task trigger's templates read: the event, who made the change, and the task with its step and type
+    names. Only a task the rule's maker may read gets this far."""
+    step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
+    kind = conn.execute("SELECT name FROM task_types WHERE id=?", (row.get("type_id"),)).fetchone()
+    task = {key: row.get(key) for key in ("id", "title", "status", "owner", "requester", "number", "step_id", "type_id")}
+    return {"event": name, "actor": str(actor or ""),
+            "task": {**task, "step": step[0] if step else "", "type": kind[0] if kind else ""}}
+
+
+def _runs_last_hour(conn, rule_id):
+    return conn.execute("SELECT count(*) FROM events WHERE target=? AND action=? AND ts>=?",
+                        (rule_id, RAN, H.shift(H.now(), hours=-1))).fetchone()[0]
+
+
+def _task_act(conn, rule, row, name, actor):
+    """Run one row's action on the task in a savepoint of its own. (ok, what it did or why it failed)."""
+    params = H._json(rule["params_json"], {}) or {}
+    action = params.get("action")
+    label = _rule_label(conn, rule)
+    token = _CARRYING.set(rule["id"])
+    conn.execute("SAVEPOINT rule_task_act")
+    try:
+        if action in TASK_RUNNERS:
+            note = str(params.get("note") or params.get("text") or "")[:1000]
+            TASK_RUNNERS[action](conn, row["id"], params, f"{label}: {note}" if note else label)
+            detail = {"close": "closed it", "move_step": f"moved it to {params.get('step')}", "set_wait": "set a wait",
+                      "relate": "related it to another task", "note": "added a note"}[action]
+        elif action in TASK_TRIGGER_ACTIONS:
+            found = EVENT_RUNNERS[action](
+                conn, rule["id"], rule["created_by"], params, _task_values(conn, row, name, actor), event=name,
+                subject=row["id"], revision=None, task=row if action == "wake_bot" else None,
+                ctx={"private": H.task_private(conn, row)})
+            if not found["ok"]:
+                raise ValueError(found["detail"] or "it did not run")
+            detail = {"wake_bot": f"woke {found['target']}", "send_webhook": f"sent {params.get('type')}"}.get(action)
+            if found.get("task_id"):
+                from . import task_relations as TR
+                TR.relate(conn, H.KEEPER, found["task_id"], row["id"], kind="related", mover=True, note=label)
+                made = H.task(conn, found["task_id"]) or {}
+                detail = f"made the task “{made.get('title')}” for {found['target']} ({found['task_id']})"
+        else:
+            raise ValueError(f"{action!r} is not an action a task trigger runs")
+        conn.execute("RELEASE rule_task_act")
+        return True, detail
+    except Exception as exc:  # noqa: BLE001 - the task change stands; the failure is recorded
+        conn.execute("ROLLBACK TO rule_task_act")
+        conn.execute("RELEASE rule_task_act")
+        said = exc.detail if isinstance(exc, H.Refused) and exc.detail else str(exc)
+        return False, (said or type(exc).__name__)[:300]
+    finally:
+        _CARRYING.reset(token)
+
+
+def task_trigger(conn, name, task_id, actor):
+    """Run the rows whose trigger is `name` (TASK_TRIGGERS) on the task `actor` just changed. Never raises: a task change
+    never fails for its rules. Returns one {rule_id, action, ok, detail} per row that ran. One indexed read when no row
+    names the trigger."""
+    try:
+        if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event=? LIMIT 1", (name,)).fetchone():
+            return []
+    except sqlite3.OperationalError:            # a database from before the table
+        return []
+    conn.execute("SAVEPOINT rule_task_trigger")
+    try:
+        done = _task_trigger(conn, name, task_id, actor)
+        conn.execute("RELEASE rule_task_trigger")
+        return done
+    except Exception:  # noqa: BLE001 - the change that set it off stands
+        conn.execute("ROLLBACK TO rule_task_trigger")
+        conn.execute("RELEASE rule_task_trigger")
+        log.warning("Task trigger %s on %s could not run", name, task_id, exc_info=True)
+        return []
+
+
+def _task_trigger(conn, name, task_id, actor):
+    row = H.task(conn, task_id)
+    if not row:
+        return []
+    rows = [r for r in conn.execute("SELECT * FROM rules WHERE enabled=1 AND event=? ORDER BY position, created, id",
+                                    (name,)).fetchall() if r["scope_kind"] in TASK_TRIGGER_SCOPES]
+    rows.sort(key=lambda r: TASK_TRIGGER_SCOPES.index(r["scope_kind"]))     # stable: position order inside a scope
+    ctx = _Context(conn, actor, row.get("owner") or "", {"task": row["id"]}, None, row)
+    chain, private, done = _CARRYING.get(), H.task_private(conn, row), []
+    for rule in rows:
+        if not (ctx.in_scope(rule) and _task_when(conn, H._json(rule["when_json"], {}) or {}, row)):
+            continue
+        if rule["created_by"] != H.KEEPER and not H.task_private_readable(conn, rule["created_by"], row):
+            continue                            # a rule never acts on a task its maker may not read
+        label = _rule_label(conn, rule)
+        if chain:
+            why = "its own action made this change" if chain == rule["id"] \
+                else f"{_rule_label(conn, chain)} made this change"
+            H._task_event(conn, row["id"], H.KEEPER, "rule", None,
+                          f"{label} did not run: {why}, and a rule's action sets off no rule (no chains deeper than one)",
+                          "")
+            continue
+        if _runs_last_hour(conn, rule["id"]) >= RUN_CAP:
+            conn.execute("UPDATE rules SET enabled=0,updated=?,revision=revision+1 WHERE id=?", (H.now(), rule["id"]))
+            H.event(conn, H.KEEPER, PAUSED, rule["id"], {"reason": "too_many_runs", "cap": RUN_CAP, "task": row["id"]})
+            H._task_event(conn, row["id"], H.KEEPER, "rule", None,
+                          f"{label} did not run: it ran {RUN_CAP} times in the last hour, so it is paused", "")
+            continue
+        action = (H._json(rule["params_json"], {}) or {}).get("action")
+        ok, detail = _task_act(conn, rule, row, name, actor)
+        H.event(conn, H.KEEPER, RAN, rule["id"], {
+            "task": row["id"], "event": name, "action": action, "ok": ok,
+            "detail": PRIVATE_FAILURE if private and not ok else detail if not private else ""})
+        H._task_event(conn, row["id"], H.KEEPER, "rule", None,
+                      f"{label} ran: {detail}" if ok else
+                      f"{label} could not {TASK_ACTION_WORDS.get(action, 'act')}: {detail}. The change still saved.", "")
+        done.append({"rule_id": rule["id"], "action": action, "ok": ok, "detail": detail})
+    return done
+
+
+def trigger_state(c, row):
+    """What a task trigger row's listing adds: `paused` when the run cap switched it off and nobody has changed it since,
+    and its last run's time and, when that run failed, `last_error` with what went wrong and when."""
+    if row["event"] not in TASK_TRIGGERS:
+        return {}
+    out = {}
+    paused = c.execute("SELECT ts FROM events WHERE target=? AND action=? ORDER BY ts DESC LIMIT 1",
+                       (row["id"], PAUSED)).fetchone()
+    if paused and not row["enabled"] and paused["ts"] >= row["updated"]:
+        out.update(paused="too_many_runs", paused_at=paused["ts"])
+    last = c.execute("SELECT ts,detail_json FROM events WHERE target=? AND action=? ORDER BY ts DESC, rowid DESC LIMIT 1",
+                     (row["id"], RAN)).fetchone()
+    if last:
+        detail = H._json(last["detail_json"], {}) or {}
+        out["last_run_at"] = last["ts"]
+        if not detail.get("ok"):
+            out["last_error"] = {"detail": detail.get("detail") or "The action failed", "at": last["ts"]}
+    # A task trigger starts no run of its own: its 7-day figures are its own runs, a failed one being one that did
+    # nothing.
+    runs, idle = c.execute("SELECT count(*), sum(json_extract(detail_json,'$.ok')=0) FROM events "
+                           "WHERE target=? AND action=? AND ts>=?", (row["id"], RAN, H.shift(H.now(), days=-7))).fetchone()
+    out.update(runs_7d=runs, no_op_7d=idle or 0, no_op_rate_7d=round((idle or 0) / runs, 3) if runs else None)
+    return out
+
+
 # ----------------------------------------------------------------------------- step entry and the Dev tickets rows
 # What a Dev ticket's hand-offs say, as editable type rows: (note, when, outcome). Seeded once per type (`seed_dev`);
 # a person edits or deletes them in Settings, and a type that lost them is not given them again.
@@ -1241,11 +1467,17 @@ def validate(c, settings, scope_kind, scope_id, event, then, when, params):
         if scope_id not in {d["id"] for d in task_rules.departments(settings)}:
             raise Problem("invalid", "Choose a department from the org chart's department list", 422)
     sourceless = event_is_sourceless(event)
-    if event != "*" and event not in EVENTS and not sourceless:
+    task_trigger = event in TASK_TRIGGERS
+    if event != "*" and event not in EVENTS and not sourceless and not task_trigger:
         raise Problem("invalid", "event is * or one of: " + ", ".join(EVENTS) + "; or, with no task: "
-                      + ", ".join(sorted(SOURCELESS)), 422)
+                      + ", ".join(sorted(SOURCELESS)) + "; or a task trigger: " + ", ".join(TASK_TRIGGERS), 422)
     if then not in OUTCOMES:
         raise Problem("invalid", f"then is one of {', '.join(OUTCOMES)}", 422)
+    if task_trigger:
+        if scope_kind not in TASK_TRIGGER_SCOPES:
+            raise Problem("invalid", f"{event} rules are for the team, a task type, a department or a bot", 422)
+        if then != ACTION or (params or {}).get("action") not in TASK_TRIGGER_ACTIONS:
+            raise Problem("invalid", f"{event} runs an action: {', '.join(TASK_TRIGGER_ACTIONS)}", 422)
     if sourceless:
         if scope_kind not in EVENT_SCOPES:
             raise Problem("invalid", f"{event} has no task or task type: its rules are for the team, a department "
@@ -1255,7 +1487,8 @@ def validate(c, settings, scope_kind, scope_id, event, then, when, params):
     if event in FLOOR_EVENTS and then in (IGNORE, NOTE, BATCH):
         raise Problem("invalid", f"{event} always wakes the bot: a rule cannot make it wait", 422)
     when = when if when is not None else {}
-    allowed = EVENT_WHEN_KEYS if sourceless else tuple(k for k in WHEN_KEYS if k not in EVENT_WHEN_KEYS)
+    allowed = EVENT_WHEN_KEYS if sourceless else TASK_TRIGGER_WHEN_KEYS if task_trigger else tuple(
+        k for k in WHEN_KEYS if k not in EVENT_WHEN_KEYS)
     if not isinstance(when, dict) or set(when) - set(allowed):
         raise Problem("invalid", f"when holds only {', '.join(allowed)}", 422)
     if len(json.dumps(when)) > 1000:            # every row is read per message and listed in pages: keep each small
@@ -1290,8 +1523,9 @@ def _check_params(c, scope_kind, scope_id, sourceless, then, params, event=""):
     action = params.get("action") if then == ACTION else None
     if sourceless and then == ACTION and action not in EVENT_ACTIONS:
         raise Problem("invalid", f"a rule for an event with no task acts with: {', '.join(EVENT_ACTIONS)}", 422)
-    if action in ONCE_ACTIONS and not sourceless:
-        raise Problem("invalid", f"{action} runs on an event with no task, like webhook.received", 422)
+    if action in ONCE_ACTIONS and not sourceless and not (action == "create_task" and event in TASK_TRIGGERS):
+        raise Problem("invalid", f"{action} runs on an event with no task, like webhook.received, or a task trigger",
+                      422)
     names_bot = action == "wake_bot" or (sourceless and then in (WAKE, NOTE) and scope_kind != "bot")
     if sourceless and scope_kind == "bot" and then in (WAKE, NOTE):
         params.pop("bot", None)                         # the bot the row is set on is the one it tells
@@ -1462,14 +1696,16 @@ def listing(c, settings, auth, who, scope_kind=None, scope_id=None, event=None, 
                 more, next_offset = True, offset + n
                 break
             if _visible(c, who, row):
-                item = task_settings.describe_rule(_with_usage({**view(row), "can_change": can_change(
-                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts))
+                item = task_settings.describe_rule({**_with_usage({**view(row), "can_change": can_change(
+                    c, settings, auth, who, row["scope_kind"], row["scope_id"])}, counts), **trigger_state(c, row)})
                 items.append(item)
                 spent += len(json.dumps(item))
         else:
             next_offset = offset + min(len(rows), limit)
     out = {"task_builtins": task_settings.builtins(c), "rules": items, "events": list(EVENTS), "outcomes": list(OUTCOMES), "scopes": list(SCOPES), "more": more,
-           "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS)}
+           "sourceless_events": sorted(SOURCELESS), "actions": list(ACTIONS), "when_keys": list(WHEN_KEYS),
+           "task_triggers": TASK_TRIGGERS, "task_trigger_scopes": list(TASK_TRIGGER_SCOPES),
+           "task_trigger_when_keys": list(TASK_TRIGGER_WHEN_KEYS), "task_trigger_actions": list(TASK_TRIGGER_ACTIONS)}
     if more:
         out["next_offset"] = next_offset
     return out
@@ -1581,8 +1817,8 @@ def install(app, store, auth, mutate):
             row = get(c, rule_id)
             if not _visible(c, who, row):
                 raise Problem("not_found", "No such rule", 404)
-            return {"rule": _with_usage({**view(row), "can_change": can_change(
-                c, store.settings, auth, who, row["scope_kind"], row["scope_id"])}, counts)}
+            return {"rule": {**_with_usage({**view(row), "can_change": can_change(
+                c, store.settings, auth, who, row["scope_kind"], row["scope_id"])}, counts), **trigger_state(c, row)}}
 
     @app.post("/api/v2/rules")
     def create_rule(request: Request, body: M.RuleCreate):

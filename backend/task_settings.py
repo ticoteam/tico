@@ -58,7 +58,15 @@ RULE_WORDS = {
 }
 
 
+# The task triggers rules run on (backend/rules.py TASK_TRIGGERS), by the card section that shows them. A closed task is
+# after it's finished: the 24-hour close that sets it off sits there too.
+TASK_TRIGGER_SECTIONS = {"task.created": "created", "task.step_changed": "step", "task.done": "finished",
+                         "task.declined": "finished", "task.closed": "after"}
+
+
 def trigger(event):
+    if event in TASK_TRIGGER_SECTIONS:
+        return TASK_TRIGGER_SECTIONS[event]
     if event in NON_TASK or "." in event:
         return None
     if event in ("task_done", "task_declined", "batch_completion"):
