@@ -131,8 +131,8 @@ ticket stays at its step with a Waiting tag.
 
   It reads the list any time with `hub pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
   (`hub task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
-  still wake it at once. With no new entry, the same pass wakes it once a day when a note has been held for it a day,
-  so what waited is read. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
+  still wake it at once. Notes held for it wake nothing: its next run, whatever starts it, carries them, so a week of
+  normal tickets is no turn at all. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 

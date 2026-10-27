@@ -370,20 +370,15 @@ def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_
         assert listed(c, typ, "stuck") == [], "a check that just finished: the builder has time to move it on"
 
 
-def test_a_manager_reads_its_held_notes_once_a_day_with_no_new_entry(api):
+def test_held_notes_alone_never_wake_a_manager_and_ride_with_its_next_list(api):
+    """A week of normal tickets leaves the manager notes (verdicts, results) and no turn: they are read when something
+    real wakes it."""
     with api.app.state.store.transaction() as c:
-        board(c)
-
-        def note(hours_ago):
+        typ = board(c)
+        for day in range(7):
             c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
-                      (H.new_id(), "keeper", "bot:coo", "Review 1 approved #7.", H.shift(H.now(), hours=-hours_ago)))
-
-        note(2)
-        assert PE.deliver(c) == [], "a note two hours old waits: no list entry, no turn"
-        note(25)
-        assert PE.deliver(c) == ["coo"], "a note held a day: one read"
-        [wake] = c.execute("SELECT body FROM messages WHERE to_actor='bot:coo' AND "
-                           "json_extract(refs_json,'$.daily')").fetchall()
-        assert wake[0].startswith("Daily read on Dev tickets: 2 held note(s)")
-        assert PE.deliver(c) == [], "its run has not carried them yet: still one read a day"
-        assert PE.deliver(c, H.shift(H.now(), hours=PE.NOTES_HOURS + 1)) == ["coo"], "a day on, read again"
+                      (H.new_id(), "keeper", "bot:coo", f"Review 1 approved #{day}.", H.shift(H.now(), days=-day)))
+        assert [PE.deliver(c, H.shift(H.now(), hours=h)) for h in range(0, 7 * 24, 6)] == [[]] * 28
+        assert unheld_jobs(c, "coo") == 0
+        ticket(c, typ, "Fix Cursor", minutes=50)
+        assert PE.deliver(c) == ["coo"], "a real exception wakes it, and its run carries the notes"

@@ -28,8 +28,6 @@ REFUSAL_HOURS = 24
 FAILED = ("failed", "interrupted", "expired")
 MAX_EXCEPTIONS = 500
 MAX_LINES = 40                  # lines in the wake; the rest is in `hub pipeline`
-# A manager's held notes (verdicts, results, ticket news) are read at least this often, list or not: its own clock.
-NOTES_HOURS = 24
 EVENT = "exceptions.sent"
 WAKE = "exceptions"
 PROFILE = "manager"
@@ -381,8 +379,8 @@ def render(entries, more=0):
 
 def deliver(c, at=None):
     """The hourly pass: each engineering type whose manager reads the list gets one wake with it, only when an entry
-    is new since the last list it was sent, or when a note has been held for it NOTES_HOURS (one read a day of what
-    waited for its next run). Returns the managers woken."""
+    is new since the last list it was sent. Notes held for it (verdicts, results, ticket news) wake nothing: they ride
+    with its next run, whatever starts it. Returns the managers woken."""
     from . import rules
     from .roadmap_flow import ENGINEERING
     at = at or H.now()
@@ -400,27 +398,16 @@ def deliver(c, at=None):
                          (EVENT, typ["id"])).fetchone()
         sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
         new = [k for k in keys if k not in sent]
-        held, oldest = c.execute("SELECT count(*), min(created) FROM notes WHERE to_actor=? AND carried_by IS NULL "
-                                 "AND cancelled_at IS NULL", (reader,)).fetchone()
-        daily = (bool(held) and slug not in woke and oldest <= H.shift(at, hours=-NOTES_HOURS)
-                 and not c.execute("SELECT 1 FROM events WHERE action=? AND target=? AND ts>? "
-                                   "AND json_extract(detail_json,'$.daily')=1 LIMIT 1",
-                                   (EVENT, typ["id"], H.shift(at, hours=-NOTES_HOURS))).fetchone())
-        if new or daily:
+        if new:
             shown = entries[:MAX_LINES]
-            head = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new)." if new else
-                    f"Daily read on {typ['name']}: {held} held note(s) since {oldest[:16]}Z, and "
-                    f"{len(entries)} exception(s), none new.")
-            text = (head + " Fix each cause: move a ticket by hand, reassign it, or close a duplicate. Tickets that "
-                    "move on their own are not listed.\n\n" + render(shown, len(entries) - len(shown)))
-            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"],
-                                                                **({} if new else {"daily": True})}, wake=True)
+            text = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new). Fix each cause: move a ticket by "
+                    "hand, reassign it, or close a duplicate. Tickets that move on their own are not listed.\n\n"
+                    + render(shown, len(entries) - len(shown)))
+            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"]}, wake=True)
             if not ok:
                 continue        # nobody could be told: the same entries are new again on the next pass
             woke.append(slug)
-        if new or daily or set(keys) != sent:
+        if new or set(keys) != sent:
             # The list as it stands is what the next pass compares with; an entry that cleared and comes back is new.
-            # A wake while notes are held reads them: the daily read counts from it.
-            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new or daily),
-                                                    **({"daily": 1} if (new or daily) and held else {})})
+            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new)})
     return woke
