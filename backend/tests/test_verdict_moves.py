@@ -369,6 +369,25 @@ def test_a_check_timeout_keeps_unrelated_human_and_bot_subtasks_open(api):
             assert step_flow.check_step(c, child) is None
 
 
+@pytest.mark.parametrize("state", ["quarantined", "planned", "paused", "archived", "inactive", "", None])
+def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api, state):
+    from backend import task_allocator
+    with api.app.state.store.transaction() as c:
+        typ = H.type_create(c, H.KEEPER, "Check queue", [
+            {"name": "Inbox", "status": "open", "flow": {"assign": {"pool": ["cmo", "cpo"], "slots": 4}}},
+            {"name": "Check", "status": "doing"}])
+        parents = [H.task_create(c, "human:ana", f"Improve messages {i}", "Company work.", "human:ana", lint=False)
+                   for i in range(2)]
+        checks = [H.task_create(c, "human:ana", f"Review 1: synthetic check {i}", "Check messages.", "human:ana",
+                                type=typ["id"], parent_id=parent["id"], private=False, lint=False)
+                  for i, parent in enumerate(parents)]
+        c.execute("UPDATE bots SET state=? WHERE slug='cmo'", (state,))
+
+        assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
+        assert all(H.task(c, check["id"])["owner"] == "bot:cpo" for check in checks)
+        assert task_allocator.allocate(c) == [], "already assigned checks are not allocated twice"
+
+
 def test_allocator_never_grants_a_pool_bot_access_to_an_unreadable_private_task(api):
     from backend import task_allocator
     with api.app.state.store.transaction() as c:

@@ -3,8 +3,8 @@
 A step's flow may say `assign: {"pool": [bot slugs], "slots": n}` (backend/step_flow.py). A ticket at that step that
 no bot of the pool owns yet goes, on each scheduler pass, to the pool bot with the fewest tickets in hand on that type
 (ties: the fewest open tickets of any kind, then the slug), when it has a free slot. A ticket in hand is one the bot
-owns past the assigning step and before the type's merged step: work, checks waiting, fixes. A bot that is paused,
-archived or out of slots takes nothing; the ticket waits for the next pass, oldest first.
+owns past the assigning step and before the type's merged step: work, checks waiting, fixes. Only active bots with
+free slots take tickets; otherwise the ticket waits for the next pass, oldest first.
 
 The allocator only changes the owner; the owner moves the ticket on, and the step's own wake tells it."""
 from . import hubdb as H
@@ -37,7 +37,7 @@ def clean(c, actor, raw):
 
 def _available(c, slug):
     found = c.execute("SELECT coalesce(state,'') FROM bots WHERE slug=?", (slug,)).fetchone()
-    return bool(found) and found[0] not in ("archived", "paused")
+    return bool(found) and found[0] == "active"
 
 
 def in_hand(c, slug, type_id, assign_step):
