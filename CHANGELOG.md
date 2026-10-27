@@ -7,6 +7,12 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.15] - 2026-10-27
+
+### Fixed
+- **SQL queries run at normal speed again.** In v0.4.14, `hub sql` and the SQL API could take many minutes and slow every other request. This release restores the earlier query path and reverts the v0.4.14 change to message searches. Results and access rules are unchanged ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Desktop app sign-in shows its instructions.** On macOS, the model sign-in dialog could open with an empty body, hiding the provider link and code, so Claude Code and Codex could not sign in from the desktop app. The instructions now show ([Add a connection](docs/computers.md#add-one)).
+
 ## [0.4.12] - 2026-10-26
 
 ### Added
