@@ -514,14 +514,16 @@ and never on a closed one. With none that takes it the bot stays as it is and th
 Every control in Settings that writes has an entry in the settings catalogue (`backend/settings_entries.py`): a stable
 key such as `team.rules.admin_sql`, the control's name ("Admins see SQL"), where it is (Settings > People > Team rules),
 who may change it, its class, the route and body it writes, and a link that opens that card
-(`#/settings/<tab>/<card>`). A person, or BotOps for them, finds and changes a setting without knowing the route:
+(`#/settings/<tab>/<card>`). A person, or BotOps or their own Assistant for them, finds and changes a setting
+without knowing the route:
 
     hub settings find "sql"                                  key, name, where, class and who may change it
     hub settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
-    hub settings set release.times 09:30,17:00               change it with your rights (BotOps: the requester's)
+    hub settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
+                                                             person's)
 
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
-what `set` does when BotOps asks for a person:
+what `set` does when BotOps or the Assistant asks for a person (the same answer from either):
 
 - **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
   the privacy count): it changes at once, as that person, and the answer names the new value.
@@ -532,6 +534,12 @@ what `set` does when BotOps asks for a person:
   can (`NO_CARD_YET`; the catalogue test fails once one can, so it goes back to confirm).
 - **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail): BotOps
   answers with a one-line reason and the card's link.
+
+The Assistant's Confirm card is in the person's own Assistant chat (the owner's CEO Bot chat), and it may card every
+catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat
+(`--on-behalf-of turn`), as a task action does. Without it, or while the owner's "Assistant acts without asking" is off,
+a direct entry is a card too. A card or a cited write from the Assistant is exactly one entry's body: two settings at
+once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
 The route still makes its own check after the catalogue's. `backend/tests/test_settings_catalog.py` reads every write
