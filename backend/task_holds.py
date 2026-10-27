@@ -40,18 +40,37 @@ def _line(text, limit=160):
     return H._clip(first, limit)
 
 
+def _shared(conn, row, ask):
+    """Whether everyone who reads the task may read this question, so its words may go in the task's reason: asked in
+    the task's own room, with no meeting and no private task besides this one in its provenance (reply chain, inputs,
+    run). A question tied to the task from a stricter source is named only as "a question"."""
+    from . import hubdb as H, task_privacy as TP
+    from .live_privacy import sources
+    from .store import Problem
+    if ask.get("conversation_id") != row.get("conversation_id"):
+        return False
+    try:
+        if sources(conn).message(ask):
+            return False
+        others = TP.message_tasks(conn, ask) - {row["id"]}
+    except Problem:         # provenance that cannot be authorized is not shared
+        return False
+    return not any(r is None or H.task_private(conn, r) for r in TP._task_rows(conn, others).values())
+
+
 def holds(conn, row):
     """Every hold Tico tracks on a task, in the order `wait_detail` reads them: [{"kind", "on", "what"}]. `on` is the
     actor holding it (None for an external hold or an approval with nobody named), `what` a short subject."""
     from . import hubdb as H, task_relations as TR, profiles, review_gate
     out = []
     asks = H._rows(conn.execute(
-        "SELECT m.id, m.to_actor, m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+        "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE m.from_actor=? AND m.kind='ask' AND m.superseded_at IS NULL AND {H.MESSAGE_TASK_SQL}=? "
         "ORDER BY m.created", (row["owner"], row["id"])))
     if asks:
         answered = H.answers_to(conn, [a["id"] for a in asks])
-        out += [{"kind": "ask", "on": a["to_actor"], "what": _line(a["body"])} for a in asks if a["id"] not in answered]
+        out += [{"kind": "ask", "on": a["to_actor"], "what": _line(a["body"]) if _shared(conn, row, a) else "a question"}
+                for a in asks if a["id"] not in answered]
     engineering = review_gate.engineering(conn, row)
     check = None
     for child in H._rows(conn.execute(
@@ -170,6 +189,13 @@ def title(conn, row):
     """A child or blocker named in what cleared: a private one by no title, as _task_hold names it."""
     from . import hubdb as H
     return "A private task" if H.task_private(conn, row) else _line(row["title"], 120)
+
+
+def holders(conn, task_id):
+    """`task_id` came back to life, or its title or owner changed: the tasks it holds as a child or blocker name it
+    afresh. Nothing cleared, so none of them is released."""
+    from . import task_relations as TR
+    refresh_many(conn, [TR.parent_of(conn, task_id), *TR.blocked_ids(conn, task_id)])
 
 
 def ended(conn, row, status):

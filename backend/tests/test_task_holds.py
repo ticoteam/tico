@@ -272,3 +272,68 @@ def test_deleting_the_only_child_clears_the_parent_s_hold(api):
         report = delete_tasks(c, [child], apply=True, actor="human:ana")
         assert report["applied"], report["refused"]
         assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: Book the train was deleted"
+
+
+def test_a_note_only_edit_keeps_a_recorded_person_wait(api):
+    """Criterion 8 on the recorded wait itself, not only the question: a note alone never erases `waiting_on`."""
+    with api.app.state.store.transaction() as c:
+        ana = task_holds.name(c, "human:ana")
+        # Recorded with its question, as a bot's wait on a person is today.
+        asked = bot_task(c, "Pick the venue")
+        ask(c, asked, "Hall A or Hall B?")
+        H.task_update(c, "bot:ops", asked, status="waiting", waiting_on="human:ana", note="Ana, Hall A or Hall B?")
+        assert H.task(c, asked)["waiting_on"] == "human:ana"
+        H.task_update(c, "bot:ops", asked, note="waiting on Engineering")
+        row = H.task(c, asked)
+        assert row["waiting_on"] == "human:ana" and row["note"] == "waiting on Engineering"
+        assert row["blocked_reason"] == f"Waiting on {ana}: Hall A or Hall B?"
+        # Recorded with no question behind it (a wait from before questions were filed for it): only the field holds.
+        bare = bot_task(c, "Sign the lease")
+        wait(c, bare)
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (bare,))
+        task_holds.refresh(c, bare)
+        assert H.task(c, bare)["blocked_reason"] == f"Waiting on {ana}" and not H.open_task_asks(c, H.task(c, bare))
+        H.task_update(c, "bot:ops", bare, note="waiting on Engineering")
+        row = H.task(c, bare)
+        assert row["waiting_on"] == "human:ana" and row["status"] == "waiting"
+        assert row["blocked_reason"] == f"Waiting on {ana}" and row["note"] == "waiting on Engineering"
+        assert bare in [t["id"] for t in H.needs_you(c, "human:ana")["waiting"]]
+
+
+def test_a_child_reopened_or_renamed_is_named_again_by_its_waiting_parent(api):
+    with api.app.state.store.transaction() as c:
+        mine = bot_task(c, "Plan the launch", owner="human:ana", actor="human:ana")
+        child = bot_task(c, "Write the post", parent=mine, actor="human:ana")
+        wait(c, mine, owner="human:ana")
+        H.task_update(c, "bot:ops", child, status="done", note="Written")
+        assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: Write the post is done"
+        H.task_update(c, "bot:ops", child, status="open", note="Needs a second draft")
+        assert H.task(c, mine)["blocked_reason"] == "Waiting on ops: Write the post"
+        H.task_update(c, "bot:ops", child, title="Write the launch post")
+        assert H.task(c, mine)["blocked_reason"] == "Waiting on ops: Write the launch post"
+
+
+def test_a_question_from_a_private_source_is_not_quoted_in_a_company_task_s_reason(api):
+    """The reason is shown to every reader of the task; a question tied to it from a stricter source is only 'a
+    question' there. One asked in the task's own room is still quoted."""
+    with api.app.state.store.transaction() as c:
+        ana = task_holds.name(c, "human:ana")
+        tid = bot_task(c, "Renew the vendor contract")
+        secret = H.task_create(c, "human:ana", "Vendor breach review", "x", "bot:ops", private=True, lint=False)
+        room = H.task(c, tid)["conversation_id"]
+        # Asked in the private room, tied to the company task.
+        H.say(c, "bot:ops", "human:ana", "Was the breach in the March export?", kind="ask",
+              conversation_id=secret["conversation_id"], refs={"task": tid})
+        assert wait(c, tid)["blocked_reason"] == f"Waiting on {ana}: a question"
+        # Asked in the company task's room while it waits, but built on a private message.
+        source = H.say(c, "bot:ops", "human:ana", "Breach notes: the March export leaked.",
+                       conversation_id=secret["conversation_id"], refs={"task": secret["id"]})
+        H.say(c, "bot:ops", "human:ana", "Should the breach go in the renewal terms?", kind="ask",
+              conversation_id=room, refs={"task": tid, "inputs": [source["id"]]})
+        assert "breach" not in H.task(c, tid)["blocked_reason"].lower()
+    text = api.get("/api/v2/tasks/" + tid, headers={"Authorization": "Bearer ben-test"}).text
+    assert "Renew the vendor contract" in text and "breach" not in text.lower()
+    with api.app.state.store.transaction() as c:
+        plain = bot_task(c, "Renew the cleaning contract")
+        ask(c, plain, "Keep the same cleaner?")
+        assert wait(c, plain)["blocked_reason"] == f"Waiting on {ana}: Keep the same cleaner?"

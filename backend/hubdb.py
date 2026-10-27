@@ -3789,6 +3789,10 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
             withdraw_task_approvals(conn, row["id"], f"Its task was {TASK_ENDED[effective]}.")
             # Its parent and the tasks it blocked lose a hold: their reason follows, and the last one clearing frees them.
             task_holds.ended(conn, {**row, "status": effective}, effective)
+        elif row.get("status") in ("done", "closed", "declined"):
+            # Reopened: it holds its parent and the tasks it blocks again.
+            from . import task_holds
+            task_holds.holders(conn, row["id"])
     from .roadmap_flow import changed as roadmap_changed
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
@@ -6007,9 +6011,10 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         sets.append("private=:private")
         args["private"] = int(private)
         _task_event(conn, task_id, actor, "private", int(task_private(conn, row)), int(private), "")
-    # Who it waits on goes with the wait as said: a new status, note or owner starts with nobody
-    # waited on unless this update names the person again.
-    changed = (status is not None and status != row["status"] or note is not None and note != row.get("note")
+    # Who it waits on goes with the wait as said: a new status or owner starts with nobody waited on unless this
+    # update names the person again. A note alone keeps the person: it is detail beneath the wait, which only
+    # clearing it or answering ends (backend/task_holds.py).
+    changed = (status is not None and status != row["status"]
                or owner is not None and resolve_actor(conn, owner) != row["owner"])
     person = (waiting_on or None) if waiting_on is not None else (None if changed else row.get("waiting_on"))
     # A note that waits on a person is put in front of them, so it is checked like a title or body.
@@ -6020,7 +6025,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if person and is_bot(actor) and is_human(person) and (person != row.get("waiting_on") or note is not None):
         asked = any(a["to_actor"] == person for a in open_task_asks(conn, row))
         said = note if note is not None else row.get("note")
-        if asked:
+        # A note-only edit under a wait already recorded keeps that wait: its new words are warned about, not refused.
+        kept = waiting_on is None and person == row.get("waiting_on")
+        if asked or kept:
             plain = plain + style_problems(conn, actor, lint_waiting_note(said, person, asked))
         else:
             require_person_ask(conn, actor, person, said, "waiting")
@@ -6158,6 +6165,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         conn.execute(f"UPDATE tasks SET {', '.join(sets)}, updated=:updated WHERE id=:id", args)
     if person and status == "waiting":
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
+    after = task(conn, task_id) or {}
+    if (after.get("title"), after.get("owner")) != (row["title"], row["owner"]):
+        # The tasks it holds name it by title and owner (backend/task_holds.py).
+        from . import task_holds
+        task_holds.holders(conn, task_id)
     if (task(conn, task_id) or {}).get("status") == "waiting":
         # Its reason follows what holds it after any change: a person wait set or cleared, a note, a status
         # (backend/task_holds.py). Someone else clearing the person it waited on clears that hold. The owner clearing
