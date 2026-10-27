@@ -203,7 +203,8 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         H.task_update(c, "bot:cpo", row["id"], step="QA Fixes")
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Waits on QA")
         H.task_update(c, "bot:cpo", row["id"], status="doing", note="Back on it")
-        H._wake(c, H.task(c, row["id"]), "bot:coo", "A setup blocker needs you.", {"wake": "blocker"})
+        # Its own words: the same notice again is dropped as a repeat, which would hide a wake.
+        H._wake(c, H.task(c, row["id"]), "bot:coo", f"A setup blocker on {title} needs you.", {"wake": "blocker"})
         late = ticket(c, typ, title + " late")
         c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), hours=-5), late["id"]))
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), hours=-5), late["id"]))
