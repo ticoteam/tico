@@ -81,13 +81,26 @@ def effective_grant(c, credential, subject):
 
 def granted(c, subject):
     """The credential ids `subject` holds an effective grant to, in one query: `effective_grant` for each of them.
-    The runner endpoints poll every few seconds for every bot, so one query per credential was most of a server's SQL."""
-    return {r[0] for r in c.execute('SELECT g.credential_id FROM credential_grants g '
-                                    'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-                                    "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
-                                    'WHERE g.subject=? AND g.revoked IS NULL '
-                                    "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL "
-                                    "AND p.subject='human:'||bc.operator))", (subject,))}
+    The runner endpoints poll every few seconds for every bot, so one query per credential was most of a server's SQL.
+
+    Within a read snapshot the answer is reused: Operations `shared()` asked for `computers` and each
+    `computer:<id>` once per runtime.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("credential_granted", subject)
+    if values is not None and key in values:
+        return values[key]
+    found = frozenset(r[0] for r in c.execute(
+        'SELECT g.credential_id FROM credential_grants g '
+        'LEFT JOIN credential_grants p ON p.id=g.parent_id '
+        "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+        'WHERE g.subject=? AND g.revoked IS NULL '
+        "AND (g.parent_id IS NULL OR (p.revoked IS NULL AND p.id IS NOT NULL "
+        "AND p.subject='human:'||bc.operator))", (subject,)))
+    if values is not None:
+        values[key] = found
+    return found
 
 
 def permitted(c, who, credential, admins):
