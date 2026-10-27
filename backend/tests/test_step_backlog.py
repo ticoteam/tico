@@ -78,10 +78,16 @@ def test_a_ticket_of_a_bot_not_every_member_reads_is_not_counted(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "cpo", people=["human:ana"])
         typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
-        tickets(c, typ, "bot:cpo", 1)
+        [hidden] = tickets(c, typ, "bot:cpo", 1)
         tickets(c, typ, "bot:ops", 3)
         assert SB.sweep(c, later(0)) == [], "the restricted bot's ticket does not push the step over"
         assert told(c) == []
+        H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        assert [n for _, _, n, _ in SB.sweep(c, later(0))] == [4]
+        [(room, body)] = c.execute("SELECT json_extract(refs_json,'$.task'), body FROM messages "
+                                   "WHERE body LIKE 'Backlog:%'").fetchall()
+        assert room != hidden["id"], "the oldest ticket is the restricted bot's, and it never hosts the warning"
+        assert "cpo" not in body
 
 
 def test_per_owner_a_private_ticket_never_makes_an_owner_over(api):
