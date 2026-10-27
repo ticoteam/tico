@@ -263,6 +263,7 @@ def test_a_task_held_only_by_its_own_quiet_subtask_is_flagged_woken_and_shown_st
         assert len(woke) == 1 and "blocked only by its own subtask" in woke[0][0] and hold["id"] in woke[0][0]
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 1
         # The question for a person is not a stuck block: its task is left alone.
+        c.execute("UPDATE jobs SET state='completed'")      # BotOps's list skips a bot that is busy
         stuck = {t["id"]: t for t in H.stuck_tasks(c)}
         assert stuck[window["id"]]["own_blockers"] == [hold["id"]] and asked["id"] not in stuck
 
@@ -277,13 +278,14 @@ def held_window(c, hold_parent=True):
     return window, hold
 
 
-def flagged(c, window, *tasks, minutes=6):
+def flagged(c, window, *tasks, minutes=6, keep_jobs_of=None):
     """(parent woken, parent on BotOps's stuck list) once the parent has been quiet six minutes and `tasks` `minutes`."""
-    c.execute("UPDATE jobs SET state='completed'")
+    c.execute("UPDATE jobs SET state='completed' WHERE bot IS NOT ?", (keep_jobs_of,))
     aged(c, window["id"], 6)
     for t in tasks:
         aged(c, t["id"], minutes)
-    return window["id"] in H.wake_stalled(c)["woke"], window["id"] in {t["id"] for t in H.stuck_tasks(c)}
+    stuck = window["id"] in {t["id"] for t in H.stuck_tasks(c)}    # before the wake makes its bot busy
+    return window["id"] in H.wake_stalled(c)["woke"], stuck
 
 
 def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is_stuck(api):
@@ -321,7 +323,8 @@ def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_tim
             assert flagged(c, window, hold) == (True, True)
 
 
-@pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked"])
+@pytest.mark.parametrize("case", ["fresh", "not_a_subtask", "mixed", "hold_blocked", "hold_asked", "hold_in_review",
+                                  "hold_waiting_on_person", "hold_job_queued", "hold_job_leased", "hold_job_running"])
 def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c, hold_parent=case != "not_a_subtask")
@@ -332,7 +335,99 @@ def test_a_blocker_that_can_still_move_does_not_stall_its_parent(api, case):
             H.TR.relate(c, "bot:finance", hold["id"], other["id"], "blocked_by")
         if case == "hold_asked":
             H.task_ask(c, "bot:finance", hold["id"], "Which window do you mean?")
-        assert flagged(c, window, hold, other, minutes=2 if case == "fresh" else 6) == (False, False)
+        if case == "hold_in_review":     # its reviewer moves it
+            c.execute("UPDATE tasks SET status='review' WHERE id=?", (hold["id"],))
+        if case == "hold_waiting_on_person":
+            c.execute("UPDATE tasks SET status='waiting', waiting_on='human:ana' WHERE id=?", (hold["id"],))
+        if case.startswith("hold_job_"):
+            job = c.execute("SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                            "JOIN conversations cv ON cv.id=m.conversation_id "
+                            f"WHERE j.bot='finance' AND {H.MESSAGE_TASK_SQL}=?", (hold["id"],)).fetchone()[0]
+            c.execute("UPDATE jobs SET state=? WHERE id=?", (case.removeprefix("hold_job_"), job))
+        assert flagged(c, window, hold, other, minutes=2 if case == "fresh" else 6,
+                       keep_jobs_of="finance" if case.startswith("hold_job_") else None) == (False, False)
+        if case.startswith("hold_job_"):
+            # Another task's queued job on the same bot cannot exempt this hold.
+            c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
+            assert flagged(c, window, hold, other, keep_jobs_of="finance") == (True, True)
+        elif case == "hold_in_review":
+            c.execute("UPDATE tasks SET status='doing' WHERE id=?", (hold["id"],))
+            assert flagged(c, window, hold, other) == (True, True)
+        elif case == "hold_waiting_on_person":
+            c.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (hold["id"],))
+            assert flagged(c, window, hold, other) == (True, True)
+
+
+def test_a_parent_waiting_on_a_person_is_not_stalled_by_its_quiet_hold(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (window["id"],))   # no ask row
+        assert flagged(c, window, hold) == (False, False)
+
+
+@pytest.mark.parametrize("sender", ["bot:ops", "human:ana", "bot:boss"])
+def test_a_parked_child_only_exempts_its_parent_for_a_job_the_runner_can_claim(api, sender):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup', reports_to='boss' WHERE bot='finance'")
+        c.execute("UPDATE messages SET from_actor=? WHERE id IN "
+                  "(SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+                  "JOIN conversations cv ON cv.id=m.conversation_id "
+                  f"WHERE j.bot='finance' AND {H.MESSAGE_TASK_SQL}=?)", (sender, hold["id"]))
+        assert flagged(c, window, hold, keep_jobs_of="finance") == ((True, True) if sender == "bot:ops"
+                                                                  else (False, False))
+
+
+@pytest.mark.parametrize("reason", ["uncertain", "scope"])
+def test_a_queued_child_job_held_by_the_claim_fence_does_not_silence_its_parent(api, reason):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        if reason == "uncertain":
+            c.execute("UPDATE jobs SET state='uncertain' WHERE bot='finance'")
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                      "VALUES(?,?,'bot:ops','bot:finance','notice','Continue the hold',?,?)",
+                      (H.new_id(), hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
+        else:
+            other = H.task_create(c, "bot:ops", "Run the migration", "", "bot:finance")
+            c.execute("INSERT INTO bot_control(bot,claim_task) VALUES('finance',?) "
+                      "ON CONFLICT(bot) DO UPDATE SET claim_task=excluded.claim_task", (other["id"],))
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued' AND held=0").fetchone()[0]
+        assert flagged(c, window, hold, keep_jobs_of="finance") == (True, True)
+        if reason == "uncertain":
+            c.execute("UPDATE jobs SET state='completed' WHERE state='uncertain'")
+        else:
+            c.execute("UPDATE bot_control SET claim_task=NULL WHERE bot='finance'")
+        assert flagged(c, window, hold, keep_jobs_of="finance") == (False, False)
+
+
+def test_botops_stuck_list_skips_an_own_blocked_parent_while_its_bot_is_busy_or_it_waits_for_the_next_run(api):
+    with api.app.state.store.transaction() as c:
+        window, hold = held_window(c)
+        aged(c, window["id"], 6)
+        aged(c, hold["id"], 6)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 1
+        listed = lambda: window["id"] in {t["id"] for t in H.stuck_tasks(c)}  # noqa: E731
+        assert not listed()
+        c.execute("UPDATE jobs SET state='completed'")
+        c.execute("UPDATE tasks SET next_run=1 WHERE id=?", (window["id"],))
+        assert not listed()
+        c.execute("UPDATE tasks SET next_run=0 WHERE id=?", (window["id"],))
+        assert listed()
+
+
+def test_creating_a_task_that_blocks_two_of_its_ancestors_returns_both_warnings(api):
+    from backend.tests.test_api import post
+    root = post(api, "tasks", {"owner": "ops", "title": "Ship the release", "body": "x"})
+    window = post(api, "tasks", {"owner": "ops", "title": "Open the deploy window", "body": "x",
+                                 "relations": [{"task": root["id"], "kind": "parent"}]})
+    made = post(api, "tasks", {"owner": "finance", "title": "Hold merges until RELEASED", "body": "x",
+                               "relations": [{"task": window["id"], "kind": "parent"},
+                                             {"task": window["id"], "kind": "blocks"},
+                                             {"task": root["id"], "kind": "blocks"}]})
+    hold = made["task"]["id"]
+    assert f"subtask of {window['id']}" in made["warning"] and f"subtask of {root['id']}" in made["warning"]
+    assert made["warning"].count(hold) == 2
 
 
 def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):
@@ -341,6 +436,7 @@ def test_a_parent_held_by_two_quiet_holds_of_its_own_lists_both(api):
         second = H.task_create(c, "bot:ops", "Hold deploys until RELEASED", "", "bot:finance", parent_id=window["id"])
         H.TR.relate(c, "bot:ops", window["id"], second["id"], "blocked_by")
         assert flagged(c, window, hold, second) == (True, True)
+        c.execute("UPDATE jobs SET state='completed'")
         assert {t["id"]: t for t in H.stuck_tasks(c)}[window["id"]]["own_blockers"] == [hold["id"], second["id"]]
 
 

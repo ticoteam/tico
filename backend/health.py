@@ -1914,13 +1914,21 @@ def view(c, who, settings, auth, github, config):
 
     # Successful model turns can still make no task progress. Infrastructure and failed-run
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
-    stalled = list(c.execute(
-        "SELECT id,title,number,owner,updated FROM tasks WHERE owner LIKE 'bot:%' AND status IN ('open','doing') "
+    # Waiting tasks can also escalate when held only by their own quiet subtasks.
+    stalled = [row for row in c.execute(
+        "SELECT id,title,number,owner,updated,status,waiting_on FROM tasks "
+        "WHERE owner LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
+        # A waiting parent's diagnosis must not reveal the activity of an unreadable blocker.
+        "AND (status<>'waiting' OR NOT EXISTS (SELECT 1 FROM task_relations r "
+        "WHERE r.to_task=tasks.id AND r.kind='blocks' AND r.from_task IN "
+        f"(SELECT tasks.id FROM tasks WHERE status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+        f"AND NOT coalesce(({auth.task_sql(c, who)}),0)))) "
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated"))
+        "AND e.target=tasks.id AND e.ts>=tasks.updated) ORDER BY updated", H.ACTIVE_STATUSES)
+        if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated"]),

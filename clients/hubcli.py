@@ -359,7 +359,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            read or set a bot's runs per hour and per day (0 no limit, default follows the
                                            team), or release it after Tico stopped it
     hub bot release <bot>                  release a bot Tico stopped for failed runs or too many runs
-    hub bot profile <bot> [doer|reviewer|lead|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
+    hub bot profile <bot> [doer|reviewer|lead|manager|responder|monitor|custom] [--batch-seconds N] [--digest-hour H]
                                            read or set what wakes a bot and which tasks it takes (--sweeps/--pulls/--takes
                                            are for custom; --confirm-drop-rules when leaving custom deletes its own rules)
     hub bot scope <bot> <task>|--release   limit a bot's claims to one task and its subtasks, or lift that
@@ -2044,7 +2044,7 @@ def parser():
     s.set_defaults(fn="webhook example")
 
     s = sub.add_parser("pipeline", help="a task type's steps (count, age, owners, whom they wait on, open PRs), each bot's "
-                       "running, queued, held and dead jobs, and failed runs by cause")
+                       "running, queued, held and dead jobs, failed runs by cause, and the engineering manager's exceptions")
     s.add_argument("--type", help="task type id or name; default the engineering board")
     s.add_argument("--owner")
     s.add_argument("--label")
@@ -2399,7 +2399,7 @@ def parser():
     s.set_defaults(fn="bot budget")
     s = bot.add_parser("profile", help="read or set a bot's profile: what wakes it and which tasks it takes")
     s.add_argument("bot")
-    s.add_argument("profile", nargs="?", choices=["doer", "reviewer", "lead", "responder", "monitor", "custom"],
+    s.add_argument("profile", nargs="?", choices=["doer", "reviewer", "lead", "manager", "responder", "monitor", "custom"],
                    help="the profile to set; leave out to read the bot's and the choices")
     s.add_argument("--batch-seconds", dest="batch_seconds", type=int, help="how long news waits to be batched (seconds)")
     s.add_argument("--sweep-seconds", dest="sweep_seconds", type=int, help="least seconds between two runs of the same sweep")

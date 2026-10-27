@@ -7118,18 +7118,25 @@ def own_stuck_blockers(conn, row, at=None):
     parent's window is released is the case seen; a question for a person in a subtask is not (it
     belongs to the person), nor is a subtask with a future due date, a snooze, a stored resume or a pending
     milestone wait (each brings it back by itself; once the date or snooze has passed, or the milestone has
-    woken it, it is quiet again). Being blocked by these does not hold `row` back from the stall watcher."""
+    woken it, it is quiet again). Review and a queued or active run of the subtask also move it independently.
+    A parent or subtask waiting on a person belongs to that person. These waits exempt the parent from the
+    stall watcher."""
     from .milestone_waits import pending as milestone_pending
+    from .quiet_work import own_job
     at = at or now()
+    if row.get("status") == "waiting" and is_human(row.get("waiting_on")):
+        return []
     blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
         return []
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
     for block in blockers:
-        if (not is_bot(block["owner"]) or block["updated"] >= quiet or not TR.is_descendant(conn, row["id"], block["id"])
+        if (not is_bot(block["owner"]) or block["status"] == "review" or block["updated"] >= quiet
+                or (block["status"] == "waiting" and is_human(block.get("waiting_on")))
+                or not TR.is_descendant(conn, row["id"], block["id"])
                 or TR.live_blocker(conn, block["id"], ACTIVE_STATUSES) or unanswered_ask(conn, block)
                 or due_later(block, at) or TS.snoozed(block, at) or block.get("resume_json")
-                or milestone_pending(conn, block["id"])):
+                or milestone_pending(conn, block["id"]) or own_job(conn, block, claimable=True)):
             return []
     return [block["id"] for block in blockers]
 
@@ -7140,7 +7147,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     or going. One BotOps sweep finds these instead of a daily run per bot.
 
     Also, at any age and even `waiting`, a task held only by its own quiet subtasks (own_stuck_blockers):
-    that wait never ends by itself. Those carry `own_blockers`."""
+    that wait never ends by itself. Those carry `own_blockers`, under the same busy and next-run rules."""
     at = now()
     cutoff = shift(at, seconds=-hours * 3600)
     rows = _rows(conn.execute(
@@ -7157,13 +7164,12 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     out = []
     for row in rows:
         slug = actor_id(row["owner"])
-        if slug in hidden or unanswered_ask(conn, row):
+        if slug in hidden or slug in busy or row.get("next_run") or unanswered_ask(conn, row):
             continue
         if not_yet_due(row, at):     # parked until its due date, like the stall watcher
             continue
         own = own_stuck_blockers(conn, row, at)
-        if not own and (row["status"] not in ("open", "doing", "ready") or row.get("next_run")
-                        or row["updated"] >= cutoff or slug in busy
+        if not own and (row["status"] not in ("open", "doing", "ready") or row["updated"] >= cutoff
                         or TR.live_blocker(conn, row["id"], ACTIVE_STATUSES)):
             continue
         out.append({"id": row["id"], "short_id": row["id"][:8], "title": row["title"], "owner": row["owner"], "status": row["status"],
@@ -7573,7 +7579,7 @@ def stall_skip(conn, row, at=None):
     or the owner's profile has no stall sweeps (rules.sweeps_on). A task held only by its own quiet subtasks
     (`own_blockers`) keeps being checked: that deadlock is what the check is for. Task Manager reports read
     `stalled_tasks`, not this, so a task no sweep wakes still reaches a person's report."""
-    from . import rules, wake_rules
+    from . import rules
     at = at or now()
     slug = actor_id(row["owner"])
     if not rules.sweeps_on(conn, slug):
@@ -7583,6 +7589,15 @@ def stall_skip(conn, row, at=None):
         if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND lane IN (?,?) AND state IN ('leased','running') "
                         "LIMIT 1", (slug, *lanes)).fetchone():
             return "live_session"
+    return recorded_wait(conn, row, at)
+
+
+def recorded_wait(conn, row, at=None):
+    """What a quiet task waits on, as recorded, or None: an ask, a snooze, a due date, a stored resume, an approval, or
+    (unless only its own quiet subtasks hold it) a blocker, a pull request or milestone wait, or an open subtask. The
+    same whatever the owner's profile says about sweeps, so a list of stuck work reads a reviewer's waits too."""
+    from . import wake_rules
+    at = at or now()
     if unanswered_ask(conn, row):
         return "ask"
     if TS.snoozed(row, at):
