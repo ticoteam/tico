@@ -28,7 +28,7 @@ def during(run, w, team, i):
     w.github_fault = FAULTS[int(since / at(1))] if at(0) <= since < at(OUTAGE_HOURS) else None
     if w.github_fault and run.child is None:
         # A person files a task under the first ticket the outage holds: a question for them to answer.
-        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND blocked_kind='gate' ORDER BY blocked_since, id LIMIT 1",
+        held = w.sql("SELECT id FROM tasks WHERE type_id=? AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=tasks.id AND e.field='move_retry') ORDER BY created, id LIMIT 1",
                      (w.dev["id"],))
         if held:
             child = w.post("tasks", {"owner": "ana", "title": "Confirm the wording with support",

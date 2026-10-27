@@ -432,11 +432,12 @@ function whFiltersValue(box) {
 // Custom headers (backend/webhooks.py HeaderIn), at most ten. A secret's value never comes back: its row says "set",
 // and left empty it keeps the value it has.
 const WH_MAX_HEADERS = 10;
+// A secret cleared when the address changed says "needs value": the endpoint is paused until it is typed or removed.
 function whHeaderRowHTML(x = {}) {
-  const kept = x.secret && x.set;
-  return `<div class="wh-hdr" data-hdr>
+  const kept = x.secret && (x.set || x.needs_value);
+  return `<div class="wh-hdr${x.needs_value ? ' wh-hdr-needs' : ''}" data-hdr${x.needs_value ? ' data-hdr-needs' : ''}>
     <input data-hdr-name maxlength="64" autocomplete="off" spellcheck="false" placeholder="Name" aria-label="Header name" value="${esc(x.name || '')}">
-    <input data-hdr-value type="${x.secret ? 'password' : 'text'}" maxlength="1000" autocomplete="new-password" spellcheck="false" aria-label="Value" placeholder="${kept ? 'set' : 'Value'}" value="${kept ? '' : esc(x.value || '')}">
+    <input data-hdr-value type="${x.secret ? 'password' : 'text'}" maxlength="1000" autocomplete="new-password" spellcheck="false" aria-label="Value" placeholder="${x.needs_value ? 'needs value' : kept ? 'set' : 'Value'}" value="${kept ? '' : esc(x.value || '')}">
     <label class="wh-hdr-secret"><input type="checkbox" data-hdr-secret${x.secret ? ' checked' : ''}> Secret</label>
     <button type="button" class="ghost" data-hdr-remove aria-label="Remove header">✕</button></div>`;
 }
@@ -486,7 +487,10 @@ async function whHookDialog(h) {
     const body = {name: String(v.get('name')).trim(), url, events: chosen, allow_http: /^http:/i.test(url) && v.has('allow_http')};
     const filter = filters ? whFiltersValue(filters) : null, sent = whHeadersValue(headers);
     if (h) {
-      await post(`/v2/webhooks/${encodeURIComponent(h.id)}/update`, {...body, ...(filter ? {filter} : {}), headers: sent, expected_revision: h.revision});
+      // A new destination while secret headers keep their values asks first: keep them, or clear them to type again.
+      const saved = await settingsDestinationSave(extra => post(`/v2/webhooks/${encodeURIComponent(h.id)}/update`,
+        {...body, ...(filter ? {filter} : {}), headers: sent, expected_revision: h.revision, ...extra}));
+      if (saved.credentials_choice === 'clear') toast('Saved. Type the secret header values again: the endpoint is paused until then.');
       dialog.close(); void renderSettingsWebhooks(); return;
     }
     if (filter && Object.values(filter).some(x => x.length)) body.filter = filter;

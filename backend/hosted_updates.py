@@ -278,8 +278,7 @@ def tick(store, vault, now=None):
         now = now or time.time()
         with store.read() as c:
             record = load(c)
-            key = gateway_connection.key(c, vault, store.settings)
-            base = gateway_connection.url(c, store.settings)
+            key, base, _ = gateway_connection.target(c, vault, store.settings)
         if key and (now - record.get("checked_s", 0) >= CHECK_S or (record.get("outcome") and not record.get("reported"))):
             check_in(store, key, base, now)
         return advance(store, now)

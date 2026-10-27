@@ -306,7 +306,10 @@ class Rule5Tasks(HubCase):
         refs = {row["id"]: [json.loads(m["refs_json"]) for m in H.messages(self.conn, row["conversation_id"])
                             if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
         self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
-        self.assertFalse(refs[noted["id"]][0].get("quiet"), "a note may change what the bot does next")
+        self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
+        notes = self.conn.execute("SELECT body FROM notes WHERE to_actor=?", (SEO,)).fetchall()
+        self.assertEqual(len(notes), 1)
+        self.assertIn("1 task", notes[0][0])
 
     def test_an_answer_goes_back_to_the_bot_that_asked_and_clears_the_wait(self):
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO)

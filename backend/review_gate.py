@@ -238,6 +238,10 @@ def snapshot(service, prs):
             cause = mint_failure(exc, repo)
             out[pr["id"]] = {"error": True, "why": "GitHub read failed: " + type(exc).__name__,
                              "retryable": cause["retryable"], "auth": cause["auth"]}
+    if any(r.get("head_sha") and not r.get("error") for r in out.values()):
+        from . import source_outages
+        with service.store.transaction() as c:
+            source_outages.github_read(c, prs, out)
     return out
 
 
@@ -388,7 +392,9 @@ def notify(c, actor, notice):
     """After refusal rollback, keep one Builder comment per ticket/head/check kind."""
     from . import hubdb as H
     row = H.task(c, notice["task"])
-    if row:
+    from . import move_retry
+    source_wait = not notice.get('local') and (move_retry.outage(notice.get('text')) or notice.get('problem_code'))
+    if row and not source_wait:
         from .task_blocked import hold
         hold(c, row["id"], notice["text"], "gate")
         c.execute("UPDATE tasks SET blocked_gate_json=? WHERE id=?", (
@@ -406,4 +412,4 @@ def notify(c, actor, notice):
     # owner's queue reaches it reads a ticket the retry has already moved.
     H._write_message(c, H.KEEPER, row["owner"], notice["text"], conv, "say",
                      {"task": row["id"], "comment": True, "news": "blocker", "review_gate": json.dumps(key, sort_keys=True),
-                      **({"quiet": True} if notice.get("temporary") else {})}, None, None)
+                      **({"quiet": True} if source_wait else {})}, None, None)

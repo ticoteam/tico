@@ -412,6 +412,8 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/directory"), ("POST", r"/api/v2/directory/(sync|preview)"),
     ("POST", r"/api/v2/(slack|github/app)/disconnect"),
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
+    # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
+    ("POST", r"/api/v2/webhooks/[^/]+/update"),
 )]
 _SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
 
@@ -747,12 +749,14 @@ def refuse_unrunnable(routes, method, path, body):
                                               for e in errors), 422)
 
 
-def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None):
+def create_proposal(c, settings, who, room, proposer, summary, method, path, body, asked=None, what=None, routes=None,
+                    shown=None):
     """One pending action for `who` to confirm, and its card in `room`, written by the bot that proposed it.
 
     The Assistant proposes what its turn may not do on its own; BotOps proposes what a person asked it for
     that always needs their own click (adding people, roles, shared credentials, a computer that does not
-    take members' bots). Either way only the person's own confirm runs it, as them."""
+    take members' bots). Either way only the person's own confirm runs it, as them. `shown`: the card's lines, when the
+    route that asks says what changes in safer words than the body (a destination by scheme, host and port only)."""
     path = normalize_path(path)
     if not valid_operation(method, path, settings, proposer):
         raise Problem("operation", "That is not something that can be proposed: it is not on the list of routes "
@@ -804,6 +808,8 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
         # The card lists every field the request carries, so nothing that runs is missing from what is confirmed.
         # (A task update lists what changes: its old and new values.)
         diff = [{"field": k, "new": v} for k, v in body.items()]
+    if shown is not None:
+        diff = shown
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
            "method": method, "path": path, "body_json": json.dumps(body),
            "status": "pending", "proposed_via": proposer, "created": H.now(),

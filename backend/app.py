@@ -1595,8 +1595,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Search is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1617,8 +1616,7 @@ def create_app(settings=None):
         if settings.rehearsal:
             raise Problem("rehearsal", "Fetch is off in rehearsal mode; nothing is sent to the Gateway", 503)
         with store.read() as c:
-            key = gateway_connection.key(c, app.state.vault, settings) if gateway_connection.connected(c, settings) else ""
-            base = gateway_connection.url(c, settings)
+            key, base, _ = gateway_connection.target(c, app.state.vault, settings)
             header = gateway_connection.bot_header(c, app.state.vault, H.actor_id(who.actor)) if H.is_bot(who.actor) else {}
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
@@ -1639,7 +1637,8 @@ def create_app(settings=None):
         vault = app.state.vault
         with store.transaction() as c:
             gateway_connection.save(c, vault, who, {"key": body.key.get_secret_value() if body.key else "",
-                                                    "url": body.url, "expected_revision": body.expected_revision},
+                                                    "url": body.url, "expected_revision": body.expected_revision,
+                                                    "credentials": body.credentials},
                                     H.now(), settings)
         gateway_connection.check_now(store, vault, settings)
         with store.read() as c:
@@ -1712,7 +1711,7 @@ def create_app(settings=None):
         """The gateway key and Gateway URL Settings > Billing reads HQ with. Owners and admins only."""
         admin_only(who, does)
         with store.read() as c:
-            return gateway_connection.key(c, app.state.vault, settings), gateway_connection.url(c, settings)
+            return gateway_connection.target(c, app.state.vault, settings)[:2]
 
     @app.get("/api/v2/billing")
     def billing_view(request: Request, month: str = ""):
@@ -4982,13 +4981,12 @@ def create_app(settings=None):
         # A Gateway URL change sends the saved key to the proposed address as a connection check.
         # Require the owner's tap whenever a key is saved, even when botops_direct is on. A key the server's
         # environment sets can't be changed here at all, so that save is refused at once rather than carded.
-        gateway_key_address_change = (
-            method == "PUT" and path == botops_act.API + "providers/gateway"
-            and isinstance(body, dict) and bool(body.get("url"))
-            and gateway_connection.connected(c, settings) and not gateway_connection.env_key(settings)
-        )
+        gateway_put = method == "PUT" and path == botops_act.API + "providers/gateway"
+        moved, shown, what, refusal = destination_card(c, acting, method, path, body)
+        gateway_key_address_change = gateway_put and (bool(body.get("url")) or bool(moved)) and (
+            gateway_connection.connected(c, settings) and not gateway_connection.env_key(settings))
         if not path or not botops_act.card_for_person(method, path, body, rules, lowers,
-                                                       force_confirm=gateway_key_address_change):
+                                                       force_confirm=gateway_key_address_change or bool(moved)):
             return None
         # Told at once, not handed a card that fails on the tap.
         who_may = ("the owner" if botops_act.owner_only(method, path, body) and acting.role != "owner"
@@ -4997,9 +4995,72 @@ def create_app(settings=None):
         if who_may:
             raise Problem("forbidden", "Only " + who_may + " can do this", 403, extra=botops_act.refusal_for_person(
                 path, "Your role can't change this: ask " + who_may, settings.public_url))
+        if refusal:
+            raise refusal
         with store.transaction() as w:
-            card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body))
+            card = propose_card(w, acting, method, path, body, botops_act.card_summary(method, path, body),
+                                what=what, shown=shown)
         return JSONResponse(card)
+
+    def destination_card(c, acting, method, path, body):
+        """For BotOps acting for a person: (change, card lines, card title, refusal) when `body` moves saved credentials
+        to another service (backend/destinations.py). It always waits for the person's own tap; until BotOps
+        says which (`credentials` "keep" or "clear") and names the revision it read, it is refused at once (`refusal`,
+        raised once the person's role is checked) with what the person must decide, so no card keeps or clears
+        anything without their word. An address edit that moves nothing saved gets no change and no refusal, but still
+        its card lines and title, so no card for either integration shows an address as typed. Else Nones."""
+        from . import destinations, webhooks
+        from .assistant import spoken
+        if method == "PUT" and path == botops_act.API + "providers/gateway":
+            moved, labels = gateway_connection.destination_change(c, body, settings), [gateway_connection.LABEL_KEY]
+            current, integration, name = gateway_connection.revision(c), "gateway", gateway_client.LABEL
+            old_url, new_url = gateway_connection.url(c, settings), gateway_client.base_url(str(body.get("url") or ""))
+        elif method == "POST" and (hook := webhooks.UPDATE_PATH.fullmatch(path)):
+            row, moved, labels = webhooks.pending_change(c, acting, hook.group(1), body, app.state.vault)
+            current, integration, name = row["revision"], "webhook", row["name"]
+            old_url, new_url = row["url"], body.get("url") or row["url"]
+        else:
+            return None, None, None, None
+        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
+        # only as its safe destination, never as typed).
+        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
+        and_also = f", and change {', '.join(spoken(k) for k in also)}" if also else ""
+        others = [{"field": k, "new": shown_value(body[k])} for k in also]
+        if not moved:
+            if "url" not in body:
+                return None, None, None, None
+            seen = destinations.shown(old_url, new_url)
+            old, new = seen["old"]["address"], seen["new"]["address"] or "an address that is not a URL"
+            what = f"Change {name}'s address to {new} ({seen['path']}; nothing saved moves to another service)"
+            return None, [{"field": "destination", "old": old, "new": new}, {"field": "path", "new": seen["path"]},
+                          *others], (what + and_also)[:300], None
+        option = destinations.choice(body.get("credentials"))
+        if not option:
+            return moved, None, None, destinations.held(integration, moved, labels, current, name)
+        if body.get("expected_revision") is None:
+            return moved, None, None, Problem("expected_revision", "Changing where saved credentials go needs "
+                                              "expected_revision: the revision you read", 422)
+        if not isinstance(body["expected_revision"], int) or body["expected_revision"] != int(current):
+            return moved, None, None, Problem("version_conflict", name + " changed since you read it; read it again", 409)
+        old, new, listed = moved["old"]["address"], moved["new"]["address"], ", ".join(labels)
+        what = (f"Send {name}'s saved {listed} to {new} instead of {old}" if option == destinations.KEEP
+                else f"Move {name} to {new} and clear its saved {listed}")
+        shown = [{"field": "destination", "old": old, "new": new},
+                 *([{"field": "path", "new": moved["path"]}] if "path" in moved else []),
+                 {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed},
+                 *others]
+        return moved, shown, (what + and_also)[:300], None
+
+    def shown_value(value):
+        """A short card value for a field that changes alongside a destination: a scalar as itself, a header list as
+        its names (a secret's value is refused before any card), anything else by size."""
+        if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            return value[:120]
+        if isinstance(value, list) and all(isinstance(h, dict) and "name" in h for h in value):
+            return ", ".join(str(h["name"])[:60] for h in value) or "none"
+        return f"{len(value)} item{'s' if len(value) != 1 else ''}" if isinstance(value, (list, dict)) else "changed"
 
     def botops_run_identity(c, attempt_id):
         """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
@@ -5017,13 +5078,13 @@ def create_app(settings=None):
             return None
     app.state.botops_run_identity = botops_run_identity
 
-    def propose_card(c, acting, method, path, body, summary, what=None):
+    def propose_card(c, acting, method, path, body, summary, what=None, shown=None):
         """What always needs the requesting person's own click: a Confirm card in their chat with BotOps,
         and the answer BotOps reports back instead of asking them to go to Settings. `what`: the card's title, when the
         route that asks already said in plain words what confirming does (never a bot's words)."""
         room = rooms.chat_room(c, auth, acting, BOTOPS)
         card = create_proposal(c, settings, acting, room, BOTOPS, summary, method, path, body, what=what,
-                               routes=app.routes)
+                               routes=app.routes, shown=shown)
         return {"proposed": True, "needs_confirm": True, **card,
                 "detail": "This needs " + ((H.human(c, H.actor_id(acting.actor)) or {}).get("name") or "the person")
                 + "'s own OK. A Confirm card is in their chat with BotOps; nothing has changed yet."}
@@ -5279,7 +5340,7 @@ def create_app(settings=None):
                                                           "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
                                                           "attempt_thread": True, "runner_drain": True,
-                                                          "capacity_continue": True}}
+                                                          "capacity_continue": True, "source_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):

@@ -117,6 +117,37 @@ function settingsWhoCanHTML(what = 'this', {admins = false} = {}) {
   const who = admins ? (name ? `${esc(name)} (the owner) or an admin` : 'the owner or an admin') : (name ? `${esc(name)}, the owner,` : 'the owner');
   return `<p class="settings-cell-note" data-who-can>Only ${who} can change ${esc(what)}.</p>`;
 }
+// A save that would send saved credentials to another service is held (backend/destinations.py: 409
+// destination_change, naming the old and new destination by scheme, host and port and the credentials by label, never a
+// value). The editor keeps them (they go to the new address), clears them to type again, or cancels (nothing is saved).
+// Resolves 'keep', 'clear' or '' for cancel.
+const settingsDestinationHeld = error => error?.status === 409 && error?.body?.error?.code === 'destination_change';
+function settingsDestinationChoice(error) {
+  const held = error?.body?.error || {}, labels = (held.credentials || []).join(', ') || 'The saved credentials';
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'tmodal destination-dialog';
+    dialog.setAttribute('aria-label', 'Change where this sends');
+    dialog.innerHTML = `<form method="dialog"><header><h2>Change where ${esc(held.name || 'this integration')} sends?</h2></header>
+      <p><b>${esc(labels)}</b> ${held.credentials?.length > 1 ? 'were' : 'was'} saved for <b data-destination-old>${esc(held.old?.address || '')}</b>.
+        This change sends to <b data-destination-new>${esc(held.new?.address || '')}</b>${held.path ? ` (${esc(held.path)})` : ''}.</p>
+      <p class="muted">Keep sends the saved ${esc(labels)} to the new address from now on. Clear removes ${held.credentials?.length > 1 ? 'them' : 'it'}, so you type ${held.credentials?.length > 1 ? 'them' : 'it'} again for the new address. Either way the change is kept in the history.</p>
+      <footer><button value="keep" class="primary" data-destination-keep>Keep and send to the new address</button>
+        <button value="clear" class="ghost danger" data-destination-clear>Clear and re-enter</button>
+        <button value="" class="ghost" data-destination-cancel>Cancel</button></footer></form>`;
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(dialog.returnValue || ''); });
+    document.body.appendChild(dialog); dialog.showModal();
+  });
+}
+// `send(extra)` once, and again with the editor's answer when it was held; a cancel throws "Nothing was saved".
+async function settingsDestinationSave(send) {
+  try { return await send({}); } catch (error) {
+    if (!settingsDestinationHeld(error)) throw error;
+    const credentials = await settingsDestinationChoice(error);
+    if (!credentials) throw new Error('Nothing was saved');
+    return Object.assign(await send({credentials}), {credentials_choice: credentials});
+  }
+}
 // The one way a failure shows: a red line under the control that failed, saying what to do. A row-like
 // parent holds it so it sits under the whole row; a list item holds it inside.
 function settingsFieldAnchor(control) {

@@ -67,6 +67,7 @@ mod worktrees;
 mod run_diagnostics;
 mod runner;
 mod sessions;
+mod source_resume;
 mod safegit;
 mod screen;
 mod sidejobs;

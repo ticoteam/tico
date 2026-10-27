@@ -194,7 +194,10 @@ function gatewayWire(gateway) {
     // The key leaves the field as soon as it is sent: nothing on the page holds it after a save.
     const body = {url: url.value.trim(), expected_revision: gateway.revision || 0, ...(key.value.trim() ? {key: key.value.trim()} : {})};
     key.value = '';
-    run(save, 'Saving…', () => put('/v2/providers/gateway', body), saved => saved.working === false ? saved.message : 'Tico AI Gateway saved');
+    // A new address for another service while a key is saved asks first: keep the key, or clear it and paste one again.
+    run(save, 'Saving…', () => settingsDestinationSave(extra => put('/v2/providers/gateway', {...body, ...extra})),
+      saved => saved.credentials_choice === 'clear' ? 'Gateway address saved and its key cleared: paste a key for the new address'
+        : saved.working === false ? saved.message : 'Tico AI Gateway saved');
   };
   const check = root.querySelector('[data-gateway-check]');
   if (check) check.onclick = () => run(check, 'Checking…', () => post('/v2/providers/gateway/check', {}), shown => shown.message || 'Checked');

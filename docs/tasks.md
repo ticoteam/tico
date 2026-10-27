@@ -86,7 +86,7 @@ On the engineering board, moving a ticket with a linked open PR into **Review 1*
 
 A failing check refuses the move and names the check. A failed GitHub check attempt still blocks after a green rerun at the same head: fix the failure and push a new head. The server requests all check attempts rather than GitHub's default latest-only results; legacy commit statuses keep the latest status per context and any earlier failure. Pending checks are allowed with a passing written receipt. No checks, or only skipped/neutral checks, also require a written passing receipt naming the current head. At least one successful check and no pending or failed checks are needed to replace that receipt; skipped/neutral companions are allowed. A missing, stale, failed or unrecognised receipt refuses the move and names the current PR head and newest receipt head. The ticket keeps its step and the reviewer stays asleep. If someone other than the Builder tried the move, the Builder also gets the same comment once per ticket, check kind and head. When GitHub is connected, the server reads the current head and checks before accepting a handoff; an unavailable or incomplete read refuses it.
 
-A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry, and once the ticket has moved, a refusal comment still queued for the Builder is dropped unread. When GitHub cannot be read, Tico tries again every 5 minutes. A temporary failure (timeout, 5xx, rate limit) never files a task, and its refusal is noted on the ticket without waking the owner, who has nothing to do. A permission, key, installation or repository-access failure files one task for the DevOps bot on the first refusal; a failure with no cause does so only when it repeats. A PR link Tico cannot resolve, or one with no recorded head, never files one: relinking the PR clears it. With no active DevOps bot, the task goes to the board's manager. The same applies when GitHub answers 403 to a reviewer's review. A remembered move is dropped when the ticket moves elsewhere or after three days.
+A refused move is remembered, and Tico makes it itself once what refused it changes: the checks on the PR, the ticket's note, or a new message on the ticket (a receipt posted). Nobody needs to ask for a retry. When GitHub cannot be read, the ticket keeps its current step and Tico tries again every 5 minutes. Timeouts, rate limits, permission errors, missing installation access and other upstream read failures do not file DevOps or manager tasks or wake the ticket owner. Engineering and Health each receive one quiet source notice when access is lost and one when it returns. A PR link Tico cannot resolve, or one with no recorded head, still needs its local record fixed. A remembered move is dropped when the ticket moves elsewhere or after three days.
 
 A ticket has at most one open **Review 1**, **Review 2**, **QA** or **Post Release QA** subtask for a pull request head. A second request for the same check on the same head (or when the head is unknown) is refused with the open subtask's id; a push gives a new head and with it a new check. Reviewers and Security give a verdict and never move the ticket: a bot that owns a Review 1, Review 2 or Security subtask of a Dev ticket (and does not own the ticket) is refused a status, step or type change, and told to finish its review task with a verdict. The Builder, QA and people move the ticket.
 
@@ -137,6 +137,8 @@ kept by id, so renaming a step keeps its flow. All keys are optional:
 A Dev tickets type is given the Dev board's flow once: reviews send their feedback back to the Builder's Fixes step
 whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
 released steps never hold. Change any of it on the steps.
+
+GitHub access is reported restored only after a successful current head and checks read. An expired or cancelled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
 
 ## Automatic starts
 
@@ -1043,7 +1045,7 @@ marked it already. Paused or stopped: the task stays open and the main chat gets
 harnesses, and older runners, work it from the prompt alone.
 
 When the requester (or a person) closes a task its bot had already marked done or sent for review, the bot is not
-woken; a close note that differs from the bot's own done note still reaches it, without starting a run.
+woken; a person's close note that differs from the bot's own done note reaches an active bot as a wake. Routine completions with nothing said are batched; paused bots read them on their next run.
 
 When a bot's task is blocked on a person's approval or input, the bot files a subtask for them under it
 (`hub task create --owner <person> --parent <task> ...`, or `hub task question ... --parent <task>` for a pick or
@@ -1409,3 +1411,4 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 ## Task settings
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
+

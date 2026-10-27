@@ -402,6 +402,10 @@ on a Confirm card in their BotOps chat is, and it runs the stored request as the
   (`POST /api/v2/system/update`), a change to the rules **BotOps changes providers and limits without asking** or
   **BotOps manages every bot**, and a new computer's one-time code, which shows on the card once the person taps it and
   never in BotOps' answer;
+- always, too: moving the Gateway connection or an outgoing webhook that holds secret headers to another service while
+  credentials are saved (the Gateway's default address included). The request says `credentials` `keep` or `clear`
+  (and a webhook its `expected_revision`), the card names the old and new scheme, host and port and the choice, and it
+  is stale at the tap once the revision, the address, the credentials or the person's rights changed;
 - providers (turning the Tico AI Gateway off or back to automatic included, the owner only) and raised limits when the
   owner turned **BotOps changes providers and limits without asking** off.
 

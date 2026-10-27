@@ -1984,7 +1984,9 @@ def parser():
     s.add_argument("--events", nargs="+")
     s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int)
     s.add_argument("--allow-http", dest="allow_http", action=argparse.BooleanOptionalAction, default=None)
-    s.add_argument("--expected-revision", dest="expected_revision", type=int)
+    s.add_argument("--expected-revision", dest="expected_revision", type=int, help="the revision you read; needed with --url")
+    s.add_argument("--credentials", choices=("keep", "clear"),
+                   help="a new address for another destination: keep sends the saved secret headers there, clear removes them")
     s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
     s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
     s.add_argument("--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)")

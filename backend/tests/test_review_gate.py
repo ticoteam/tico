@@ -365,7 +365,8 @@ def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatc
         return SimpleNamespace(status_code=200, json=lambda: data)
     monkeypatch.setattr(service, '_call', fetch)
     assert move(api, task).status_code == 422
-    assert get(api, 'tasks/' + task['id'])['task']['step']['name'] == 'Blocked'
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step_id'] == task['step_id'] and not current.get('blocked_since')
 
 
 def test_author_labels_override_pr_path_default(api):

@@ -310,7 +310,7 @@ NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_conn
                "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
                "bot.budget", "ceo.checks", "ceo.level",
                "repos.product.create", "rules.wake", "rules.wake.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "webhooks.outgoing", "listening.destination", "listening.destination.remove", "roadmap.public",
+               "listening.destination", "listening.destination.remove", "roadmap.public",
                "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd")
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else

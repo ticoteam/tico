@@ -160,17 +160,17 @@ impl Runner {
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, continues: false, retryable: false, turn, yielded: false });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: false });
             }
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, continues: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
             }
             if yielding.is_some_and(|by| Instant::now() >= by) {
                 // No safe point within the grace: the work so far stays in the worktree and on the task.
                 let _ = host.interrupt(thread, &turn).await;
-                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, capacity: false, continues: false, retryable: false, turn, yielded: true });
+                return Ok(Drove { outcome: "interrupted".into(), reply: answer(&earlier, &reply), tokens: spent(&earlier_tokens, &tokens), limited: false, acted, capacity: false, continues: false, retryable: false, turn, yielded: true });
             }
             let late = Instant::now() >= d.limit;
             if d.flags.lost.load(Ordering::SeqCst) && salvage.is_none() {
@@ -453,7 +453,7 @@ impl Runner {
             text = if text.is_empty() { p.clone() } else { format!("{text}\n\n{p}") };
         }
         let yielded = yielding.is_some() && outcome != "failed";
-        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, capacity, continues, retryable, turn, yielded })
+        Ok(Drove { outcome, reply: text, tokens: spent(&earlier_tokens, &tokens), limited, acted, capacity, continues, retryable, turn, yielded })
     }
 }
 

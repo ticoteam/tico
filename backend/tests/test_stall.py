@@ -191,7 +191,8 @@ def test_closing_what_the_bot_already_finished_does_not_wake_it_unless_the_note_
             H.task_update(c, "bot:finance", row["id"], status="done", note="Reviewed; two fixes made.")
         H.task_close(c, ana, same["id"], note="Reviewed; two fixes made.")
         H.task_close(c, ana, new["id"], note="Ship the fixes to the board too.")
-        assert closed_wakes(same["id"]) == [] and closed_wakes(new["id"]) == [0]     # the new note lands without a run
+        assert closed_wakes(same["id"]) == []
+        assert closed_wakes(new["id"]) == [1]  # A person's new instruction still needs a turn.
 
 
 def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_the_stall_check(api):

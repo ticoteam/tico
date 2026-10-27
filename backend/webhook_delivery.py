@@ -219,7 +219,14 @@ def deliver(store, vault, send_id, *, transport=None):
         if send["secret_prev"] and (send["secret_prev_until"] or "") > H.now():
             keys.append(vault.cipher.unseal(c, sealed_as(send["webhook_id"], True), send["secret_prev"]))
         from . import webhooks
-        custom = webhooks.open_headers(c, vault, send["webhook_id"], webhooks.headers_of(send))
+        stored = webhooks.headers_of(send)
+        custom = webhooks.open_headers(c, vault, send["webhook_id"], stored)
+    if webhooks.needs_value(stored):
+        # A secret header whose value was cleared when the address changed: never sent without it. The send waits for
+        # the value (the endpoint is paused until then, so it is not claimed again).
+        with store.transaction() as c:
+            c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL WHERE id=? AND state='sending'", (send_id,))
+        return
     body = send["body"].encode()
     timestamp = int(time.time())
     started = time.monotonic()

@@ -39260,6 +39260,18 @@
               }
             ],
             "title": "Expected Revision"
+          },
+          "credentials": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
           }
         },
         "additionalProperties": false,
