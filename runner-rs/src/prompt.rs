@@ -9,12 +9,12 @@ use crate::util::{py_dumps, text_of};
 
 /// Where the next resumed turn on this provider thread should start reading history.
 ///
-/// Advances past the origin and every contiguous later message this turn already delivered
-/// (applied inputs, and the bot's own replies which the next prompt would skip anyway). Stops
-/// before the first non-own message that was not applied, so an intervening unacked human line
-/// is still forwarded. Applied inputs that arrived after the claim-time history page are used
-/// only when that contiguous walk reached the end of the page (no gap left in the snapshot).
-pub fn history_cursor_after(origin: &str, applied: &[String], history: &[Value], own_actor: &str) -> String {
+/// Advances past the origin and every contiguous later **applied** input this turn already
+/// delivered. Stops before any message that was not applied — including this bot's own replies
+/// (a side-session resume re-includes those) and unacked human lines. Applied inputs that arrived
+/// after the claim-time history page are used only when that contiguous walk reached the end of
+/// the page (no gap left in the snapshot).
+pub fn history_cursor_after(origin: &str, applied: &[String], history: &[Value], _own_actor: &str) -> String {
     if origin.is_empty() {
         return String::new();
     }
@@ -33,8 +33,7 @@ pub fn history_cursor_after(origin: &str, applied: &[String], history: &[Value],
             reached_end = false;
             break;
         }
-        let from = s(&m["from_actor"]);
-        if from == own_actor || applied.contains(id.as_str()) {
+        if applied.contains(id.as_str()) {
             cursor = id;
             continue;
         }
@@ -450,18 +449,31 @@ mod tests {
             {"id": "m5", "from_actor": "bot:reviewer", "body": "later handoff"}
         ]);
         let hist = history.as_array().unwrap();
-        // Folded ack after origin: next turn must not re-read it.
+        // Folded ack after origin: next turn must not re-read it. Own reply m2 is not applied, so the
+        // walk stops there (side-session resume still needs own replies after the cursor).
         assert_eq!(
             history_cursor_after("m1", &["m3".into()], hist, "bot:ops"),
+            "m1"
+        );
+        // Contiguous applied with no gap: origin then applied m3 (own m2 absent from this page).
+        let folded = json!([
+            {"id": "m1", "from_actor": "human:ana", "body": "origin"},
+            {"id": "m3", "from_actor": "bot:reviewer", "body": "folded handoff"},
+            {"id": "m4", "from_actor": "human:ana", "body": "unacked follow-up"},
+            {"id": "m5", "from_actor": "bot:reviewer", "body": "later handoff"}
+        ]);
+        let folded = folded.as_array().unwrap();
+        assert_eq!(
+            history_cursor_after("m1", &["m3".into()], folded, "bot:ops"),
             "m3"
         );
         // An intervening unacked human line stops the walk; the later applied id must not jump the gap.
         assert_eq!(
-            history_cursor_after("m1", &["m3".into(), "m5".into()], hist, "bot:ops"),
+            history_cursor_after("m1", &["m3".into(), "m5".into()], folded, "bot:ops"),
             "m3"
         );
-        // No applied inputs: still walks past own replies (next prompt would skip them anyway).
-        assert_eq!(history_cursor_after("m1", &[], hist, "bot:ops"), "m2");
+        // No applied inputs: stay on the origin (same as today's hand-in).
+        assert_eq!(history_cursor_after("m1", &[], hist, "bot:ops"), "m1");
         // Live applied after a fully-acked page may advance past the snapshot.
         let short = json!([
             {"id": "m1", "from_actor": "human:ana", "body": "origin"},
