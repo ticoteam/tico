@@ -424,3 +424,18 @@ def test_only_the_person_lets_their_items_through_and_rehearsal_has_nothing_to_l
     file(api, token, "Pick the launch venue")
     rehearsed = next(i for i in get(api, "ask-ingest/filtered", token="ben-test")["items"] if i["mode"] == "rehearsal")
     let_through(api, rehearsed["id"], expected=409)
+
+
+def test_the_decisions_readout_shows_calls_outcomes_and_let_throughs(gate):
+    api, model, token = gate
+    plate(api, 15)
+    file(api, token)                                   # sent back
+    model.meets = "$200 a month"
+    file(api, token, "Raise the Gateway cap to $400 a month")    # through
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    let_through(api, item["id"])
+    readout = get(api, "judge/readout")
+    [row] = [r for r in readout["sets"] if r["set"] == A.QUESTION_SET]
+    assert row["calls"] == 2
+    assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "rehearsal": {}, "let_through": 1}
+    assert "outcomes: sent_back 1, through 1; let through 1" in readout["text"]

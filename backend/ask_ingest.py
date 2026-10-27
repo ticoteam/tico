@@ -478,6 +478,21 @@ def let_through(c, person, item_id):
     return {**row, "let_through_at": at, "let_through_by": person}
 
 
+def outcome_counts(c, start, end):
+    """For the decisions readout (backend/decide_readout.py): the gated items in the window by what the gate decided
+    ({outcome: n}, Rehearsal's would-have counted under its own key), and how many people let through."""
+    outcomes, rehearsal, let = {}, {}, 0
+    for row in c.execute("SELECT mode, outcome, would, let_through_at FROM ask_ingest_items WHERE created>=? AND "
+                         "created<?", (start, end)):
+        if row["mode"] == ON or row["would"] == FAILED_OPEN:
+            outcomes[row["outcome"]] = outcomes.get(row["outcome"], 0) + 1
+        else:
+            rehearsal[row["would"]] = rehearsal.get(row["would"], 0) + 1
+        let += bool(row["let_through_at"])
+    return {"outcomes": dict(sorted(outcomes.items())), "rehearsal": dict(sorted(rehearsal.items())),
+            "let_through": let}
+
+
 def install(app, store, auth):
     from fastapi import Request
     from pydantic import Field

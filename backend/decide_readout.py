@@ -179,6 +179,17 @@ def readout(c, settings, days=7, at=None):
                     "jev_share": round(row["jev"] / row["calls"], 4) if row["calls"] else None,
                     "cost_usd": round(row["cost_usd"], 6), "ceiling_priced": row["ceiling_priced"],
                     "answers": {q: dict(sorted(v.items())) for q, v in sorted(row["answers"].items())}})
+    # Ask ingest's own outcomes (backend/ask_ingest.py): through, merged, FYI, hands needed, sent back, failed open,
+    # and how many a person let through. Counts only; the items are the person's to read.
+    from .ask_ingest import QUESTION_SET, outcome_counts
+    gate = outcome_counts(c, stamp(start), stamp(end))
+    if gate["outcomes"] or gate["rehearsal"]:
+        row = next((r for r in out if r["set"] == QUESTION_SET), None)
+        if row is None:
+            row = {"set": QUESTION_SET, "versions": [], "calls": 0, "jev": 0, "fallback": 0, "failed": {},
+                   "jev_share": None, "cost_usd": 0.0, "ceiling_priced": 0, "answers": {}}
+            out.append(row)
+        row["gate"] = gate
     calls = sum(r["calls"] for r in out)
     jev = sum(r["jev"] for r in out)
     cap = float(settings.decisions_monthly_usd or 0)
@@ -220,6 +231,13 @@ def text(data):
             lines.append(f"  {qid}: " + ", ".join(f"{value} {n}" for value, n in values.items()))
         if row["calls"] and not row["answers"] and row["set"] != OTHER_LABELS:
             lines.append("  answers: not kept in this set's audit")
+        if row.get("gate"):
+            gate = row["gate"]
+            if gate["outcomes"]:
+                lines.append("  outcomes: " + ", ".join(f"{k} {n}" for k, n in gate["outcomes"].items())
+                             + f"; let through {gate['let_through']}")
+            if gate["rehearsal"]:
+                lines.append("  rehearsal, would have: " + ", ".join(f"{k} {n}" for k, n in gate["rehearsal"].items()))
     if total["calls"]:
         lines.append(f"All sets: {total['calls']} calls, {_usd(total['cost_usd'])}; Jev answered "
                      f"{_pct(total['jev_share'])} (target 90%), fallback {total['fallback']}, failed {total['failed']}")
