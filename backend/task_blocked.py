@@ -14,6 +14,8 @@ def ensure(c):
         ('blocked_since', 'TEXT'), ('blocked_reason', 'TEXT'), ('blocked_kind', 'TEXT'),
         ('blocked_from_step', 'TEXT'), ('blocked_from_status', 'TEXT'), ('blocked_gate_json', 'TEXT'),
         ('building_started_at', 'TEXT'), ('building_seconds', 'REAL NOT NULL DEFAULT 0'),
+        # When its last tracked hold cleared, for a task still waiting: the stranded sweep's clock (task_holds.py).
+        ('holds_cleared_at', 'TEXT'),
     ):
         H.add_column(c, 'tasks', name, kind)
     c.execute('CREATE INDEX IF NOT EXISTS tasks_blocked_since ON tasks(blocked_since) WHERE blocked_since IS NOT NULL')
@@ -85,16 +87,22 @@ def transition(c, row, effective, step_id, note, at, manual=False):
               (elapsed, at if building else None, row['id']))
     if effective == 'waiting':
         if not row.get('blocked_since'):
-            reason = str(note or '').strip().splitlines()[0] if str(note or '').strip() else 'Waiting on a hold'
+            if manual:
+                reason = str(note or '').strip().splitlines()[0] if str(note or '').strip() else 'Waiting on a hold'
+                kind = 'manual'
+            else:
+                # Named from what holds it, never from the note: a note can't say it waits on someone it doesn't.
+                from . import task_holds
+                reason, kind = task_holds.reason(c, row)
             reason = reason[:1000]
-            kind = 'manual' if manual else 'dependency' if H.waiting_for(c, row) else 'stranded'
             c.execute('UPDATE tasks SET blocked_since=?,blocked_reason=?,blocked_kind=?,blocked_from_step=?,blocked_from_status=? WHERE id=?',
                       (at, reason, kind, row.get('step_id'), row.get('status') or 'open', row['id']))
             H._task_event(c, row['id'], H.KEEPER, 'blocked_since', None, at, reason)
         elif manual and str(note or '').strip():
             c.execute("UPDATE tasks SET blocked_reason=?,blocked_kind='manual' WHERE id=?", (str(note).strip().splitlines()[0][:1000], row['id']))
     elif row.get('blocked_since'):
-        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL WHERE id=?', (row['id'],))
+        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL'
+                  + (',holds_cleared_at=NULL' if 'holds_cleared_at' in row else '') + ' WHERE id=?', (row['id'],))
         H._task_event(c, row['id'], H.KEEPER, 'blocked_since', row['blocked_since'], None, 'Hold cleared')
 
 
@@ -184,7 +192,9 @@ def reconcile(c, task_id, snapshots=None):
     row = H.task(c, task_id)
     action = reconciliation(c, row, snapshots)
     if action == 'dependency':
-        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason='Waiting on a dependency',updated=? WHERE id=?", (H.now(), task_id))
+        from . import task_holds
+        c.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=?,updated=? WHERE id=?",
+                  (task_holds.words(c, task_holds.holds(c, row))[:1000], H.now(), task_id))
         bump(c, row)
     if action != 'resume':
         return
@@ -307,7 +317,9 @@ def sweep(c, at, task_ids=None):
                 from . import check_blocked
                 check_blocked.apply(c, row['id'])
             else:
-                hold(c, row['id'], 'Waiting on ' + detail['why'])
+                from . import task_holds
+                found = task_holds.holds(c, row)
+                hold(c, row['id'], task_holds.words(c, found) if found else 'Waiting on ' + detail['why'])
     for row in H._rows(c.execute('SELECT t.* FROM tasks t WHERE blocked_since IS NOT NULL' + scope, args)):
         reconcile(c, row['id'])
         row = H.task(c, row['id'])

@@ -228,8 +228,7 @@ def missing(c, settings, runner, body):
     from .shared_bots import follow
     from .store import readiness_document
     ready = readiness_document(runner['readiness_json'])
-    busy = {(r[0], r[1]) for r in c.execute(
-        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    busy = set(E.live_lanes(c))
     busy |= {tuple(v.split('|', 1)) for v in body.busy_lanes or () if '|' in v}
     held = E.turns_here(c, runner['id'])
     held_bots = set(body.busy_bots or ()) | ({b for b, _ in busy} if not E.lanes_on(runner) else set())

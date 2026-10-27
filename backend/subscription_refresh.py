@@ -38,14 +38,18 @@ def view(value):
     return result
 
 
+def signin_key(runner, profile):
+    return f'subscription-reading-after:{runner}:{profile}'
+
+
 def signin_after(c, runner, profile):
-    return metadata(c, f'subscription-reading-after:{runner}:{profile}')
+    return metadata(c, signin_key(runner, profile))
 
 
 def invalidate_signin(c, runner, profile, runtime, at):
     if profile:
         value = signin_after(c, runner, profile)
-        save_metadata(c, f'subscription-reading-after:{runner}:{profile}', {**value, runtime: at})
+        save_metadata(c, signin_key(runner, profile), {**value, runtime: at})
         storage_key = key(runner, profile, runtime)
         refresh = metadata(c, storage_key)
         if refresh and refresh['state'] == 'requested':

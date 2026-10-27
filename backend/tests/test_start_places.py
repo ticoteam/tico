@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready  # noqa: F401
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_attempt_contention import fleet
 from backend.tests.test_runner_load import point
 
@@ -50,6 +50,38 @@ def test_four_counts_separate_37_login_waiters(api):
     assert 'shared login' in machine['turn_summary'] and 'oldest' in machine['turn_summary']
     health = get(api, 'health')
     assert next(c for c in health['checks'] if c['id'] == 'turns:' + rid)['summary'].endswith(machine['turn_summary'])
+
+
+def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api, monkeypatch):
+    """Below the company warning, Health's Turns line counts queued work without claim_refusal for each queued bot
+    (its stuck and queue checks already say why). A paused bot's work still reads as waiting, not queued; at
+    warning the line names each wait again."""
+    from backend import execution
+    computer = runner(api)
+    for bot in ('finance', 'doc-updater'):
+        assign(api, computer, bot)
+        post(api, 'chat/' + bot, {'text': 'Queued while healthy'})
+    ready(api, computer, ['finance', 'doc-updater'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE slug='doc-updater'")
+    real = execution.claim_refusal
+
+    def refused(*args, **kwargs):
+        raise AssertionError('claim_refusal on the Health Turns line below warning')
+
+    monkeypatch.setattr(execution, 'claim_refusal', refused)
+    line = next(m for m in get(api, 'health')['computers'] if m['id'] == computer['runner_id'])
+    assert {k: line['turn_counts'][k] for k in ('waiting', 'queued')} == {'waiting': 1, 'queued': 1}
+    assert [w['reason'] for w in line['turn_counts']['waits']] == ['bot paused']
+    asked = []
+    monkeypatch.setattr(execution, 'claim_refusal', lambda *args, **kwargs: asked.append(args[3]) or real(*args, **kwargs))
+    from backend import org_turns
+    with api.app.state.store.transaction() as c:
+        org_turns.save(c, org_turns.LEVELS, {'warning_per_person': 0, 'stop_per_person': 100})
+    line = next(m for m in get(api, 'health')['computers'] if m['id'] == computer['runner_id'])
+    # At warning the running bot's queue is asked why again; the paused one never needs asking.
+    assert asked == ['finance']
+    assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
 def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):

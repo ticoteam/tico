@@ -1,5 +1,6 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
+import functools
 import json
 import re
 import secrets
@@ -85,6 +86,34 @@ CAPACITY_CONTINUE = "capacity_continue_v1"
 SOURCE_CONTINUE = "source_continue_v1"
 
 
+def positive_effect(c, aid, body):
+    """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
+
+    Stream-kind silence alone used to requeue such a run as `attempt.no_effect_retry` despite recorded hub writes,
+    usage, partial text, pushes or consumed approvals. Those mean a blind retry is unsafe; hold for review instead.
+    """
+    if (getattr(body, "text", None) or "").strip():
+        return True
+    if getattr(body, "pushes", None):
+        return True
+    # Output only: input tokens prove the prompt was sent, which a provider bills before erroring too.
+    if getattr(body, "tokens_out", None):
+        return True
+    usage = getattr(body, "usage", None)
+    if usage is not None:
+        parts = [usage, *list(getattr(usage, "segments", None) or [])]
+        if any(getattr(part, "output_tokens", 0) for part in parts):
+            return True
+    if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
+        return True
+    row = c.execute("SELECT bot,coalesce(started,created) began FROM attempts WHERE id=?", (aid,)).fetchone()
+    if row and c.execute(
+            "SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL AND consumed_at>=? LIMIT 1",
+            ("bot:" + row["bot"], row["began"])).fetchone():
+        return True
+    return False
+
+
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
     return start_places.held(c, runner_id)
@@ -122,20 +151,26 @@ def claimed_busy(runner_id, fresh=CLAIMED_FRESH):
     return seen[0], frozenset(tuple(entry.split("|", 1)) for entry in seen[1] if "|" in entry)
 
 
+@functools.lru_cache(maxsize=256)
+def _capability_set(capabilities_json):
+    """Parse a runner's capabilities_json once; claim/Health ask several flags per computer."""
+    return frozenset(H._json(capabilities_json, []) or [])
+
+
 def lanes_on(runner):
-    return LANES in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and LANES in _capability_set(runner["capabilities_json"])
 
 
 def roots_on(runner):
-    return ROOTS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and ROOTS in _capability_set(runner["capabilities_json"])
 
 
 def task_goals_on(runner):
-    return TASK_GOALS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and TASK_GOALS in _capability_set(runner["capabilities_json"])
 
 
 def capacity_continue_on(runner):
-    return CAPACITY_CONTINUE in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and CAPACITY_CONTINUE in _capability_set(runner["capabilities_json"])
 
 
 def session_task_id(c, bot, config, task_id, roots):
@@ -649,12 +684,23 @@ def owner_name(c, actor):
     return row.get("display_name") or row.get("name") or H.actor_id(actor)
 
 
-def quiet_source_wait(c, job, facts=None):
-    """A proven safe second computer loss needs source recovery, not a person's effects review."""
-    if not job['attempt_id'] or c.execute(
-            "SELECT count(*) FROM attempts WHERE job_id=? AND started IS NOT NULL", (job['id'],)).fetchone()[0] < 2:
+def quiet_source_wait(c, job, facts=None, *, started_counts=None, attempt_times=None):
+    """A proven safe second computer loss needs source recovery, not a person's effects review.
+
+    `started_counts` / `attempt_times` are optional preloads from `_readable_held` so a status/operations
+    pass does not SELECT count/attempt once per uncertain job.
+    """
+    if not job['attempt_id']:
         return False
-    attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
+    started = (started_counts or {}).get(job['id'])
+    if started is None:
+        started = c.execute(
+            "SELECT count(*) FROM attempts WHERE job_id=? AND started IS NOT NULL", (job['id'],)).fetchone()[0]
+    if started < 2:
+        return False
+    attempt = (attempt_times or {}).get(job['attempt_id'])
+    if attempt is None:
+        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     facts = facts or retry_facts(c, job, attempt['started'], attempt['finished'])
     return facts['safe'] and facts['lease_lost']
 
@@ -662,25 +708,62 @@ def quiet_source_wait(c, job, facts=None):
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
     under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
-    task None and readable False, so it is counted without its title."""
+    task None and readable False, so it is counted without its title.
+
+    Operations / status call held_runs, isolation_refused and stopped_rows for the same bot; cache the list for the
+    read snapshot and batch message/attempt privacy once instead of message_readable per uncertain job per caller.
+    """
+    from . import read_cache
+    actor = privacy.actor(who)
+    values = read_cache.cache(c)
+    # task_sql's fence depends on the role as well as the actor.
+    key = ("readable_held", actor, who.role, bot)
+    if values is not None and key in values:
+        return iter(values[key])
     fence = auth.task_sql(c, who)
-    for row in c.execute("SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
-            continue
-        job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
-        if quiet_source_wait(c, job):
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id,j.id AS job_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    kept = [r for r in rows if r["id"] in shown
+            and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"]))]
+    job_ids = [r["job_id"] for r in kept]
+    jobs = {}
+    for part in H.chunks(job_ids):
+        marks = ",".join("?" * len(part))
+        jobs.update({j["id"]: j for j in c.execute(f"SELECT * FROM jobs WHERE id IN ({marks})", part)})
+    # A job with no started attempt counts 0 here, so quiet_source_wait never falls back to its own SELECT.
+    started_counts, attempt_times = dict.fromkeys(job_ids, 0), {}
+    if job_ids:
+        for part in H.chunks(job_ids):
+            marks = ",".join("?" * len(part))
+            for r in c.execute(
+                    f"SELECT job_id, count(*) n FROM attempts WHERE job_id IN ({marks}) "
+                    "AND started IS NOT NULL GROUP BY job_id", part):
+                started_counts[r["job_id"]] = r["n"]
+        aids = [r["attempt_id"] for r in kept if r["attempt_id"]]
+        for part in H.chunks(aids):
+            marks = ",".join("?" * len(part))
+            for a in c.execute(f"SELECT id, started, finished FROM attempts WHERE id IN ({marks})", part):
+                attempt_times[a["id"]] = a
+    out = []
+    for row in kept:
+        job = jobs.get(row["job_id"])
+        if not job or quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times):
             continue
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
         task = H.task(c, task_id) if task_id else None
-        readable = bool(task and H.task_private_readable(c, privacy.actor(who), task)
+        readable = bool(task and H.task_private_readable(c, actor, task)
                         and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone())
         if task and not readable:
-            yield row, None, False
+            out.append((row, None, False))
         else:
-            yield row, task, True
+            out.append((row, task, True))
+    if values is not None:
+        values[key] = out
+    return iter(out)
 
 
 def held_runs(c, who, auth, bot, limit=3):
@@ -736,16 +819,34 @@ def stopped_rows(c, who, auth, bot, limit=5):
     A choice saved while the bot's lane was busy (reconcile_job, deferred) keeps its job held: that job carries it as
     `decided`, and a row whose every job has one carries it too ("mixed" when they differ), so a refreshed card shows the outcome instead of
     offering a second choice that would be refused. `runs` counts every readable run; rows stop at `limit`."""
+    held = list(_readable_held(c, who, auth, bot))
+    job_ids = [row["job_id"] for row, _, _ in held]
+    jobs, attempts, recoveries = {}, {}, {}
+    for part in H.chunks(job_ids):
+        marks = ",".join("?" * len(part))
+        jobs.update({j["id"]: j for j in c.execute(f"SELECT * FROM jobs WHERE id IN ({marks})", part)})
+        for r in c.execute(
+                f"SELECT job_id, attempt_id, decision FROM job_recovery WHERE job_id IN ({marks})", part):
+            recoveries[(r["job_id"], r["attempt_id"])] = r["decision"]
+    aids = [row["attempt_id"] for row, _, _ in held if row["attempt_id"]]
+    for part in H.chunks(aids):
+        marks = ",".join("?" * len(part))
+        for a in c.execute(
+                f"SELECT id, state, result_json, stop_requested, started, finished FROM attempts "
+                f"WHERE id IN ({marks})", part):
+            attempts[a["id"]] = a
     rows, by_run = [], {}
 
     def handle(job):
-        saved = c.execute("SELECT decision FROM job_recovery WHERE job_id=? AND attempt_id=?",
-                          (job["id"], job["attempt_id"])).fetchone()
-        return {"id": job["id"], "attempt_id": job["attempt_id"], **({"decided": saved[0]} if saved else {})}
+        key = (job["id"], job["attempt_id"])
+        return {"id": job["id"], "attempt_id": job["attempt_id"],
+                **({"decided": recoveries[key]} if key in recoveries else {})}
 
-    for row, task, seen in _readable_held(c, who, auth, bot):
+    for row, task, seen in held:
         key = row["attempt_id"] or row["id"]
-        job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        job = jobs.get(row["job_id"])
+        if not job:
+            continue
         if key in by_run:
             if by_run[key] is not None:
                 by_run[key]["jobs"].append(handle(job))
@@ -753,8 +854,7 @@ def stopped_rows(c, who, auth, bot, limit=5):
         if len(rows) >= limit:
             by_run[key] = None
             continue
-        attempt = c.execute("SELECT state,result_json,stop_requested,started,finished FROM attempts WHERE id=?",
-                            (row["attempt_id"],)).fetchone() if row["attempt_id"] else None
+        attempt = attempts.get(row["attempt_id"]) if row["attempt_id"] else None
         cause = stop_cause(attempt)
         facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
         by_run[key] = {"title": task["title"] if task else "A chat request" if seen else None,
@@ -783,28 +883,34 @@ def held_back(c, who, auth, bot, limit=3):
     """The bot's queued work the claim's interrupted-work fence (unfenced_sql) passes over, as `who` may read it:
     (count, titles of up to `limit` tasks it is on). A saved recovery choice is already a review, so its lane wait
     must not be turned into another choice prompt; count jobs only when an unresolved stopped run still blocks them."""
+    actor = privacy.actor(who)
     fence, count, titles = auth.task_sql(c, who), 0, []
     task_sql = queued_task_sql()
     held_task_sql = task_sql.replace("m.", "um.").replace("cv.", "uc.")
-    for row in c.execute(f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "JOIN conversations cv ON cv.id=m.conversation_id "
-                         f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
-                         "AND EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
-                         "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot "
-                         "AND u.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
-                         "WHERE r.job_id=u.id AND r.attempt_id=u.attempt_id) AND (("
-                         f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
-                         f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
-                         "ORDER BY j.created", (bot,)).fetchall():
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+    rows = list(c.execute(
+        f"SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"WHERE j.bot=? AND j.state='queued' AND j.held=0 AND NOT {unfenced_sql()} "
+        "AND EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
+        "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot=j.bot "
+        "AND u.state='uncertain' AND NOT EXISTS(SELECT 1 FROM job_recovery r "
+        "WHERE r.job_id=u.id AND r.attempt_id=u.attempt_id) AND (("
+        f"{held_task_sql} IS NOT NULL AND {held_task_sql}={task_sql}) OR "
+        f"({held_task_sql} IS NULL AND cv.kind='chat' AND um.conversation_id=m.conversation_id))) "
+        "ORDER BY j.created", (bot,)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    for row in rows:
+        if row["id"] not in shown:
+            continue
+        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
             continue
         count += 1
         message = H.message(c, row["id"])
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
         task = H.task(c, task_id) if task_id else None
         if (task and task["title"] not in titles and len(titles) < limit
-                and H.task_private_readable(c, privacy.actor(who), task)
+                and H.task_private_readable(c, actor, task)
                 and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()):
             titles.append(task["title"])
     return count, titles
@@ -814,15 +920,21 @@ def unreviewed(c, who, bot):
     """The bot's held runs `who` may read that have waited HELD_UNREVIEWED or longer with no saved decision:
     (count, whole hours the oldest has waited). A run waits from when it stopped (the job's creation when it never
     started); a saved decision that waits for its lane is a review already."""
+    actor = privacy.actor(who)
     cutoff = H.shift(H.now(), seconds=-HELD_UNREVIEWED)
     count, oldest = 0, None
-    for row in c.execute("SELECT m.*,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
-                         "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
-                         "WHERE j.bot=? AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
-                         "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
-                         "ORDER BY since", (bot, cutoff)).fetchall():
-        if not (privacy.message_readable(c, privacy.actor(who), row)
-                and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id,coalesce(a.finished,j.created) AS since FROM jobs j "
+        "JOIN messages m ON m.id=j.message_id LEFT JOIN attempts a ON a.id=j.attempt_id "
+        "WHERE j.bot=? AND j.state='uncertain' AND coalesce(a.finished,j.created)<=? "
+        "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) "
+        "ORDER BY since", (bot, cutoff)))
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    for row in rows:
+        if row["id"] not in shown:
+            continue
+        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
             continue
         count += 1
         oldest = oldest or row["since"]
@@ -834,13 +946,17 @@ def left_by_keeper(c, who, bot):
     """How many of the bot's runs saved for later that `who` may read rode on a stopped run whose own request the
     keeper already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
     was going to look at them."""
-    return sum(privacy.message_readable(c, privacy.actor(who), row)
-               and privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"])
-               for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                    "JOIN attempts a ON a.id=j.attempt_id "
-                                    "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
-                                    "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
-                                    (bot, H.KEEPER)).fetchall())
+    actor = privacy.actor(who)
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN attempts a ON a.id=j.attempt_id "
+        "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
+        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
+        (bot, H.KEEPER)))
+    # One privacy prime (status/operations used to call message_readable per row here).
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, rows)}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    return sum(r["id"] in shown and privacy.attempt_readable(c, actor, r["attempt_id"]) for r in rows)
 
 
 def limit_streak(c, bot):
@@ -1502,9 +1618,37 @@ def in_scope(c, scope, task_id):
 def live_tasks(c):
     """{(bot, task)} with a turn out now. A later wake for that bot about that task waits for the turn even when its
     lane is another one: a task moved under another of the bot's tasks mid-turn keys a new lane (session_root), and
-    one task never has two turns of the same bot at once."""
-    return {(r[0], r[1]) for r in c.execute("SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
-                                             "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
+    one task never has two turns of the same bot at once.
+
+    Cached for the read snapshot: Health `_waiting` / `queued_reasons` and claim paths asked once per slow bot.
+    Frozen: callers share it.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "execution.live_tasks"
+    if values is not None and key in values:
+        return values[key]
+    out = frozenset((r[0], r[1]) for r in c.execute(
+        "SELECT a.bot,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
+        "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL"))
+    if values is not None:
+        values[key] = out
+    return out
+
+
+def live_lanes(c):
+    """{(bot, lane)} with a leased or running attempt. Claim fences and Health `_waiting` ask once per bot; reuse the
+    set for the current read snapshot instead of re-SELECTing and rebuilding it each time. Frozen: callers share it."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "execution.live_lanes"
+    if values is not None and key in values:
+        return values[key]
+    out = frozenset((r[0], r[1]) for r in c.execute(
+        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')"))
+    if values is not None:
+        values[key] = out
+    return out
 
 
 FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot reads the rest in its room
@@ -1674,8 +1818,9 @@ def queued_jobs_sql(bots=None):
 
 def prime_claimables(c, bots, first=3):
     """What bot_claimable reads for each of these bots with queued work, one table at a time: the computer's row, the
-    bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. Outside a
-    snapshot nothing is kept."""
+    bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. `first`
+    None reads every queued job's message: Health walks the whole queue (`queued_reasons`), and the first few are
+    only enough for the claim's next job. Outside a snapshot nothing is kept."""
     from . import readiness
     from .read_cache import cache, prime, prime_rows
     if cache(c) is None:
@@ -1692,7 +1837,8 @@ def prime_claimables(c, bots, first=3):
             jobs[row["bot"]].append(row)
         prime_rows(c, queued_jobs_sql(), {(s,): queue for s, queue in jobs.items()})
         privacy.snapshot(c)
-        waiting = [job["message_id"] for queue in jobs.values() for job in queue[:first]]
+        waiting = [job["message_id"] for queue in jobs.values()
+                   for job in (queue if first is None else queue[:first])]
         privacy.prime_queued(c, H.prime_messages(c, waiting).values())
 
 
@@ -1727,8 +1873,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
             return result(why, first["created"] if first else None, job=first["id"] if first else None)
         return result(why)
     lanes, roots = lanes_on(runner), roots_on(runner)
-    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
-    busy |= held_lanes
+    busy = set(live_lanes(c)) | held_lanes
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created"], j["id"])) if oldest else queue:
@@ -1767,8 +1912,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
             yield job, why
         return
     lanes, roots = lanes_on(runner), roots_on(runner)
-    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
-    busy |= held_lanes
+    busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
     for job in queue:
@@ -2412,8 +2556,7 @@ class Execution:
         lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
-        busy = {(r["bot"], r["lane"]) for r in c.execute(
-            "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+        busy = set(live_lanes(c))
         busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
@@ -2481,7 +2624,7 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
-            if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in json.loads(runner["capabilities_json"] or "[]"):
+            if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in _capability_set(runner["capabilities_json"]):
                 continue        # old strict-primary runners cannot route a saved fallback
             if not continues and continuation_thread(c, row["id"]):
                 continue        # left queued for a runner that continues its thread: this one would start it afresh
@@ -2512,11 +2655,14 @@ class Execution:
         record of lanes the attempts table does not show, and an empty list from a silent computer is not "free"."""
         from .models import Claim
         from .performance import load_status
+        from .read_cache import one
         for queued in c.execute("SELECT w.job_id,a.runner_id FROM org_turn_waits w JOIN jobs j ON j.id=w.job_id "
                                  "JOIN assignments a ON a.bot=j.bot WHERE j.state='queued' ORDER BY w.created,w.job_id"):
             rid = queued['runner_id']
             remote = rid != runner['id']
-            target = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (rid,)).fetchone() if remote else runner
+            # Share RUNNER_SQL with bot_claimable for the snapshot; skip revoked computers in Python.
+            found = one(c, RUNNER_SQL, (rid,)) if remote else runner
+            target = found if found and not found["revoked_at"] else None
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
@@ -3924,6 +4070,8 @@ class Execution:
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
             silent = (kinds <= SILENT_KINDS and (quick or tico_code == gateway.UNAVAILABLE) and tries < NO_EFFECT_TRIES
                       and tico_code not in gateway.FINAL)
+            if silent and positive_effect(c, aid, body):
+                silent = False
         # A refused key or sign-in blocks this profile until its credential changes.
         # Only runs with no evidence of actions may wait queued rather than held for review.
         rejected = body.outcome == "failed" and body.auth_rejected is not None and not stopped

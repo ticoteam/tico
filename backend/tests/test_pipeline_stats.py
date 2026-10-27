@@ -242,3 +242,28 @@ def test_a_decisions_note_is_left_out_for_a_reader_who_cannot_open_the_runs_conv
     [row] = stats(api, token="cara-test")["queues"]["ops"]["decisions"]
     assert (row["job"], row["decision"], row["by_kind"], row["note"]) == (attempt["job_id"], "dismiss", "botops", None)
     assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z")
+
+
+def test_job_queues_privacy_checks_messages_in_one_batch(api, monkeypatch):
+    """/status and Operations used to call message_readable per queued job; one readable_messages pass covers them."""
+    from backend import task_privacy as privacy
+
+    board(api)
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    for i in range(8):
+        post(api, "chat/ops", {"text": f"Queue item {i}"})
+    calls = []
+    real = privacy.readable_messages
+
+    def once(c, actor, messages):
+        calls.append(len(list(messages)))
+        return real(c, actor, messages)
+
+    monkeypatch.setattr(privacy, "readable_messages", once)
+    who = api.app.state.store.settings.test_identities["ana-test"]
+    with api.app.state.store.read_transaction() as c:
+        queues = pipeline_stats.job_queues(c, who, ["ops"])
+    assert queues["ops"]["queued"] == 8
+    assert calls.count(8) == 1

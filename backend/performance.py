@@ -212,9 +212,10 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
 
 
 def attempt_snapshots(c, attempt_id):
-    row = c.execute("SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,)).fetchone()
-    return {"load_start": json.loads(row[0]) if row and row[0] else None,
-            "load_end": json.loads(row[1]) if row and row[1] else None}
+    from .read_cache import one
+    row = one(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
+    return {"load_start": json.loads(row["start_json"]) if row and row["start_json"] else None,
+            "load_end": json.loads(row["end_json"]) if row and row["end_json"] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads

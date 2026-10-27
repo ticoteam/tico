@@ -1113,6 +1113,7 @@ def create_app(settings=None):
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
+        value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
         hold_kind = value.pop("blocked_kind", None)
         for field in ("blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
@@ -1203,7 +1204,10 @@ def create_app(settings=None):
             f"SELECT task_id,schedule_id FROM schedule_occurrences WHERE task_id IN ({marks})", ids)}
 
         links = {tid: [] for tid in ids}
-        for link in c.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks}) ORDER BY created", ids):
+        for link in c.execute(
+                f"SELECT id,task_id,kind,url,title,state,added_by,created,pr_sha,pr_merged_at,repo,number,branch,"
+                f"computer_id,path,checks,mergeable,review_state,pending_comments,updated "
+                f"FROM task_links WHERE task_id IN ({marks}) ORDER BY created", ids):
             # Not a link's record, its empty columns or its own write time (a computer's heartbeat rewrites that every
             # minute): the task's read and its /links have them, and every open tab gets each list change.
             links[link["task_id"]].append({k: v for k, v in dict(link).items()
@@ -1716,7 +1720,9 @@ def create_app(settings=None):
         admin_only(request.state.identity, 'sees company turn settings')
         from . import org_turns
         with store.read_transaction() as c:
-            return org_turns.snapshot(c, settings)
+            # Settings only shows levels and in_use; a fleet snapshot would classify every
+            # queued bot on every computer for fields this page never renders.
+            return org_turns.admission(c)
 
     @app.post('/api/v2/settings/turn-levels')
     def turn_levels_set(request: Request, body: M.TurnLevels):
@@ -5458,10 +5464,17 @@ def create_app(settings=None):
     def turns(request: Request, bot: str, since: str | None = None):
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # A snapshot, so the page's messages and runs are read together and stay cached for each check.
+        with store.read_transaction() as c:
             auth.require_read(c, who, bot)
+            since_at = views.since_time(since)
+            found = list(H.turns(c, bot, since=since_at))
+            stored = H.prime_messages(c, [turn["message_id"] for turn in found])
+            privacy.prime_messages(c, list(stored.values()))
+            privacy.prime_attempts(c, [turn["id"] for turn in found])
+            views.prime_attempt_details(c, [turn["id"] for turn in found])
             result = []
-            for turn in H.turns(c, bot, since=views.since_time(since)):
+            for turn in found:
                 msg = H.message(c, turn["message_id"])
                 if not msg:
                     continue
@@ -5472,7 +5485,7 @@ def create_app(settings=None):
                 except Problem:
                     continue
                 result.append({**turn, **views.attempt_details(c, turn)})
-            result.extend(views.failed_attempts(c, who, auth, bot, views.since_time(since)))
+            result.extend(views.failed_attempts(c, who, auth, bot, since_at))
             result.sort(key=lambda row: row.get("started") or "", reverse=True)
             from .usage_records import ran_on
             made = ran_on(c, [row["id"] for row in result])
@@ -5896,6 +5909,8 @@ def create_app(settings=None):
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
+        # One pass for every computer's bots (not one SELECT per runner).
+        placed, _ = views.assignments_by_runner(c)
         rows = []
         # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
         limits = usage_limits.company(c)
@@ -5910,8 +5925,7 @@ def create_app(settings=None):
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
                                  **load_status(c, r["id"]), **turns})
                 continue
-            bots = [x["bot"] for x in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (r["id"],))
-                    if (readable.get(x["bot"]) or {}).get("see")]
+            bots = [bot for bot in placed.get(r["id"]) or [] if (readable.get(bot) or {}).get("see")]
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
@@ -5925,7 +5939,8 @@ def create_app(settings=None):
         Newly discoverable computers expose no repositories, logs or operator identity."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot, so the per-computer lookups share read_cache across every computer.
+        with store.read_transaction() as c:
             return {"computers": computer_rows(c, who), "services": views.team_services(c, who, auth),
                     "services_scope": "team"}
 

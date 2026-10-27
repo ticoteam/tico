@@ -128,12 +128,18 @@ def job_queues(c, who, bots, now=None):
     is `held`; only the rest is `queued`."""
     privacy.snapshot(c)
     actor = privacy.actor(who)
+    rows = _queue_job_rows(c, bots)
+    # One privacy prime for every queued/uncertain message (and its attempt), not message_readable per row —
+    # /api/status and Operations rebuild these counts on every poll.
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": row["id"]} for row in rows])}
+    privacy.prime_attempts(c, [row["job_attempt"] for row in rows if row["id"] in shown and row["job_attempt"]])
     memo = {}
 
-    def readable(row):
-        return privacy.message_readable(c, actor, row, current=True) and (
+    def keep(row):
+        return row["id"] in shown and (
             not row["job_attempt"] or privacy.attempt_readable(c, actor, row["job_attempt"], memo))
-    out = _split(c, bots, now, readable)
+
+    out = _tally_queues(bots, rows, now, keep)
     for q in out.values():
         del q["oldest_queued_at"], q["oldest_dead_at"]
     return out
@@ -143,36 +149,42 @@ def queue_counts(c, bots, now=None):
     """job_queues' split over every job, with the oldest queued and dead job's time (`oldest_queued_at`,
     `oldest_dead_at`). Health reads it, so the queued count it shows a bot is the one Pipeline shows an operator who may
     read all of that bot's jobs."""
-    return _split(c, bots, now, None)
+    return _tally_queues(bots, _queue_job_rows(c, bots), now, None)
 
 
-def _split(c, bots, now, readable):
+def _queue_job_rows(c, bots):
     from .execution import unfenced_sql
+    rows = []
+    for part in H.chunks(list(bots)):
+        marks = ",".join("?" * len(part))
+        rows.extend(c.execute(
+            f"SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, j.created AS job_created, "
+            f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
+            "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created, j.id", part))
+    return rows
+
+
+def _tally_queues(bots, rows, now, keep):
     now = now or H.now()
     out = {b: {"queued": 0, "held": 0, "dead": 0, "uncertain": 0, "oldest_queued_hours": None, "oldest_queued_at": None,
                "oldest_dead_at": None, "dead_ids": []} for b in bots}
-    for part in H.chunks(list(out)):
-        marks = ",".join("?" * len(part))
-        for row in c.execute(
-                f"SELECT m.*, j.id AS job_id, j.bot AS job_bot, j.state AS job_state, j.created AS job_created, "
-                f"j.held AS job_held, j.attempt_id AS job_attempt, {unfenced_sql()} AS free FROM jobs j "
-                "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                f"WHERE j.state IN ('queued','uncertain') AND j.bot IN ({marks}) ORDER BY j.created, j.id", part):
-            if readable and not readable(row):
-                continue
-            q = out[row["job_bot"]]
-            if row["job_state"] == "uncertain":
-                q["uncertain"] += 1
-            elif not row["free"]:
-                q["dead"] += 1
-                q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
-                if len(q["dead_ids"]) < DEAD_IDS:
-                    q["dead_ids"].append(row["job_id"])
-            elif row["job_held"]:
-                q["held"] += 1
-            else:
-                q["queued"] += 1
-                q["oldest_queued_at"] = q["oldest_queued_at"] or row["job_created"]
+    for row in rows:
+        if keep and not keep(row):
+            continue
+        q = out[row["job_bot"]]
+        if row["job_state"] == "uncertain":
+            q["uncertain"] += 1
+        elif not row["free"]:
+            q["dead"] += 1
+            q["oldest_dead_at"] = q["oldest_dead_at"] or row["job_created"]
+            if len(q["dead_ids"]) < DEAD_IDS:
+                q["dead_ids"].append(row["job_id"])
+        elif row["job_held"]:
+            q["held"] += 1
+        else:
+            q["queued"] += 1
+            q["oldest_queued_at"] = q["oldest_queued_at"] or row["job_created"]
     for q in out.values():
         q["oldest_queued_hours"] = hours(q["oldest_queued_at"], now)
     return out

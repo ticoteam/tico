@@ -167,3 +167,19 @@ def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_the
     assert (answer["can_run"], answer["problem"]) == (None, "Codex is installing on Ben Mac")
     answer = verdict(state="failed", detail="npm is not installed on this computer")
     assert answer["can_run"] is False and "could not be installed" in answer["problem"]
+
+
+def test_choices_and_recent_batch_match_per_runner_lookups(api):
+    """Operations listing should not query harness tables once per computer."""
+    from backend import harness_actions
+    a, b = online(api), online(api)
+    ask(api, a)
+    ask(api, b, action="update", harness="codex")
+    post(api, f"runners/{a['runner_id']}/harness-choices", {"harness": "codex", "enabled": False})
+    with api.app.state.store.read() as c:
+        by_choice = harness_actions.choices_by_runner(c)
+        by_recent = harness_actions.recent_by_runner(c)
+        assert by_choice[a["runner_id"]] == harness_actions.choices(c, a["runner_id"])
+        assert by_choice.get(b["runner_id"], {}) == harness_actions.choices(c, b["runner_id"])
+        assert by_recent[a["runner_id"]] == harness_actions.recent(c, a["runner_id"])
+        assert by_recent[b["runner_id"]] == harness_actions.recent(c, b["runner_id"])

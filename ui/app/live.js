@@ -40,7 +40,9 @@ function liveFollow(id) {
   };
 }
 // Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
-const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(fn, ms);
+// A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
+// whenever live was down.
+const liveFallback = (fn, ms) => liveAvailable() ? 0 : setInterval(() => { if (!document.hidden) fn(); }, ms);
 // Run `fn` once after a burst: every call within `ms` of the first folds into it.
 const LIVE_SOON = new Map();
 function liveSoon(key, fn, ms = 250) {

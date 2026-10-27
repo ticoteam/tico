@@ -322,12 +322,19 @@ def still_reporting(c, bot):
 
 def listing(c, who, auth):
     """Every external agent this person may see, for Settings."""
+    from . import read_cache
+    rows = list(c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.slug=a.bot ORDER BY a.bot"))
+    slugs = [r["bot"] for r in rows]
+    # One access pass and one config read for the whole list (operations embeds this on every load).
+    access = auth.bot_accesses(c, who, slugs) if slugs else {}
+    operators = {r["bot"]: r["operator"] for r in read_cache.configs(c, slugs)}
     out = []
-    for record in c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.slug=a.bot ORDER BY a.bot"):
-        if not auth.bot_access(c, who, record["bot"])["read"]:
+    for record in rows:
+        # bot_accesses answers every slug asked for; a missing one denies rather than allows.
+        if not (access.get(record["bot"]) or {}).get("read"):
             continue
-        config = c.execute("SELECT operator FROM bot_config WHERE bot=?", (record["bot"],)).fetchone()
-        if who.role != "owner" and not (config and who.actor == "human:" + config["operator"]):
+        operator = operators.get(record["bot"])
+        if who.role != "owner" and not (operator and who.actor == "human:" + operator):
             continue
         value = {k: record[k] for k in ("bot", "display_name", "harness", "created", "created_by",
                                         "last_seen", "version", "platform", "model", "provider",

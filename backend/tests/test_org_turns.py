@@ -80,6 +80,13 @@ def test_spec11_only_sign_ins_count_guests_do_not_and_empty_org_counts_one(api):
     assert (value['people'], value['warning'], value['stop']) == (1, 40, 100)
 
 
+def test_settings_turn_levels_get_uses_admission_not_fleet_snapshot(api):
+    """The settings page only renders levels and in_use; classifying every queued bot is wasted work."""
+    value = get(api, 'settings/turn-levels')
+    assert 'in_use' in value and 'at_stop' in value and 'warning_per_person' in value
+    assert 'running' not in value and 'queued' not in value and 'waiting' not in value
+
+
 def test_spec15_admin_levels_persist_apply_and_non_admin_is_denied_by_server(api):
     """Synthetic permission regression; acceptance 15 still requires a separate live check."""
     value = post(api, 'settings/turn-levels', {'warning_per_person': 5, 'stop_per_person': 9}, 'ben-test')

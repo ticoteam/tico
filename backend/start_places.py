@@ -1,5 +1,7 @@
 """Short computer reservations, separate from a worker's renewable delivery lease."""
 
+from types import MappingProxyType
+
 from .store import H
 
 START_SECONDS = 180
@@ -24,20 +26,43 @@ def restore_waits(c):
 
 
 def ready_waiting(c, runner_id):
+    """Whether this computer already holds a start waiting on capacity/stop. Cached for the read snapshot:
+    claim waiter order and held_starts ask once per computer."""
+    from . import read_cache
     from .org_turns import REASON
-    return bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
-                          "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                          "AND p.wait_reason IN ('computer busy',?) LIMIT 1", (runner_id, H.now(), REASON)).fetchone())
+    values = read_cache.cache(c)
+    key = ("start_places.ready_waiting", runner_id)
+    if values is not None and key in values:
+        return values[key]
+    out = bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
+                         "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
+                         "AND p.wait_reason IN ('computer busy',?) LIMIT 1",
+                         (runner_id, H.now(), REASON)).fetchone())
+    if values is not None:
+        values[key] = out
+    return out
 
 
 def held(c, runner_id):
-    """Running work and unexpired starts; legacy workers retain their original lease capacity."""
+    """Running work and unexpired starts; legacy workers retain their original lease capacity.
+
+    Cached for the read snapshot (a read transaction or a claim's write transaction until its first write): claim
+    waiter order and Health capacity fences ask once per computer. Read-only: callers share one map.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("start_places.held", runner_id)
+    if values is not None and key in values:
+        return values[key]
     now = H.now()
-    return {r[0]: r[1] for r in c.execute(
+    out = MappingProxyType({r[0]: r[1] for r in c.execute(
         "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
         "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot",
-        (runner_id, now, now))}
+        (runner_id, now, now))})
+    if values is not None:
+        values[key] = out
+    return out
 
 
 def held_totals(c):
@@ -133,62 +158,81 @@ def reserve(c, attempt, settings=None):
     return {"reserved": True, "start_until": until}
 
 
-def summary(c, runner_id, settings, default=None):
+def summary(c, runner_id, settings, default=None, *, classify=True):
     """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Pass one company
     Default across every computer in a listing (Health, Operations, /computers): without it each summary rebuilds
-    pools/groups/spend while classifying queued bots."""
+    pools/groups/spend while classifying queued bots.
+
+    `classify=False` skips only claim_refusal for each queued bot (quota, readiness, sign-in, spend): Health below
+    its warning level, where its stuck and queue checks already name why a bot is not starting. Paused bots and a
+    busy computer still read as waits."""
     from .read_cache import value
-    return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
+    return value(c, ("start_summary", runner_id, bool(classify)),
+                 lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
 
 
-def _summary(c, runner_id, settings, default):
+def summaries(c, runner_ids, settings, default=None):
+    """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
+    on its own, including the same claim refusal for each queued bot."""
+    from .read_cache import value
+    ids = tuple(sorted({rid for rid in runner_ids if rid}))
+    return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings, default))
+
+
+def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
-    out = dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS)
-    groups = {}
+    out = {rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids}
+    groups = {rid: {} for rid in runner_ids}
+    if not runner_ids:
+        return out
 
-    def add(reason, count, since):
-        out['waiting'] += count
-        old = groups.setdefault(reason, {'reason': reason, 'count': 0, 'oldest': since})
+    def add(rid, reason, count, since):
+        out[rid]['waiting'] += count
+        old = groups[rid].setdefault(reason, {'reason': reason, 'count': 0, 'oldest': since})
         old['count'] += count
         old['oldest'] = min(old['oldest'], since)
 
     now = H.now()
-    for row in c.execute("SELECT a.state,a.created,a.lease_until,p.start_until,p.wait_reason,p.waiting_since,p.managed "
-                         "FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-                         "WHERE a.runner_id=? AND a.state IN ('leased','running')", (runner_id,)):
+    marks = ",".join("?" * len(runner_ids))
+    for row in c.execute("SELECT a.runner_id,a.state,a.created,a.lease_until,p.start_until,p.wait_reason,"
+                         "p.waiting_since,p.managed FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                         f"WHERE a.runner_id IN ({marks}) AND a.state IN ('leased','running')", runner_ids):
+        rid = row['runner_id']
         if row['state'] == 'running':
-            out['running'] += 1
+            out[rid]['running'] += 1
         elif row['wait_reason']:
-            add(row['wait_reason'], 1, row['waiting_since'] or row['created'])
+            add(rid, row['wait_reason'], 1, row['waiting_since'] or row['created'])
         elif row['lease_until'] > now and (not row['managed'] or (row['start_until'] or '') > now):
-            out['starting'] += 1
+            out[rid]['starting'] += 1
         else:
-            out['queued'] += 1
-    # Quota and readiness waits need not be leased to a worker to be visible.
+            out[rid]['queued'] += 1
     from .execution import claim_refusal
     from .store import readiness_document
-    runner = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
-    ready = readiness_document(runner['readiness_json']) if runner else {}
-    overloaded = performance.load_status(c, runner_id)['overloaded']
+    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
+    overloaded = {rid: performance.load_status(c, rid)['overloaded'] for rid in runner_ids}
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget'}
-    for row in c.execute("SELECT j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
+    for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
                          "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.slug=j.bot "
-                         "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id=? AND j.state='queued' GROUP BY j.bot",
-                         (runner_id,)):
+                         "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
+                         "GROUP BY a.runner_id,j.bot", runner_ids):
+        rid = row['runner_id']
+        runner = runners.get(rid)
+        ready = readiness_document(runner['readiness_json']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
-        if not why and runner:
+        if not why and runner and classify:
             refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
                                        default=default)
             why = reasons.get(refused, 'pre-start requirements' if refused else '')
-        if not why and overloaded:
+        if not why and overloaded[rid]:
             why = 'computer busy'
         if why:
-            add(why, row['n'], row['oldest'])
+            add(rid, why, row['n'], row['oldest'])
         else:
-            out['queued'] += row['n']
-    out['waits'] = sorted(groups.values(), key=lambda g: (g['oldest'], g['reason']))
+            out[rid]['queued'] += row['n']
+    for rid in out:
+        out[rid]['waits'] = sorted(groups[rid].values(), key=lambda g: (g['oldest'], g['reason']))
     return out
 
 

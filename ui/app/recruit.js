@@ -177,6 +177,7 @@ async function recruitSeat(id) {
   // The CEO Bot's draft arrives in a minute or so; a description being typed is never replaced.
   if (seat.draft?.state === 'drafting') RECRUIT_POLL = setInterval(async () => {
     if (!dialog.open) { clearInterval(RECRUIT_POLL); return; }
+    if (document.hidden) return;
     try {
       const now = await get(`/v2/seats/${encodeURIComponent(id)}`, {fresh: true});
       if (now.draft?.state === 'drafting') return;
