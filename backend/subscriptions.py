@@ -59,15 +59,33 @@ def weekly_key(runner, profile, runtime):
     return 'subscription-weekly:' + json.dumps([runner, profile, runtime], separators=(',', ':'))
 
 
-def reported_runtimes(c, runner, profile, raw):
+def subscription_meta(c):
+    """{key: dict} for every subscription* registry row in one pass (Operations profiles listing)."""
+    out = {}
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE 'subscription%'"):
+        try:
+            value = json.loads(row['value_json'] or '{}')
+        except ValueError:
+            value = {}
+        out[row['key']] = value if isinstance(value, dict) else {}
+    return out
+
+
+def reported_runtimes(c, runner, profile, raw, meta=None):
     from .repositories import metadata
     from . import subscription_refresh as refresh
+
+    def lookup(key):
+        if meta is not None:
+            return meta.get(key) or {}
+        return metadata(c, key)
+
     runtimes = json.loads(raw or '{}')
-    cutoff = refresh.signin_after(c, runner, profile)
+    cutoff = lookup(f'subscription-reading-after:{runner}:{profile}')
     for runtime, state in runtimes.items():
         reported = weekly_snapshot(state.get('weekly'))
-        manual = weekly_snapshot(metadata(c, weekly_key(runner, profile, runtime)))
-        refreshed = metadata(c, refresh.key(runner, profile, runtime))
+        manual = weekly_snapshot(lookup(weekly_key(runner, profile, runtime)))
+        refreshed = lookup(refresh.key(runner, profile, runtime))
         direct = weekly_snapshot(refreshed.get('weekly'))
         if refreshed:
             state['refresh'] = refresh.view(refreshed)
@@ -113,6 +131,25 @@ def computer_profiles(c, runner, accounts):
         rows.append({'name': row['profile'], **identity(c, runner['id'], row['profile']),
                      'runtimes': runtimes if accounts else without_accounts(runtimes)})
     return rows
+
+
+def profiles_by_runner(c):
+    """{runner_id: computer_profiles(... accounts=True)} for every computer in one pass (Operations listing).
+
+    Loads computer_profiles once, shares subscription* registry metadata, and resolves display names from that map.
+    """
+    from .subscription_identity import connection_id
+    meta = subscription_meta(c)
+    out = {}
+    for row in c.execute('SELECT * FROM computer_profiles ORDER BY profile'):
+        rid, profile = row['runner_id'], row['profile']
+        sid = connection_id(rid, profile)
+        named = meta.get(sid) or {}
+        runtimes = reported_runtimes(c, rid, profile, row['runtimes_json'], meta=meta)
+        out.setdefault(rid, []).append({
+            'name': profile, 'id': sid, 'display_name': named.get('display_name') or profile,
+            'runtimes': runtimes})
+    return out
 
 
 def context(c, settings=None):

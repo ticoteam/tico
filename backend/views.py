@@ -2083,6 +2083,8 @@ def install_views(app, store, auth, mutate, task_view):
             subscription_context = subscriptions.context(c, store.settings)
             # One pass for every computer's bot_connections (not assignment+config+identity per bot per runner).
             connections_map = subscriptions.connections_by_runner(c, store.settings, subscription_context)
+            # One pass for every computer's subscription profiles (not per-runner SELECTs + metadata).
+            profiles_map = subscriptions.profiles_by_runner(c)
             kept_for_inbox = inbox_isolation.inbox_only(c, roster(c))
             shared_keys = serving(c)
             # A company key's name and preview are a credential administrator's to read, as in Credentials; a
@@ -2147,7 +2149,10 @@ def install_views(app, store, auth, mutate, task_view):
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
-                profiles = subscriptions.computer_profiles(c, row, True)
+                # Copy per computer so stripping accounts for non-operators does not mutate the shared batch map.
+                profiles = [{**p, "runtimes": {k: dict(v) if isinstance(v, dict) else v
+                                               for k, v in (p.get("runtimes") or {}).items()}}
+                            for p in (profiles_map.get(row["id"]) or [])]
                 # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
                 keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
