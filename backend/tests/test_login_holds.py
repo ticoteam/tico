@@ -60,7 +60,7 @@ def test_thirteen_queued_jobs_after_a_limit_start_one_probe_at_the_reset_not_thi
     for n in range(12):
         post(api, "tasks", {"owner": "ops", "title": f"Review change {n}", "body": "Please review it."})
     first = claim(api, machine)
-    assert limit(api, machine, first)["outcome"] == "failed"
+    assert limit(api, machine, first)["outcome"] == "interrupted"
     # Another bot signed in with the same login on this computer queues work too: 13 jobs wait on one login.
     post(api, "tasks", {"owner": "finance", "title": "Close the month", "body": "Please do it."})
     with api.app.state.store.read() as c:

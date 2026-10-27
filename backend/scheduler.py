@@ -229,6 +229,10 @@ class Scheduler:
             # A completed run's notes are settled where its result is recorded; this settles any that path missed.
             H.notes_settle_catch_up(c, 500)
 
+        def source_outages_tick(c):
+            from . import source_outages
+            source_outages.sync(c, self.store.settings)
+
         def company_turns_tick(c):
             from . import org_turns
             org_turns.observe(c, self.store.settings, detailed=False)
@@ -254,6 +258,7 @@ class Scheduler:
                      self.execution.auto_reconcile,
                      self.execution.release_deploy_drains,
                      self.execution.release_limits,      # a usage limit lifts at its reset, not at the next claim
+                     source_outages_tick,
                      company_turns_tick,
                      wake_presets_tick,                         # wake presets let go of the notices and sweeps now due
                      self.execution.hold_unrunnable,

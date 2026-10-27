@@ -6105,7 +6105,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
               refs={**(refs or {}), "news": "task_done" if status == "done" else "task_declined",
                     **({"wake_batch": "completion"} if status == "done" and is_bot(actor)
                        and not _awaited_by(conn, after, after["requester"]) else {})},
-              quiet_bots=True)
+              quiet_bots=True, human_completion=is_human(actor) and status == 'done')
     if finishing:
         # Not only the requester: the owner that parked it waiting on this person, a bot that asked them a
         # question on it, and the parent's owner. Each once, never whoever tapped; tasks-only bots quietly,
@@ -6122,7 +6122,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     and who != (parent or {}).get("owner"))
             _wake(conn, after, who, _marked_done(conn, actor, after["title"]) + (f"\n{note}" if note and not quiet else "")
                   + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), {"news": "task_done"},
-                  quiet_bots=True, quiet=idle)
+                  quiet_bots=True, quiet=idle, human_completion=is_human(actor))
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
@@ -6466,7 +6466,7 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
         batch = who == after["requester"] and is_bot(actor) and not _awaited_by(conn, after, who)
         _wake(conn, after, who, said, {"news": "task_done", **({"wake_batch": "completion"} if batch else {})},
               quiet_bots=True,
-              quiet=accepted or bool(finished and who == after["owner"]))
+              quiet=accepted or bool(finished and who == after["owner"]), human_completion=is_human(actor))
     parent = task(conn, TR.parent_of(conn, after["id"]) or "")
     if parent and parent["owner"] != actor and parent["owner"] not in told and parent["owner"] != subtask_told:
         _wake(conn, after, parent["owner"], f"Child closed: {after['title']}", quiet_bots=True, quiet=True)
@@ -7703,7 +7703,7 @@ def notes_waiting_counts(conn, bots, limit=500):
 
 
 def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False, trigger="status_or_relation",
-          source=None):
+          source=None, human_completion=False):
     """Tell someone their task moved. Task traffic never counts against rule 4.
 
     `trigger` is what this wake is, for the run it starts (backend/run_triggers.py): a task's status or
@@ -7721,6 +7721,10 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     `quiet` is stronger: the caller knows this notice asks nothing of any bot, so no bot is
     woken for it, whatever it opted into.
     """
+    if human_completion and is_bot(target) and _actor_exists(conn, target) and task_private_readable(conn, target, task_row):
+        from . import completion_notes
+        completion_notes.record(conn, target, task_row['id'])
+        refs = {**(refs or {}), 'quiet': True}
     if quiet_bots and (quiet or tasks_only(conn, target)):
         refs = {**(refs or {}), "quiet": True}
     if (is_bot(target) and target == task_row.get("owner") and TS.snoozed(task_row)

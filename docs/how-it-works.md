@@ -270,7 +270,7 @@ the same computer continues the same provider session. A consumed approval or a 
 (merge, publish, send or payment) holds it for BotOps instead, and the review names the action. A second interruption
 is dismissed and BotOps is told. The computer records fixed operation labels alongside shell events without exposing
 command arguments. Older program-only events from action-capable tools (such as `gh` or `npm`) go to review with a
-command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without the computer’s restart report keeps the conservative rule above. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
+command-details-unavailable reason; they cannot prove that no merge or publish happened. A lost lease without a restart report resumes once after fifteen minutes when no consumed approval or named outside action was recorded. A second lost lease holds the job quietly for its computer and says Resuming; it does not dismiss the work or create a BotOps task. A server silence of up to thirty minutes extends existing leases once, so a twenty-minute renewal outage keeps the running session. **Unreleased:** safe runs held after a usage limit also recover automatically, as described below.
 A known primary login reset keeps runnable jobs queued until that reset when no eligible fallback is ready;
 a new message does not start another attempt on the spent login. An interrupted fallback returns to this queue
 only when its host acknowledged the end, reported its tools completely, and recorded no output, tools or consumed
@@ -314,7 +314,7 @@ bot's folder, in the bot's own words). Anyone who manages the
 bot, wherever it runs, sees Resume bot beside the warning by its name and a Paused for review card under More with the
 refused text (credential values masked) and its task; one click releases that pause and the checks stay on.
 
-**A subscription usage limit.** A run that hits one fails with `limited` set; it did nothing, so
+**A subscription usage limit.** A safe run that hits one is saved as retryable and interrupted with `limited` set, preserving its checkpoint and provider session, so
 the job stays queued however often this happens (it is never *Interrupted*) and the bot shows
 *limited*. The limit holds the provider login, not just the bot: that runtime's sign-in on that computer, saved on the server so it outlasts a restart of the runner or the server. It holds
 until the reset the provider names (Claude's "resets 2:40am (UTC)" included, even days away), or when none is named
@@ -617,3 +617,5 @@ Heartbeats and `scripts/tico doctor` report each base clone's state, last fetch,
 any error. A base clone failure does not change a bot's readiness. A clone that has been absent
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.
+
+Outside source failures are isolated by computer, login profile and runtime. The provider's absolute reset time wins over a later status refresh, and a claim releases an expired reset hold even between scheduler ticks. Repeated observations update one durable source incident; only its start and recovery send quiet notices to Engineering and Health, with the since time, waiter count and expected return. Waiting automatic notices use the existing history/digest batching, while interrupted jobs retain their own checkpoint. Human bulk finish/close writes one count-only next-run note per recipient; task details remain on their original tasks, including for paused recipients.

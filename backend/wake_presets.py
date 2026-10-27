@@ -334,7 +334,7 @@ def _release(c, bot, jobs):
     sent = H.say(c, H.KEEPER, "bot:" + bot, f"{len(jobs)} updates held by {held_by}:\n"
                  + "\n".join(lines) + "\nOpen each task that needs you; the rest is news.", kind="notice",
                  refs={"wake_digest": len(jobs)})
-    held_until = max(c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] for j in jobs)
+    held_until = max(c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] or H.now() for j in jobs)
     c.execute("UPDATE jobs SET wake_class='digest',wake_preset=?,hold_until=? WHERE message_id=?",
               (jobs[0]["wake_preset"], held_until, (sent or {}).get("id")))
     digest = c.execute("SELECT id FROM jobs WHERE message_id=?", ((sent or {}).get("id"),)).fetchone()
