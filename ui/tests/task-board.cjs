@@ -522,6 +522,34 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       body: {key: 'release-2026-10-02', metadata: {date: '2026-10-02'}}});
     assert.deepEqual(tags.at(-1).metadata, {channel: 'stable', date: '2026-10-02'});
 
+    // A long name makes the same 40-character key the server saves, shown live under Advanced (C2).
+    const newTag = async () => {
+      await page.goto('http://tico-ui.test/#/settings');
+      await page.locator('[data-settings-tab="tasks"]').click();
+      const form = page.locator('#settings-tags [data-tag-create]');
+      await form.waitFor();
+      await form.locator('.tag-advanced > summary').click();
+      return form;
+    };
+    let form = await newTag();
+    assert.equal(await form.locator('input[name="key"]').getAttribute('maxlength'), '40');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: made from the name');
+    await form.locator('input[name="label"]').fill('Quarterly roadmap review for the platform team now');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: quarterly-roadmap-review-for-the-platfor');
+    await form.locator('button[type="submit"]').click();
+    await page.waitForURL('**/#/tag/quarterly-roadmap-review-for-the-platfor');
+    assert.equal(posted.at(-1).body.key, 'quarterly-roadmap-review-for-the-platfor');
+    // A cut that lands on a word gap drops the hyphen, as the server does, so the key is 39 characters.
+    form = await newTag();
+    await form.locator('input[name="label"]').fill('Notes on the customer interviews we ran in spring 2027');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: notes-on-the-customer-interviews-we-ran');
+    await form.locator('input[name="key"]').fill('  Spring Interviews ');
+    assert.equal(await form.locator('[data-tag-key-line]').innerText(), 'Key: spring-interviews', 'a typed key shows as it will be saved');
+    await form.locator('button[type="submit"]').click();
+    await page.waitForURL('**/#/tag/spring-interviews');
+    assert.equal(posted.at(-1).body.key, 'spring-interviews');
+    for (const key of ['quarterly-roadmap-review-for-the-platfor', 'spring-interviews']) tags.splice(tags.findIndex(tag => tag.key === key), 1);
+
     // The starter creates only on click and handles a key another person creates while the list is open.
     tags.splice(tags.findIndex(tag => tag.key === 'release-checklist'), 1);
     const settingsTags = async () => {

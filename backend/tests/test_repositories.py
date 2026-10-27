@@ -53,6 +53,19 @@ def test_sync_bot_repos_setup_overrides_and_unreachable(api, gh):
     assert api.put('/api/v2/repositories/Acme/product', json={'enabled': False}, headers=auth('person-test')).status_code == 403
 
 
+@pytest.mark.parametrize('cleared', ['', '   ', None])
+def test_cleared_setup_command_returns_to_the_repository_file(api, gh, cleared):
+    gh.setup_files['/repos/Acme/product/contents/tico.json'] = {'setup': 'npm ci'}
+    catalog(api, gh)
+    put(api, 'repositories/Acme/product', {'enabled': True})
+    typed = put(api, 'repositories/Acme/product', {'setup_command': 'make install'})
+    assert (typed['setup_command'], typed['setup_source']) == ('make install', 'settings')
+    cleared_row = put(api, 'repositories/Acme/product', {'setup_command': cleared})
+    assert (cleared_row['setup_command'], cleared_row['setup_source']) == (None, None)
+    rows = {r['full_name']: r for r in api.post('/api/v2/repositories/refresh', headers=auth()).json()['repositories']}
+    assert (rows['Acme/product']['setup_command'], rows['Acme/product']['setup_source']) == ('npm ci', 'tico.json')
+
+
 def test_read_grant_reads_pull_requests_comments_and_deployments_but_never_writes(api, gh):
     # A read-only reviewer needs `gh pr view`, `gh pr diff`, a PR's comments and its preview deployment.
     catalog(api, gh)
