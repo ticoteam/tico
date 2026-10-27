@@ -46,7 +46,7 @@ def in_use(c):
     Queued jobs blocked on quota, a spending limit, readiness or a paused bot never became turns, and an attempt
     parked by the stop itself is not counted either: counting them kept the company at its stop with nothing running.
 
-    The first `state IN` term lets SQLite read only the partial index of active attempts (one_active_attempt_per_lane):
+    The first `state IN` term lets SQLite read only the partial index of live attempts (attempts_live_lease):
     without it the OR scanned every attempt ever made, ~90 ms a call on a live install, on every claim.
     """
     now = H.now()
