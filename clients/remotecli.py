@@ -155,6 +155,7 @@ def run(args, who=None):
         # Say what the change took away: a switch to own keeps the chosen rows, but they stop applying.
         lost = [r["full_name"] + " (" + r["access"] + ")" for r in (result or {}).get("stopped") or []]
         lost += [name + " (run workflows)" for name in (result or {}).get("workflows_stopped") or []]
+        lost += [name + " (edit workflow files)" for name in (result or {}).get("workflow_edits_stopped") or []]
         lost += ["repository creation"] if (result or {}).get("creation_stopped") else []
         lost += ["product repository creation"] if (result or {}).get("product_creation_stopped") else []
         if lost:

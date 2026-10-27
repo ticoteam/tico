@@ -93,6 +93,11 @@ def test_the_cli_says_what_a_mode_change_took_away(monkeypatch, capsys):
     args = Namespace(cmd="bot", fn="bot repos", bot="ops", all=False, own=True, chosen=None)
     assert remotecli.run(args)["mode"] == "own"
     assert capsys.readouterr().err.strip() == "ops no longer has: Acme/product (write), repository creation"
+    # Clearing only a workflow option is a loss too.
+    monkeypatch.setattr(hubtools, "bot_repos_set", lambda client, body: {
+        "mode": "chosen", "stopped": [], "workflow_edits_stopped": ["Acme/product"]})
+    remotecli.run(Namespace(cmd="bot", fn="bot repos", bot="ops", all=False, own=False, chosen=["Acme/product:write-edit"]))
+    assert capsys.readouterr().err.strip() == "ops no longer has: Acme/product (edit workflow files)"
 
 
 def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
