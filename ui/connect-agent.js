@@ -293,8 +293,11 @@
       timer = setTimeout(poll, POLL_MS);
     }
 
+    // Only a scheduled poll is pulled forward: no timer means a request is in flight or polling has ended
+    // (connected, or given up), and starting one then would run a second chain or ask unprompted.
     const onVis = () => {
-      if (document.hidden || closed || !issued || timer) return;
+      if (document.hidden || closed || !issued || !timer) return;
+      clearTimeout(timer);
       timer = setTimeout(poll, 0);
     };
     document.addEventListener('visibilitychange', onVis);

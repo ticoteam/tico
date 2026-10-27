@@ -1858,7 +1858,7 @@ def fleet_snapshot(c, auth, identity, task_view):
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
                      "queued": queued.get(slug, 0),
-                     "active_attempt": dict(attempt) if attempt else None,
+                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started", "lease_until")} if attempt else None,
                      "active_attempts": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
