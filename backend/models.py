@@ -1330,7 +1330,7 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     capacity: int = Field(default=4, ge=1, le=256)
     # The assignment_* values name the retired temporary assignments (#420); an older runner still sends them.
-    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1"]] = Field(default_factory=list, max_length=20)
+    capabilities: list[Literal["assignment_instances_v1", "assignment_cleanup_v1", "task_lanes_v1", "task_lanes_v2", "session_roots_v1", "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1", "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1"]] = Field(default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -2243,6 +2243,17 @@ class RunSession(Contract):
     detail: str | None = Field(default=None, max_length=500)
 
 
+class SourceContinuation(Contract):
+    # A quota-stopped side session belongs to this job, never the primary conversation session.
+    thread_id: str = Field(min_length=1, max_length=1000)
+    runtime: str = Field(min_length=1, max_length=80)
+    harness: str = Field(min_length=1, max_length=80)
+    model: str = Field(default="", max_length=200)
+    reasoning_effort: str = Field(default="", max_length=80)
+    profile: str = Field(default="", max_length=80)
+    epoch: tuple[str, int] | None = None
+
+
 class Completion(Contract):
     load_snapshot: LoadSnapshot | None = None
     subscription_unavailable: SubscriptionUnavailable | None = None
@@ -2262,6 +2273,7 @@ class Completion(Contract):
     # The model was at capacity after the turn acted, and the runner kept its thread: the job continues that thread
     # after the capacity hold instead of being held for review (backend/execution.py capacity_continuation).
     continues: bool = False
+    source_continuation: SourceContinuation | None = None
     fallback: str | None = Field(default=None, max_length=80)  # harness that actually ran the turn
     primary_limited: bool = False  # the bot's own runtime hit its usage limit and the company's default `fallback` ran the turn
     primary_held: bool = False  # the claim held the bot's own login (config `primary_held`): the runner never tried it

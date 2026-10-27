@@ -82,6 +82,7 @@ TASK_GOALS = "task_goals_v1"
 # A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
 # other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
 CAPACITY_CONTINUE = "capacity_continue_v1"
+SOURCE_CONTINUE = "source_continue_v1"
 
 
 def turns_here(c, runner_id):
@@ -821,8 +822,19 @@ def capacity_continuation(c, job_id):
     return row[0] if row else None
 
 
+def source_continuation(c, job_id):
+    """The actual quota-stopped fallback, bound to its job instead of the primary session."""
+    row = c.execute("SELECT result_json FROM attempts WHERE job_id=? "
+                    "AND json_extract(result_json,'$.source_continue')=1 ORDER BY created DESC,rowid DESC LIMIT 1",
+                    (job_id,)).fetchone()
+    return json.loads(row[0]).get('source_continuation') if row else None
+
+
 def continuation_thread(c, job_id):
     """Require the saved provider session for capacity, quota or safe lease recovery."""
+    source = source_continuation(c, job_id)
+    if source:
+        return source["thread_id"]
     capacity = capacity_continuation(c, job_id)
     if capacity:
         return capacity
@@ -1292,7 +1304,11 @@ def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_b
     # otherwise the bot's own cooldown does, as for a limit its fallback met.
     if (cooling_off(c, bot) and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
             or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
-        return "cooling_off", None
+        # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
+        pending = c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued' AND held=0", (bot,))
+        if not any(source_continuation(c, j['id']) and not login_refusal(c, settings, runner['id'], bot, config, j['id'])
+                   for j in pending):
+            return "cooling_off", None
     return None, config
 
 
@@ -1302,6 +1318,10 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     ready here and not held itself does not wait: its turn runs there (primary_hold marks the job so the runner skips
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
+    source = source_continuation(c, job_id) if job_id else None
+    if source:
+        return login_wait(c, runner_id, login_holds.canonical(c, runner_id, source["profile"], source["runtime"]),
+                          source["runtime"], bot, job_id)
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
     if why and job_id and continuation_thread(c, job_id):
         return why          # only its own thread, on its own login, continues it
@@ -2401,6 +2421,8 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
+            if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in json.loads(runner["capabilities_json"] or "[]"):
+                continue        # old strict-primary runners cannot route a saved fallback
             if not continues and continuation_thread(c, row["id"]):
                 continue        # left queued for a runner that continues its thread: this one would start it afresh
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
@@ -2691,7 +2713,10 @@ class Execution:
         c.execute("INSERT OR IGNORE INTO attempt_conversations VALUES(?,?)", (aid, conv["id"]))
         task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
-        if check:
+        source = source_continuation(c, row["id"])
+        if source:
+            login_holds.take_probe(c, who.runner_id, login_holds.canonical(c, who.runner_id, source["profile"], source["runtime"]), source["runtime"], row["id"])
+        elif check:
             check_models.handed(c, aid, task["id"], check)
         elif primary_hold(c, self.store.settings, who.runner_id, row["bot"], followed, row["id"]):
             # Its login is held and the claim let it through for its fallback (login_refusal): the runner starts the
@@ -2875,6 +2900,7 @@ class Execution:
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
                             **({"continue_thread": continue_thread} if continue_thread else {}),
+                            **({"source_continuation": source} if source else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
                             "history": history, "principal": principal,
@@ -3705,6 +3731,11 @@ class Execution:
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
                            **({"check": check["runtime"]} if check else {})}), aid))
+        source = body.source_continuation
+        if source_pause and source and body.fallback and source.harness == body.fallback:
+            computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) WHERE id=?", (aid,))
         quota_continue = False
         if source_pause and not body.fallback and row['thread_id'] and worked:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()

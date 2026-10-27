@@ -5271,7 +5271,7 @@ def create_app(settings=None):
                                                           "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
                                                           "attempt_thread": True, "runner_drain": True,
-                                                          "capacity_continue": True}}
+                                                          "capacity_continue": True, "source_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):

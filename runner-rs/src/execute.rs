@@ -410,6 +410,14 @@ fn capacity_continue() -> bool {
     crate::follow::feature("capacity_continue")
 }
 
+fn source_continue() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::SOURCE_CONTINUE.with(|on| on.get()) {
+        return on;
+    }
+    crate::follow::feature("source_continue")
+}
+
 /// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
 /// an older one has no such route).
 fn thread_updates() -> bool {
@@ -1097,6 +1105,7 @@ impl Runner {
         // Pushes from the task's worktrees from here on are this turn's (crate::worktrees::pushes).
         let begun = crate::util::epoch_s() as i64;
         self.state.record(&attempt)?;
+        let source_resume = crate::source_resume::apply(&mut attempt);
         let config = attempt["config"].clone();
         let key = session_key(&attempt);
         // Goal continuations count per thread: one task's stuck goal does not pause another's.
@@ -1130,7 +1139,7 @@ impl Runner {
         // A harness that keeps one process per conversation between turns (crate::warm) has sessions of its own.
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = if persistent { format!("{runtime}:{}", text_of(&config["harness"])) } else { runtime.clone() };
-        let mut conv = key.clone();
+        let mut conv = source_resume.as_ref().map_or_else(|| key.clone(), |_| crate::source_resume::scope(&attempt));
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
         let mut execution_path: PathBuf = crate::sessions::local_path(&self.config, &bot, &config);
@@ -1157,7 +1166,8 @@ impl Runner {
         let mut auth_rejected: Option<(String, String)> = None;
         let mut selected: Option<Profile> = None;
         let mut subscription_unavailable: Option<Value> = None;
-        let mut fallback: Option<String> = None;
+        let mut fallback: Option<String> = source_resume.as_ref().map(|s| s.harness.clone());
+        let mut source_saved = source_resume.clone();
         // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
         let mut session: Option<crate::continuity::Session> = None;
         // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own.
@@ -1325,7 +1335,9 @@ impl Runner {
             // task-model fallback runs in a side session of its own, started from the task's checkpoint (prompt()
             // supplies it), and never touches the thread this runtime saved: the turns that use that thread resume it.
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
-            let previous = if side_run { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let binding_changed = source_resume.as_ref().is_some_and(|s|
+                s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
+            let previous = if side_run || binding_changed { None } else { self.state.session(&bot, &conv, &session_runtime)? };
             let (limit, limit_name) = self.run_deadline(&aid, &config, vault.relay.as_ref())?;
             prepared = true;
             if busy.is_some() || held.is_some() {
@@ -1767,6 +1779,22 @@ impl Runner {
                     fresh: None,
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                // Keep the actual fallback thread under this job, separate from every normal conversation session.
+                // A host that has not confirmed its provider session cannot promise strict continuation.
+                if drove.limited && !drove.capacity && source_continue()
+                    && (!h.confirms_threads() || h.confirmed(&th).is_some()) {
+                    let saved = h.session_id(&th);
+                    let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
+                        format!("{}:{}", hop.runtime, hop.harness)
+                    } else { hop.runtime.clone() };
+                    keep_session(&self.state, &bot, &crate::source_resume::scope(&attempt), &kept_runtime, &saved).await?;
+                    source_saved = Some(crate::source_resume::Saved {
+                        thread_id: saved, runtime: hop.runtime.clone(), harness: hop.harness.clone(),
+                        model: hop.model.clone(), reasoning_effort: hop.reasoning_effort.clone().unwrap_or_default(),
+                        profile: selected.as_ref().map_or(String::new(), |p| p.name.clone()),
+                        epoch: clear_epoch(&attempt, &key),
+                    });
+                }
                 turn = Some(drove.turn.clone());
                 let how = if drove.outcome == "completed" { String::new() } else { format!(" ({})", drove.outcome) };
                 let why = match &busy {
@@ -1789,7 +1817,7 @@ impl Runner {
             // That login is out of quota too: the next of the company's providers takes the turn. Only while at most
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
-            if drove.limited && hop.default && !native_control && spent < 2 {
+            if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
                 let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
@@ -2004,6 +2032,9 @@ impl Runner {
             completion.insert("usage".into(), Value::Object(spent));
         }
         if drove.limited {
+            if let Some(saved) = source_saved.as_ref().filter(|_| source_continue()) {
+                completion.insert("source_continuation".into(), json!(saved));
+            }
             completion.insert("limited".into(), json!(true));
             // The provider's own reset, so the bot resumes then; only a server that takes the field is sent it.
             let reset = segments.last().and_then(|s| {
@@ -2308,6 +2339,7 @@ mod tests {
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
         pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static SOURCE_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -2324,6 +2356,7 @@ mod tests {
             HOST_COMMAND.with(|command| command.borrow_mut().take());
             THREAD_UPDATES.with(|on| on.set(None));
             CAPACITY_CONTINUE.with(|on| on.set(None));
+            SOURCE_CONTINUE.with(|on| on.set(None));
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
@@ -4163,4 +4196,69 @@ else:
         server.abort();
         std::fs::remove_dir_all(dir).ok();
     }
+    #[tokio::test]
+    async fn quota_stopped_fallback_survives_a_runner_restart_and_resumes_its_own_session() {
+        let _controls = RunControls;
+        SOURCE_CONTINUE.with(|on| on.set(Some(true)));
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fallback-quota");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        capacity_host(&dir);
+        let script = dir.join("synthetic_claude.py");
+        let code = std::fs::read_to_string(&script).unwrap().replace(
+            "Selected model is at capacity. Please try a different model.",
+            "Usage limit reached; resets at 2099-01-01T07:00:00Z");
+        std::fs::write(&script, code).unwrap();
+        runner.state.save_session("ops", "bot", "codex", "primary-untouched").unwrap();
+        let mut first = capacity_attempt("a-side", None);
+        first["job_id"] = json!("job-side");
+        first["config"]["primary_held"] = json!("2099-01-01T07:00:00Z");
+        tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(first.clone())).await.unwrap().unwrap();
+        let done = completion(&seen, "a-side");
+        assert_eq!(done["limited"], true, "{done}");
+        let saved = done["source_continuation"].clone();
+        assert_eq!(saved["thread_id"], "capacity-session", "{done}");
+        assert_eq!(saved["runtime"], "claude", "{done}");
+        assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("primary-untouched"));
+        let next = Arc::new(Runner::new(runner.config.clone(), runner.client.clone(), runner.state.clone()));
+        first["id"] = json!("a-side-again");
+        first["source_continuation"] = saved;
+        first["continue_thread"] = json!("capacity-session");
+        tokio::time::timeout(Duration::from_secs(12), next.execute(first)).await.unwrap().unwrap();
+        assert_eq!(completion(&seen, "a-side-again")["outcome"], "completed");
+        let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(args.len(), 2, "no primary or fresh replay: {args:?}");
+        let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(resumed.windows(2).any(|p| p == ["--resume", "capacity-session"]), "{args:?}");
+        assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("primary-untouched"));
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_fallback_continuation_with_a_changed_login_or_epoch_never_starts_fresh() {
+        for changed_profile in [false, true] {
+            let _controls = RunControls;
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "fallback-binding");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            capacity_host(&dir);
+            if changed_profile {
+                runner.state.epoch_moved("ops", "", "source:job-side", 2).unwrap();
+            }
+            runner.state.save_session("ops", "source:job-side", "claude", "capacity-session").unwrap();
+            let mut attempt = capacity_attempt("a-binding", Some("capacity-session"));
+            attempt["job_id"] = json!("job-side");
+            attempt["bot_session_epoch"] = json!(2);
+            attempt["source_continuation"] = json!({"thread_id":"capacity-session", "runtime":"claude", "harness":"claude",
+                "model":"synthetic-fallback", "reasoning_effort":"", "profile": if changed_profile {"old-login"} else {""},
+                "epoch": if changed_profile {json!(["",2])} else {json!(["",1])}});
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(attempt)).await.unwrap().unwrap();
+            assert_eq!(completion(&seen, "a-binding")["outcome"], "interrupted");
+            assert!(!dir.join("argv.jsonl").exists(), "changed binding must not launch any provider turn");
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
 }

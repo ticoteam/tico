@@ -252,12 +252,16 @@ def test_quota_after_a_named_external_action_stays_held(api, monkeypatch):
         {'seq': 1, 'kind': 'tool', 'payload': {'name': 'Bash', 'status': 'started',
                                             'outside_actions': ['merge pull request']}},
         {'seq': 2, 'kind': 'error', 'payload': {'error': 'Usage limit; resets at 2026-10-27T07:00:00Z', 'limit': True}}]}, machine['token'])
-    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'limited': True,
-                                                   'last_seq': 2, 'text': 'Stopped after the merge request.'}, machine['token'])
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1', 'source_continue_v1']}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'limited': True, 'fallback': 'codex',
+          'source_continuation': {'thread_id': 'side-session', 'runtime': 'codex', 'harness': 'codex',
+                                  'model': 'synthetic', 'profile': '', 'epoch': None},
+          'last_seq': 2, 'text': 'Stopped after the merge request.'}, machine['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
-        assert not result.get('source_pause')
+        assert not result.get('source_pause') and not result.get('source_continue')
 
 
 @pytest.mark.parametrize('evidence', ['unknown_shell', 'final_answer'])
@@ -335,3 +339,36 @@ def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(
         assert carrier['message_id'] == messages[-1]
         assert c.execute('SELECT count(*) FROM jobs WHERE wake_carrier=?', (carrier['id'],)).fetchone()[0] == 2
         assert all(H.message(c, message) for message in messages)
+
+
+def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_runner(api, monkeypatch):
+    from backend.tests.test_login_holds import two_bots
+    machine = two_bots(api, monkeypatch)
+    caps = ['capacity_continue_v1', 'source_continue_v1']
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': caps}, machine['token'])
+    post(api, 'chat/ops', {'text': 'Read the saved work.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'primary-thread'}, machine['token'])
+    seq = events(api, machine, first, [('tool', 'Read'), ('error', 'Usage limit; resets at 2026-10-19T07:00:00Z')])
+    saved = {'thread_id': 'fallback-thread', 'runtime': 'codex', 'harness': 'codex', 'model': 'synthetic',
+             'reasoning_effort': '', 'profile': '', 'epoch': None}
+    post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'limited': True, 'fallback': 'codex',
+          'source_continuation': saved, 'last_seq': seq}, machine['token'])
+    assert claim(api, machine) is None
+    # A later setting stops new fallback turns, not continuation of work already saved there.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback.off',json('true')) WHERE bot='ops'")
+        login_holds.record(c, machine['runner_id'], '', 'fake', H.now(), reset='2026-10-19T09:00:00.000000Z')
+    at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': ['capacity_continue_v1']}, machine['token'])
+    assert claim(api, machine) is None  # old runners know only primary-session continuation
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                  'capabilities': caps}, machine['token'])
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id']
+    assert again['continue_thread'] == 'fallback-thread' and again['source_continuation'] == saved
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT thread_id FROM attempts WHERE id=?', (first['id'],)).fetchone()[0] == 'primary-thread'
+        assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
