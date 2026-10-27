@@ -712,7 +712,7 @@ mod tests {
         let thread = host.resume_thread("lost-session", &s);
         host.start_turn(&thread, "continue", None).unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_failed" && text_of(&e["error"]).contains("Invalid session identifier")), "{events:?}");
+        assert!(events.iter().any(|e| e["kind"] == "turn_failed" && e["process_exit"] == true && e["exit_code"] == 1), "{events:?}");
         assert!(!host.restored(&thread));
         let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
         assert_eq!(args.lines().count(), 1, "a missing continuation must not launch a second session: {args}");
