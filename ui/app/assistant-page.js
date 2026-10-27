@@ -7,9 +7,10 @@
 // ui/app/pill.js), and on a wide window the same dense right rail (Active, Updates, Files, Recurring) when the
 // assistant has any of them; with none, the chat alone. GET /v2/assistant gives your own Assistant room with its
 // messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of the assistant bot, shown
-// live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). The room takes text only, so
-// the composer has no attach button. For the owner the page is their CEO Bot chat, by its name, with no "Assistant"
-// wording (ui/app/state.js meCeo); their own Assistant chats from before stay readable under "Earlier chats".
+// live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). An Assistant room takes text only,
+// so its composer has no attach button. For the owner the page is their CEO Bot chat, by its name, with no "Assistant"
+// wording (ui/app/state.js meCeo), and it takes files like any bot chat: attach, drop or paste a screenshot
+// (/v2/uploads/assistant/messages). Their own Assistant chats from before stay readable under "Earlier chats".
 // "What it has learned" at the top opens ui/app/learned.js.
 const ASSISTANT_HINTS = ["What's waiting on me?", 'Find the launch plan', 'How do I add a bot?'];
 let ASSISTANT_PILL = null, ASSISTANT_DRAFT = '', ASSISTANT_LOAD = 0;
@@ -21,12 +22,15 @@ function assistantPrefill(text) {
   box.dispatchEvent(new Event('input'));
   box.focus();
 }
-function assistantPill() {
+// `files`: the server says this chat is the CEO Bot's (GET /v2/assistant `ceo`), the only one whose uploads it takes.
+function assistantPill(files) {
   const slug = myChatBot();
-  if (ASSISTANT_PILL?.slug === slug) return ASSISTANT_PILL;
+  if (ASSISTANT_PILL?.slug === slug && ASSISTANT_PILL.attach === files) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
-  return ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files: false, send: assistantSend,
+  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files, send: assistantSend,
     label: meCeo() ? `Message ${myChatName()}` : 'Message the Assistant', placeholder: 'Ask anything…'}));
+  ASSISTANT_PILL.attach = files;
+  return ASSISTANT_PILL;
 }
 const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints" aria-label="Suggestions">${
   ASSISTANT_HINTS.map(t => `<button class="ghost" type="button" data-hint="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
@@ -67,8 +71,9 @@ async function pageAssistant() {
     window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
   }
-  const P = assistantPill(), thread = $('#conv-thread');
+  const files = !!d.ceo && d.bot === slug, P = assistantPill(files), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
+  if (files) chatDropZone($('#pane-chat'), P);
   if (ASSISTANT_DRAFT) { assistantPrefill(ASSISTANT_DRAFT); ASSISTANT_DRAFT = ''; }
   bindChatSwipe(thread);
   thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });
@@ -77,13 +82,14 @@ async function pageAssistant() {
 }
 async function assistantSend(P, text) {
   text = String(text || '').trim();
-  if (!text || P.sending) return;
+  const files = P.files.slice();
+  if ((!text && !files.length) || P.sending) return;
   P.sending = true;
   const btn = pq(P, '.p-send'), state = V2C, scope = sessionScope(pq(P, '.p-text'));
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
   try {
-    const r = await post('/v2/assistant/messages', {text});
-    pillAcknowledge(P, text, [], scope);
+    const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.'}, files);
+    pillAcknowledge(P, text, files, scope);
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
       for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }

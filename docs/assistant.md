@@ -4,8 +4,8 @@ Every human has one private chat with the team's assistant (the `coo` bot; you m
 bot that knows how Tico is laid out and does things in it on your behalf. **Assistant** in the main left rail opens it
 as a page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
-page, and so does **Ask the Assistant…** at the bottom of search (⌘K), with your words in the box. The room takes text
-only, so the composer has no attach button. **BotOps** beside it in the rail opens BotOps' bot page. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
+page, and so does **Ask the Assistant…** at the bottom of search (⌘K), with your words in the box. An Assistant's room
+takes text only, so the composer has no attach button (the owner's CEO Bot chat takes files: [CEO Bot](ceo-bot.md)). **BotOps** beside it in the rail opens BotOps' bot page. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
 Ask it to find a meeting, a doc, a file or a task; to tell you what needs you; to make a task; to hand work to the
