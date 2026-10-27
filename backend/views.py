@@ -2266,17 +2266,15 @@ def install_views(app, store, auth, mutate, task_view):
             read = CL.read_ids(c, who.actor)
             products = [{**row, "unread": row["id"] not in read} for row in CL.products(c, store.settings)]
             entries = []
-            # The newest bot-owned done tasks with a note long enough, in shipped_at order; 400 leaves room for unreadable ones.
+            # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
+            # (not auth.task per candidate); 120 is the activity cap beside product releases.
             activity = [dict(r) for r in c.execute(
                 "SELECT id,title,owner,note,done_at,updated FROM tasks WHERE status='done' AND substr(owner,1,4)='bot:' "
-                "AND length(note)>=20 ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 400")] \
+                f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
+                "ORDER BY COALESCE(NULLIF(done_at,''),updated) DESC LIMIT 120")] \
                 if kind != "product" and not unread and since_version is None else []
             for task in activity:
                 if len((task.get("note") or "").strip()) < 20:
-                    continue
-                try:
-                    auth.task(c, who, task["id"])
-                except Problem:
                     continue
                 note = re.sub(r"\s+", " ", task["note"]).strip()
                 entries.append({"id": "activity-" + task["id"], "title": task["title"],
@@ -2284,7 +2282,7 @@ def install_views(app, store, auth, mutate, task_view):
                                 "shipped_at": task.get("done_at") or task["updated"], "task_id": task["id"]})
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             # Busy bot activity cannot push shipped releases out of the product view.
-            entries = products + entries[:120]
+            entries = products + entries
             entries.sort(key=lambda row: row["shipped_at"] or "", reverse=True)
             if kind != "all":
                 entries = [row for row in entries if row["kind"] == kind]
