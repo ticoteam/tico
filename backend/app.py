@@ -676,11 +676,16 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
+                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    setting = (not approves and request.state.identity.via == "assistant"
+                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
                     if not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and assistant_instructed(request.method, request.url.path, raw, decides=bool(approves))):
+                            and (setting or assistant_instructed(request.method, request.url.path, raw,
+                                                                 decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval or answering a bot's "
-                                      "question that the person clearly asked for in this chat runs when you cite their "
+                                      "own. A task change, comment or link, declining an approval, answering a bot's "
+                                      "question or a direct setting (`hub settings set`) that the person clearly asked "
+                                      "for in this chat runs when you cite their "
                                       "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
                                       "(or POST /api/v2/assistant/actions), several actions on one card (path "
                                       "/api/v2/assistant/batch); approving is a card unless the person lets you "
@@ -690,6 +695,15 @@ def create_app(settings=None):
                         with store.read() as c:
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
+                            if setting:
+                                def trial(e, target, body):
+                                    # The route's own rule (repositories.needs_card), tried and rolled back.
+                                    from . import repositories
+                                    with store.transaction() as tc:
+                                        return repositories.card_words(tc, settings, auth, request.state.identity,
+                                                                       target["bot"], body)[0]
+                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial,
+                                                                    settings.public_url)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
