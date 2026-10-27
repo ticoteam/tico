@@ -183,3 +183,17 @@ def test_the_upgrade_finds_a_renamed_release_check_by_its_pool_after_the_merge_s
         step_flow.seed_checks(c)
         assert step_flow.check_kind(step_flow.step(c, "after")) == "release_qa"
         assert step_flow.check_kind(step_flow.step(c, "before")) is None, "a pool before the merge step is no release check"
+
+
+def test_a_numbered_review_title_names_only_a_review_step_the_board_has(api):
+    """"Review 3 failing tests" under a Dev ticket (two review steps) is ordinary work: it files with no receipt and
+    is no check. A board with no review steps still reads the Dev board's own Review 1 and Review 2 titles."""
+    pools.team(api)
+    task = pools.ticket(api, None)      # no test receipt: a review request would meet the gate
+    with api.app.state.store.transaction() as c:
+        for title in ("Review 3 failing tests", "Review 10 pages"):
+            made = H.task_create(c, "bot:cpo", title, "Look them over.", "bot:cmo", parent_id=task["id"])
+            assert step_flow.child_check(c, made) is None, title
+        assert step_flow.titled(c, None, "Review 3: PR #412") is None
+        assert step_flow.titled(c, None, "Review 2: PR #412")["generic"] is True
+        assert step_flow.check_kind(step_flow.titled(c, None, "QA: PR #412")) == "qa"

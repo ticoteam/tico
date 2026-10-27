@@ -212,9 +212,13 @@ def titled(c, type_id, title):
     kind = "review" if m[1] else "release_qa" if m[2] else "qa"
     order = int(m[1]) if m[1] else 1
     ofkind = [s for s in board if check_kind(s) == kind]
-    if 0 < order <= len(ofkind):
-        return ofkind[order - 1]
-    # The board has no such step (or no flow at all): the generic title still names a kind of check, of no step.
+    if ofkind:
+        # Only a step the board has: "Review 3 failing tests" on a two-review board is ordinary work.
+        return ofkind[order - 1] if 0 < order <= len(ofkind) else None
+    if order not in ((1, 2) if kind == "review" else (1,)):
+        return None
+    # The board has no step of that kind (or no flow at all): the Dev board's own titles, Review 1 and 2, QA and
+    # Post Release QA, still name a kind of check, of no step.
     return {"id": f"{kind}:{order}", "type_id": type_id, "name": " ".join(m[0].split()), "position": -1,
             "status": "review", "flow_json": json.dumps({"check": kind}), "generic": True}
 
