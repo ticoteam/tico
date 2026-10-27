@@ -63,9 +63,10 @@ CREATE TABLE IF NOT EXISTS ask_ingest_settings(
 CREATE TABLE IF NOT EXISTS ask_ingest_items(
  id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
  message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
- call_id TEXT, created TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT);
+ call_id TEXT, created TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT, merged_into TEXT, passed_at TEXT);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_ref ON ask_ingest_items(ref);
+CREATE INDEX IF NOT EXISTS ask_ingest_items_merged ON ask_ingest_items(merged_into) WHERE merged_into IS NOT NULL;
 """
 
 
@@ -306,6 +307,8 @@ def decide(answers, budget, chores_budget, decisions, chores):
     if answers is None:
         return FAILED_OPEN, "no_answer"
     urgent = answers["urgency"] == 3
+    if answers["covered"] not in (None, "new"):
+        return MERGED, "covered"
     kind = answers["kind"]
     if kind == STATUS:
         return FYI, "status"
@@ -373,9 +376,18 @@ def apply(c, verdict):
     else:
         would, reason = decide(verdict["answers"], own["budget"], own["chores_budget"], decisions, chores)
     mode = own["mode"]
-    outcome = would if mode == ON or would == FAILED_OPEN else THROUGH
     name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-    text = ""
+    outcome = would if mode == ON or would == FAILED_OPEN else THROUGH
+    text, merged_into = "", None
+    if would == MERGED:
+        merged_into = (verdict.get("items") or {}).get(verdict["answers"]["covered"])
+        open_item = H.task(c, merged_into) if merged_into else None
+        if not open_item or open_item["status"] not in H.ACTIVE_STATUSES:
+            would, reason, merged_into = FAILED_OPEN, "covered_gone", None     # it ended since the call
+            outcome = would
+        else:
+            text = (f"Not sent to {name}: they already have this open as \u201c{open_item['title']}\u201d. Their answer "
+                    "there comes back to you here. Nothing was refused.")
     if would == SENT_BACK:
         _, manager_name = manager_of(c, asker)
         text = message(reason, name, decisions, chores, manager_name)
@@ -384,20 +396,53 @@ def apply(c, verdict):
     if mode != ON and text:
         text = "Rehearsal, nothing changed. With the filter on: " + text
     return {"mode": mode, "outcome": outcome, "would": would, "reason": reason, "text": text, "load": decisions,
-            "acts": mode == ON and outcome in (SENT_BACK, FYI)}
+            "merged_into": merged_into, "acts": mode == ON and outcome in OFF_PLATE}
 
 
 def record(c, verdict, decided, ref, message_id=None):
     """One `ask_ingest_items` row for the gated item `ref` (a task id; `message_id` the question asked on it), and
     the call's `decision.outcome`."""
+    merged_into = decided.get("merged_into") if decided["outcome"] == MERGED else None
     c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,call_id,"
-              "created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              "created,merged_into) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
-               decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now()))
+               decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now(),
+               merged_into))
+    if merged_into:
+        # The open item names who else asked; quiet, so nobody wakes for it.
+        H.task_comment(c, H.KEEPER, merged_into, f"{_bot_line(c, verdict['asker'])} asked the same thing; your answer "
+                       "here goes to them too.", wake=False)
     if verdict.get("call"):
         H.event(c, H.KEEPER, "decision.outcome", verdict["call"],
                 {"label": QUESTION_SET, "verdict": decided["would"],
                  "action": decided["outcome"] if decided["mode"] == ON else "rehearsal"})
+
+
+def on_reply(c, actor, task_id, text):
+    """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
+    to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
+    message. The CEO Bot's merge (backend/ceo_merge.py) relays the same way for its own merged items."""
+    if not H.is_human(actor) or not task_id or not str(text or "").strip():
+        return
+    try:
+        rows = H._rows(c.execute("SELECT * FROM ask_ingest_items WHERE merged_into=? AND person=? AND outcome=? "
+                                 "AND passed_at IS NULL AND let_through_at IS NULL", (task_id, actor, MERGED)))
+    except Exception:        # a bare hubdb connection without this module's tables (hubdb-only tests, upgrades)
+        return
+    if not rows:
+        return
+    item = H.task(c, task_id) or {}
+    name = H.person_name(c, H.actor_id(actor)) or H.actor_id(actor)
+    said = f'{name} answered this on \u201c{item.get("title") or ""}\u201d: "{str(text).strip()[:2000]}"'
+    for row in rows:
+        if row["kind"] == "loose":
+            H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={"ask_ingest": row["id"]})
+        else:
+            own = H.task(c, row["ref"])
+            if not own or own["status"] not in H.ACTIVE_STATUSES:
+                continue
+            H.task_comment(c, H.KEEPER, own["id"], said, wake=True)
+        c.execute("UPDATE ask_ingest_items SET passed_at=? WHERE id=?", (H.now(), row["id"]))
 
 
 def withdraw_loose(c, asker, message_id, person):
@@ -453,7 +498,7 @@ def let_through(c, person, item_id):
     row = dict(row)
     if row["let_through_at"]:
         return row
-    if row["mode"] != ON or row["outcome"] not in (SENT_BACK, FYI):
+    if row["mode"] != ON or row["outcome"] not in OFF_PLATE:
         raise LookupError("it already reached you")
     asker, name = row["asker"], H.person_name(c, H.actor_id(person)) or H.actor_id(person)
     task = H.task(c, row["ref"]) if row["kind"] != "loose" else None

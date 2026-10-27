@@ -439,3 +439,54 @@ def test_the_decisions_readout_shows_calls_outcomes_and_let_throughs(gate):
     assert row["calls"] == 2
     assert row["gate"] == {"outcomes": {A.SENT_BACK: 1, A.THROUGH: 1}, "rehearsal": {}, "let_through": 1}
     assert "outcomes: sent_back 1, through 1; let through 1" in readout["text"]
+
+
+# ---- the same thing again: merged ------------------------------------------------------------------------------
+
+def test_a_repeat_joins_the_open_item_and_the_answer_there_goes_back_to_the_bot(gate):
+    api, model, token = gate
+    first = file(api, token, "Pick the launch date for Acme", "Nov 3 or Nov 10?")["task"]
+    model.covered = "launch date for Acme"
+    second = file(api, token, "Launch date?", "Which day do we launch Acme: Nov 3 or Nov 10?")
+    assert second["task"]["owner"] == "bot:ops", "the repeat stays with the bot"
+    assert second["ingest"]["outcome"] == A.MERGED and "Pick the launch date for Acme" in second["ingest"]["text"]
+    [_, merged] = items(api)
+    assert (merged["merged_into"], merged["reason"]) == (first["id"], "covered")
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben") == (1, 0), "one item on the plate, not two"
+    r = api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        passed = [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]
+        assert len(passed) == 1 and H.task(c, second["task"]["id"])["owner"] == "bot:ops"
+    api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Still Nov 10."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Still" in (m["body"] or "")], "once"
+
+
+def test_a_repeat_loose_question_hears_the_answer_as_a_message(gate):
+    api, model, token = gate
+    first = file(api, token, "Pick the launch date for Acme", "Nov 3 or Nov 10?")["task"]
+    model.covered = "launch date for Acme"
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": "Which day is the Acme launch?", "kind": "ask"},
+                 headers=headers(token))
+    assert r.json()["ingest"]["outcome"] == A.MERGED
+    with api.app.state.store.read() as c:
+        assert H.loose_asks_to(c, "human:ben") == []
+    api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        told = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND body LIKE '%answered this%Nov 10.%'").fetchall()
+    assert len(told) == 1
+
+
+def test_in_rehearsal_a_repeat_still_reaches_the_person(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    first = file(api, token, "Pick the launch date for Acme")["task"]
+    model.covered = "launch date for Acme"
+    second = file(api, token, "Launch date?")
+    assert second["task"]["owner"] == "human:ben" and second["ingest"]["would"] == A.MERGED
+    api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]

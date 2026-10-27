@@ -3145,6 +3145,9 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about and asked["from_actor"] == "bot:goal-manager" and is_human(actor):
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+    if about and is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
@@ -5028,6 +5031,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner"] == "bot:goal-manager":
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
+    if is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
