@@ -1692,7 +1692,9 @@ def create_app(settings=None):
         admin_only(request.state.identity, 'sees company turn settings')
         from . import org_turns
         with store.read_transaction() as c:
-            return org_turns.snapshot(c, settings)
+            # Settings only shows levels and in_use; a fleet snapshot would classify every
+            # queued bot on every computer for fields this page never renders.
+            return org_turns.admission(c)
 
     @app.post('/api/v2/settings/turn-levels')
     def turn_levels_set(request: Request, body: M.TurnLevels):
