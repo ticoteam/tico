@@ -5,6 +5,7 @@ import re
 import secrets
 import sqlite3
 import threading
+from contextlib import contextmanager
 import time
 from datetime import timezone
 
@@ -1661,6 +1662,9 @@ class Execution:
         self.stall_lock = threading.Lock()
         self.stall_graces = []
         self.stall_seen = None
+        # Attempt id -> {call: (runner id, arrived)}: its runner's renewals and event batches that reached this
+        # process and have not landed, either still waiting for the write lock or failed on a busy database.
+        self.calls = {}
 
     def refuse_in_rehearsal(self, what="Runners"):
         """A rehearsal (TICO_REHEARSAL=1) is a copy of real data: a computer that connected would run bots against its
@@ -2032,6 +2036,48 @@ class Execution:
         with self.stall_lock:
             self.served_at = now
 
+    @contextmanager
+    def calling(self, who, aid):
+        """A runner's renewal or event batch for this attempt, from the moment it reached the server; yields that
+        time. On a slow server the call can wait for the write lock longer than the lease itself: v0.4.14 held it
+        for up to a minute and ended live turns "Computer lost" (Dev 612). Until the call lands, `expire` keeps the
+        lease, and `renew` judges the lease by the call's arrival. A refusal (not the runner's, or a lease really
+        lost) forgets it at once; a busy database's failure stays until the lease would have run out anyway."""
+        arrived = H.now()
+        if who.role != "runner" or not who.runner_id:
+            yield arrived
+            return
+        call = object()
+        with self.stall_lock:
+            if sum(map(len, self.calls.values())) >= 4096:
+                cutoff = H.shift(arrived, seconds=-self.store.settings.lease_seconds)
+                self.calls = {k: kept for k, v in self.calls.items()
+                              if (kept := {t: x for t, x in v.items() if x[1] > cutoff})}
+            self.calls.setdefault(aid, {})[call] = (who.runner_id, arrived)
+        try:
+            yield arrived
+        except Problem as e:
+            if not e.retryable:
+                self._landed(aid, call)
+            raise
+        else:
+            self._landed(aid, call)
+
+    def _landed(self, aid, call):
+        with self.stall_lock:
+            waiting = self.calls.get(aid, {})
+            waiting.pop(call, None)
+            if not waiting:
+                self.calls.pop(aid, None)
+
+    def still_calling(self, row, now):
+        """When the latest call from this attempt's own runner that has not landed arrived, if within one lease."""
+        cutoff = H.shift(now, seconds=-self.store.settings.lease_seconds)
+        with self.stall_lock:
+            times = [at for runner_id, at in self.calls.get(row["id"], {}).values()
+                     if runner_id == row["runner_id"] and at > cutoff]
+        return max(times) if times else None
+
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
         overdue = set(start_places.overdue(c))
@@ -2049,6 +2095,14 @@ class Execution:
         graces = self.stall_recovery(now) if any(row["id"] not in overdue for row in rows) else ()
         for row in rows:
             with isolated(c, "expire", row["id"]):
+                # Its runner's call arrived and waits for the lock: the lease lapsed on our side, not the runner's.
+                heard = None if row["id"] in overdue else self.still_calling(row, now)
+                if heard:
+                    until = H.shift(heard, seconds=self.store.settings.lease_seconds)
+                    c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
+                    H.event(c, H.KEEPER, "attempt.lease-held", row["id"],
+                            {"bot": row["bot"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until})
+                    continue
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
                 if grace and not row["already_graced"] and row["id"] not in overdue:
                     served_at, _, until = grace
@@ -2755,10 +2809,11 @@ class Execution:
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
-    def attempt(self, c, who, aid, active=True, final=False):
+    def attempt(self, c, who, aid, active=True, final=False, arrived=None):
         """`final` is a runner handing in the result of a turn it has finished. That result
         exists nowhere else, so a lapsed lease must not be grounds for refusing it: ownership
-        still decides, the clock does not."""
+        still decides, the clock does not. `arrived` is when a renewal reached the server: a
+        lease that was live then lapsed only while the renewal waited for the lock."""
         self.runner(c, who)
         self.record_contact(H.now())
         row = c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
@@ -2781,7 +2836,8 @@ class Execution:
         place = c.execute("SELECT start_until FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
         if active and row["state"] == "leased" and place and place[0] and place[0] <= H.now():
             raise Problem("stale_lease", "Start reservation expired; this work returns to the queue", 409)
-        if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= H.now() or not current):
+        if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= (arrived or H.now())
+                       or not current):
             raise Problem("stale_lease", "Execution ownership expired; stop this attempt", 409)
         return row
 
@@ -2970,12 +3026,12 @@ class Execution:
         from .worktree_waits import cancel_for_attempt
         cancel_for_attempt(c, row["id"], benched or f"Stopped by {stopper(c, person)}")
 
-    def renew(self, c, who, aid, *, if_fresh=False):
+    def renew(self, c, who, aid, *, if_fresh=False, arrived=None):
         if if_fresh:
             lease = c.execute("SELECT lease_until FROM attempts WHERE id=?", (aid,)).fetchone()
             if not lease or lease[0] < H.shift(H.now(), seconds=max(20, self.store.settings.lease_seconds * 2 / 3)):
                 return None
-        row = self.attempt(c, who, aid, active=not if_fresh)
+        row = self.attempt(c, who, aid, active=not if_fresh, arrived=arrived)
         now = H.now()
         seconds = self.store.settings.lease_seconds
         if if_fresh:
