@@ -368,3 +368,33 @@ def test_answering_on_any_route_ends_the_wait_on_that_person(api):
             assert (row["status"], row["waiting_on"]) == ("open", None), (tid, row["status"], row["blocked_reason"])
             assert row["note"] == f"{ana} answered your question; nothing left to wait on"
             assert tid not in [t["id"] for t in H.needs_you(c, "human:ana")["waiting"]]
+
+
+def test_a_person_s_task_says_an_answer_cleared_it_on_any_route(api):
+    """Scope 4 for a question on a person's own task: answered on any route, the task stays at its step and says the
+    answer is what cleared, with the stranded clock running from then."""
+    def asked(c, title):
+        tid = H.task_create(c, "bot:ops", title, "x", "human:ana")["id"]
+        q = H.task_comment(c, "bot:ops", tid, "Which month for the review?", wake=False, ask={
+            "questions": [{"id": "month", "header": "Month", "question": "Which month for the review?",
+                           "multi": False, "other": True,
+                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
+            "who": "human:ana"})
+        H.task_update(c, "human:ana", tid, status="waiting")
+        return tid, q["id"]
+
+    with api.app.state.store.transaction() as c:
+        direct, direct_q = asked(c, "Review month (direct)")
+        commented, _ = asked(c, "Review month (comment)")
+        picked, picked_q = asked(c, "Review month (pick)")
+        steps = {tid: H.task(c, tid)["step_id"] for tid in (direct, commented, picked)}
+    post(api, f"messages/{direct_q}/answer", {"text": "July"})
+    post(api, f"tasks/{commented}/comments", {"text": "July, please."})
+    post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
+    with api.app.state.store.read() as c:
+        ana, ops = task_holds.name(c, "human:ana"), task_holds.name(c, "bot:ops")
+        for tid in (direct, commented, picked):
+            row = H.task(c, tid)
+            assert (row["status"], row["step_id"]) == ("waiting", steps[tid]), tid
+            assert row["blocked_reason"] == f"Nothing left to wait on: {ana} answered {ops}'s question", tid
+            assert row["holds_cleared_at"], tid

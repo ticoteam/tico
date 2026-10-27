@@ -2844,14 +2844,17 @@ def _close_open_asks(conn, actor, target, kind, msg):
 
 def _answered_holds(conn, actor, task_id, ask_ids, asker):
     """`actor` just answered `ask_ids` on `task_id`. A wait on them for those questions ends once none to them is open,
-    and the task's reason follows; when that was its last hold, the bot that asked goes back to work
-    (backend/task_holds.py)."""
+    and the task's reason follows; when that was its last hold, the bot that asked goes back to work, and a person's
+    task says the answer is what cleared (backend/task_holds.py). Another bot's question answered on a bot's task
+    changes only its words: that bot was not waiting on it."""
     from . import task_holds
     before = (task(conn, task_id) or {}).get("waiting_on")
     drop_asked_waits(conn, task_id, ask_ids, "")
     row = task(conn, task_id) or {}
-    held = row.get("owner") == asker or row.get("waiting_on") != before
-    task_holds.refresh(conn, task_id, f"{task_holds.name(conn, actor)} answered your question" if held else None)
+    own = row.get("owner") == asker
+    held = own or row.get("waiting_on") != before or is_human(row.get("owner") or "")
+    whose = "your" if own else f"{task_holds.name(conn, asker)}'s"
+    task_holds.refresh(conn, task_id, f"{task_holds.name(conn, actor)} answered {whose} question" if held else None)
 
 
 LIBRARIAN_LITERAL = re.compile(
