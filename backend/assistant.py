@@ -31,6 +31,7 @@ from fastapi import Request
 from . import ceo_bot
 from . import models as M
 from . import visuals
+from .media import upload_contract
 from . import rooms
 from .store import H, Problem, digest
 
@@ -1456,21 +1457,29 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
-    def post_message_sync(request, body, who, intent, reply, links):
+    def chat_bot_for(c, who, files):
+        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+        info = availability(c, settings, who)
+        if not info["available"]:
+            raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+        if files and info["bot"] != ceo_bot.SLUG:
+            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
+        auth.require_write(c, who, info["bot"])
+        return info["bot"]
+
+    def post_message_sync(request, body, who, intent, reply, links, uploads=None):
         def work(c):
-            info = availability(c, settings, who)
-            if not info["available"]:
-                raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-            bot = info["bot"]
-            auth.require_write(c, who, bot)
+            bot = chat_bot_for(c, who, uploads is not None)
             room = chat_room(c, settings, who)
             refs = {"assistant": True}
-            if body.place == "updates":
+            if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
             if reply is not None:
                 refs["quiet"] = True
             message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
                             kind="say", refs=refs)
+            if uploads is not None:
+                message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
             out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
             if reply is not None:
                 out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
@@ -1478,6 +1487,8 @@ def install(app, store, auth, mutate, onboarding):
                                                 message["id"], None, delivered_at=H.now())
                 H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
             return out
+        if uploads is not None:
+            return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
 
     @app.post("/api/v2/assistant/messages")
@@ -1494,6 +1505,19 @@ def install(app, store, auth, mutate, onboarding):
         intent, reply, links = (None, None, []) if body.place == "updates" else \
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
+
+    # The owner's CEO Bot chat takes pictures and files like any bot chat (a pasted screenshot attaches); an Assistant
+    # room stays text only. Files skip the quick answers, which read words only.
+    @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
+    async def assistant_upload(request: Request):
+        who = own(request)
+
+        def admit(body):
+            # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
+            with store.read() as c:
+                chat_bot_for(c, who, True)
+        body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):

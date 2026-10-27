@@ -7573,7 +7573,7 @@ def stall_skip(conn, row, at=None):
     or the owner's profile has no stall sweeps (rules.sweeps_on). A task held only by its own quiet subtasks
     (`own_blockers`) keeps being checked: that deadlock is what the check is for. Task Manager reports read
     `stalled_tasks`, not this, so a task no sweep wakes still reaches a person's report."""
-    from . import rules, wake_rules
+    from . import rules
     at = at or now()
     slug = actor_id(row["owner"])
     if not rules.sweeps_on(conn, slug):
@@ -7583,6 +7583,15 @@ def stall_skip(conn, row, at=None):
         if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND lane IN (?,?) AND state IN ('leased','running') "
                         "LIMIT 1", (slug, *lanes)).fetchone():
             return "live_session"
+    return recorded_wait(conn, row, at)
+
+
+def recorded_wait(conn, row, at=None):
+    """What a quiet task waits on, as recorded, or None: an ask, a snooze, a due date, a stored resume, an approval, or
+    (unless only its own quiet subtasks hold it) a blocker, a pull request or milestone wait, or an open subtask. The
+    same whatever the owner's profile says about sweeps, so a list of stuck work reads a reviewer's waits too."""
+    from . import wake_rules
+    at = at or now()
     if unanswered_ask(conn, row):
         return "ask"
     if TS.snoozed(row, at):

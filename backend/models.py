@@ -2425,6 +2425,13 @@ class AssistantMessage(Contract):
     place: Literal["updates"] | None = None
 
 
+class AssistantUpload(Contract):
+    """A message with files in the owner's CEO Bot chat (POST /api/v2/uploads/assistant/messages)."""
+    text: Annotated[str, Field(min_length=1, max_length=8000)]
+    # Each file's caption, in upload order.
+    titles: list[Annotated[StrictStr, Field(max_length=200)]] = Field(default_factory=list, max_length=10)
+
+
 class LibrarianResearch(Contract):
     """A person asks the Librarian to research and add to one page (docs/librarian.md#research)."""
     target: Annotated[str, Field(min_length=1, max_length=300)]     # a doc id, market/<page> or a market entity id

@@ -232,3 +232,84 @@ def test_the_ceo_bot_chat_stays_with_the_owner_seat_and_the_old_owner_gets_their
     with api.app.state.store.read() as c:
         assert c.execute("SELECT status FROM assistant_actions WHERE id=?", (pending["action"]["id"],)).fetchone()[0] == "cancelled"
         assert c.execute("SELECT count(*) FROM events WHERE action='ceo_bot.chat_moved'").fetchone()[0] == 1
+
+
+def png():
+    import io
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(image, format="PNG")
+    return image.getvalue()
+
+
+def test_the_owner_pastes_a_screenshot_into_the_ceo_bot_chat_and_its_turn_reads_it(api, monkeypatch):
+    """Chris, Oct 27: a pasted screenshot attaches in the CEO Bot chat as in any bot chat; an Assistant takes text only."""
+    import hashlib
+    from backend.store import Problem
+    blobs = api.app.state.blobs
+    writes = []
+
+    def storage_down(data, content_type="application/octet-stream"):
+        # Storage that is down and counts each write asked of it: a send that must keep nothing never reaches it.
+        writes.append(hashlib.sha256(data).hexdigest())
+        raise Problem("storage", "Storage is unavailable", 503)
+
+    def kept(data):
+        return (blobs.directory / blobs.key(hashlib.sha256(data).hexdigest())).exists()
+    ceo(api)
+    data = png()
+    sent = api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
+                    files={"files": ("image.png", data, "image/png")},
+                    headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
+    assert sent.status_code == 200, sent.text
+    message = sent.json()["message"]
+    room = get(api, "assistant")["room_id"]
+    assert (message["to_actor"], message["conversation_id"], message["refs"]["assistant"]) == \
+        ("bot:goal-manager", room, True)
+    attachment, = message["refs"]["attachments"]
+    assert (attachment["name"], attachment["title"], attachment["kind"]) == ("image.png", "Screenshot", "image")
+    assert sent.json()["fast"] is False                      # a picture always goes to the CEO Bot's turn
+    def stored(c):
+        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("messages", "message_assets", "bot_files", "blobs")]
+    with api.app.state.store.read() as c:
+        after = stored(c)
+    # The same send again (a retry after a lost answer) gives the same message and keeps nothing twice; other content
+    # under that key is a conflict, refused before anything is stored.
+    def again(picture):
+        return api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
+                        files={"files": ("image.png", picture, "image/png")},
+                        headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
+    assert kept(data)
+    monkeypatch.setattr(blobs, "put", storage_down)
+    replay = again(data)
+    assert replay.status_code == 200 and replay.json() == sent.json(), replay.text
+    changed = again(data + b"\0")
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict", changed.text
+    assert writes == [] and not kept(data + b"\0")
+    with api.app.state.store.read() as c:
+        assert stored(c) == after
+    monkeypatch.undo()
+    # The CEO Bot's turn for that message can open the picture.
+    r = runner(api)
+    assign(api, r, "goal-manager")
+    ready(api, r, ["goal-manager"])
+    attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
+    assert turn_message(api, attempt) == message["id"]
+    downloaded = api.get(attachment["url"], headers=headers(attempt["token"]))
+    assert downloaded.status_code == 200, downloaded.text
+    assert downloaded.content == data
+    # Ben (an admin) talks to his Assistant, whose room stays text only: refused, and nothing is said.
+    with api.app.state.store.read() as c:
+        before = stored(c)
+    # Refused before a byte is stored, so storage being down changes nothing; the same key again, with the same and with
+    # other content, is refused the same way: no cached success, nothing kept in the database or in storage.
+    mine, other = png() + uuid.uuid4().bytes, png() + uuid.uuid4().bytes
+    monkeypatch.setattr(blobs, "put", storage_down)
+    for text, picture in (("Look", mine), ("Look", mine), ("Look again", other)):
+        refused = api.post("/api/v2/uploads/assistant/messages", data={"text": text},
+                           files={"files": ("image.png", picture, "image/png")},
+                           headers={**headers("ben-test"), "Idempotency-Key": "paste-2"})
+        assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
+        assert writes == [] and not kept(mine) and not kept(other)
+        with api.app.state.store.read() as c:
+            assert stored(c) == before
