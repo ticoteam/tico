@@ -376,3 +376,51 @@ def test_a_persons_question_is_not_gated(gate):
                  headers=headers("priya-test"))
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and not model.calls
+
+
+# ---- Let it through --------------------------------------------------------------------------------------------
+
+def let_through(api, item_id, token="ben-test", expected=200):
+    r = api.post(f"/api/v2/ask-ingest/items/{item_id}/let-through", headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_let_it_through_puts_a_sent_back_task_on_the_plate_and_tells_the_asker_once(gate):
+    api, model, token = gate
+    plate(api, 15)
+    tid = file(api, token)["task"]["id"]
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert let_through(api, item["id"])["item"]["let_through_by"] == "human:ben"
+    with api.app.state.store.read() as c:
+        assert H.task(c, tid)["owner"] == "human:ben" and on_plate(api, tid)
+        told = [m for m in H.task_comments(c, tid) if "let this through" in (m["body"] or "")]
+    assert len(told) == 1
+    let_through(api, item["id"])
+    with api.app.state.store.read() as c:
+        assert len([m for m in H.task_comments(c, tid) if "let this through" in (m["body"] or "")]) == 1, "once"
+    assert get(api, "ask-ingest/filtered", token="ben-test")["items"][0]["let_through_at"]
+
+
+def test_let_it_through_asks_a_withdrawn_question_again(gate):
+    api, model, token = gate
+    plate(api, 15)
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask"},
+                 headers=headers(token))
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    let_through(api, item["id"])
+    with api.app.state.store.read() as c:
+        assert [m["id"] for m in H.loose_asks_to(c, "human:ben")] == [r.json()["id"]]
+
+
+def test_only_the_person_lets_their_items_through_and_rehearsal_has_nothing_to_let_through(gate):
+    api, model, token = gate
+    plate(api, 15)
+    file(api, token)
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    let_through(api, item["id"], token="priya-test", expected=404)
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    file(api, token, "Pick the launch venue")
+    rehearsed = next(i for i in get(api, "ask-ingest/filtered", token="ben-test")["items"] if i["mode"] == "rehearsal")
+    let_through(api, rehearsed["id"], expected=409)

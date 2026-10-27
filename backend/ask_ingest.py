@@ -443,6 +443,41 @@ def filtered(c, person, since):
     return out
 
 
+def let_through(c, person, item_id):
+    """The person puts a filtered item on their plate as first meant, in one step, and the asker hears it once: a
+    task handed to them, a withdrawn question asked again, a wait set. Returns the item; Problem-free errors are
+    ValueError (no such item of theirs) or LookupError (nothing to let through)."""
+    row = c.execute("SELECT * FROM ask_ingest_items WHERE id=? AND person=?", (item_id, person)).fetchone()
+    if not row:
+        raise ValueError("no filtered item of yours with that id")
+    row = dict(row)
+    if row["let_through_at"]:
+        return row
+    if row["mode"] != ON or row["outcome"] not in (SENT_BACK, FYI):
+        raise LookupError("it already reached you")
+    asker, name = row["asker"], H.person_name(c, H.actor_id(person)) or H.actor_id(person)
+    task = H.task(c, row["ref"]) if row["kind"] != "loose" else None
+    if row["kind"] != "loose" and (not task or task["status"] not in H.ACTIVE_STATUSES):
+        raise LookupError("that task has ended")
+    if row["kind"] == "task":
+        H.task_update(c, asker, task["id"], owner=person)
+    elif row["kind"] == "wait":
+        H.task_update(c, asker, task["id"], status="waiting", waiting_on=person)
+    else:
+        c.execute("UPDATE messages SET superseded_at=NULL WHERE id=?", (row["message_id"],))
+        H.recount(c, [asker, person])
+    told = f"{name} let this through their filter: it is on their Needs you as you first asked."
+    if task:
+        H.task_comment(c, H.KEEPER, task["id"], told, wake=False)
+    else:
+        H.say(c, H.KEEPER, asker, told, kind="notice", refs={"ask_ingest": row["id"]})
+    at = H.now()
+    c.execute("UPDATE ask_ingest_items SET let_through_at=?, let_through_by=? WHERE id=?", (at, person, row["id"]))
+    H.event(c, person, "ask_ingest.let_through", row["ref"], {"item": row["id"], "kind": row["kind"],
+                                                               "outcome": row["outcome"], "asker": asker})
+    return {**row, "let_through_at": at, "let_through_by": person}
+
+
 def install(app, store, auth):
     from fastapi import Request
     from pydantic import Field
@@ -486,6 +521,20 @@ def install(app, store, auth):
                 return {"settings": save(c, who.actor, target, body.model_dump()), "team": target == TEAM}
             except ValueError as exc:
                 raise Problem("validation", str(exc), 422)
+
+    @app.post("/api/v2/ask-ingest/items/{item_id}/let-through")
+    def ingest_let_through(request: Request, item_id: str):
+        """Let it through: no confirm; the asker is told once. Doing it again changes nothing."""
+        who = request.state.identity
+        auth.domain(who)
+        person = person_of(who)
+        with store.transaction() as c:
+            try:
+                return {"item": let_through(c, person, item_id)}
+            except ValueError as exc:
+                raise Problem("not_found", str(exc), 404)
+            except LookupError as exc:
+                raise Problem("state", str(exc), 409)
 
     @app.get("/api/v2/ask-ingest/filtered")
     def ingest_filtered(request: Request, hours: int = 24):
