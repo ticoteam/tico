@@ -649,12 +649,23 @@ def owner_name(c, actor):
     return row.get("display_name") or row.get("name") or H.actor_id(actor)
 
 
-def quiet_source_wait(c, job, facts=None):
-    """A proven safe second computer loss needs source recovery, not a person's effects review."""
-    if not job['attempt_id'] or c.execute(
-            "SELECT count(*) FROM attempts WHERE job_id=? AND started IS NOT NULL", (job['id'],)).fetchone()[0] < 2:
+def quiet_source_wait(c, job, facts=None, *, started_counts=None, attempt_times=None):
+    """A proven safe second computer loss needs source recovery, not a person's effects review.
+
+    `started_counts` / `attempt_times` are optional preloads from `_readable_held` so a status/operations
+    pass does not SELECT count/attempt once per uncertain job.
+    """
+    if not job['attempt_id']:
         return False
-    attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
+    started = (started_counts or {}).get(job['id'])
+    if started is None:
+        started = c.execute(
+            "SELECT count(*) FROM attempts WHERE job_id=? AND started IS NOT NULL", (job['id'],)).fetchone()[0]
+    if started < 2:
+        return False
+    attempt = (attempt_times or {}).get(job['attempt_id'])
+    if attempt is None:
+        attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     facts = facts or retry_facts(c, job, attempt['started'], attempt['finished'])
     return facts['safe'] and facts['lease_lost']
 
@@ -679,14 +690,30 @@ def _readable_held(c, who, auth, bot):
         "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)))
     shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
     privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    kept = [r for r in rows if r["id"] in shown
+            and (not r["attempt_id"] or privacy.attempt_readable(c, actor, r["attempt_id"]))]
+    job_ids = [r["job_id"] for r in kept]
+    jobs = {}
+    for part in H.chunks(job_ids):
+        marks = ",".join("?" * len(part))
+        jobs.update({j["id"]: j for j in c.execute(f"SELECT * FROM jobs WHERE id IN ({marks})", part)})
+    started_counts, attempt_times = {}, {}
+    if job_ids:
+        for part in H.chunks(job_ids):
+            marks = ",".join("?" * len(part))
+            for r in c.execute(
+                    f"SELECT job_id, count(*) n FROM attempts WHERE job_id IN ({marks}) "
+                    "AND started IS NOT NULL GROUP BY job_id", part):
+                started_counts[r["job_id"]] = r["n"]
+        aids = [r["attempt_id"] for r in kept if r["attempt_id"]]
+        for part in H.chunks(aids):
+            marks = ",".join("?" * len(part))
+            for a in c.execute(f"SELECT id, started, finished FROM attempts WHERE id IN ({marks})", part):
+                attempt_times[a["id"]] = a
     out = []
-    for row in rows:
-        if row["id"] not in shown:
-            continue
-        if row["attempt_id"] and not privacy.attempt_readable(c, actor, row["attempt_id"]):
-            continue
-        job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
-        if quiet_source_wait(c, job):
+    for row in kept:
+        job = jobs.get(row["job_id"])
+        if not job or quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times):
             continue
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
