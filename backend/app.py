@@ -2695,8 +2695,12 @@ def create_app(settings=None):
             tref = (body.refs or {}).get("task")
             tref = tref[0] if isinstance(tref, list) and tref else tref
             if isinstance(tref, str) and ask_ingest.gated(who, settings.assistant_bot):
+                # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
                 with store.read() as c:
-                    title = (H.task(c, tref) or {}).get("title") or title
+                    try:
+                        title = auth.task(c, who, tref).get("title") or title
+                    except Problem:
+                        pass
             ingest = ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
                                           kind="question" if tref else "loose")
 
@@ -4109,14 +4113,14 @@ def create_app(settings=None):
             row = auth.task(c, who, task_id)
             lifecycle.refuse_send(c, who, None, what="task questions")
             gate = ask_ingest.apply(c, ingest) if ask_ingest.matches(ingest, row["requester"]) else None
-            msg = H.task_ask(c, who.actor, task_id, body.text)
+            # Not parked on a question that is not sent: the task keeps its status and the bot's own note.
+            msg = H.task_ask(c, who.actor, task_id, body.text, park=not (gate and gate["acts"]))
             if gate:
                 ask_ingest.record(c, ingest, gate, task_id, msg["id"])
                 if gate["acts"]:
                     H.task_ask_resolve(c, who.actor, task_id, msg["id"])
-                    if (H.task(c, task_id) or {}).get("status") != row["status"]:
-                        # Not parked on a question that was not sent.
-                        H.task_update(c, who.actor, task_id, status=row["status"], note=gate["text"])
+                    # Why, on the task's record, quiet as the merge and let-through notes are.
+                    H.task_comment(c, H.KEEPER, task_id, gate["text"], wake=False)
             return {**msg, **ask_ingest.reply(gate)}
         return mutate(request, body, work)
 
