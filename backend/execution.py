@@ -1507,6 +1507,21 @@ def live_tasks(c):
                                              "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL")}
 
 
+def live_lanes(c):
+    """{(bot, lane)} with a leased or running attempt. Claim fences and Health `_waiting` ask once per bot; reuse the
+    set for the current read snapshot instead of re-SELECTing and rebuilding it each time."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = "execution.live_lanes"
+    if values is not None and key in values:
+        return values[key]
+    out = {(r[0], r[1]) for r in c.execute(
+        "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+    if values is not None:
+        values[key] = out
+    return out
+
+
 FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot reads the rest in its room
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
@@ -1727,8 +1742,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
             return result(why, first["created"] if first else None, job=first["id"] if first else None)
         return result(why)
     lanes, roots = lanes_on(runner), roots_on(runner)
-    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
-    busy |= held_lanes
+    busy = set(live_lanes(c)) | held_lanes
     followed, refused = follow(c, bot, config), None     # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created"], j["id"])) if oldest else queue:
@@ -1767,8 +1781,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False):
             yield job, why
         return
     lanes, roots = lanes_on(runner), roots_on(runner)
-    busy = {(r["bot"], r["lane"]) for r in rows(c, "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
-    busy |= held_lanes
+    busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
     for job in queue:
@@ -2412,8 +2425,7 @@ class Execution:
         lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
-        busy = {(r["bot"], r["lane"]) for r in c.execute(
-            "SELECT bot,lane FROM attempts WHERE state IN ('leased','running')")}
+        busy = set(live_lanes(c))
         busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
