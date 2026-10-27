@@ -215,3 +215,70 @@ def test_outside_a_private_run_the_route_is_refused(api):
     finance = bot_token(api, "finance")
     words = refused(api, filed(None, owner="doc-updater"), finance)
     assert words == "Only a bot's own run on private work files a task from it", words
+
+
+@pytest.mark.parametrize("change,status,words", [
+    ({"private": True}, 422, "A task from private work is company-visible: leave out --private"),
+    ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
+    ("company parent", 403, "File a task from private work under the private task it comes from, or with no parent"),
+    ("related", 403, "A task from private work is related to no private task but its parent"),
+])
+def test_the_route_refuses_a_private_task_a_person_a_company_parent_and_a_private_relation(api, change, status, words):
+    row = private_work(api)
+    other = private_work(api, "Ops lockfile scan")
+    attempt = run_on(api)
+    if change == "company parent":
+        with api.app.state.store.transaction() as c:
+            shared = H.task_create(c, "bot:cpo", "Upload fixes", "Company work.", "bot:ops", private=False, lint=False)
+        body = filed(shared["id"])
+    elif change == "related":
+        body = filed(row["id"], relations=[{"task": row["id"], "kind": "parent"}, {"task": other["id"], "kind": "related"}])
+    else:
+        body = filed(row["id"], **change)
+    r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
+    assert r.status_code == status and r.json()["error"]["detail"] == words, r.text
+    assert words in dry_run(api, body, attempt["token"])
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE requester='bot:ops' AND title=?", (REPAIR["title"],)).fetchone()
+
+
+SECRET = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+COPIED = "the vendor's intake form posts every upload to the shared bucket before the chat setting is read"
+
+
+@pytest.mark.parametrize("extra,check", [
+    ({"acceptance_criteria": ["Done when " + COPIED]}, "copies 12 or more words"),
+    ({"labels": [SECRET.lower()]}, "secret-shaped"),
+    ({"links": ["https://ci.acme.example/run?token=" + SECRET]}, "secret-shaped"),
+    ({"change_paths": ["backend/" + COPIED.replace(" ", "_") + ".py"]}, "copies 12 or more words"),
+    ({"blocker": {"repo": "acme/web", "status": 403, "endpoint": SECRET}}, "secret-shaped"),
+    ({"public_title": "Uploads: " + SECRET}, "secret-shaped"),
+    ({"public_summary": "Background: " + COPIED}, "copies 12 or more words"),
+])
+def test_every_text_the_task_keeps_gets_the_words_checks(api, extra, check):
+    row = private_work(api)
+    attempt = run_on(api)
+    correction(api, filed(row["id"], **extra), attempt["token"], check)
+
+
+def test_the_private_run_attaches_no_file_to_the_new_task(api):
+    row = private_work(api)
+    attempt = run_on(api)
+    made = post(api, "tasks", filed(row["id"]), attempt["token"])
+    r = api.post(f"/api/v2/tasks/{made['id']}/files", json={"name": "intake.md", "text": "Intake notes."},
+                 headers=headers(attempt["token"]))
+    assert r.status_code == 403, r.text
+
+
+@pytest.mark.parametrize("field", ["title", "body", "acceptance_criteria", "labels", "public_title", "public_summary"])
+def test_a_private_tasks_title_anywhere_in_the_text_is_a_correction(api, field):
+    row = private_work(api)
+    carried = private_work(api, "Ops Lockfile_Scan")
+    attempt = run_on(api)
+    carry(api, attempt, carried)
+    for name in ("ZIP TRIAGE", "ops lockfile scan"):
+        value = f"Follow up on {name} first."
+        extra = {field: [value] if field in ("acceptance_criteria", "labels") else value}
+        correction(api, filed(row["id"], **extra), attempt["token"], "names a private task by its title")
+    # A word of a title on its own is not the title.
+    assert post(api, "tasks", filed(row["id"], body=REPAIR["body"] + " Triage it first."), attempt["token"])

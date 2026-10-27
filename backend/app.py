@@ -3501,8 +3501,8 @@ def create_app(settings=None):
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
                                        actor=who.actor, title=body.title, body=body.body,
-                                       from_private_work=body.from_private, criteria=body.acceptance_criteria,
-                                       links=body.links)
+                                       from_private_work=body.from_private, texts=privacy.create_texts(body),
+                                       related=[other for other, _ in others])
         # The private tasks a company-visible task from private work comes from: their history says so.
         kept = privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None) \
             if body.from_private else []

@@ -699,8 +699,13 @@ def _no_person(c, who, rows):
                               403)
 
 
+def _words(text):
+    # Letters and digits only, any case: words joined by `_` (a path, a label) are still the words they copy.
+    return re.findall(r"[^\W_]+", str(text or "").lower())
+
+
 def _copied_runs(text):
-    words = re.findall(r"\w+", str(text or "").lower())
+    words = _words(text)
     return {tuple(words[i:i + COPIED_WORDS]) for i in range(len(words) - COPIED_WORDS + 1)}
 
 
@@ -839,33 +844,50 @@ def _carries_private_file_or_link(c, kept, text):
     return False
 
 
-def from_private_words(c, kept, title, body, criteria=(), links=()):
+def create_texts(body):
+    """Every text a task create keeps besides its title and body (models.TaskCreate): what a task from private work
+    could otherwise carry past the words checks."""
+    blocker = body.blocker
+    return [*body.acceptance_criteria, *body.labels, *body.change_paths, *body.links, body.public_title or "",
+            body.public_summary or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ())]
+
+
+def from_private_words(c, kept, title, body, texts=()):
     """Refuse a task from private work whose words carry it: a secret-shaped value, 12 or more words in a row copied
-    from one of `kept` (its title, body, note or comments), or a file or link from a private task. The refusal names the
-    check, never the text; it is a writing correction (Problem, not a recorded refusal), so it never counts toward
-    quarantine."""
-    text = "\n".join([title or "", body or "", *(criteria or ())])
+    from one of `kept` (its title, body, note or comments), or a file or link from a private task, in its title, body or
+    any other text it keeps (`texts`, create_texts). The refusal names the check, never the text; it is a writing
+    correction (Problem, not a recorded refusal), so it never counts toward quarantine."""
+    text = "\n".join([title or "", body or "", *(t for t in texts or () if t)])
     if secret_shaped(text):
         raise Problem("lint", "This task holds a secret-shaped value: take it out, and say only what the work needs", 422)
     runs = _copied_runs(text)
     if runs and any(runs & _copied_runs(_private_words(c, row)) for row in kept):
         raise Problem("lint", f"This task copies {COPIED_WORDS} or more words in a row from private work: say only what "
                               "the work needs, in your own words", 422)
-    if _carries_private_file_or_link(c, kept, "\n".join([text, *(links or ())])):
+    # A private task's title is shorter than a copied run yet names it outright; a false hit costs a rewrite.
+    words = " " + " ".join(_words(text)) + " "
+    if any((name := " ".join(_words(row.get("title")))) and f" {name} " in words for row in kept):
+        raise Problem("lint", "This task names a private task by its title: describe the work without it", 422)
+    if _carries_private_file_or_link(c, kept, text):
         raise Problem("lint", "This task carries a file or link from a private task: take it out, and say in your own "
                               "words what the work needs", 422)
 
 
 def require_create(c, who, private, owner, parent, actor=None, title=None, body=None, from_private_work=False,
-                   criteria=(), links=()):
+                   texts=(), related=()):
     """The privacy refusals of a task create (app.task_create), in one place so its dry-run gives the create's own
     words. `who` is the caller as authenticated, `actor` the identity the task is filed as (a delegated person).
     Returns guest_for's (parent id, person) for the create to make with hubdb.task_reach, or None.
-    `from_private_work`: a company-visible task filed from private work (from_private), whose words are checked here."""
+    `from_private_work`: a company-visible task filed from private work (from_private), whose words (`texts`, every
+    other text it keeps) are checked here; `related` are the ids of the tasks it is related to besides its parent."""
     if from_private_work:
         if private:
             raise Problem("privacy", "A task from private work is company-visible: leave out --private", 422)
-        from_private_words(c, from_private(c, who, owner, parent), title, body, criteria, links)
+        kept = from_private(c, who, owner, parent)
+        if any(H.task_private(c, _task(c, tid)) for tid in related):
+            # Related, blocked by or a duplicate of a private task, it would say so to that task's readers and wait on it.
+            raise Problem("privacy", "A task from private work is related to no private task but its parent", 403)
+        from_private_words(c, kept, title, body, texts)
         return None
     execution = private_execution(c, who)
     if execution and private is False:
