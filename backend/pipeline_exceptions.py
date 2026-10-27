@@ -16,8 +16,9 @@ reads, about hourly, the few things that did not move on their own and fixes the
   write on the ticket twice in a day with no retry pending.
 - `merge`: an open pull request GitHub reports as conflicting, with its number and head.
 
-An entry is one per subject (a ticket, a bot, a step or a service) and kind; `since` is when that cause began. The list
-is a read: it routes nothing. The hourly pass (`deliver`, system routine `engineering_exceptions`) wakes a manager
+An entry is one per subject (a ticket, a bot, a step or a service) and kind; `since` is when that cause began. Every
+entry, a count included, is made only from the tickets its reader may read (`build`): a private ticket the manager does
+not read adds nothing to a builder's slots, a step's backlog or the GitHub outage. The list is a read: it routes nothing. The hourly pass (`deliver`, system routine `engineering_exceptions`) wakes a manager
 whose profile is `manager` with it only when an entry is new since the last list it was sent, so a week of tickets
 that move on their own costs the manager no turn."""
 from . import task_privacy as privacy
@@ -132,7 +133,7 @@ class _List:
         self.items[key] = {"key": f"{subject}:{kind}", "kind": kind, "cause": cause, "since": str(since), **extra}
 
 
-def _stuck(c, out, rows, children, at):
+def _stuck(c, out, rows, children, at, reader):
     """Tickets and their open checks with no run for STUCK_MINUTES and nothing to wait on; failed or cut runs."""
     from . import check_pools
     from .pipeline_stats import cause_of
@@ -143,17 +144,14 @@ def _stuck(c, out, rows, children, at):
     work = list(rows) + [H.task(c, child_id) for child_id in children]
     entered = _entered(c, [w["id"] for w in work if w])
     cutoff = H.shift(at, minutes=-STUCK_MINUTES)
-    manager = {}
     for item in work:
         if not item or item["status"] not in H.ACTIVE_STATUSES:
             continue
         ticket = tickets.get(children.get(item["id"], item["id"]))
         if not ticket:
             continue
-        if item["id"] in children:
-            reader = manager.setdefault(ticket["type_id"], H.type_manager(c, ticket))
-            if not reader or not H.task_private_readable(c, H.bot_actor(reader), item):
-                continue        # a check the manager cannot read is not named on its list
+        if item["id"] in children and not H.bot_reads_task(c, reader, item):
+            continue            # a check the manager cannot read is not named on its list
         live, finished, jobs = _runs(c, item)
         label = _label(c, ticket)
         check = None if item["id"] == ticket["id"] else {"id": item["id"], "title": str(item["title"] or "")[:150],
@@ -222,9 +220,11 @@ def _pools(c, out, rows, at):
 
 
 def _slots(c, out, typ, rows):
-    """Builders over their step's slots, and steps over their backlog."""
+    """Builders over their step's slots, and steps over their backlog. Both count `rows` only: the allocator's own
+    count (task_allocator.in_hand) reads every ticket, the ones the list's reader may not read included."""
     from . import step_flow, task_allocator
     steps = H._rows(c.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position", (typ["id"],)))
+    position = {s["id"]: s["position"] for s in steps}
     by_step = {}
     for r in rows:
         by_step.setdefault(r.get("step_id"), []).append(r)
@@ -232,13 +232,14 @@ def _slots(c, out, typ, rows):
         flow = step_flow.of(step) if step_flow._ready(c) else {}
         assign = flow.get("assign") or {}
         slots = int(assign.get("slots") or task_allocator.DEFAULT_SLOTS)
+        after, before = task_allocator.held_between(c, typ["id"], step) if assign.get("pool") else (0, 0)
         for slug in assign.get("pool") or []:
-            held = task_allocator.in_hand(c, slug, typ["id"], step)
-            if held > slots:
-                mine = sorted((r for r in rows if r.get("owner") == "bot:" + slug), key=lambda r: r.get("updated") or "")
-                since = (mine[slots] if len(mine) > slots else (mine[-1] if mine else {})).get("updated")
-                out.add("bot:" + slug, "slots", f"{slug} holds {held} tickets, over its {slots} slots at {step['name']}",
-                        since or step.get("updated") or H.now(), bot=slug)
+            mine = sorted((r for r in rows if r.get("owner") == "bot:" + slug
+                           and after < position.get(r.get("step_id"), after) < before),
+                          key=lambda r: r.get("updated") or "")
+            if len(mine) > slots:
+                out.add("bot:" + slug, "slots", f"{slug} holds {len(mine)} tickets, over its {slots} slots at "
+                        f"{step['name']}", mine[slots].get("updated") or step.get("updated") or H.now(), bot=slug)
         backlog = flow.get("backlog") or {}
         here = by_step.get(step["id"]) or []
         over = backlog.get("over")
@@ -331,18 +332,25 @@ def _merges(c, out, rows):
                         link["updated"] or link["created"], ticket=_label(c, row), pr=link["number"], head=head)
 
 
-def build(c, typ, rows=None, at=None):
-    """Every current exception on an engineering type, oldest first. `rows` are the type's open tickets when the
-    caller has them. No visibility filter: `report` and `deliver` give it only to the type's manager."""
+def build(c, typ, rows=None, at=None, reader=None):
+    """Every current exception on an engineering type that `reader` (default: the type's manager) may know of, oldest
+    first. `rows` are the type's open tickets the reader may read, when the caller has selected them; otherwise the
+    open tickets are read here and kept only where the reader reads them (H.bot_reads_task), before anything is
+    counted or capped. Every entry and count is made from that selection alone."""
     at = at or H.now()
+    if not reader:
+        manager = H.type_manager(c, {"type_id": typ["id"]})
+        reader = H.bot_actor(manager) if manager else None
+    if not reader:
+        return []
     if rows is None:
-        rows = H._rows(c.execute(
+        rows = [r for r in H._rows(c.execute(
             f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
-            "ORDER BY created LIMIT 5000", (typ["id"], *H.ACTIVE_STATUSES)))
+            "ORDER BY created", (typ["id"], *H.ACTIVE_STATUSES))) if H.bot_reads_task(c, reader, r)][:5000]
     rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
     out = _List()
     children = _check_children(c, {r["id"] for r in rows})
-    _stuck(c, out, rows, children, at)
+    _stuck(c, out, rows, children, at, reader)
     _pools(c, out, rows, at)
     _slots(c, out, typ, rows)
     _outages(c, out, typ, rows, at)
@@ -361,7 +369,7 @@ def report(c, auth, who, typ, rows=None, at=None):
         return None             # someone else, or a caller acting for another reader
     if rows is None:
         rows = H.tasks(c, status=H.ACTIVE_STATUSES, type_id=typ["id"], limit=5000, visible=auth.task_sql(c, who))
-    return build(c, typ, rows, at)
+    return build(c, typ, rows, at, reader=who.actor)
 
 
 def render(entries, more=0):
@@ -390,9 +398,7 @@ def deliver(c, at=None):
         slug = typ["manager"]
         if not reads_list(c, slug):
             continue
-        reader = H.bot_actor(slug)
-        entries = [e for e in build(c, typ, at=at)
-                   if not e.get("ticket") or H.task_private_readable(c, reader, H.task(c, e["ticket"]["id"]))]
+        entries = build(c, typ, at=at, reader=H.bot_actor(slug))
         keys = sorted(e["key"] for e in entries)
         last = c.execute("SELECT detail_json FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
                          (EVENT, typ["id"])).fetchone()

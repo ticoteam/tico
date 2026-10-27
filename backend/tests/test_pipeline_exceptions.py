@@ -382,3 +382,102 @@ def test_held_notes_alone_never_wake_a_manager_and_ride_with_its_next_list(api):
         assert unheld_jobs(c, "coo") == 0
         ticket(c, typ, "Fix Cursor", minutes=50)
         assert PE.deliver(c) == ["coo"], "a real exception wakes it, and its run carries the notes"
+
+
+# ------------------------------------------------------------------------------------------- what the reader may read
+# A private ticket of bots outside the manager's org chart (backend/tests/test_api.py unrelated_task_managers) is
+# neither named nor counted: not in a builder's slots, a step's backlog or the GitHub outage, in Pipeline or the hourly
+# wake. `finance` is a pool bot the manager does not manage; `ops` asks for its hidden tickets.
+
+def unread(c, typ, title, step="In QA", owner="bot:finance"):
+    """A private ticket whose parties the manager neither is nor manages."""
+    made = H.task_create(c, "bot:ops", title, "Build.", owner, type=typ["id"], step=step, lint=False)
+    c.execute("UPDATE tasks SET private=1 WHERE id=?", (made["id"],))
+    settled(c)
+    return H.task(c, made["id"])
+
+
+def outside_the_chart(c, typ):
+    from backend.tests.test_api import unrelated_task_managers
+    unrelated_task_managers(c, "coo", "ops", "finance", "cpo")
+    hidden = unread(c, typ, "Hidden probe")
+    assert not H.bot_reads_task(c, "bot:coo", hidden) and H.bot_reads_task(c, "bot:finance", hidden)
+    c.execute("UPDATE tasks SET status='closed' WHERE id=?", (hidden["id"],))
+
+
+def flow(c, typ, step, **value):
+    c.execute("UPDATE task_steps SET flow_json=? WHERE type_id=? AND name=?", (json.dumps(value), typ["id"], step))
+
+
+def both_reads(api, c, typ, kind):
+    """(Pipeline's list, the hourly wake's list) for the manager, each of `kind`."""
+    shown = pipeline_stats.report(c, api.app.state.auth, Identity("bot:coo", "bot"), type=typ["id"])["exceptions"]
+    c.execute("DELETE FROM events WHERE action=?", (PE.EVENT,))      # every entry is new to this pass
+    before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
+    PE.deliver(c)
+    body = (c.execute("SELECT body FROM messages WHERE rowid>? AND to_actor='bot:coo' AND "
+                      "json_extract(refs_json,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
+    return [e for e in shown if e["kind"] == kind], body
+
+
+def test_slots_count_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
+    with api.app.state.store.transaction() as c:
+        typ = board(c)
+        outside_the_chart(c, typ)
+        flow(c, typ, "In Progress", assign={"pool": ["finance"], "slots": 1})
+        for n in range(3):
+            unread(c, typ, f"Hidden slot {n}")
+        shown, body = both_reads(api, c, typ, "slots")
+        assert shown == [] and "finance holds" not in body, "no visible ticket: no private workload count"
+        mine = ticket(c, typ, "Visible slot", step="In QA")
+        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (mine["id"],))
+        shown, body = both_reads(api, c, typ, "slots")
+        assert shown == [] and "finance holds" not in body, "one readable ticket is within its one slot"
+        # Authorized positive: a second readable ticket is over the slot, and the count is of readable ones only.
+        other = ticket(c, typ, "Visible slot 2", step="QA Fixes")
+        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (other["id"],))
+        shown, body = both_reads(api, c, typ, "slots")
+        assert [e["cause"].split(",")[0] for e in shown] == ["finance holds 2 tickets"]
+        assert "finance holds 2 tickets" in body
+
+
+def test_a_steps_backlog_counts_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
+    with api.app.state.store.transaction() as c:
+        typ = board(c)
+        outside_the_chart(c, typ)
+        flow(c, typ, "In QA", backlog={"over": 1})
+        unread(c, typ, "Hidden backlog 1")
+        unread(c, typ, "Hidden backlog 2")
+        ticket(c, typ, "Visible backlog 1", step="In QA")
+        shown, body = both_reads(api, c, typ, "backlog")
+        assert shown == [] and "over its backlog" not in body, "one readable ticket is not over a backlog of 1"
+        ticket(c, typ, "Visible backlog 2", step="In QA")
+        shown, body = both_reads(api, c, typ, "backlog")
+        assert [e["cause"] for e in shown] == ["2 tickets at In QA, over its backlog of 1"]
+        assert "2 tickets at In QA, over its backlog of 1" in body
+
+
+def test_the_github_outage_folds_in_only_the_tickets_the_manager_reads_in_pipeline_and_the_hourly_wake(api):
+    from backend import move_retry
+    with api.app.state.store.transaction() as c:
+        typ = board(c)
+        outside_the_chart(c, typ)
+        early, late = H.shift(H.now(), minutes=-30), H.shift(H.now(), minutes=-10)
+
+        def held(row, since):
+            c.execute("INSERT INTO task_events(id,task_id,ts,actor,field,old,new,note) VALUES(?,?,?,?,?,?,?,'')",
+                      (H.new_id(), row["id"], H.shift(H.now(), seconds=1), H.KEEPER, move_retry.FIELD,
+                       row["step_id"], json.dumps({"state": "waiting", "outage": True, "since": since,
+                                                   "step": "Review 1", "kind": "github"})))
+
+        hidden = unread(c, typ, "Hidden outage")
+        held(hidden, early)
+        shown, body = both_reads(api, c, typ, "outage")
+        assert [e for e in shown if e["key"] == "service:github:outage"] == [] and "GitHub cannot be read" not in body
+        mine = ticket(c, typ, "Visible outage", step="In QA")
+        held(mine, late)
+        shown, body = both_reads(api, c, typ, "outage")
+        [entry] = [e for e in shown if e["key"] == "service:github:outage"]
+        assert "retries 1 ticket(s)" in entry["cause"] and entry["since"] == late, "the hidden one's count and since"
+        assert entry["tickets"] == [mine.get("number") or mine["id"]]
+        assert "retries 1 ticket(s)" in body
