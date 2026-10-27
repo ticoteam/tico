@@ -142,13 +142,18 @@ def subscription_login(runtime, detail):
             and not re.search(r"(?i)api[ _-]?key", detail))
 
 
-def shared_logins(c, runner_id, readiness, assigned, access):
+def shared_logins(c, runner_id, readiness, assigned, access, names=None):
     """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
     at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
     omitted: its bots run concurrently on one ChatGPT login. One row per login: its
     runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
-    it and the ones this reader may see. A key login runs its bots side by side and is left out."""
+    it and the ones this reader may see. A key login runs its bots side by side and is left out.
+
+    `names` is `{connection_id: display_name}` from `subscription_identity.display_names` when the caller already
+    loaded every rename (Operations listing).
+    """
     from .harnesses import harness_caps
+    from .subscription_identity import connection_id, identity
     runtimes = readiness.get("runtimes") or {}
     logins = {}
     for bot, report in (readiness.get("bots") or {}).items():
@@ -162,11 +167,19 @@ def shared_logins(c, runner_id, readiness, assigned, access):
         if not subscription_login(runtime, login.get("detail")):
             continue
         logins.setdefault((runtime, profile), []).append(bot)
-    from .subscription_identity import identity
-    return [{"runtime": runtime, "profile": profile,
-             "display_name": identity(c, runner_id, profile)["display_name"] if profile else "",
-             "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))}
-            for (runtime, profile), bots in sorted(logins.items()) if len(bots) > 1]
+    rows = []
+    for (runtime, profile), bots in sorted(logins.items()):
+        if len(bots) <= 1:
+            continue
+        if not profile:
+            label = ""
+        elif names is not None:
+            label = names.get(connection_id(runner_id, profile)) or profile
+        else:
+            label = identity(c, runner_id, profile)["display_name"]
+        rows.append({"runtime": runtime, "profile": profile, "display_name": label,
+                     "count": len(bots), "bots": sorted(b for b in bots if (access.get(b) or {}).get("read"))})
+    return rows
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -2072,6 +2085,9 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from .subscription_identity import display_names
+            # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
+            login_names = display_names(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2154,7 +2170,8 @@ def install_views(app, store, auth, mutate, task_view):
                                  "shared_keys": shared, "shared_with": shared_with,
                                  # The sign-ins several of its bots share, which they take turns on (counting only
                                  # the bots this reader may see).
-                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden, access),
+                                 "shared_logins": shared_logins(c, row["id"], value["readiness"], assigned_here - hidden,
+                                                               access, names=login_names),
                                  "bot_runtimes": sorted(run_on.get(row["id"], ())),
                                  "update": runner_versions.view(fleet.get(row["id"])),
                                  "harness_actions": recent(c, row["id"]) if who.role == "owner" else [],
