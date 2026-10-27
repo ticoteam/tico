@@ -22,6 +22,7 @@ Settings card writes to a route no entry covers.
   public(e, base)                what a caller sees of an entry, with its card's full link
   plan(c, auth, who, e, value, target)  {"run": {method, path, body}}, the Confirm card, or a refusal naming who may
   matched(method, path, body)    the entry and target a request is exactly the body of, and its class
+  stored_class(c, method, path, body)  `matched`, a partial wake-rule update classed by the rule it keeps
 """
 import json
 import re
@@ -372,8 +373,28 @@ def matched(method, path, body):
                 continue
         elif any(body.get(k) != v for k, v in e.extra.items()):
             continue
+        if e.key == "rules.wake" and ("then" not in body or "params" not in body):
+            # A partial update keeps the stored rule's action, which this body does not show: `stored_class` reads it.
+            return e, target, "stored"
         return e, target, kind_for(e, body)
     return None
+
+
+def merged_wake(row, update):
+    """A wake-rule update as the route will save it: its action and params, where it leaves them out, the stored rule's."""
+    params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
+    return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
+
+
+def stored_class(c, method, path, body):
+    """`matched`, with a partial wake-rule update classed by what the route will save, as `plan` classes it: turning on
+    or editing a stored rule that sends outside is person-only however little the body says."""
+    found = matched(method, path, body)
+    if not found or found[2] != "stored":
+        return found
+    e, target, _ = found
+    row = c.execute("SELECT then_outcome, params_json FROM rules WHERE id=?", (target["id"],)).fetchone()
+    return e, target, kind_for(e, merged_wake(row, body) if row else body)
 
 
 def install(app, store, auth, settings):
@@ -432,8 +453,7 @@ def install(app, store, auth, settings):
                 if row["revision"] != update.get("expected_revision"):
                     from .store import Problem
                     raise Problem("version_conflict", "The rule changed; refresh before saving", 409)
-                params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
-                return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
+                return merged_wake(row, update)
 
             card_direct = False
             if assistant:

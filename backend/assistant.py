@@ -86,8 +86,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     if path in ("/api/v2/updates/read", "/api/v2/changelog/read", "/api/notes", "/api/v2/assistant/actions",
                 "/api/v2/assistant/read-back", "/api/v2/assistant/learned"):
         return True
-    # Asking the settings catalogue for a change's plan writes nothing: it answers with the request, a card in the
-    # person's chat or a refusal (backend/settings_catalog.py), and the change itself meets the checks below.
+    # Asking the settings catalogue for a change's plan changes no setting: it answers with the request, a refusal or a
+    # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
+    # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
     try:
@@ -185,7 +186,19 @@ def instructed_setting(method, path, body=None):
     from . import settings_catalog
     path = normalize_path(path)
     found = path and settings_catalog.matched(method, path, _fields(body))
-    return bool(found) and found[2] == "direct"
+    return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
+
+
+def require_direct_setting(c, method, path, body):
+    """403 unless the setting this cited write changes is direct once read against what is stored (a partial wake-rule
+    update keeps the stored rule's action): the same class `plan` gave it."""
+    from . import settings_catalog
+    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body))
+    if not found or found[2] != "direct":
+        e = found[0] if found else None
+        raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
+                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + e.card
+                      if e else "That setting needs the person's own yes", 403)
 
 
 def instructed_route(method, path, body=None, decides=False):
@@ -791,7 +804,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if proposer == "assistant" and not any(m == method and p.fullmatch(path) for m, p in _PROPOSABLE):
         # A setting the Assistant puts on a card is one catalogue entry's body, and never a person-only one.
         from . import settings_catalog
-        found = settings_catalog.matched(method, path, body if isinstance(body, dict) else None)
+        found = settings_catalog.stored_class(c, method, path, body if isinstance(body, dict) else None)
         if not found or found[2] == "person":
             raise Problem("operation", "A setting on a card is one setting from the catalogue (`hub settings find`) "
                           "that is not the person's own to change in Settings", 422)
