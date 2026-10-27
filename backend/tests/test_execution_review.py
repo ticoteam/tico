@@ -332,6 +332,24 @@ def test_a_turn_that_failed_before_doing_anything_goes_back_in_the_queue(api):
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
 
+def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
+    """A host that streams almost nothing can still have written to the hub, reported usage and left text.
+    Treating that as no-effect would retry work that may already have pushed, sent or paid."""
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-positive'}, machine['token'])
+    post(api, 'messages', {'to': 'ana', 'text': 'Synthetic effect already delivered'}, attempt['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT writes FROM turns WHERE id=?', (attempt['id'],)).fetchone()[0] > 0
+    post(api, f"attempts/{attempt['id']}/complete",
+         {'outcome': 'failed', 'last_seq': 0, 'text': 'Synthetic partial output',
+          'usage': {'output_tokens': 100_000, 'model': 'gpt-6-sol', 'runtime': 'codex'}}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert job_state(api, attempt['job_id']) == 'uncertain'
+        assert c.execute("SELECT count(*) FROM events WHERE action='attempt.no_effect_retry' AND target=?",
+                         (attempt['id'],)).fetchone()[0] == 0
+    assert get(api, 'bots/finance/execution-review')['jobs'][0]['id'] == attempt['job_id']
+
+
 def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     """A run that may have acted is not run again on its own: it waits, named, for its operator or BotOps.
     Their resume runs it once more; a second stop is dismissed and BotOps finds out why."""
