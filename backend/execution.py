@@ -240,6 +240,7 @@ def lift_after_connection_change(c, settings, actor, bot):
                             "Connection changed; the Tico AI Gateway key is still at its usage limit"),
                      reason="Connection changed")
         return
+    c.execute("UPDATE jobs SET held=0,hold_until=NULL WHERE bot=? AND state='queued' AND wake_class='quota-reset'", (bot,))
     out = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone()
     H.status_set(c, actor, bot, state="running" if out else "idle",
                  focus="Working on other tasks" if out else "Connection changed; queued work resumes",
@@ -553,8 +554,14 @@ def retry_facts(c, job, started, finished):
                        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
                        (job['id'], job['message_id'])).fetchone()[0]
     restart = restart_reported(c, job['attempt_id'])
-    attempt = c.execute('SELECT state FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
-    lease_lost = bool(attempt and attempt['state'] == 'expired' and started)
+    attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
+    computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (attempt['runner_id'],)).fetchone() if attempt else None
+    # Only a negotiated strict continuation may bypass the legacy late-result grace. Unknown tools and
+    # an already-final answer still need their original safety/settlement path.
+    final = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='message' "
+                      "AND json_extract(payload_json,'$.final')=1 LIMIT 1", (job['attempt_id'],)).fetchone()
+    lease_lost = bool(attempt and attempt['state'] == 'expired' and started and attempt['thread_id']
+                      and capacity_continue_on(computer) and reported and not acted and not final)
     outside = outside_actions(c, job, started, finished) if restart or lease_lost else []
     result = c.execute("SELECT result_json FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
@@ -564,7 +571,7 @@ def retry_facts(c, job, started, finished):
             # Explicit restart policy holds only named irreversible effects or consumed approvals. A silent
             # host alone is not such an effect; the continuation must check prior work before proceeding.
             'fallback_unknown': bool(fallback_unknown),
-            'safe': not fallback_unknown and not consumed and (not outside if restart or lease_lost else reported and not acted)}
+            'safe': not fallback_unknown and not consumed and (not outside if restart else reported and not acted)}
 
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
@@ -811,6 +818,18 @@ def capacity_continuation(c, job_id):
     turns starts a fresh thread or moves to a fallback, which could repeat what the stopped turn did."""
     row = c.execute("SELECT thread_id FROM attempts WHERE job_id=? AND json_extract(result_json,'$.capacity_continue')=1 "
                     "ORDER BY created DESC LIMIT 1", (job_id,)).fetchone()
+    return row[0] if row else None
+
+
+def continuation_thread(c, job_id):
+    """Require the saved provider session for capacity, quota or safe lease recovery."""
+    capacity = capacity_continuation(c, job_id)
+    if capacity:
+        return capacity
+    row = c.execute("SELECT thread_id FROM attempts WHERE job_id=? "
+                    "AND (json_extract(result_json,'$.lease_continue')=1 OR json_extract(result_json,'$.quota_continue')=1) "
+                    "ORDER BY created DESC LIMIT 1",
+                    (job_id,)).fetchone()
     return row[0] if row else None
 
 
@@ -1284,7 +1303,7 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
-    if why and job_id and capacity_continuation(c, job_id):
+    if why and job_id and continuation_thread(c, job_id):
         return why          # only its own thread, on its own login, continues it
     return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
 
@@ -2325,7 +2344,7 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
-            if not continues and capacity_continuation(c, row["id"]):
+            if not continues and continuation_thread(c, row["id"]):
                 continue        # left queued for a runner that continues its thread: this one would start it afresh
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
@@ -2714,9 +2733,10 @@ class Execution:
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
-        continue_thread = capacity_continuation(c, row['id'])
+        continue_thread = continuation_thread(c, row['id'])
         if continue_thread:
-            msg = {**msg, 'body': msg['body'] + CONTINUE_NOTE}
+            msg = {**msg, 'body': msg['body'] + (CONTINUE_NOTE if capacity_continuation(c, row['id']) else
+                   '\n\nTico: continue the same saved session after the source interruption. Check prior work and finish only what remains.')}
         # Next-run tasks ride along with whatever woke the bot: one run, one prompt, each task
         # still its own task to mark done. Only a runner that puts them in its prompt gets them.
         # Any lane carries them: a bot whose turns are all tasks and routines never has a main-lane
@@ -3626,6 +3646,12 @@ class Execution:
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
                            **({"check": check["runtime"]} if check else {})}), aid))
+        quota_continue = False
+        if source_pause and not body.fallback and row['thread_id'] and worked:
+            computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            quota_continue = capacity_continue_on(computer)
+            if quota_continue:
+                c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.quota_continue',json('true')) WHERE id=?", (aid,))
         if body.outcome == "completed":
             H.notes_settle(c, aid)        # read for good; a failed or interrupted run gives its notes back
         from .performance import stamp_attempt
@@ -3657,7 +3683,7 @@ class Execution:
         # Unless the runner kept its thread (`continues`): then the job goes back in the queue, and after the capacity
         # hold its next turn continues that thread, which knows what it did. Once only: a continuation the model's
         # capacity stops again is held for review, even before it acts (capacity_continuation).
-        continuing = capacity_continuation(c, row["job_id"])
+        continuing = continuation_thread(c, row["job_id"])
         repeated_capacity = busy and bool(continuing)
         continues = busy_acted and body.continues and bool(row["thread_id"]) and not continuing
         if busy and (body.limited or continues):
@@ -3868,7 +3894,7 @@ class Execution:
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
-        if source_pause and login_hold and (body.fallback or not fallback_choice(
+        if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         if rejected:
@@ -4442,7 +4468,7 @@ class Execution:
                 if not held or facts['restart'] or facts['lease_lost']:
                     calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
                 started = facts['starts']
-                if not row['aged'] and not freed and not facts['restart'] and not (safe and started <= 1 and not facts['lease_lost']):
+                if not row['aged'] and not freed and not facts['restart'] and not (safe and started <= 1):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
@@ -4543,6 +4569,9 @@ class Execution:
                 note = (f"Resumed automatically: the interrupted run {did} and consumed no approval before it "
                         "stopped, so running it again repeats nothing. If this conversation already holds your "
                         "earlier partial work, check what already happened, then continue from there.")
+                if facts['lease_lost']:
+                    c.execute("UPDATE attempts SET result_json=json_set(coalesce(result_json,'{}'),'$.lease_continue',json('true')) WHERE id=?",
+                              (row['attempt_id'],))
                 if facts['restart'] or facts['lease_lost']:
                     # The cut time is the attempt's finished (report) time: the closest Tico has to when
                     # the computer was cut off.

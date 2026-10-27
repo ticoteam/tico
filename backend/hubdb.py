@@ -5972,6 +5972,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # before the status write supersedes those questions.
     finishing = status == "done" and row["status"] != "done" and is_human(actor)
     askers = [m["from_actor"] for m in open_task_asks(conn, row)] if finishing else []
+    if finishing:
+        # A waiting bot's person-owned question can live in a child instead of waiting_on on this card.
+        # Capture its requester before completion supersedes those questions.
+        askers += [child['requester'] for tid in TR.child_ids(conn, task_id)
+                   if (child := task(conn, tid)) and child['owner'] == actor
+                   and child['status'] in ACTIVE_STATUSES and is_bot(child['requester'])]
     # A bot's result rewritten or handed to someone else, before any status move below: that run's outcome.
     if title is not None or body is not None and body != row.get("body"):
         RT.turn_result(conn, actor, row, "edited", event)
@@ -6122,7 +6128,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                     and who != (parent or {}).get("owner"))
             _wake(conn, after, who, _marked_done(conn, actor, after["title"]) + (f"\n{note}" if note and not quiet else "")
                   + (f"\nStill open: {'; '.join(still_open)}" if still_open else ""), {"news": "task_done"},
-                  quiet_bots=True, quiet=idle, human_completion=is_human(actor))
+                  quiet_bots=True, quiet=idle, human_completion=is_human(actor),
+                  completion_actionable=who in askers or who == row['owner'] and row.get('waiting_on') in (actor, actor_id(actor)))
     if status == "review" and row["status"] != "review" and actor != after["requester"]:
         # Review is the requester's turn. Nothing else tells a bot that asked for the work, so
         # without this a handoff between bots waits until someone notices.
@@ -7732,7 +7739,7 @@ def notes_waiting_counts(conn, bots, limit=500):
 
 
 def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False, trigger="status_or_relation",
-          source=None, human_completion=False):
+          source=None, human_completion=False, completion_actionable=False):
     """Tell someone their task moved. Task traffic never counts against rule 4.
 
     `trigger` is what this wake is, for the run it starts (backend/run_triggers.py): a task's status or
@@ -7750,7 +7757,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     `quiet` is stronger: the caller knows this notice asks nothing of any bot, so no bot is
     woken for it, whatever it opted into.
     """
-    actionable_completion = human_completion and ('?' in str(body or '') or _awaited_by(conn, task_row, target)
+    actionable_completion = human_completion and (completion_actionable or '?' in str(body or '') or _awaited_by(conn, task_row, target)
                              or is_human(task_row.get('owner')) and task_row.get('requester') == target)
     if (human_completion and is_bot(target) and _actor_exists(conn, target)
             and task_private_readable(conn, target, task_row)

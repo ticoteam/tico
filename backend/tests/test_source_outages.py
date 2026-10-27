@@ -170,15 +170,23 @@ def test_a_safe_lost_lease_resumes_once_then_waits_without_a_botops_task(api, mo
     from backend.tests.test_api import setup_attempt
     from backend.execution import STALL_MAX
     machine, _, first = setup_attempt(api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                     'capabilities': ['capacity_continue_v1']}, machine['token'])
     post(api, f"attempts/{first['id']}/started", {'thread_id': 'same-session'}, machine['token'])
+    post(api, f"attempts/{first['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}}]}, machine['token'])
     clock = H.now()
     store, execution = api.app.state.store, api.app.state.execution
     for attempt in (first, None):
         if attempt is None:
-            ready(api, machine, ['ops'])
+            post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                             'capabilities': ['capacity_continue_v1']}, machine['token'])
             attempt = claim(api, machine)
             assert attempt and attempt['job_id'] == first['job_id'] and attempt['recovery']['resume_session']
+            assert attempt['continue_thread'] == 'same-session'
             post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'same-session'}, machine['token'])
+            post(api, f"attempts/{attempt['id']}/events", {'events': [
+                {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}}]}, machine['token'])
         expire(api, attempt['id'])
         # No server-stall grace: the computer alone lost contact.
         execution.served_at = None
@@ -238,3 +246,59 @@ def test_quota_after_a_named_external_action_stays_held(api, monkeypatch):
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         result = json.loads(c.execute('SELECT result_json FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0])
         assert not result.get('source_pause')
+
+
+@pytest.mark.parametrize('evidence', ['unknown_shell', 'final_answer'])
+def test_strict_lease_recovery_preserves_unknown_effects_and_late_final_answers(api, monkeypatch, evidence):
+    from backend.execution import retry_facts
+    from backend.tests.test_api import setup_attempt
+    machine, _, attempt = setup_attempt(api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                     'capabilities': ['capacity_continue_v1']}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'kept'}, machine['token'])
+    payload = ({'seq': 2, 'kind': 'tool', 'payload': {'name': 'shell'}} if evidence == 'unknown_shell' else
+               {'seq': 2, 'kind': 'message', 'payload': {'text': 'Done.', 'final': True}})
+    post(api, f"attempts/{attempt['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'status', 'payload': {'tool_events': True}}, payload]}, machine['token'])
+    expire(api, attempt['id'])
+    execution = api.app.state.execution
+    execution.served_at = None
+    with api.app.state.store.transaction() as c:
+        execution.expire(c)
+        c.execute('UPDATE attempts SET finished=? WHERE id=?',
+                  (H.shift(H.now(), minutes=-16), attempt['id']))
+        row = c.execute('SELECT * FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()
+        run = c.execute('SELECT started,finished FROM attempts WHERE id=?', (attempt['id'],)).fetchone()
+        facts = retry_facts(c, row, run['started'], run['finished'])
+        assert not facts['lease_lost']
+        execution.auto_reconcile(c)
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert not c.execute("SELECT 1 FROM events WHERE action='job.auto_reconcile' AND target=?",
+                             (attempt['id'],)).fetchone()
+
+
+
+def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fallback(api, monkeypatch):
+    from backend.tests.test_login_holds import two_bots
+    machine = two_bots(api, monkeypatch)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                     'capabilities': ['capacity_continue_v1']}, machine['token'])
+    post(api, 'chat/ops', {'text': 'Continue reading the saved work.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'quota-session'}, machine['token'])
+    seq = events(api, machine, first, [('tool', 'Read'),
+                 ('error', 'Usage limit; resets at 2026-10-19T07:00:00Z')])
+    post(api, f"attempts/{first['id']}/complete", {'outcome': 'failed', 'limited': True,
+                 'last_seq': seq, 'text': 'Files read; continue after the reset.'}, machine['token'])
+    assert claim(api, machine) is None  # the other login is ready, but it does not hold this session's work
+    at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
+    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {'ops': True},
+                                     'capabilities': ['capacity_continue_v1']}, machine['token'])
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id'] and again['continue_thread'] == 'quota-session'
+    post(api, f"attempts/{again['id']}/started", {'thread_id': 'quota-session'}, machine['token'])
+    post(api, f"attempts/{again['id']}/complete", {'outcome': 'failed', 'last_seq': 0,
+                 'text': 'The saved session is missing.'}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'uncertain'
+    assert claim(api, machine) is None
