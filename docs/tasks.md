@@ -372,7 +372,8 @@ ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line
 On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
 your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
 items with your settings and your plate as it was then, so you can see what On would have done before you turn it
-on; nothing moves.
+on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
+"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you.
 
 API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
 `POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page

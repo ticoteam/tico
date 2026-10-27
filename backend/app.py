@@ -3774,17 +3774,24 @@ def create_app(settings=None):
         else:
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
             privacy.require_wait(c, caller, row, body.waiting_on)
-            if ingest and row["owner"] == who.actor and row.get("waiting_on") != ingest["person"] and \
-                    H.resolve_actor(c, body.waiting_on) == ingest["person"]:
-                # Ask ingest (backend/ask_ingest.py): sent back or FYI with the filter on, the wait is not set.
+            gate = None
+            if ingest and ingest["kind"] == "task" and row["owner"] == who.actor and body.owner and \
+                    H.resolve_actor(c, body.owner) == ingest["person"]:
+                # Ask ingest (backend/ask_ingest.py): a bot handing its own task to a person is filing it for them;
+                # sent back or FYI with the filter on, the task stays the bot's.
+                gate = ask_ingest.apply(c, ingest)
+                ask_ingest.record(c, ingest, gate, task_id)
+                if gate["acts"]:
+                    fields["owner"] = None
+            elif ingest and ingest["kind"] == "wait" and row["owner"] == who.actor and \
+                    row.get("waiting_on") != ingest["person"] and H.resolve_actor(c, body.waiting_on) == ingest["person"]:
+                # Sent back or FYI with the filter on, the wait is not set.
                 gate = ask_ingest.apply(c, ingest)
                 ask_ingest.record(c, ingest, gate, task_id)
                 if gate["acts"]:
                     fields["waiting_on"] = None
                     if fields.get("status") == "waiting":
                         fields["status"] = None
-            else:
-                gate = None
             if "size" in body.model_fields_set and body.size is None:
                 fields["clear_size"] = True
             warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
@@ -3799,16 +3806,22 @@ def create_app(settings=None):
         caller = request.state.identity
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
         ingest = None
-        if body.waiting_on and ask_ingest.gated(caller, settings.assistant_bot):
+        if (body.owner or body.waiting_on) and ask_ingest.gated(caller, settings.assistant_bot):
             with store.read() as c:
                 try:
                     row = auth.task(c, caller, auth.resolve_task(c, caller, tid))
                 except Problem:
                     row = None
             if row and row["owner"] == caller.actor:
-                ingest = ask_ingest.preflight(store, app.state.judge, caller, body.waiting_on, row["title"],
-                                              body.note or row.get("note") or "", kind="wait")
+                ingest = handoff_preflight(caller, row, body.owner, body.note) if body.owner else \
+                    ask_ingest.preflight(store, app.state.judge, caller, body.waiting_on, row["title"],
+                                         body.note or row.get("note") or "", kind="wait")
         return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots, ingest=ingest))
+
+    def handoff_preflight(caller, row, owner, note=None):
+        """Ask ingest for a bot handing its own task `row` to `owner`: judged like a task filed for them."""
+        return ask_ingest.preflight(store, app.state.judge, caller, owner, row["title"],
+                                    "\n\n".join(filter(None, (row.get("body"), note))), kind="task")
 
     # One bulk change holds the write lock for every task it changes, and answers with a line for each:
     # past this many matching tasks it is refused whole, and the caller narrows the filter.
@@ -3867,7 +3880,16 @@ def create_app(settings=None):
         with store.read() as c:
             chosen = bulk_select(c, caller, body.filter)
         # A move into a review step reads each task's pull requests first, outside the write lock (review_preflight).
-        snapshots, unchecked = {}, {}
+        snapshots, unchecked, ingests = {}, {}, {}
+        if body.action == "owner" and body.owner and not body.dry_run and ask_ingest.gated(caller, settings.assistant_bot):
+            # A bot handing its own tasks to a person: each is judged by ask ingest first, a few calls at a time.
+            with store.read() as c:
+                mine = [r for r in (H.task(c, tid) for tid in chosen) if r and r["owner"] == caller.actor]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for r, verdict in zip(mine, pool.map(lambda r: handoff_preflight(caller, r, body.owner, body.note), mine)):
+                    if verdict:
+                        ingests[r["id"]] = verdict
         if body.action in ("step", "status"):
             for tid in chosen:
                 try:
@@ -3906,7 +3928,7 @@ def create_app(settings=None):
                 try:
                     if tid in unchecked or tid not in snapshots and body.action in ("step", "status"):
                         raise unchecked.get(tid) or Problem("changed", "Task changed during the bulk change; try again", 409)
-                    task_update_one(c, caller, tid, change, snapshots.get(tid), view=False)
+                    task_update_one(c, caller, tid, change, snapshots.get(tid), view=False, ingest=ingests.get(tid))
                 except H.Refused as exc:
                     # Audited and answered as the single update's refusal would be; the other tasks go on.
                     del c.after_commit[before:]

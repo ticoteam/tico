@@ -620,7 +620,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # withdrawn as soon as it is asked and the task does not wait on the person.
         from . import ask_ingest
         ingest = ask_ingest.preflight(store, app.state.judge, who, body.on, title,
-                                      "\n\n".join(filter(None, (question, body.why, body.body))), kind="question")
+                                      "\n\n".join(filter(None, (question, body.why, body.body))),
+                                      kind="task_question")
         # A question the asking rules refuse stores no bytes: the write below refuses it first.
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]

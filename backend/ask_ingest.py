@@ -520,6 +520,9 @@ def let_through(c, person, item_id):
     else:
         c.execute("UPDATE messages SET superseded_at=NULL WHERE id=?", (row["message_id"],))
         H.recount(c, [asker, person])
+        if row["kind"] == "task_question":
+            # A task question also holds its task on the person (media.task_question); the gate skipped that too.
+            H.task_update(c, asker, task["id"], status="waiting", waiting_on=person)
     told = f"{name} let this through their filter: it is on their Needs you as you first asked."
     if task:
         H.task_comment(c, H.KEEPER, task["id"], told, wake=False)

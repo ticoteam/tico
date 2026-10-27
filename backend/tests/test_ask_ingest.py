@@ -555,3 +555,46 @@ def test_a_replay_is_the_persons_own_or_an_admins(gate):
     api.app.state.judge = None
     r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
     assert r.status_code == 409, r.text
+
+
+# ---- Review 1: a task question let through waits again; a bot's handoff to a person is gated --------------------
+
+def test_let_it_through_a_task_question_asks_again_and_waits_on_the_person(gate):
+    api, model, token = gate
+    plate(api, 15)
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
+                 headers=headers(token))
+    tid = r.json()["task"]["id"]
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert item["kind"] == "task_question"
+    let_through(api, item["id"])
+    with api.app.state.store.read() as c:
+        row = H.task(c, tid)
+        assert (row["status"], row["waiting_on"]) == ("waiting", "human:ben"), "the wait is back as first filed"
+        assert [a for a in H.open_task_asks(c, row) if a["to_actor"] == "human:ben"]
+    assert on_plate(api, tid)
+
+
+def test_a_bot_handing_its_task_to_a_person_is_gated(gate):
+    api, model, token = gate
+    plate(api, 15)
+    task = own_task(api, token, "Pick the launch date")
+    r = api.post(f"/api/v2/tasks/{task['id']}", json={"version": task["version"], "owner": "ben"}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK and r.json()["task"]["owner"] == "bot:ops"
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    let_through(api, item["id"])
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["owner"] == "human:ben"
+
+
+def test_a_bots_bulk_handoff_to_a_person_is_gated_task_by_task(gate):
+    api, model, token = gate
+    plate(api, 15)
+    ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
+    r = api.post("/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert {H.task(c, i)["owner"] for i in ids} == {"bot:ops"}
+    assert sorted(i["ref"] for i in items(api) if i["kind"] == "task" and i["ref"] in ids) == sorted(ids)
