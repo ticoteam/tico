@@ -12,7 +12,7 @@ Each bot has one mode:
 
 - **Own repo only:** its Instructions repository, with write access.
 - **All ticked repos:** every reachable product repository ticked now and later (other bots’ Instructions repositories are excluded), with read or write access. Write is the default.
-- **Chosen repos:** chosen ticked repositories, with read or write access for each. A write grant may also allow **Run workflows**: starting, rerunning and cancelling GitHub Actions runs there. Only an Owner or admin turns it on or off, and the GitHub App must have Actions: read and write ([GitHub App](github-app.md#letting-a-bot-run-workflows)).
+- **Chosen repos:** chosen ticked repositories, with read or write access for each. A write grant may also allow **Run workflows**: starting, rerunning and cancelling GitHub Actions runs there. Only an Owner or admin turns it on or off; asked through BotOps, it is a Confirm card in their BotOps chat that names the bot and the repository, and only their own tap turns it on. The GitHub App must have Actions: read and write ([GitHub App](github-app.md#letting-a-bot-run-workflows)).
 
 The bot always keeps write access to its own repository. Read grants allow reading contents. Write grants also allow changing contents, issues and pull requests. Repositories must belong to the connected organization. Unticking a repository removes it from all and chosen effective access; its stored chosen grant stays available if it is ticked again. Bot settings can save these unticked choices without removing them. Tokens already issued expire within an hour.
 

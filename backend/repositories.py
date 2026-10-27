@@ -312,6 +312,24 @@ def stopped(before, after):
     return out
 
 
+def started(before, after):
+    """What a change gives that only a person's own click may: `workflows_started`, the repositories the bot may now run
+    workflows in (a tick, or a kept tick coming back into effect) or may once its grant applies (a tick kept on a grant
+    not in effect yet), and `product_creation_started` when Create product repositories turns back on. BotOps acting
+    for a person puts these on a Confirm card (`bot_set`)."""
+    workflows = []
+    for kind in ('effective', 'chosen'):
+        running = {r['full_name'].lower() for r in before[kind] if r.get('run_workflows')}
+        workflows += [r['full_name'] for r in after[kind] if r.get('run_workflows')
+                      and r['full_name'].lower() not in running and r['full_name'] not in workflows]
+    out = {}
+    if workflows:
+        out['workflows_started'] = workflows
+    if not before.get('create_product_repositories') and after.get('create_product_repositories'):
+        out['product_creation_started'] = True
+    return out
+
+
 def describe_stopped(result):
     """`Acme/product (write), repository creation` for a reply or a card."""
     parts = [r['full_name'] + ' (' + r['access'] + ')' for r in result.get('stopped') or []]
@@ -342,15 +360,39 @@ def preview_change(c, settings, actor, bot, body):
     row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     org = row['org'] if row else getattr(settings, 'github_owner', '')
     name = (H.bot(c, bot) or {}).get('display_name') or bot
+    try:
+        return tried(c, bot, update, org, actor, name)
+    except Problem:
+        return None
+
+
+def tried(c, bot, update, org, actor, name, owner=False):
+    """The change made as the person's own click on its card would make it (`owner`: the Owner's), then rolled back:
+    its plain words (`plain_change`), or the refusal that click would get."""
     c.execute('SAVEPOINT repo_preview')
     try:
         before = access(c, bot, org)
-        return plain_change(name, before, set_access(c, bot, update, org, actor, team_list=True, own_click=False))
-    except Problem:
-        return None
+        result = set_access(c, bot, update, org, actor, team_list=True, owner=owner)
+        return plain_change(name, before, {**result, **started(before, access(c, bot, org))})
     finally:
         c.execute('ROLLBACK TO repo_preview')
         c.execute('RELEASE repo_preview')
+
+
+def card_words(c, settings, auth, who, bot, body):
+    """For a catalogue Confirm card (settings_catalog.plan): the card's plain words, after trying the change as the
+    person's own click; a change that click could not make (no write access for Run workflows, an admin turning Create
+    product repositories on) is refused now, so no card is made for it."""
+    if auth.system_bot(bot) and who.role != 'owner':
+        raise Problem('forbidden', 'Only the Owner changes Built-in bots', 403)
+    try:
+        update = RepoAccessUpdate(**(body if isinstance(body, dict) else {}))
+    except ValueError as exc:
+        raise Problem('validation', 'Bot repositories takes {"mode": "own|all|chosen", ...}: ' + str(exc)[:200], 422)
+    row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    org = row['org'] if row else getattr(settings, 'github_owner', '')
+    name = (H.bot(c, bot) or {}).get('display_name') or bot
+    return tried(c, bot, update, org, who.actor, name, owner=who.role == 'owner')
 
 
 def plain_change(name, before, result):
@@ -366,6 +408,11 @@ def plain_change(name, before, result):
     lines = ['; '.join(changed)] if changed else []
     if gained:
         lines.append('gets ' + _and(gained))
+    if result.get('workflows_started'):
+        lines.append('may run workflows in ' + _and(_short(n) for n in result['workflows_started'])
+                     + ": it can start CI there, and CI uses that repository's secrets")
+    if result.get('product_creation_started'):
+        lines.append('may create product repositories again')
     if lost:
         lines.append('loses access to ' + _and(lost))
     if result.get('workflows_stopped'):
@@ -673,7 +720,7 @@ def install(app, store, service):
         with store.read() as c:
             validate_identity(c, who)
         if who.role not in ('human', 'owner') or (change and who.role != 'owner' and not app.state.auth.bot_admin(who)):
-            raise Problem('forbidden', 'Only an owner or admin changes repository access' if change else 'A teammate may read repositories', 403)
+            raise Problem('forbidden', 'Only the owner or an admin changes repository access' if change else 'A teammate may read repositories', 403)
         return who
 
     def listing():
@@ -753,25 +800,37 @@ def install(app, store, service):
                                   owner=who.role == 'owner')
             # A bot's turn acting for a person (BotOps, the Assistant) may give another bot access with their rights, but
             # taking any away is the person's own call: BotOps once set two bots to own, and their product repositories
-            # stopped applying with nobody asked.
+            # stopped applying with nobody asked. Letting a bot run workflows, or turning Create product repositories
+            # back on, is the person's own click too: BotOps puts it on a Confirm card, which runs as their own session.
+            # The change is tried as that click would make it first, so what their click could not do (no write
+            # access, an admin turning product repositories on) is refused now rather than put on a card.
             before = access(c, bot, org)
             c.execute('SAVEPOINT repo_narrowing')
-            result = set_access(c, bot, body, org, who.actor, team_list=True, own_click=False)
-            if not result['stopped'] and not result.get('creation_stopped') and not result.get('workflows_stopped') \
-                    and not result.get('product_creation_stopped'):
+            try:
+                result = {**set_access(c, bot, body, org, who.actor, team_list=True, owner=who.role == 'owner'),
+                          **started(before, access(c, bot, org))}
+            except Problem:
+                c.execute('ROLLBACK TO repo_narrowing')
+                c.execute('RELEASE repo_narrowing')
+                raise
+            gains = result.get('workflows_started') or result.get('product_creation_started')
+            if not gains and not result['stopped'] and not result.get('creation_stopped') \
+                    and not result.get('workflows_stopped') and not result.get('product_creation_stopped'):
                 c.execute('RELEASE repo_narrowing')
                 return result
             c.execute('ROLLBACK TO repo_narrowing')
             c.execute('RELEASE repo_narrowing')
             name = (H.bot(c, bot) or {}).get('display_name') or bot
-            lost = describe_stopped(result)
             propose = getattr(app.state, 'botops_propose', None)
             if who.via == 'botops' and propose:
                 plain = plain_change(name, before, result)
                 return propose(c, who, 'PUT', '/api/v2/bots/' + bot + '/repositories', body.model_dump(exclude_none=True),
                                plain[:300], what=plain)
-            raise Problem('forbidden', 'This takes ' + lost + ' away from ' + name + '; a person who manages it makes '
-                          'that change in Settings > Repositories', 403)
+            if gains:
+                raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows or create product '
+                              'repositories, themselves in Settings > Repositories', 403)
+            raise Problem('forbidden', 'This takes ' + describe_stopped(result) + ' away from ' + name + '; a person '
+                          'who manages it makes that change in Settings > Repositories', 403)
 
     def computer(request):
         who = request.state.identity
