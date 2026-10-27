@@ -5137,7 +5137,7 @@ def is_comment(msg):
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
-            and not (set(refs) - {"task", "comment", "quiet", "via", "rule"}))
+            and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate"}))
 
 
 
@@ -5419,6 +5419,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
+        labels.insert(0, "incident")
     if qa is False:
         labels = [key for key in labels if key != "qa"]
     author_qa = qa if qa is not None else True if "qa" in labels else None

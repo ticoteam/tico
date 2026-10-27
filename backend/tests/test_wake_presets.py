@@ -394,10 +394,12 @@ def test_a_digest_turn_is_measured_from_each_event_and_split_over_its_tickets(ap
 
 
 def stale_comments(api, task, n):
-    """Tico's reminders left as comments on the task: news no rule wakes for, so a note that starts no job."""
+    """Tico's reminders left as comments on the task: news no rule wakes for, so a note that starts no job.
+    A stale check that flags the owner's task wakes it at once instead (Dev 543, in test_urgent_news.py), so
+    these reminders carry no stale-check flag."""
     with api.app.state.store.transaction() as c:
         for i in range(n):
-            H.task_comment(c, H.KEEPER, task["id"], f"Still waiting on review {i}.", extra_refs={"stale_check": "s1"})
+            H.task_comment(c, H.KEEPER, task["id"], f"Still waiting on review {i}.")
 
 
 def finished_requests(api, task, n):

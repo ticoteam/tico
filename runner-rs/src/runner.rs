@@ -57,6 +57,9 @@ pub struct Runner {
     worktree_stamp: AtomicBool,
     /// The server accepts short start reservations; claims opt in only after its heartbeat says so.
     start_places: AtomicBool,
+    /// A claim whose answer never came back: key, body and first send. The next claim sends it again, so a job the
+    /// server leased meanwhile is handed over instead of stranded until its lease runs out (Dev 612).
+    unanswered_claim: Mutex<Option<(String, Value, Instant)>>,
     /// The server takes runtimes' `credential_source` (its heartbeat reply said so); until then it is left out.
     credential_source: AtomicBool,
     /// The server takes the signed-in account and the 5-hour window (its heartbeat reply said so); until then
@@ -146,6 +149,7 @@ impl Runner {
             worktrees,
             worktree_stamp: AtomicBool::new(false),
             start_places: AtomicBool::new(false),
+            unanswered_claim: Mutex::new(None),
             credential_source: AtomicBool::new(false),
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
@@ -551,7 +555,7 @@ impl Runner {
             // Lanes: a bot with a task turn running here can still take its other tasks' turns.
             let mut body = json!({"next_run": true, "busy_bots": maintaining, "busy_lanes": self.lanes.busy_lanes()});
             if self.start_places.load(Ordering::SeqCst) { body["start_places"] = json!(true); }
-            match self.client.post("jobs/claim", &body, None).await {
+            match self.claim_again_or(body).await {
                 Err(e) if e.status == 422 => {
                     if e.detail.contains("start_places") { self.start_places.store(false, Ordering::SeqCst); }
                     else { crate::lanes::hold_back("busy_lanes"); }
@@ -564,6 +568,19 @@ impl Runner {
         let mut bots: Vec<String> = active.iter().filter_map(|aid| self.state_bot(aid)).chain(maintaining).collect::<HashSet<_>>().into_iter().collect();
         bots.sort();
         self.client.post("jobs/claim", &json!({"next_run": true, "busy_bots": bots}), None).await
+    }
+
+    /// Sends this claim, or first the one whose answer was lost: the same key and body, which the server answers from
+    /// its record if it leased a job (store.py is_poll). A slow server took 20-60 s per claim on Oct 27 against this
+    /// client's 10 s timeout, and every claim it finished after the runner gave up stranded a lease.
+    async fn claim_again_or(&self, body: Value) -> Result<Value, ApiError> {
+        let pending = self.unanswered_claim.lock().unwrap().take().filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
+        let (key, body, at) = pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
+        let result = self.client.post("jobs/claim", &body, Some(&key)).await;
+        if matches!(&result, Err(e) if e.retryable) {
+            *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
+        }
+        result
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
@@ -601,6 +618,9 @@ pub fn drains_on_stop() -> bool {
 }
 
 /// A restart under way rides on the heartbeat (an older server that refuses it gets it held back, lanes.rs ROOT_FIELDS).
+/// How long a lost claim answer is asked for again: past a lease, any job it leased has expired back to the queue.
+const UNANSWERED_CLAIM_REPLAY: Duration = Duration::from_secs(60);
+
 fn restart_blocks_claims(asked: Option<Instant>, now: Instant, drain: bool) -> bool {
     asked.is_some_and(|at| drain || now.saturating_duration_since(at) >= Duration::from_secs(20 * 60))
 }
@@ -1098,6 +1118,34 @@ mod tests {
         assert!(requests[1].contains("\"start_places\":true"));
         assert!(requests[2].contains("start_places") && !requests[3].contains("start_places"));
         assert!(!runner.start_places.load(Ordering::SeqCst));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_answer_was_lost_is_sent_again_with_its_key() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (503, r#"{"error":{"code":"unavailable","detail":"busy"}}"#),
+            (200, r#"{"attempt":{"id":"a-late","bot":"ops"}}"#),
+            (200, r#"{"attempt":null}"#),
+        ]).await;
+        let dir = std::env::temp_dir().join(format!("tico-lost-claim-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url":url, "token":"synthetic", "runner_id":"r1", "projects_dir":dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let runner = Runner::new(config.clone(), Client::new(&config.url(), &config.token(), 5, 0).unwrap(), State::open(&dir.join("state")).unwrap());
+        assert!(runner.claim_next().await.is_err());
+        runner.start_places.store(true, Ordering::SeqCst);             // the next claim's own body differs
+        let claimed = runner.claim_next().await.unwrap();
+        assert_eq!(claimed["attempt"]["id"], "a-late");
+        runner.claim_next().await.unwrap();
+        let requests = seen.lock().unwrap();
+        let key = |r: &str| r.lines().find_map(|l| l.split_once(':').filter(|(k, _)| k.eq_ignore_ascii_case("idempotency-key")).map(|(_, v)| v.trim().to_string()));
+        let body = |r: &str| r.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+        assert_eq!(key(&requests[0]), key(&requests[1]), "the lost claim is asked again under its own key");
+        assert_eq!(body(&requests[0]), body(&requests[1]), "with the body the key was first sent with");
+        assert_ne!(key(&requests[1]), key(&requests[2]), "an answered claim is not repeated");
+        assert!(requests[2].contains("start_places"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

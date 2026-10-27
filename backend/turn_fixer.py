@@ -218,7 +218,8 @@ def tend(c, settings, owner_id='', freed=0):
                         c, H.KEEPER, f"Company turns incident {incident['id'][:8]}: what the turn fixer could not fix",
                         f"The company has been at or over its warning level since {incident['opened_at']} and the turn "
                         f"fixer freed every start it could prove dead.\n\n{found['text']}\n\nFind and fix what keeps "
-                        "turns busy; Settings > Health shows the finding as it changes.", H.bot_actor(helper))
+                        "turns busy; Settings > Health shows the finding as it changes.", H.bot_actor(helper),
+                        labels=["incident"])
                     incident['task_id'], incident['handed_to'] = task['id'], helper
                 except H.Refused as exc:
                     incident['handed_to'] = ''

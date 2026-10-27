@@ -95,7 +95,8 @@ HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW
  UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs_json,'$.wake_batch')
    ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
    WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
-   AND m.from_actor='{H.KEEPER}' AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
+   AND m.from_actor='{H.KEEPER}' AND coalesce(json_extract(m.refs_json,'$.wake_immediate'),0)<>1
+   AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
  UPDATE jobs SET state='cancelled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
    AND ({_DUPLICATE});
 END"""
