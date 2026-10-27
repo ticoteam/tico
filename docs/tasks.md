@@ -261,9 +261,18 @@ once the question is answered, declined or closed, the next one on the topic ope
 the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
 letters and digits in any script, case folded; one with none is refused.
 
-The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
-or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
-the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
+The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links,
+tool names or error output. A pull request may be named, in exactly the form `PR #1555`; a bare `#1555` is refused like
+any other reference number. Without a plain ask the update is refused, saying what failed and what to do now. An ask
+refused only for its length or sentence count comes back with a rewrite: its one request and the sentence saying what
+happens after, which passes as it is. Retry once with it and put the rest in a comment (or, for a task given to a
+person, below it in the body), so nothing is lost. When no shorter wording keeps the same decision (it asks two
+things, including indirect or conditional requests, asks nothing, or the request alone is too long or not plain),
+the refusal says exactly what to change instead. A second request such as "And sign the contract" needs repair;
+an outcome such as "If yes, I'll sign it, send it and close the task" stays together. An affirmative "If yes" takes
+priority over a negative branch such as "If you do not approve" or "If you agree not to merge";
+nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
+A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
 person on it: its guest").

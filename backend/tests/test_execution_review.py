@@ -649,6 +649,107 @@ def test_a_model_at_capacity_after_a_tool_is_saved_for_review_not_replayed(api, 
     assert claim(api, machine) is None
 
 
+def later():
+    """Times for a test's turns from just after its message was written, so the message never reads as a person's
+    after a limit (person_wrote_since), and within its first claim's start reservation."""
+    from backend.store import H
+    base = H.shift(H.now(), seconds=5)
+    return lambda seconds: H.shift(base, seconds=seconds)
+
+
+def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=True, thread='capacity-thread'):
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': thread}, machine['token'])
+    events = [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'send_email', 'text': 'Sent'}}] if acted else []
+    events.append({'seq': len(events) + 1, 'kind': 'error',
+                   'payload': {'error': 'Selected model is at capacity. Please try a different model.', 'limit': True}})
+    post(api, f"attempts/{attempt['id']}/events", {'events': events}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'failed', 'last_seq': len(events), 'text': '',
+                                                     'limited': not acted, 'continues': continues}, machine['token'])
+
+
+def claim_at(api, monkeypatch, machine, at, continues=True):
+    """A claim at `at` by a runner that does (`continues`) or does not advertise capacity continuation."""
+    from backend.store import H
+    monkeypatch.setattr(H, 'now', lambda: at)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (H.now(),))
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {'ops': True},
+                                    "capabilities": ['capacity_continue_v1'] if continues else []}, token=machine['token'])
+    return claim(api, machine)
+
+
+@pytest.mark.parametrize('continuation_acted', [False, True])
+def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, monkeypatch, continuation_acted):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []                  # not held for a person
+    assert claim_at(api, monkeypatch, machine, at(60)) is None   # the capacity hold
+    following = claim_at(api, monkeypatch, machine, at(121))
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
+    assert following['message']['body'].endswith(execution.CONTINUE_NOTE)
+    # A second capacity refusal exhausts the one continuation, whether or not it ran another tool.
+    capacity_turn(api, monkeypatch, machine, following, at(180), acted=continuation_acted,
+                  continues=continuation_acted)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.H.status(c, 'ops')['state'] == 'crashed'
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert claim_at(api, monkeypatch, machine, at(600)) is None
+
+
+def test_a_capacity_continuation_with_a_missing_session_is_held_without_a_silent_retry(api, monkeypatch):
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    following = claim_at(api, monkeypatch, machine, at(121))
+    post(api, f"attempts/{following['id']}/started", {'thread_id': 'capacity-thread'}, machine['token'])
+    post(api, f"attempts/{following['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'error', 'payload': {'error': 'No conversation found with session ID: capacity-thread'}}
+    ]}, machine['token'])
+    post(api, f"attempts/{following['id']}/complete", {'outcome': 'failed', 'last_seq': 1, 'text': ''}, machine['token'])
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert claim_at(api, monkeypatch, machine, at(600)) is None
+
+
+def test_a_runner_that_cannot_continue_a_thread_is_never_handed_the_continuation(api, monkeypatch):
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0))
+    # A runner from before capacity continuation would ignore `continue_thread` and start the job on a fresh thread.
+    assert claim_at(api, monkeypatch, machine, at(121), continues=False) is None
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
+    following = claim_at(api, monkeypatch, machine, at(130))
+    assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
+
+
+def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_moves_to_a_fallback(api, monkeypatch):
+    from backend import execution
+    machine, message, attempt = setup_attempt(api)
+    at = later()
+    capacity_turn(api, monkeypatch, machine, attempt, at(0), continues=False)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
+        assert execution.capacity_continuation(c, attempt['job_id']) is None
+    # A job that continues a thread waits out its own login's hold even where a fallback is ready.
+    monkeypatch.setattr(execution, 'primary_hold', lambda *a, **k: 'held')
+    monkeypatch.setattr(execution, 'fallback_choice', lambda *a, **k: ('', 'claude'))
+    with api.app.state.store.transaction() as c:
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) is None
+        c.execute("UPDATE attempts SET thread_id='kept',result_json=json_set(result_json,'$.capacity_continue',json('true')) "
+                  "WHERE id=?", (attempt['id'],))
+        assert execution.capacity_continuation(c, attempt['job_id']) == 'kept'
+        assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) == 'held'
+
+
 def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(api):
     from backend.store import H
     machine, message, attempt = setup_attempt(api)

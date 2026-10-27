@@ -75,7 +75,7 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Review 1 | review | Builder | Reviewer 1 comments |
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
 | Review 2 | review | Builder | Reviewer 2 comments on the updated change (skipped for small changes) |
-| Review 2 Fixes | doing | Builder | Builder acts on the feedback, then merges |
+| Review 2 Fixes | doing | Builder | Builder acts on the feedback, then moves the ticket to In QA; the merge follows QA's pass |
 | In QA | review | Builder | QA runs the acceptance tests |
 | QA Fixes | doing | QA | A test failed; the Builder fixes it and moves the ticket back to In QA |
 | Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake |

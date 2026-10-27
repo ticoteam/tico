@@ -35,6 +35,8 @@ def hq(api, monkeypatch):
     from backend import gateway_connection
     # Connect asks for the Gateway key on a thread; the Gateway tests below tick it themselves.
     monkeypatch.setattr(gateway_connection, "check_soon", lambda *args, **kwargs: fake.gateway_soon.append(args))
+    # A kept key re-checks on a thread that may tick too: racing the test's own ticks, it took the lock or HQ's answer.
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
 
     def handle(request):
         fake.seen.append(request)

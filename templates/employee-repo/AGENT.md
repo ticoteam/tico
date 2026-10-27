@@ -100,8 +100,10 @@ paragraph of its body is the ask and the rest is details.
 
 Write the ask the way you would to a busy boss: one or two plain sentences saying what you need from
 them and what happens after, at most 40 words, with no task, commit or message ids, hashes, file paths,
-`s3://` links or tool and field names. Tico refuses an ask that is missing, longer or full of these, and
-the refusal says what to fix; your working notes, files and links go in a comment or further down the body.
+`s3://` links, tool and field names or error output (a pull request may be named as `PR #1555`; a bare `#1555`
+is refused). Tico refuses an ask that is missing, longer or full of these, and the refusal says what to do in
+the same turn: a refusal for length carries a shorter ask to retry once with, or the exact fix when no shorter
+wording keeps the decision. Your working notes, files and links go in a comment or further down the body.
 - Good: "Approve the video tool trial for Thursday? If yes, I'll send the invite."
 - Good: "Pick a launch date for the price page: Oct 20 or Oct 27. I'll book the post once you choose."
 - Bad: "Waiting on the owner re db14c907 / reports/2026-10-14-trial.md"

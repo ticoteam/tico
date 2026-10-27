@@ -5271,12 +5271,15 @@ def create_app(settings=None):
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
+        # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
+        # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
                                                           "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
-                                                          "attempt_thread": True, "runner_drain": True}}
+                                                          "attempt_thread": True, "runner_drain": True,
+                                                          "capacity_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):
@@ -6333,13 +6336,14 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/renew")
     def renew(request: Request, aid: str, body: M.Empty):
-        if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
-            with store.read_transaction() as c:
-                validate_identity(c, request.state.identity)
-                fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
-                if fresh is not None:
-                    return fresh
-        return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid))
+        with execution.calling(request.state.identity, aid) as arrived:
+            if 0 < len(request.headers.get("idempotency-key", "")) <= 200:
+                with store.read_transaction() as c:
+                    validate_identity(c, request.state.identity)
+                    fresh = execution.renew(c, request.state.identity, aid, if_fresh=True)
+                    if fresh is not None:
+                        return fresh
+            return mutate(request, body, lambda c: execution.renew(c, request.state.identity, aid, arrived=arrived))
 
     @app.post("/api/v2/attempts/{aid}/start-place")
     def start_place(request: Request, aid: str, body: M.StartPlace):
@@ -6355,12 +6359,13 @@ def create_app(settings=None):
 
     @app.post("/api/v2/attempts/{aid}/events")
     def events(request: Request, aid: str, body: M.EventBatch):
-        body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
-        # Warm neutral provenance in a read snapshot. The transaction checks current
-        # permissions again, and only reuses this graph while its source clock matches.
-        with store.read_transaction() as c:
-            execution.attempt(c, request.state.identity, aid, active=False)
-        return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
+        with execution.calling(request.state.identity, aid):
+            body = scrub_attempt(aid, body)          # a secret set in this run never reaches the record
+            # Warm neutral provenance in a read snapshot. The transaction checks current
+            # permissions again, and only reuses this graph while its source clock matches.
+            with store.read_transaction() as c:
+                execution.attempt(c, request.state.identity, aid, active=False)
+            return mutate(request, body, lambda c: execution.events(c, request.state.identity, aid, body))
 
     @app.post("/api/v2/attempts/{aid}/capture")
     def keep_capture(request: Request, aid: str, body: M.StreamCapture):

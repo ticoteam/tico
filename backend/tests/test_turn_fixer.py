@@ -146,6 +146,8 @@ def test_one_finding_per_incident_one_botops_task_and_owner_notice_only_when_due
     fix(api)
     fix(api)
     second = incident()
+    with store.read() as c:
+        assert 'incident' in H.task_labels(H.task(c, second['task_id']))
     assert second['id'] == first['id'] and second['finding']['updated_at'] > found['updated_at']
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:botops' AND title LIKE 'Company turns incident%'"

@@ -1594,6 +1594,11 @@ LINT_HEX_ID = re.compile(r"(?<![\w/.-])(?=[0-9a-f-]*\d)(?=[0-9a-f-]*[a-f])"
 LINT_CURRENCY = "$£€¥"
 # A year after a few letters (FY2026, CY2025, ES2022) or a standard's number (ISO27001) names a thing, not a record.
 LINT_NAMED_NUMBER = re.compile(r"[A-Z]{1,4}-?(?:19|20)\d{2}|ISO-?\d+")
+# A pull request is public and a person can look it up, so a line put in front of them may name one, in exactly the
+# form "PR #1555". A bare "#1555" is still a reference number, also where it ends a sentence or follows a word
+# ("Merge #1555.", "PR#1555", "#1555/files").
+LINT_PR_REF = re.compile(r"(?<![\w#/.-])PR #\d+(?![\w#/-]|\.\w)")
+LINT_BARE_REF = re.compile(r"(?<![&#/.-])#\d{3,}(?!\w)")
 LINT_WAIT_WORDS = 40
 
 
@@ -1605,10 +1610,13 @@ def lint_waiting_note(note, person, asked=False):
     if not text:
         return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
     problems = []
-    # An amount ("$250000") is not a reference number. Only here: a title keeps LINT_IDENT as it is.
-    m = LINT_HEX_ID.search(text) or next((i for i in LINT_IDENT.finditer(text)
-                                          if not (i.start() and text[i.start() - 1] in LINT_CURRENCY)
-                                          and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None)
+    # An amount ("$250000") is not a reference number, nor is a pull request named "PR #1555". Only here: a title
+    # keeps LINT_IDENT as it is.
+    unref = LINT_PR_REF.sub("PR", text)
+    m = LINT_HEX_ID.search(unref) or next((i for i in LINT_IDENT.finditer(unref)
+                                           if not (i.start() and unref[i.start() - 1] in LINT_CURRENCY)
+                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None) \
+        or LINT_BARE_REF.search(unref)
     if m:
         problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
     n = len(text.split())
@@ -1642,14 +1650,19 @@ LINT_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[\"'(\[A-Z0-9])")
 LINT_ABBREV = re.compile(r"(?:\b(?:[A-Za-z]\.){2,}|\b(?:Mr|Mrs|Ms|Dr|Prof|St|vs|etc|Inc|Ltd|Co|Jr|Sr|No|approx|e\.g|i\.e|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.)$")
 
 
-def lint_sentences(text):
-    """How many sentences an ask has, not counting a stop after an abbreviation or initials as an end."""
+def ask_sentences(text):
+    """An ask's sentences, a stop after an abbreviation or initials not counting as an end."""
     parts, start = [], 0
     for m in LINT_SENTENCE_END.finditer(text):
         if not LINT_ABBREV.search(text[start:m.start()]):
             parts.append(text[start:m.start()])
             start = m.end()
-    return len([s for s in [*parts, text[start:]] if s.strip()])
+    return [" ".join(s.split()) for s in [*parts, text[start:]] if s.strip()]
+
+
+def lint_sentences(text):
+    """How many sentences an ask has, not counting a stop after an abbreviation or initials as an end."""
+    return len(ask_sentences(text))
 
 
 def lint_person_ask(text):
@@ -1668,6 +1681,85 @@ def lint_person_ask(text):
     return problems + lint_plain(text)
 
 
+# What a too-long ask is cut down to: the one sentence that asks for something, and the one after it that says what
+# happens then ("If yes, I'll ...", "Then ...", "I will ..."). The rest is the bot's context and goes under Details.
+# A sentence that answers the request ("If yes, ...") is the outcome over one that only opens like one ("Then the
+# runner failed."), wherever it comes after the request.
+LINT_IF_YES = re.compile(r"if (?:yes|so|approved|you (?:agree|approve|do|say yes))\b", re.I)
+# A matching opener can still decline the request ("If you do not approve", "If you agree not to merge").
+# Inspect only the condition: a negation in what the bot does afterward does not change the person's answer.
+LINT_NEGATIVE_CONDITION = re.compile(r"\b(?:no|not|never)\b|\b\w+n['’]t\b", re.I)
+LINT_OUTCOME = re.compile(rf"(?:{LINT_IF_YES.pattern}|if (?:not|no)\b|then\b|once\b"
+                          r"|after (?:that|you|it)\b|i(?:'ll|\s+will|\s+can|\s+then)\b|we(?:'ll|\s+will)\b"
+                          r"|th(?:at|is) (?:lets|unblocks|means)\b)", re.I)
+LINT_REQUEST = re.compile(r"\b(?:please|(?:need|want|would like) you to|you (?:must|should|need to|have to))\b", re.I)
+# Words that open a condition or a time ("If yes", "Once approved", "After you approve"): the clause after one leads.
+LINT_LEAD_IN = {"if", "once", "after", "when", "whenever", "before", "as", "unless", "until", "since", "because",
+                "while", "assuming", "given"}
+
+
+def _asks_for_something(sentence):
+    """A question, an indirect request, or an imperative clause, including one after a condition."""
+    if sentence.rstrip("\"')] ").endswith("?"):
+        return True
+    # An outcome opener does not make the rest of its sentence safe to discard: "Once approved, please sign ..."
+    # still asks for a second decision. Treat possible requests conservatively rather than silently losing them.
+    if LINT_REQUEST.search(sentence):
+        return True
+
+    def first_word(clause):
+        clause = re.sub(r"^(?:(?:and|please|also|then)\s+)+", "", clause.strip(), flags=re.I)
+        return re.split(r"[\s,;:]+", clause, 1)[0].strip("\"'*_()").lower()
+
+    if not LINT_OUTCOME.match(sentence):
+        return any(first_word(clause) in LINT_VERBS for clause in re.split(r"[,;]\s*", sentence))
+    # An outcome lists what happens ("If yes, I'll sign it, send it and close this task."), so only the clause that
+    # leads each part, past its condition, can tell the person to do something ("Once approved, sign the contract.").
+    for part in sentence.split(";"):
+        for clause in part.split(","):
+            word = first_word(clause)
+            if word in LINT_VERBS:
+                return True
+            if word not in LINT_LEAD_IN:
+                break
+    return False
+
+
+def person_ask_rewrite(text):
+    """For an ask too long or with too many sentences: (rewrite, "") where the rewrite keeps its one request and what
+    happens after, in one or two plain sentences of at most LINT_ASK_WORDS words, or ("", repair) saying exactly what
+    to change when no shorter wording keeps the same decision. Deterministic, like lint_person_ask: the bot retries
+    once with the rewrite and puts the other sentences under Details, so nothing is lost or decided for it."""
+    sentences = ask_sentences(str(text or "").strip())
+    # Every question and every request counts: an ask that asks one thing and requests another is two decisions,
+    # and keeping only one of them would change what the person is asked.
+    asks = [i for i, s in enumerate(sentences) if _asks_for_something(s)]
+    if not asks:
+        return "", ("none of its sentences asks for anything: open it with the one question or request, "
+                    "then say what happens after")
+    if len(asks) > 1:
+        quoted = "; ".join(f'"{sentences[i]}"' for i in asks)
+        return "", (f"it asks {len(asks)} things ({quoted}): keep the one decision this ask is for in one sentence, "
+                    "ask any other separately, and put the reasons in the details")
+    i = asks[0]
+    after = [s for s in sentences[i + 1:] if LINT_OUTCOME.match(s)]
+    outcome = next((s for s in after if LINT_IF_YES.match(s)
+                    and not LINT_NEGATIVE_CONDITION.search(re.split(r"[,;:]", s, 1)[0])),
+                   after[0] if after else None)
+    kept = [sentences[i], *([outcome] if outcome else [])]
+    rewrite = " ".join(kept)
+    n = len(rewrite.split())
+    if n > LINT_ASK_WORDS:
+        what = "its request and what happens after are" if outcome else "its request alone is"
+        return "", (f'{what} {n} words: shorten "{rewrite}" to at most {LINT_ASK_WORDS} words, keeping what you '
+                    "need and what happens after, and put the reasons in the details")
+    unclear = lint_plain(rewrite)
+    if unclear:
+        return "", (f'its request "{rewrite}" {"; ".join(unclear)}: say that in plain words and put the reference '
+                    "in the details")
+    return rewrite, ""
+
+
 # Error output a bot pasted: a traceback, an exception or error class name (bare or with its message), an exit code, an
 # HTTP error status. "an error in the invoice" is prose; "TypeError", "ValueError: bad date" and "HTTP 502" are the
 # bot's own record, so they go under Details.
@@ -1678,17 +1770,18 @@ LINT_ERROR = re.compile(r"\bTraceback\b|(?-i:\b[A-Z]\w*(?:Error|Exception)\b)|(?
 
 def lint_plain(text):
     """What in `text` belongs under Details, not in front of a person, empty when nothing does: an s3:// link, an id
-    or hash, a file path, a tool or field name, or error output. The part of the ask rules (lint_person_ask,
+    or hash (a pull request named "PR #1555" is neither), a file path, a tool or field name, or error output. The part of the ask rules (lint_person_ask,
     lint_question) that holds for every line a card shows above Details."""
     text = str(text or "").strip()
     problems = []
     m = LINT_S3.search(text)
     if m:
         problems.append(f'has an s3:// link: "{m.group(0)}"')
-    plain = LINT_S3.sub(" ", re.sub(r"https?://\S+", " ", text))
+    plain = LINT_PR_REF.sub("PR", LINT_S3.sub(" ", re.sub(r"https?://\S+", " ", text)))
     m = LINT_HEX_ID.search(plain) or next((i for i in LINT_IDENT.finditer(plain)
                                            if not (i.start() and plain[i.start() - 1] in LINT_CURRENCY)
-                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None)
+                                           and not LINT_NAMED_NUMBER.fullmatch(i.group(0))), None) \
+        or LINT_BARE_REF.search(plain)
     if m:
         problems.append(f'has an id or hash: "{m.group(0)}"')
     m = LINT_PATH.search(plain)
@@ -1713,18 +1806,31 @@ def person_ask_of_body(body, title=""):
 
 
 def person_ask_refusal(person, text, where):
-    """What a refusal of this ask says, or "" when it passes: what failed, the rule and an example, so the bot fixes
-    it in one retry. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to them)."""
+    """What a refusal of this ask says, or "" when it passes: what failed, what to do about it in this same turn, the
+    rule and an example, so the bot fixes it in one retry. An ask refused for its length carries a rewrite to retry
+    with (person_ask_rewrite), or, when none keeps the decision, the exact repair: a blocker is never left unasked
+    for want of a shorter wording. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to
+    them)."""
+    text = str(text or "").strip()
     problems = lint_person_ask(text)
     if not problems:
         return ""
     name = actor_id(person)
     place = ("the waiting note (--note)" if where == "waiting"
              else "the first paragraph of the task body (--body)")
-    return (f"Your ask to {name} {'; '.join(problems)}. The rule: {place} is one or two plain sentences saying what "
-            f"you need from {name} and what happens after, at most {LINT_ASK_WORDS} words, with no ids, hashes, file "
-            f"paths, s3:// links, tool names or error output; put details in a comment or further down the body. "
-            f'Example: "{LINT_ASK_EXAMPLE}"')
+    fix = ""
+    if len(text.split()) > LINT_ASK_WORDS or lint_sentences(text) > 2:
+        rewrite, repair = person_ask_rewrite(text)
+        details = ("a comment on the task" if where == "waiting"
+                   else "the body under it, after a blank line")
+        fix = (f' Retry once with this ask, which keeps what you need and what happens after: "{rewrite}" Put the '
+               f"rest of your text in {details}, so nothing is lost." if rewrite else
+               f" No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. To fix "
+               f"it, {repair}; then retry once.")
+    return (f"Your ask to {name} {'; '.join(problems)}.{fix} The rule: {place} is one or two plain sentences saying "
+            f"what you need from {name} and what happens after, at most {LINT_ASK_WORDS} words, with no ids, hashes, "
+            f"file paths, s3:// links, tool names or error output (a pull request may be named as \"PR #<number>\"); "
+            f'put details in a comment or further down the body. Example: "{LINT_ASK_EXAMPLE}"')
 
 
 def require_person_ask(conn, actor, person, text, where):
@@ -5154,7 +5260,7 @@ def is_comment(msg):
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
-            and not (set(refs) - {"task", "comment", "quiet", "via", "rule"}))
+            and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate"}))
 
 
 
@@ -5436,6 +5542,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         refuse(conn, actor, "lint", "; ".join(plain), severity)
     plain = warnings + plain
     labels = _labels(labels)
+    if str(title).lstrip().lower().startswith("incident:") and "incident" not in labels:
+        labels.insert(0, "incident")
     if qa is False:
         labels = [key for key in labels if key != "qa"]
     author_qa = qa if qa is not None else True if "qa" in labels else None
@@ -6621,12 +6729,11 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
             if (waiting_for(conn, row) or not_yet_due(row, at)
                     or (bot(conn, actor_id(row["owner"])) or {}).get("state") != "active"):
                 continue
-            # A gate or worktree hold on an engineering ticket clears only through task_blocked reconciliation, which
-            # knows its real condition (fresh CI, no unlinked pushes), and a move Tico still retries clears when it is
-            # made; reopening either here would claim nothing is outstanding when something is. A gate hold on
-            # another board that no retry will clear is released here, or nothing ever would.
-            if row.get("blocked_kind") in ("gate", "worktree") and (
-                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at))):
+            # Worktree holds stay on every board: unlinked pushes are still outstanding. Engineering gate holds
+            # clear through task_blocked reconciliation, and a move Tico still retries clears when it is made.
+            # Only a gate hold on another board that no retry will clear is released here, or nothing ever would.
+            if (row.get("blocked_kind") == "worktree" or row.get("blocked_kind") == "gate" and (
+                    review_gate.engineering(conn, row) or move_retry.remembered(conn, row, parse_ts(at)))):
                 continue
             superseded = _has_table(conn, "schedule_occurrences") and _one(
                 conn, "SELECT 1 FROM schedule_occurrences o WHERE o.task_id=? AND EXISTS("

@@ -5,6 +5,7 @@ import re
 import secrets
 import sqlite3
 import threading
+from contextlib import contextmanager
 import time
 from datetime import timezone
 
@@ -78,6 +79,10 @@ ROOTS = "session_roots_v1"
 # it sets it in the task's session beside the turn's prompt. Any other runner is handed no task-room goal.
 TASK_GOALS = "task_goals_v1"
 
+# A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
+# other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
+CAPACITY_CONTINUE = "capacity_continue_v1"
+
 
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
@@ -126,6 +131,10 @@ def roots_on(runner):
 
 def task_goals_on(runner):
     return TASK_GOALS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+
+
+def capacity_continue_on(runner):
+    return CAPACITY_CONTINUE in set(H._json(runner["capabilities_json"], []) or []) if runner else False
 
 
 def session_task_id(c, bot, config, task_id, roots):
@@ -788,6 +797,21 @@ def limit_errors(c, attempt_id):
         (attempt_id,))]
 
 
+# Said to the turn that continues one the model's capacity stopped (capacity_continuation): its thread holds what it did.
+CONTINUE_NOTE = ("\n\nTico: the model was at capacity and stopped your previous turn on this request partway through. "
+                 "This turn continues that same session once the model is free again: carry on from where it stopped, "
+                 "and do not repeat anything it already did.")
+
+
+def capacity_continuation(c, job_id):
+    """The thread a job continues after the model's capacity stopped one of its turns once it had acted (complete
+    `continues`), or None. The job continues it once: a second such stop is held for review, and none of its later
+    turns starts a fresh thread or moves to a fallback, which could repeat what the stopped turn did."""
+    row = c.execute("SELECT thread_id FROM attempts WHERE job_id=? AND json_extract(result_json,'$.capacity_continue')=1 "
+                    "ORDER BY created DESC LIMIT 1", (job_id,)).fetchone()
+    return row[0] if row else None
+
+
 def last_limit(c, bot):
     """The bot's most recent attempt that ended on a usage limit."""
     # Another lane begun before the limit can finish afterwards without lifting the bot's hold.
@@ -1251,6 +1275,8 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx)
+    if why and job_id and capacity_continuation(c, job_id):
+        return why          # only its own thread, on its own login, continues it
     return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
 
 
@@ -1661,6 +1687,9 @@ class Execution:
         self.stall_lock = threading.Lock()
         self.stall_graces = []
         self.stall_seen = None
+        # Attempt id -> {call: (runner id, arrived)}: its runner's renewals and event batches that reached this
+        # process and have not landed, either still waiting for the write lock or failed on a busy database.
+        self.calls = {}
 
     def refuse_in_rehearsal(self, what="Runners"):
         """A rehearsal (TICO_REHEARSAL=1) is a copy of real data: a computer that connected would run bots against its
@@ -2032,6 +2061,52 @@ class Execution:
         with self.stall_lock:
             self.served_at = now
 
+    @contextmanager
+    def calling(self, who, aid):
+        """A runner's renewal or event batch for this attempt, from the moment it reached the server; yields that
+        time. On a slow server the call can wait for the write lock longer than the lease itself: v0.4.14 held it
+        for up to a minute and ended live turns "Computer lost" (Dev 612). Until the call lands, `expire` keeps the
+        lease, and `renew` judges the lease by the call's arrival. A refusal (not the runner's, or a lease really
+        lost) forgets it at once; a busy database's failure stays until the lease would have run out anyway."""
+        arrived = H.now()
+        if who.role != "runner" or not who.runner_id:
+            yield arrived
+            return
+        call = object()
+        with self.stall_lock:
+            if sum(map(len, self.calls.values())) >= 4096:
+                cutoff = H.shift(arrived, seconds=-self.store.settings.lease_seconds)
+                for other in list(self.calls):
+                    kept = {t: x for t, x in self.calls[other].items() if x[1] > cutoff}
+                    if kept:
+                        self.calls[other] = kept
+                    else:
+                        del self.calls[other]
+            self.calls.setdefault(aid, {})[call] = (who.runner_id, arrived)
+        try:
+            yield arrived
+        except Problem as e:
+            if not e.retryable:
+                self._landed(aid, call)
+            raise
+        else:
+            self._landed(aid, call)
+
+    def _landed(self, aid, call):
+        with self.stall_lock:
+            waiting = self.calls.get(aid, {})
+            waiting.pop(call, None)
+            if not waiting:
+                self.calls.pop(aid, None)
+
+    def still_calling(self, row, now):
+        """When the latest call from this attempt's own runner that has not landed arrived, if within one lease."""
+        cutoff = H.shift(now, seconds=-self.store.settings.lease_seconds)
+        with self.stall_lock:
+            times = [at for runner_id, at in self.calls.get(row["id"], {}).values()
+                     if runner_id == row["runner_id"] and at > cutoff]
+        return max(times) if times else None
+
     def expire(self, c, *, attempt_ids=None, limit=None):
         now = H.now()
         overdue = set(start_places.overdue(c))
@@ -2049,6 +2124,14 @@ class Execution:
         graces = self.stall_recovery(now) if any(row["id"] not in overdue for row in rows) else ()
         for row in rows:
             with isolated(c, "expire", row["id"]):
+                # Its runner's call arrived and waits for the lock: the lease lapsed on our side, not the runner's.
+                heard = None if row["id"] in overdue else self.still_calling(row, now)
+                if heard:
+                    until = H.shift(heard, seconds=self.store.settings.lease_seconds)
+                    c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
+                    H.event(c, H.KEEPER, "attempt.lease-held", row["id"],
+                            {"bot": row["bot"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until})
+                    continue
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
                 if grace and not row["already_graced"] and row["id"] not in overdue:
                     served_at, _, until = grace
@@ -2069,11 +2152,13 @@ class Execution:
                                  "WHERE j.attempt_id=? AND j.state IN ('leased','running','input')", (row["id"],)).fetchall()
                 # A lost lease may retry open work, but cannot undo Stop or resurrect a finished task.
                 # Inputs folded into a running turn have their own jobs: Stop applies only to its original request.
-                # A quarantine's Stop is not the person's choice to drop the request: its job goes back in the queue to
-                # run when the quarantine lifts, as it does when the runner hears that Stop (Dev 573).
+                # A quarantine's Stop is not the person's choice to drop the request: a run safe to repeat goes back in
+                # the queue to run when the quarantine lifts, as it does when the runner hears that Stop (Dev 573). Any
+                # other run is held for review like a lost one: running it again could repeat an outside action.
                 benched = quarantine_stops.stopped_by(c, row)
+                held_back = bool(benched) and not quarantine_stops.requeues(c, row)
                 if benched:
-                    retry_state = state = "queued"
+                    retry_state = state = "uncertain" if held_back else "queued"
                 cancelled = {job["id"] for job in jobs if (row["stop_requested"] and job["id"] == row["job_id"] and not benched)
                              or job["task_status"] in ("done", "closed", "declined")}
                 if row["job_id"] in cancelled:
@@ -2115,7 +2200,7 @@ class Execution:
                     job = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
                                     (row["job_id"],)).fetchone()
                     if job:
-                        self.stopped(c, row, job["conversation_id"])
+                        self.stopped(c, row, job["conversation_id"], held=held_back)
                 elif state == "cancelled":
                     settle_status(c, row["bot"], "idle", "", claimed=row["created"])
                 elif row["state"] == "leased" and state == "queued":
@@ -2210,7 +2295,7 @@ class Execution:
     def candidate(self, c, who, body, runner, *, job_id=None, people_only=False):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
         message (start_places.from_person), on a computer that holds every other start."""
-        lanes, roots = lanes_on(runner), roots_on(runner)
+        lanes, roots, continues = lanes_on(runner), roots_on(runner), capacity_continue_on(runner)
         # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
         # without lanes runs one turn per bot, so any active attempt takes the whole bot.
         busy = {(r["bot"], r["lane"]) for r in c.execute(
@@ -2282,6 +2367,8 @@ class Execution:
                 privacy.snapshot(c)
                 part = candidates[i:i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
+            if not continues and capacity_continuation(c, row["id"]):
+                continue        # left queued for a runner that continues its thread: this one would start it afresh
             if job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live) is None and not login_refusal(
                     c, self.store.settings, runner["id"], row["bot"], followed[row["bot"]], row["id"], subscription_context):
                 return row
@@ -2663,6 +2750,11 @@ class Execution:
             msg = {**msg, 'body':msg['body'] + '\n\nOperator recovery instructions (' + recovery['actor'] + '):\n' + recovery['note']}
         if task and (recovery or released_notice):
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
+        # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
+        # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
+        continue_thread = capacity_continuation(c, row['id'])
+        if continue_thread:
+            msg = {**msg, 'body': msg['body'] + CONTINUE_NOTE}
         # Next-run tasks ride along with whatever woke the bot: one run, one prompt, each task
         # still its own task to mark done. Only a runner that puts them in its prompt gets them.
         # Any lane carries them: a bot whose turns are all tasks and routines never has a main-lane
@@ -2741,6 +2833,7 @@ class Execution:
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
                             "message": msg, "conversation": conv, "task": task,
+                            **({"continue_thread": continue_thread} if continue_thread else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                             "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot"]) if task else [],
                             "history": history, "principal": principal,
@@ -2759,10 +2852,11 @@ class Execution:
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
                             "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
 
-    def attempt(self, c, who, aid, active=True, final=False):
+    def attempt(self, c, who, aid, active=True, final=False, arrived=None):
         """`final` is a runner handing in the result of a turn it has finished. That result
         exists nowhere else, so a lapsed lease must not be grounds for refusing it: ownership
-        still decides, the clock does not."""
+        still decides, the clock does not. `arrived` is when a renewal reached the server: a
+        lease that was live then lapsed only while the renewal waited for the lock."""
         self.runner(c, who)
         self.record_contact(H.now())
         row = c.execute("SELECT a.*,x.runner_id AS assigned_runner,x.generation AS assigned_generation "
@@ -2785,7 +2879,8 @@ class Execution:
         place = c.execute("SELECT start_until FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
         if active and row["state"] == "leased" and place and place[0] and place[0] <= H.now():
             raise Problem("stale_lease", "Start reservation expired; this work returns to the queue", 409)
-        if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= H.now() or not current):
+        if active and (row["state"] not in ("leased", "running") or row["lease_until"] <= (arrived or H.now())
+                       or not current):
             raise Problem("stale_lease", "Execution ownership expired; stop this attempt", 409)
         return row
 
@@ -2956,12 +3051,14 @@ class Execution:
         return {"attempt_id": row["id"], "outcome": body.outcome, "message": None, "filed": True}
 
     @staticmethod
-    def stopped(c, row, conversation_id):
+    def stopped(c, row, conversation_id, held=False):
         """A turn a person stopped is over: the bot is idle, told quietly who stopped it, and gives up its worktree wait.
-        A turn a quarantine stopped says why and that its run is back in the queue (`quarantine_stops`)."""
+        A turn a quarantine stopped says why, and that its run is back in the queue or, `held`, held for review
+        (`quarantine_stops.requeues`)."""
         person = row["stop_requested"]
         benched = quarantine_stops.stopped_by(c, row)
-        said = f"{benched}. {quarantine_stops.REQUEUED}" if benched else f"Stopped by {stopper(c, person)}"
+        then = quarantine_stops.HELD if held else quarantine_stops.REQUEUED
+        said = f"{benched}. {then}" if benched else f"Stopped by {stopper(c, person)}"
         settle_status(c, row["bot"], "idle", "", claimed=row["created"])
         # Quiet: the bot reads it with the room next time; it does not start a run of its own. A quarantined bot's
         # full held queue withholds only this line.
@@ -2969,17 +3066,18 @@ class Execution:
                                              kind="notice", refs={"quiet": True, "stopped_by": person,
                                                                   "turn_id": row["id"]}))
         H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person,
-                                                            **({"quarantine": benched, "requeued": True} if benched else {})})
+                                                            **({"quarantine": benched, "requeued": not held}
+                                                               if benched else {})})
         # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
         from .worktree_waits import cancel_for_attempt
         cancel_for_attempt(c, row["id"], benched or f"Stopped by {stopper(c, person)}")
 
-    def renew(self, c, who, aid, *, if_fresh=False):
+    def renew(self, c, who, aid, *, if_fresh=False, arrived=None):
         if if_fresh:
             lease = c.execute("SELECT lease_until FROM attempts WHERE id=?", (aid,)).fetchone()
             if not lease or lease[0] < H.shift(H.now(), seconds=max(20, self.store.settings.lease_seconds * 2 / 3)):
                 return None
-        row = self.attempt(c, who, aid, active=not if_fresh)
+        row = self.attempt(c, who, aid, active=not if_fresh, arrived=arrived)
         now = H.now()
         seconds = self.store.settings.lease_seconds
         if if_fresh:
@@ -3412,8 +3510,10 @@ class Execution:
     def complete(self, c, who, aid, body):
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
-        # finished in the seconds before its runner heard stays on the run, and its job goes back in the queue with
-        # the rest of the turn's work, to run when the quarantine lifts (Dev 573).
+        # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
+        # rest of the turn's work, to run when the quarantine lifts, only when running it again repeats nothing
+        # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
+        # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
         if benched and body.outcome == "completed":
             body = body.model_copy(update={"outcome": "interrupted"})
@@ -3448,7 +3548,7 @@ class Execution:
             return self.hand_back(c, row, body)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
             filed = self.file_result(c, row, body)
-            if row["stop_requested"] and self.holds(c, who, row):
+            if row["stop_requested"] and not benched and self.holds(c, who, row):
                 # The Stop stands over the answer, and over a second run of the request too: the job ends as a
                 # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime
                 # never received go back in the queue, as they do for a Stop the runner heard.
@@ -3557,6 +3657,8 @@ class Execution:
         # interrupted or failed work, which may have acted, is held for review.
         # A turn a person stopped is over by their choice: nothing to retry and nothing to review.
         stopped = bool(row["stop_requested"]) and body.outcome != "completed" or skipped
+        # A quarantine's Stop is no choice to drop the work: what it held back waits for review, not cancelled.
+        held_back = bool(benched) and not quarantine_stops.requeues(c, row)
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
         # send starts the next run in a fresh session (backend/run_backoff.py).
         failure = run_backoff.classify(c, aid, body) if body.outcome == "failed" and not stopped else None
@@ -3574,10 +3676,23 @@ class Execution:
                 and all(login_holds.capacity(error) for error in errors))
         busy_acted = busy and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
                                         "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
-        if busy and body.limited:
+        # Unless the runner kept its thread (`continues`): then the job goes back in the queue, and after the capacity
+        # hold its next turn continues that thread, which knows what it did. Once only: a continuation the model's
+        # capacity stops again is held for review, even before it acts (capacity_continuation).
+        continuing = capacity_continuation(c, row["job_id"])
+        repeated_capacity = busy and bool(continuing)
+        continues = busy_acted and body.continues and bool(row["thread_id"]) and not continuing
+        if busy and (body.limited or continues):
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limit_source',json(?)) WHERE id=?",
                       (encode({"kind": login_holds.CAPACITY_KIND, "notice": errors[0][:300]}), aid))
-        limited = limited and not busy_acted
+        if continues:
+            # Recorded as the capacity limit it is, so the bot's cooldown (last_limit) holds the job for the wait.
+            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
+                      "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
+        limited = limited and not busy_acted or continues
+        if repeated_capacity:
+            limited = False
+            c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('false')) WHERE id=?", (aid,))
         # A limit its fallback could not take over is the limit's too (hop_failed): queued again to wait for the reset,
         # never held for a person, and recorded as a limit so the cooldown and the login's hold read it.
         hopped = (not limited and not stopped and not check
@@ -3610,7 +3725,8 @@ class Execution:
                 tico_code = gateway.run_code(tico_error)
         gateway_connection.forget(c, aid)
         silent = False
-        if body.outcome == "failed" and not limited and not retryable and not stopped:
+        # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
+        if body.outcome == "failed" and not limited and not retryable and not stopped and not continuing:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
@@ -3646,8 +3762,11 @@ class Execution:
         requeue = not rejected_acted if rejected else limited or retryable or silent or yielded or reset_wait
         if body.outcome == 'interrupted' and body.primary_held and body.fallback and not reset_wait:
             requeue = False  # a yield or limit flag cannot turn unknown fallback effects into a safe retry
+        if repeated_capacity:
+            requeue = False
         c.execute("UPDATE jobs SET state=? WHERE id=?",
-                  ("completed" if body.outcome == "completed" else "queued" if benched else "cancelled" if stopped
+                  ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
+                   else "cancelled" if stopped
                    else "queued" if requeue else "uncertain", row["job_id"]))
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
@@ -3680,7 +3799,8 @@ class Execution:
                                     (task_id, actor, row["started"] or row["created"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
             state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else
-                     "queued" if benched else "cancelled" if stopped else "queued" if requeue else "uncertain")
+                     "uncertain" if held_back else "queued" if benched else "cancelled" if stopped
+                     else "queued" if requeue else "uncertain")
             c.execute("UPDATE jobs SET state=?,attempt_id=CASE WHEN ? THEN NULL ELSE attempt_id END WHERE message_id=?",
                       (state, deferred, incoming["message_id"]))
         if body.outcome == "completed":
@@ -3788,7 +3908,7 @@ class Execution:
             settle_status(c, row["bot"], "idle", "", claimed=row["created"])
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot"], "job_id": row["job_id"]})
         elif stopped:
-            self.stopped(c, row, conv["id"])
+            self.stopped(c, row, conv["id"], held=held_back)
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's
@@ -3890,9 +4010,10 @@ class Execution:
                      "retry_after": retry, "provider_reset": bool(body.limit_resets_at),
                      **({"fallback_failed": body.fallback} if hopped else {}),
                      **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {})})
-        elif busy_acted:
+        elif busy_acted or repeated_capacity:
+            when = "again on its continued thread" if repeated_capacity else "after the run had acted"
             settle_status(c, row["bot"], "crashed", f"{runtime} {login_holds.CAPACITY_KIND} at {H.now()[11:16]} "
-                          "after the run had acted; this run is saved for review", claimed=row["created"], stop=aid)
+                          f"{when}; this run is saved for review", claimed=row["created"], stop=aid)
         elif rejected and any(gateway.key_refused(error) for error in limit_errors(c, aid)):
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
@@ -4350,7 +4471,9 @@ class Execution:
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss',
                                                'Task access was revoked.', H.KEEPER, action='job.auto_reconcile'))
                     continue
-                if row['stop_requested'] and row['id'] == row['attempt_job']:
+                # A quarantine's Stop is not a person's: its run is judged like any other lost run below.
+                if (row['stop_requested'] and row['id'] == row['attempt_job'] and not quarantine_stops.stopped_by(
+                        c, {'stop_requested': row['stop_requested'], 'id': row['attempt_id']})):
                     # A person pressed Stop and the computer never reported back: the request is over by their
                     # choice, as it would be had the runner heard it, so it is not resumed. A late answer is only
                     # filed. A message folded into the turn is not what they stopped and is judged as before.
