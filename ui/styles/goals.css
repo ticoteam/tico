@@ -227,6 +227,8 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 .gm-thread .bubble.you{border:0}
 .gm-thread .bubble.bot.reply{background:transparent;border-radius:0}
 .gm-thread [data-gm-live]{min-width:0}
+.gm-starters{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
+.gm-starters button{font-size:var(--t-sm)}
 .gm-form{min-width:0}
 .gm-form .ask{margin:0}
 .gm-form .p-chips:empty{display:none}

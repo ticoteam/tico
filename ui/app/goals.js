@@ -434,6 +434,7 @@ function goalsFollowRoster() {
 let GOAL_MANAGER_STOP = null;
 const GM = 'goal-manager';
 const GM_STATE = {paused: 'Paused', planned: 'Not set up', archived: 'Off', retired: 'Off', quarantined: 'Paused'};
+const GM_STARTERS = ['Set a goal', 'Fix my goals', 'Go through suggestions'];
 async function goalManagerMount(pageState) {
   GOAL_MANAGER_STOP?.();
   const host = $('#goal-manager-panel');
@@ -448,7 +449,8 @@ async function goalManagerMount(pageState) {
   const off = !bot ? 'Not set up' : GM_STATE[bot.status] || '';
   host.innerHTML = `<section class="rail-sec gm-info">
       <header class="gm-head"><h2>${esc(ceoBotName())}</h2>${off ? `<span class="pill">${esc(off)}</span>` : ''}<a href="#/bot/${GM}">Open bot</a></header>
-      <p class="gm-what">Keeps KPIs current and each goal green, yellow or red. Humans set the goals.</p></section>
+      <p class="gm-what">Keeps KPIs current and each goal green, yellow or red. ${meCeo()
+        ? 'Tell it what you want to achieve. It drafts the goal and saves it when you say yes.' : 'Humans set the goals.'}</p></section>
     ${bot ? `<section class="rail-sec" aria-labelledby="gm-routines-h"><h3 class="rail-h" id="gm-routines-h">Routines</h3>
       <ul class="gm-routines" data-gm-routines><li class="muted">Loading…</li></ul><p class="gm-last" data-gm-result></p></section>` : ''}
     <section class="rail-sec gm-chat" data-gm-chat aria-labelledby="gm-chat-h"><h3 class="rail-h" id="gm-chat-h">Chat</h3></section>`;
@@ -495,7 +497,9 @@ async function goalManagerMount(pageState) {
       if (live) rows.push(`<div data-gm-live>${v2MessageHTML({from_actor:'bot:' + GM, body:live})}</div>`);
       else if (noProvider()) rows.push('<p class="muted" data-gm-provider>The ' + esc(ceoBotName()) + ' needs an AI provider. <a href="#/settings" data-gs-tab="models">Settings &gt; Computers</a></p>');
       else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
-      const html = rows.join('') || '<p class="muted">Ask the ' + esc(ceoBotName()) + ' about your goals.</p>';
+      // An empty chat offers three starters; a tap sends its words as the owner's message.
+      const html = rows.join('') || `<div class="gm-starters">${GM_STARTERS.map(words =>
+        `<button type="button" class="ghost" data-gm-starter>${esc(words)}</button>`).join('')}</div>`;
       if (html === rendered) return;
       // Keep an older message in view while new replies arrive (ui/app/stick-scroll.js).
       stickScroll(thread).update(() => {
@@ -552,8 +556,12 @@ async function goalManagerMount(pageState) {
       } catch (e) { fail(e.message); }
       finally { sending = P.sending = false; if (current()) pillButtons(P); }
     };
-    composer = makePill({mode:'chat', files:false, label:'Message to the ' + ceoBotName(), placeholder:'Ask it to change a goal…', send});
+    composer = makePill({mode:'chat', files:false, label:'Message to the ' + ceoBotName(), placeholder:'Set or fix a goal…', send});
     pq(composer, '.p-text').maxLength = 4000;
+    thread.addEventListener('click', event => {
+      const starter = event.target.closest('[data-gm-starter]');
+      if (starter) void send(composer, starter.textContent);
+    });
     chat.querySelector('.gm-form').append(composer.el);
     void (async () => {
       try {
