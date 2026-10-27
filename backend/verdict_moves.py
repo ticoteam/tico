@@ -434,15 +434,24 @@ def timeouts(c, at=None):
             if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('round_skipped','step_skipped') "
                          "AND ts>=? LIMIT 1", (ticket_id, entered[0])).fetchone():
                 continue        # skipped already: the merge, its builder's to do, is what it waits for
+            head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
+            # A pass at the head is a usable verdict: the round ends on it, waiting only for what comes after the
+            # check (green CI and the merge), and says so rather than that no verdict came (Dev 646).
+            last = next((t for t in reversed(_checks(c, ticket, step)) if _verdict(t)), None)
+            passed = bool(last and head and _verdict(last) in GOOD
+                          and head.startswith(str(last.get("verdict_head") or "-").lower()))
             for check in _checks(c, ticket, step):
                 if check["status"] in H.ACTIVE_STATUSES:
                     H.task_close(c, H.KEEPER, check["id"],
                                  note=f"Unanswered for {hours:g} h; Tico closed it and skipped this round.")
-            head = next((_head(p) for p in _prs(c, ticket) if _head(p)), "")
-            H._task_event(c, ticket_id, H.KEEPER, "round_skipped", None, f"{step['id']}:{head}",
-                          f"{step['name']}: no usable verdict in {hours:g} h")
-            out = _passed(c, H.task(c, ticket_id), step, f"{step['name']} had no usable verdict for {hours:g} h; "
-                                                         "Tico skipped the round")
+            if passed:
+                note = f"{step['name']}: {_verdict(last)} at head {head[:12]}; round closed after {hours:g} h"
+                why = f"{step['name']} gave {_verdict(last)} at head {head}"
+            else:
+                note = f"{step['name']}: no usable verdict in {hours:g} h"
+                why = f"{step['name']} had no usable verdict for {hours:g} h; Tico skipped the round"
+            H._task_event(c, ticket_id, H.KEEPER, "round_skipped", None, f"{step['id']}:{head}", note)
+            out = _passed(c, H.task(c, ticket_id), step, why)
             if out.get("handoff"):
                 H._wake(c, ticket, ticket["owner"], out["say"], at_step(c, ticket_id, {HANDOFF: out["handoff"]}))
             skipped.append(ticket_id)

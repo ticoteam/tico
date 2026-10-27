@@ -453,6 +453,12 @@ comments never wake it. A
 reviewer who pushes to a bot's PR remains a reviewer; only a pusher matching the PR author
 counts as the bot. New heads reset mergeability to Unknown, and conflicts wake once per head
 until a clean result clears the marker. Check suites are tracked separately by App.
+Checks left pending are read afresh from GitHub: by the background pass once a link has had no word for 10 minutes
+(at most once per link every 10 minutes), and when the task is opened. The fresh read rebuilds the head's checks from
+GitHub's current check runs, statuses and suites. A suite that has had no check run for 10 minutes never started (an
+installed App's suite, such as a deploy or monitoring service with nothing to run on that push). That suite is not
+pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
+check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Rules page (`hub rule list`) rows for `pr_checks_done` and `pr_review` change what these do.
 

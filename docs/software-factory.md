@@ -50,8 +50,9 @@ approval before merge even when the team's task review policy allows a fixes-onl
 
 1. **Product decides what, engineering decides how.** Feature ideas go to Head of Product first. Bugs and small
    changes go straight to Head of Engineering as a Dev ticket.
-2. **Prefer different models for checks.** Reviewers and QA prefer a different model company from the Builder;
-   when none is free or healthy, a same-family checker takes the work. Tico records the configured and executed
+2. **Prefer different models for checks.** Reviewers prefer a different model company from the Builder;
+   when none is free or healthy, a same-family reviewer takes the work. QA is never given to a QA bot known to run on
+   the Builder's model company (it declines the build); the QA check waits for one of another company. Tico records the configured and executed
    families on the check. Set this per bot (its model), or use a check model on a subtask (see [Tasks](tasks.md)).
 3. **Reviewers advise; the Builder decides.** The Builder answers each comment it doesn't take with a one-line
    reason on the ticket. There is no second round of the same review after fixes.
