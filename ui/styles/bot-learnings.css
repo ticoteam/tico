@@ -21,6 +21,7 @@
 .learn-switch button[aria-selected="true"]{background:var(--raised);color:var(--ink)}
 .learn-body{flex:1;overflow:auto;padding:4px 14px 16px;overscroll-behavior:contain}
 .learn-body .md{padding-top:8px;font-size:var(--t-base)}
+.learn-warning{margin:8px 0;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-base)}
 .learn-list{list-style:none;margin:0;padding:0}
 .learn-row{padding:9px 0;border-bottom:1px solid var(--line);font-size:var(--t-base);line-height:18px}
 .learn-row.new .lr-subject::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 1px 0;border-radius:50%;background:var(--accent)}
