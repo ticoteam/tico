@@ -236,10 +236,12 @@ def test_the_owners_request_carried_by_a_bot_turn_cannot_turn_the_right_on(api, 
                "via-self": Identity("human:ana", "owner", "ana@acme.example", runner_id="r1", attempt_id="a1",
                                     task_actor="bot:cmo", confirmed=True)}
     api.app_state.store.settings.test_identities.update(carried)
-    for token in carried:
-        refused = grant(api, who=token)
-        assert refused.status_code == 403 and "Only the Owner turns on" in refused.text, (token, refused.text)
-        assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False, token
+    # The bot's own turn is refused; BotOps acting for her puts it on a Confirm card that only her own tap runs.
+    refused = grant(api, who="via-self")
+    assert refused.status_code == 403 and "Only the Owner turns on" in refused.text, refused.text
+    card = grant(api, who="via-botops")
+    assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
+    assert api.get(ACCESS, headers=auth()).json()["create_product_repositories"] is False
 
 
 def test_an_external_agent_of_a_granted_bot_cannot_create(api, gh):
