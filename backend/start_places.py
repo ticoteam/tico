@@ -31,13 +31,25 @@ def ready_waiting(c, runner_id):
 
 
 def held(c, runner_id):
-    """Running work and unexpired starts; legacy workers retain their original lease capacity."""
+    """Running work and unexpired starts; legacy workers retain their original lease capacity.
+
+    Cached for the read snapshot: claim waiter order and Health capacity fences ask once per computer,
+    and idle claims ask again for the same runner.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("start_places.held", runner_id)
+    if values is not None and key in values:
+        return values[key]
     now = H.now()
-    return {r[0]: r[1] for r in c.execute(
+    out = {r[0]: r[1] for r in c.execute(
         "SELECT a.bot,count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
         "WHERE a.runner_id=? AND a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND a.lease_until>? "
         "AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.bot",
         (runner_id, now, now))}
+    if values is not None:
+        values[key] = out
+    return out
 
 
 def claim(c, aid):
