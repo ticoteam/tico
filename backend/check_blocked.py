@@ -1,6 +1,7 @@
 """A blocked Review or QA check shows on its ticket (Dev 553).
 
-A check is a Review 1, Review 2 or QA subtask of a Dev ticket, owned by a bot. It is blocked when it is Waiting or
+A check is a subtask of a Dev ticket requesting one of its board's check steps (Review 1, Review 2 or QA on the Dev
+board: backend/step_flow.titled), owned by a bot. It is blocked when it is Waiting or
 waits on an open blocker. Its ticket then shows Blocked (backend/task_blocked.py) with the check's reason, and the
 ticket's builder gets one notice in the ticket's own room per blocked episode, never Head of Engineering. When the
 check works again, or finishes, the ticket goes back to the step it was at.
@@ -21,17 +22,11 @@ def _H():
     return hubdb
 
 
-def kind(row):
-    """'QA', 'Review 1' or 'Review 2' for a check's title, else None."""
-    found = review_gate.ONE_OPEN.match(str((row or {}).get("title") or "").strip())
-    if not found:
-        return None
-    words = found[1].split()
-    if words[0].lower() == "qa":
-        return "QA"
-    if words[0].lower() == "post":
-        return "Post Release QA"
-    return f"Review {words[-1]}"
+def kind(c, row, ticket=None):
+    """The label of the board's check step a check's title asks for ('Review 1', 'QA', ...), else None."""
+    from . import step_flow
+    found = step_flow.child_check(c, row, ticket) if row else None
+    return step_flow.label(found) if found else None
 
 
 def _name(c, actor):
@@ -74,8 +69,8 @@ def detail(c, row):
         return None
     for child_id in TR.child_ids(c, row["id"]):
         child = H.task(c, child_id)
-        label = kind(child)
-        # A builder's own decision question can be titled Review 1/2 without being a judging check.
+        label = kind(c, child, row)
+        # A builder's own decision question can be titled for a review step without being a judging check.
         if not label or not profiles.is_check(c, child):
             continue
         found = blocked(c, child)
@@ -133,7 +128,7 @@ def changed(c, task_id):
     H = _H()
     from . import task_relations as TR
     row = H.task(c, task_id)
-    if not kind(row) or not H.is_bot(row["owner"]):
+    if not row or not H.is_bot(row["owner"]) or not kind(c, row):
         return
     parent = TR.parent_of(c, task_id)
     if parent:

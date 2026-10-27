@@ -87,9 +87,9 @@ def review(c, row, *, parent_id=None):
     parent = H.task(c, parent) if parent else None
     if not parent or parent['owner'] == row['owner']:
         return False
-    step = c.execute('SELECT name FROM task_steps WHERE id=?',
-                     (parent.get('blocked_from_step') if parent.get('blocked_since') else parent.get('step_id'),)).fetchone()
-    return bool(step and step[0] in ('Review 1', 'Review 2', 'In QA', 'Post Release QA'))
+    from . import step_flow
+    step = step_flow.step(c, parent.get('blocked_from_step') if parent.get('blocked_since') else parent.get('step_id'))
+    return bool(step and step_flow.check_kind(step))
 
 
 def actionable_notice(row, message):

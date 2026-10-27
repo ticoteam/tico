@@ -46,16 +46,17 @@ def reads_list(c, slug):
 
 def _check_children(c, ids):
     """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets."""
-    from .check_pools import CHECK_TITLE
+    from .check_pools import is_check_title
     if not ids:
         return {}
     out = {}
     for part in H.chunks(sorted(ids)):
         for row in c.execute(
-                "SELECT t.id, t.title, r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                "SELECT t.id, t.title, r.to_task, p.type_id FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                "JOIN tasks p ON p.id=r.to_task "
                 f"WHERE r.kind='parent' AND r.to_task IN ({','.join('?' * len(part))}) "
                 f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})", (*part, *H.ACTIVE_STATUSES)):
-            if CHECK_TITLE.match(str(row["title"] or "").strip()):
+            if is_check_title(c, {"type_id": row["type_id"]}, row["title"]):
                 out[row["id"]] = row["to_task"]
     return out
 
@@ -63,15 +64,14 @@ def _check_children(c, ids):
 def _finished_check(c, ticket, step, since):
     """The newest check of this step's kind filed below the ticket since it entered the step and finished since, or
     None: the check was filed, and what stands is the ticket not moving on."""
-    from .check_pools import kind
-    want = kind(step["name"]).lower()
+    from . import step_flow
     for row in c.execute(
             "SELECT t.id, t.title, t.owner, coalesce(t.done_at, t.closed_at, t.updated) AS ended FROM task_relations r "
             "JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' AND r.to_task=? AND t.created>=? "
             f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY ended DESC, t.id",
             (ticket["id"], since, *H.ACTIVE_STATUSES)):
-        title = str(row["title"] or "").strip().lower()
-        if title == want or title.startswith(want + ":") or title.startswith(want + " "):
+        found = step_flow.child_check(c, dict(row), ticket)
+        if found and found["id"] == step["id"]:
             return dict(row)
     return None
 

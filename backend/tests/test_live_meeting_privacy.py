@@ -663,3 +663,137 @@ def test_ordinary_api_reads_do_not_scan_unrelated_keeper_history(api, monkeypatc
                       ((f"synthetic-history-{n}", unrelated, H.now()) for n in range(2000)))
     after = measure()
     assert all(a <= b + 500 for a, b in zip(after, before)), (before, after)
+
+
+def test_settled_run_unsettles_when_a_moved_input_room_joins_a_private_meeting(live, derived):
+    """A run settled in the stored read index (backend/read_deps.py) depends on each input moved off it: binding that
+    input's room to a private meeting refuses the run, and a message citing it, to non-members before any new sweep."""
+    from backend import read_deps
+    from backend import sql as S
+    from backend.privacy_index import ReadIndex
+
+    mid, attempt = derived
+    store, auth, aid = live.app.state.store, live.app.state.auth, attempt["id"]
+    # Bots read history in task rooms.
+    root_room = {"id": post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]}
+    with store.transaction() as c:
+        root = H.say(c, "human:ana", "human:ben", "Synthetic public request", conversation_id=root_room["id"])
+        c.execute("UPDATE jobs SET message_id=? WHERE id=?", (root["id"], attempt["job_id"]))
+        c.execute("DELETE FROM attempt_inputs WHERE attempt_id=?", (aid,))
+        moved_room = H.open_conversation(c, "human:ana", ["bot:ops"], kind="chat", subject="Synthetic other room")
+        moved = H.say(c, "human:ana", "human:ben", "Synthetic moved input", conversation_id=moved_room["id"])
+        # As task_privacy.record_moved_input writes it before any meeting provenance exists.
+        H.event(c, H.KEEPER, task_privacy.INPUT_MOVED, aid,
+                {"message_id": moved["id"], "to_attempt": "synthetic-later-run", "tasks": [], "live_meetings": []})
+        cites = H.say(c, "bot:ops", "human:ana", "Synthetic run reply", conversation_id=root_room["id"],
+                      refs={"turn_id": aid})
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,started,finished,trigger,message_id) VALUES(?,?,?,?,?,?)",
+                  (aid, "ops", H.now(), H.now(), "message", root["id"]))
+        # Finance may read Ops' runs, so only the meeting decides what it reads below.
+        c.execute("UPDATE bot_config SET team='engineering' WHERE bot='finance'")
+        meeting_key = c.execute("SELECT room_key FROM conversations WHERE id=?",
+                                (attempt["message"]["conversation_id"],)).fetchone()[0]
+    readers = {token: auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/sql", "POST")
+               for token in ("ana-test", "finance-live", "ben-test", "ops-live")}
+
+    def reads(who):
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                return tuple(bool(conn.execute(f"SELECT 1 FROM {table} WHERE id=?", (key,)).fetchall())
+                             for table, key in (("attempts", aid), ("turns", aid), ("messages", cites["id"])))
+            finally:
+                conn.close()
+
+    def gate(who):
+        with store.read() as c:
+            index = ReadIndex(c, who, rooms=True)
+            row = H.message(c, cites["id"])
+            run = bool(index.attempt(aid))
+            return (run, run, bool(index.message(row["id"], row["conversation_id"], row["refs_json"],
+                                                  row["in_reply_to"])))
+
+    with store.read() as c:
+        read_deps.sweep(c)
+        assert c.execute("SELECT 1 FROM read_index WHERE key=?", ("a:" + aid,)).fetchall()
+    for token, who in readers.items():
+        assert reads(who) == gate(who) == (True, True, True), token
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET room_key=? WHERE id=?", (meeting_key, moved_room["id"]))
+    for when in ("before a sweep", "after a sweep"):
+        for token, who in readers.items():
+            member = token in ("ben-test", "ops-live")
+            assert reads(who) == gate(who) == (member,) * 3, (when, token)
+        with store.read() as c:
+            read_deps.sweep(c)
+
+
+def test_meeting_turn_writes_unsettle_only_the_rooms_naming_the_turn(live, derived):
+    """A turn makes a legacy room a meeting room through the keeper input naming it: adding the turn unsettles the rows
+    that read that room, here a reply elsewhere to a message in it (refused to non-members before any new sweep), and
+    nothing else; a claim, reply or skip unsettles nothing."""
+    from backend import read_deps
+    from backend import sql as S
+    from backend.privacy_index import ReadIndex
+
+    mid, attempt = derived
+    store, auth = live.app.state.store, live.app.state.auth
+    root_room = post(live, "tasks", {"owner": "ops", "title": "Synthetic public request", "body": "Synthetic"})["conversation_id"]
+    with store.transaction() as c:
+        # The run's keeper input stays in a room with no stored meeting binding: only the turn row makes it one.
+        c.execute("UPDATE conversations SET room_key=NULL WHERE id=?", (attempt["message"]["conversation_id"],))
+        turn = dict(c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=?", (mid,)).fetchone())
+        c.execute("DELETE FROM live_meeting_turns WHERE id=?", (turn["id"],))
+        unrelated = H.say(c, "human:ana", "human:ben", "Synthetic unrelated request", conversation_id=root_room)
+        # The keeper input names the meeting itself; a plain message beside it reads the meeting only through its room.
+        beside = H.say(c, "bot:ops", "human:ana", "Synthetic plain note", conversation_id=attempt["message"]["conversation_id"])
+        cites = H.say(c, "human:ana", "bot:ops", "Synthetic follow-up", conversation_id=root_room, in_reply_to=beside["id"])
+    readers = {token: auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/sql", "POST")
+               for token in ("ana-test", "finance-live", "ben-test", "ops-live")}
+
+    def reads(who):
+        with store.read() as c:
+            conn = S.connect(store.settings.db_path, c, auth, who)
+            try:
+                return bool(conn.execute("SELECT 1 FROM messages WHERE id=?", (cites["id"],)).fetchall())
+            finally:
+                conn.close()
+
+    def gate(who):
+        with store.read() as c:
+            index = ReadIndex(c, who, rooms=True)
+            row = H.message(c, cites["id"])
+            return bool(index.message(row["id"], row["conversation_id"], row["refs_json"], row["in_reply_to"]))
+
+    def settled():
+        with store.read() as c:
+            return {r[0] for r in c.execute("SELECT key FROM read_index")}
+
+    with store.read() as c:
+        read_deps.sweep(c)
+    before = settled()
+    assert {"m:" + cites["id"], "m:" + unrelated["id"]} <= before
+    for token, who in readers.items():
+        assert reads(who) == gate(who) is True, token
+    with store.transaction() as c:
+        c.execute("INSERT INTO live_meeting_turns(%s) VALUES(%s)" % (",".join(turn), ",".join("?" * len(turn))),
+                  tuple(turn.values()))
+    after = settled()
+    assert before - after == {"m:" + cites["id"], "m:" + beside["id"]}
+    for when in ("before a sweep", "after a sweep"):
+        for token, who in readers.items():
+            member = token in ("ben-test", "ops-live")
+            assert reads(who) == gate(who) == member, (when, token)
+        with store.read() as c:
+            read_deps.sweep(c)
+    settled_now = settled()
+    for status, column in (("claimed", "claimed_at"), ("replied", "replied_at"), ("skipped", "claimed_at")):
+        with store.transaction() as c:
+            c.execute(f"UPDATE live_meeting_turns SET status=?,{column}=? WHERE id=?", (status, H.now(), turn["id"]))
+        assert settled() == settled_now, status
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM read_dirty").fetchall()
+    with store.transaction() as c:
+        c.execute("UPDATE live_meeting_turns SET bot='finance' WHERE id=?", (turn["id"],))
+        assert c.execute("SELECT 1 FROM read_dirty WHERE key=?", ("m:" + cites["id"],)).fetchall()
+        assert not c.execute("SELECT 1 FROM read_dirty WHERE key=?", ("m:" + unrelated["id"],)).fetchall()

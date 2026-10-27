@@ -23,7 +23,6 @@ bot was unsure of does not wake it every hour.
 A non-empty report is one task per department, owned by the bot, titled "Task check: <department> (<n>)". A still-open
 one absorbs the next report (its body is replaced and the bot is woken only when the body changed), so reports never pile
 up. The wake is the routine's: `trigger="schedule"`, `refs.wake="task_manager_report"` (backend/run_triggers.py)."""
-import re
 import sqlite3
 from datetime import datetime, timezone
 
@@ -53,8 +52,6 @@ KEEP_DAYS = 7               # the ledger forgets an item this long after it was 
 OWNER_REVIEW_MINUTES = 60   # a run waiting for its owner's review this long is listed
 LIVE = ("open", "doing", "waiting", "review", "ready")
 
-QA = re.compile(r"^QA\b", re.I)
-STEP = re.compile(r"^(Review [12]|QA)", re.I)
 
 # What to do first when a department has more than PER_DEPARTMENT items: the ones a person is waiting on, then the rest.
 ORDER = ("ask_overdue", "ask_unanswered", "shipped", "merged", "review_no_pr", "review_duplicate", "own_blockers",
@@ -186,32 +183,37 @@ def _asks(c, at):
 def _reviews(c):
     """Review and QA tickets (a child of the ticket under review) with no pull request on the ticket, and a second open
     one for the same parent and step."""
+    from . import step_flow
     rows = H._rows(c.execute(
-        "SELECT * FROM tasks WHERE coalesce(private,1)=0 AND status IN ('open','doing','waiting','review','ready') "
-        "AND (title LIKE 'Review %' OR title LIKE 'QA%') ORDER BY created, id"))
+        "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+        "JOIN tasks p ON p.id=r.to_task "
+        "WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
+        "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow_json LIKE '%\"check\":%') "
+        "OR t.title LIKE 'Review %' OR t.title LIKE 'QA%') ORDER BY t.created, t.id"))
     out, groups = [], {}
     for row in rows:
-        match = STEP.match(row["title"].strip())
-        if not match:
-            continue
         parent_id = TR.parent_of(c, row["id"])
         parent = H.task(c, parent_id) if parent_id else None
-        if not parent or not _readable(c, row) or not _readable(c, parent):
+        # A review or QA request: titled for one of its ticket's review or QA steps (backend/step_flow.titled).
+        step = step_flow.child_check(c, row, parent) if parent else None
+        if not step or step_flow.check_kind(step) not in ("review", "qa") or not _readable(c, row) or not _readable(c, parent):
             continue
+        match = (step_flow.label(step),)
         links = [p for p in H.task_links(c, parent_id) if p["kind"] == "pr"]
         if not links:
-            out.append(_item("review_no_pr", row, f"{match.group(1)} ticket for {parent_id} with no linked pull request",
+            out.append(_item("review_no_pr", row, f"{match[0]} ticket for {parent_id} with no linked pull request",
                              f"hub task get {parent_id}; if its pull request is gone: hub task close {row['id']} "
                              f"--note \"No pull request to review\""))
             continue
         heads = tuple(sorted(str(H._json(p.get("detail_json"), {}).get("head_sha") or p.get("pr_sha") or "")
                              for p in links if p.get("state") not in ("merged", "closed", "shipped")))
-        groups.setdefault((parent_id, match.group(1).lower(), heads), []).append(row)
-    for (parent_id, step, _heads), rows in groups.items():
-        for extra in rows[1:]:
-            out.append(_item("review_duplicate", extra, f"a second open {step.title()} ticket for {parent_id}; "
-                             f"{rows[0]['id']} came first",
-                             f"hub task close {extra['id']} --note \"Duplicate of {rows[0]['id']}\""))
+        groups.setdefault((parent_id, step["id"], heads), []).append((match[0], row))
+    for (parent_id, _step, _heads), found in groups.items():
+        name, first = found[0]
+        for _name, extra in found[1:]:
+            out.append(_item("review_duplicate", extra, f"a second open {name} ticket for {parent_id}; "
+                             f"{first['id']} came first",
+                             f"hub task close {extra['id']} --note \"Duplicate of {first['id']}\""))
     return out
 
 

@@ -501,7 +501,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         who = request.state.identity
         human_only(who)
         body, uploads = await form(request, M.TaskCreate, blobs, store)
-        # A Review 1 or Review 2 child is gated on the PR's current head and checks, read afresh as in create_task.
+        # A child for a review step is gated on the PR's current head and checks, read afresh as in create_task.
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = (await asyncio.to_thread(review_preflight, who, parents[0], child_title=body.title.strip())
                      if parents else None)
@@ -564,7 +564,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if len(own) == 1:
                 body = body.model_copy(update={"parent": own.pop()})
 
-        # A question titled Review 1 or Review 2 under a Dev ticket meets the review gate as a review child does:
+        # A question titled for a review step under a Dev ticket meets the review gate as a review child does:
         # on the PR's current head and checks read afresh, so all-green hosted checks count (create_task).
         title = body.title or question
         snapshots = review_preflight(who, body.parent, child_title=title.strip()) if body.parent else None
