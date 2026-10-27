@@ -100,21 +100,22 @@ function route() {
   else if (S.route === '#/settings/inbox') { SETTINGS_TAB = 'inbox'; location.replace(SETTINGS); return; }   // Google's sign-in returns here
   else if (S.route === '#/settings/roadmap') { SETTINGS_TAB = 'tasks'; ROADMAP_SETTINGS_REVEAL = true; location.replace(SETTINGS); return; }   // Health's roadmap suggestions fix
   else if (S.route === '#/settings/storage') { SETTINGS_TAB = 'storage'; location.replace(SETTINGS); return; }   // Health's Set up S3
-  // Settings > Rules; `?task=` narrows the wake rules to one task's (the task modal's Wake rules link).
+  // Settings > Automation > Rules, at its old address for good (the Tasks Owner's links carry it); `?task=` narrows the
+  // rules to one task's (the task modal's Wake rules link).
   else if (S.route === '#/settings/rules' || S.route.startsWith('#/settings/rules?')) {
     // ?task=<id>, ?bot=<slug>, or the API's own scope_kind=task|bot&scope_id=<id>.
     const q = new URLSearchParams(S.route.split('?')[1] || ''), kind = q.get('task') ? 'task' : q.get('bot') ? 'bot' : q.get('scope_kind');
     const id = q.get('task') || q.get('bot') || q.get('scope_id') || '';
     RULES_OPEN = Object.fromEntries(q);
     RULES_FOR = ['task', 'bot'].includes(kind) && id ? `${kind}:${id}` : ''; RULES_FOR_TITLE = '';
-    SETTINGS_TAB = 'recurring'; SETTINGS_REVEAL = RULES_FOR ? '#set-rules-card' : ''; location.replace(SETTINGS); return;
+    SETTINGS_TAB = 'rules'; SETTINGS_REVEAL = RULES_FOR ? '#set-rules-card' : ''; location.replace(SETTINGS); return;
   }
-  else if (S.route === '#/settings/routines') { SETTINGS_TAB = 'recurring'; location.replace(SETTINGS); return; }   // General > Team's moved switches
+  else if (S.route === '#/settings/routines') { SETTINGS_TAB = 'routines'; location.replace(SETTINGS); return; }   // Automation > Bot routines (Task settings' routine row)
   else if (S.route === '#/settings/people') { SETTINGS_TAB = 'people'; location.replace(SETTINGS); return; }   // setup's people to invite
   else if (['#/settings/subscriptions', '#/subscriptions', '#/settings/computers'].includes(S.route)) { SETTINGS_TAB = 'devices'; location.replace(SETTINGS); return; }   // Subscriptions moved to Computers
-  // Every other #/settings/<tab>[/<card>] opens that tab, and the card when named (the settings catalogue's links,
-  // backend/settings_entries.py). settingsShow maps old names and sections and puts the tab's own address back in
-  // the bar, so a tab can be bookmarked and shared: #/settings/gateway, #/settings/models, …
+  // Every other #/settings/<name>[/<card>] opens that group, or the group an old tab or section moved to, and the card
+  // when named (the settings catalogue's links, backend/settings_entries.py). settingsShow maps old names and puts the
+  // group's own address back in the bar, so a group can be bookmarked and shared: #/settings/models, #/settings/limits, …
   else if (/^#\/settings\/[a-z-]+(?:\/[a-z0-9-]+)?\/?(\?.*)?$/.test(S.route)) {
     const [tab, card] = S.route.slice(11).split('?')[0].split('/'); SETTINGS_TAB = tab; SETTINGS_REVEAL = card ? '#' + card : ''; location.replace(SETTINGS); return;
   }
