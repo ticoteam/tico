@@ -78,7 +78,7 @@ def test_a_second_reason_anyone_else_a_waiting_or_confirmed_one_and_an_empty_one
     done = post(api, f"goal-proposals/{typed['id']}/decide", {"decision": "reject", "note": "Too narrow"})["proposal"]
     assert done["may_reason"] is False
     post(api, f"goal-proposals/{typed['id']}/note", {"note": REASON}, expected=422)
-    post(api, "goal-proposals/no-such/note", {"note": REASON}, expected=422)
+    post(api, "goal-proposals/no-such/note", {"note": REASON}, expected=404)
 
 
 def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_box(api):
