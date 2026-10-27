@@ -130,7 +130,7 @@ def batch_waiters(c, bot):
                          "AND m.from_actor=? AND m.kind='notice' AND m.deleted_at IS NULL "
                          "AND coalesce(json_extract(m.refs_json,'$.quiet'),0)=0 "
                          "AND coalesce(json_extract(m.refs_json,'$.command'),0)=0 "
-                         "ORDER BY j.created,j.id", (bot, H.KEEPER)).fetchall():
+                         "ORDER BY j.created,j.rowid", (bot, H.KEEPER)).fetchall():
         refs = H._json(row['refs_json'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):
             continue

@@ -216,9 +216,11 @@ def test_a_hundred_queued_notices_restore_as_one_carrier_with_their_history(api,
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task['id'],))
         for n in range(100):
             from backend.rules import Decision, WAKE
-            H._write_message(c, H.KEEPER, 'bot:ops', f'Waiting update {n}',
-                              H.conversation(c, task['conversation_id']), 'notice', {'task': task['id']},
-                              None, None, decided=Decision(WAKE, 'assignment'))
+            sent = H._write_message(c, H.KEEPER, 'bot:ops', f'Waiting update {n}',
+                                     H.conversation(c, task['conversation_id']), 'notice', {'task': task['id']},
+                                     None, None, decided=Decision(WAKE, 'assignment'))
+            # IDs sort opposite to arrival, so the clock tie cannot accidentally make this guard pass.
+            c.execute('UPDATE jobs SET id=? WHERE message_id=?', (f'waiting-{100-n:03}', sent['id']))
         source_outages.batch_waiters(c, 'ops')
         pending = [dict(r) for r in c.execute("SELECT * FROM jobs WHERE state='queued'")]
         assert len(pending) == 1
@@ -302,3 +304,24 @@ def test_mid_turn_primary_quota_uses_strict_saved_session_even_with_a_ready_fall
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['job_id'],)).fetchone()[0] == 'uncertain'
     assert claim(api, machine) is None
+
+
+
+def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(api, monkeypatch):
+    from backend.rules import Decision, WAKE
+    at(monkeypatch, '2026-10-27T01:00:00.000000Z')
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, 'human:ana', 'Read the latest update', 'Read it.', 'bot:ops', lint=False)
+        c.execute("UPDATE jobs SET state='completed'")
+        messages = []
+        for n in range(3):
+            message = H._write_message(c, H.KEEPER, 'bot:ops', f'Update {n}',
+                          H.conversation(c, task['conversation_id']), 'notice', {'task': task['id']},
+                          None, None, decided=Decision(WAKE, 'assignment'))
+            c.execute('UPDATE jobs SET id=? WHERE message_id=?', (f'waiting-{3-n}', message['id']))
+            messages.append(message['id'])
+        source_outages.batch_waiters(c, 'ops')
+        [carrier] = c.execute("SELECT id,message_id FROM jobs WHERE state='queued'").fetchall()
+        assert carrier['message_id'] == messages[-1]
+        assert c.execute('SELECT count(*) FROM jobs WHERE wake_carrier=?', (carrier['id'],)).fetchone()[0] == 2
+        assert all(H.message(c, message) for message in messages)
