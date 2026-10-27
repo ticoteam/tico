@@ -2099,6 +2099,9 @@ def install_views(app, store, auth, mutate, task_view):
             from .model_login import cleared_by_runner, key_cleared_by_runner
             # One pass each for signed-out logins and cleared keys (not two SELECTs per computer).
             signed_out, key_cleared = cleared_by_runner(c), key_cleared_by_runner(c)
+            from .repositories import computer_repositories
+            # One pass for every computer's repository status (not one registry_metadata lookup per runner).
+            repo_status = computer_repositories(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2124,8 +2127,7 @@ def install_views(app, store, auth, mutate, task_view):
                 value.update(performance_listing(value))
                 value.pop("capabilities_json")
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
-                from .repositories import metadata
-                value["repositories"] = metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown")
+                value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
                                              if bot in assigned_here and bot not in hidden}
