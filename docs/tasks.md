@@ -213,6 +213,21 @@ waits in the trash and gets them back when restored. The MCP tool is `hub_task_w
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
+When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then
+name the bot with `--on` and give the reason in the note:
+
+```sh
+hub task wait <task> --on task:<the bot's task>
+hub task update <task> --status waiting --on bot:pr-reviewer --note "Needs the receipt-gate fix merged and QA'd first."
+```
+
+The task and its card show "Waiting on Builder (OpenAI)" with that reason. The blocker holds the task, so its owner
+is not woken while the prerequisite stays open. When that task is done, declined or closed and nothing else blocks
+this one, its owner is woken once with the outcome ("Unblocked: … is finished" or "was declined") and picks it back
+up. `--on bot:<slug>` is accepted only for an active bot that owns the first open task this one is blocked by, the
+one its views name: a bot alone does not say which of its work must finish, so an inactive bot, an unknown name or a
+bot that does not own that task is refused with how to link it, and nothing changes. A subtask needs neither: its result comes back to its parent on its own.
+
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
 

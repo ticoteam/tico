@@ -872,7 +872,10 @@ def task_question(api, args):
                         "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
                         "file paths, s3:// links or tool names (refused otherwise), e.g. \"Approve the video tool trial "
                         "for Thursday? If yes, I'll send the invite.\" It becomes one small task for them; this task "
-                        "stays yours, blocked on it, and opens again with their answer. An empty string clears it"),
+                        "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
+                        "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
+                        "the note is then the reason displayed beside the bot. The existing relation holds the work and "
+                        "wakes the owner with its outcome when resolved. An empty string clears it"),
        "roles": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
                  "description": "Who is on it by role, {role: [people or bots]}: each role named replaces that role's people, [] clears one, "
                                 "a role not named stays. A role is a short name the team chooses (developer, reviewer, qa); one person may hold several"},

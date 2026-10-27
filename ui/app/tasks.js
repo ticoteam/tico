@@ -66,7 +66,26 @@ function taskBlockedLine(t) {
     ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
   return `${reason} · since ${fmt(t.blocked_since)}`;
 }
+// A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
+// must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
+// blocked, not set waiting, still reads "Blocked by". A task that also waits on a person (`waiting_on` on a person's
+// task, an open question to them, or any open blocker they own, which is how the ask card a bot's task files for them
+// is served) keeps their ask, so its note is never shown as a bot's reason. A reader who cannot open the first
+// blocker is served only the ones after it, so a second bot's task there is named instead. That wait is the task's
+// Blocked hold, so it carries the hold's age; a review-gate or worktree hold is something else and says its own why.
+function taskBotWait(t) {
+  const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
+  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(t.blocked_kind) || actorPerson(t.waiting_on)
+      || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
+  const b = taskBlockers(t).find(open);
+  if (!b || !actorSlug(b.owner)) return null;
+  const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
+  return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b,
+    since: t.blocked_since ? ` · since ${fmt(t.blocked_since)}` : ''};
+}
 function taskWaitLine(t) {
+  const bot = taskBotWait(t);
+  if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}${bot.since}`;
   if (t?.blocked_since) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;

@@ -1087,8 +1087,13 @@ def create_app(settings=None):
         value.pop("labels_json", None)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
-        for field in ("blocked_kind", "blocked_from_step", "blocked_from_status", "blocked_gate_json"):
+        hold_kind = value.pop("blocked_kind", None)
+        for field in ("blocked_from_step", "blocked_from_status", "blocked_gate_json"):
             value.pop(field, None)
+        # A review-gate or worktree hold says its own why, so the screen never folds it into a bot wait's line
+        # (ui/app/tasks.js taskBotWait); other kinds stay server-only.
+        if hold_kind in ("gate", "worktree"):
+            value["blocked_kind"] = hold_kind
         # Most list rows have no hold or accumulated clock; omit empty optional fields.
         for field in ("blocked_since", "blocked_reason", "building_started_at", "building_seconds"):
             if not value.get(field):
@@ -5258,12 +5263,15 @@ def create_app(settings=None):
         # `load_snapshot`: start and completion may carry an instantaneous load reading.
         # `attempt_thread`: a running attempt may name its thread after its start (`attempts/{aid}/thread`), once the
         # harness confirmed a new session (an older one has no such route).
+        # `capacity_continue`: a run the model's capacity stopped after it acted may say its thread was kept
+        # (`continues`), and a claim may name that thread (`continue_thread`) for the next turn to continue.
         return {**runner_versions.desired(), "features": {"task_files_multipart": True, "runner_commit": True,
                                                           "screen_v1": True, "limit_resets_at": True,
                                                           "usage_requests": True, "usage_request_main": True,
                                                           "run_pushes": True, "run_rotation": True, "run_session": True,
                                                           "run_diagnostics": True, "load_snapshot": True,
-                                                          "attempt_thread": True, "runner_drain": True}}
+                                                          "attempt_thread": True, "runner_drain": True,
+                                                          "capacity_continue": True}}
 
     @app.get("/api/v2/runners/assignments")
     def assigned(request: Request):

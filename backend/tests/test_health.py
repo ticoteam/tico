@@ -654,6 +654,72 @@ def claimable(c, runner, *bots):
     c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), runner))
 
 
+def test_refusal_quarantine_explains_the_claim_hold_and_matches_bot_status(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    words = "Only a person changes a task number; leave the requested number for the person managing this bot."
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        for _ in range(H.QUARANTINE_AT + 1):
+            with pytest.raises(H.Refused):
+                H.refuse(c, "bot:helper", "identity", words)
+        assert H.bot(c, "helper")["state"] == "quarantined"
+        c.execute("UPDATE events SET ts='2030-10-26T23:55:00Z' WHERE action='quarantine' AND target='bot:helper'")
+    body, checks = health_of(api)
+    [held] = body["stuck"]
+    status = api.get("/api/v2/status", headers=signed_in()).json()["bots"]
+    quarantine = next(row for row in status if row["bot"] == "helper")["quarantine"]
+    assert held["reason"] == "quarantined" and held["why"] == quarantine["why"]
+    assert quarantine["auto"] and quarantine["resumes_at"] == "2030-10-27T00:55:00.000000Z"
+    assert "rule 8; 10 repeated refusals today" in held["why"]
+    assert "2030-10-27 00:55 UTC" in held["why"] and "resumes by itself" in held["why"]
+    assert "Refused write (identity): " + words in held["why"]
+    assert "BotOps must review" not in held["why"]
+    assert "a person who manages it can clear it sooner" in held["why"]
+    # Both the summary report and its diagnostic items must exclude manager-only refused words.
+    assert "Quarantined" in checks["queue"]["summary"]
+    assert words not in json.dumps(checks["queue"])
+    assert "Refused write" not in json.dumps(checks["queue"])
+
+
+def test_manual_quarantine_has_no_lift_promise_and_other_holds_keep_their_explanation(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        H.quarantine(c, "helper", "A person is checking its work")
+    [held] = health_of(api)[0]["stuck"]
+    status = api.get("/api/v2/status", headers=signed_in()).json()["bots"]
+    quarantine = next(row for row in status if row["bot"] == "helper")["quarantine"]
+    assert held["why"] == quarantine["why"] == "Quarantined until a person clears it."
+    assert not quarantine["auto"] and quarantine["resumes_at"] is None
+    with api.app.state.store.transaction() as c:
+        H.status_set(c, "human:morgan", "helper", state="active", reason="Checked")
+        H.status_set(c, "human:morgan", "helper", state="paused", reason="Waiting")
+    body, checks = health_of(api)
+    [paused] = body["stuck"]
+    assert paused["reason"] == "paused"
+    assert paused["why"] == "Paused: its owner or BotOps must resume it"
+    assert paused["why"] in checks["queue"]["items"][0]["text"]
+
+
+def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environment):
+    api = environment()
+    runner = silent_computer(api, 0)
+    with api.app.state.store.transaction() as c:
+        claimable(c, runner, "helper")
+        H.quarantine(c, "helper", "10 repeated refusals today",
+                     refusal={"rule": "identity", "detail": "Private request token=synthetic-private-value"})
+    [held] = health_of(api)[0]["stuck"]
+    assert "token=[hidden]" in held["why"] and "synthetic-private-value" not in held["why"]
+    reader = as_person(api, "quinn")
+    status = api.get("/api/v2/status", headers=reader).json()["bots"]
+    why = next(row for row in status if row["bot"] == "helper")["quarantine"]["why"]
+    assert "resumes by itself" in why and "Refused write" not in why and "Private request" not in why
+    [held] = health_of(api, reader)[0]["stuck"]
+    assert held["why"] == why
+
+
 def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
     from backend import execution, health
 

@@ -66,9 +66,12 @@ def _queue_items(rows, full, bot_reader):
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
+        # Check summaries enter support reports; private refusal context stays on the bot's display row.
+        why = ("Quarantined: queued work waits for the quarantine to clear."
+               if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
                       "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {row['why']}",
+                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {why}",
                       "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
@@ -723,7 +726,6 @@ HELD = {
     "task_cap": ("Its active task limit is full; waiting work frees a place", BOT_SETTINGS),
     "auto_start_off": ("Automatic assigned-task starts are off for this bot", BOT_SETTINGS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
-    "quarantined": ("Quarantined: BotOps must review the refused action before resuming it", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
@@ -814,6 +816,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
         elif reason == "updating":
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
+        elif reason == "quarantined":
+            from .quarantine_display import explanation
+            text = explanation(c, row["bot"], who, auth)
+            fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
@@ -834,8 +840,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
         out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
                    | {"dead": row.get("dead", 0), "held": row.get("held", 0),
-                      "why": text[:320], "fix": fix if full else None,
-                      **({"queue_reasons": queue_reasons} if queue_reasons else {}),
+                       "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
+                       **({"queue_reasons": queue_reasons} if queue_reasons else {}),
                       **({"oldest_queued": row["oldest_queued"]} if "oldest_queued" in row else {})})
     return out
 
