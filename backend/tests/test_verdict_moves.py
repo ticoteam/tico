@@ -667,3 +667,22 @@ def test_a_finished_suite_with_no_check_run_keeps_its_failure(api, monkeypatch):
     assert G.refresh_pending_checks(service) == [_link(api, task)["id"]]
     assert _link(api, task)["checks"] == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_the_read(api, monkeypatch):
+    """The read began before a failed suite's webhook landed: its older green must not replace the failure."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    service, _ = _github(api, monkeypatch, [_suite_row(1, "github-actions", "completed", "success", runs=2),
+                                            _suite_row(STUCK, "tico-team-bots", "queued")], GREEN_RUNS)
+    _quiet(api, task)
+    read = service._call
+    def webhook_mid_read(method, path, **kw):
+        if path.endswith("/check-runs"):
+            _suite(api, "lint", "completed", "failure", sha=HEAD, id=7)
+        return read(method, path, **kw)
+    monkeypatch.setattr(service, "_call", webhook_mid_read)
+    assert G.refresh_pending_checks(service) == []
+    link = _link(api, task)
+    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"].get("suite:lint#7") == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]

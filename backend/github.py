@@ -516,15 +516,16 @@ _pending_lock = threading.Lock()
 def refresh_pending_checks(service):
     """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
-    so a suite that never started stops holding a green head (Dev 646). Reads outside the write; the longest-quiet
-    links first. Returns the ids of links whose checks left pending."""
+    so a suite that never started stops holding a green head (Dev 646). Reads outside the write, and applies a read
+    only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first. Returns
+    the ids of links whose checks left pending."""
     with service.store.read() as c:
         app = service.row(c)
         if not app:
             return []
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(c.execute(
-            "SELECT l.id,l.repo,l.number,json_extract(l.detail_json,'$.head_sha') AS head FROM task_links l "
+            "SELECT l.id,l.repo,l.number,l.updated,json_extract(l.detail_json,'$.head_sha') AS head FROM task_links l "
             "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
             f"WHERE l.kind='pr' AND l.state='open' AND l.checks='pending' AND l.number IS NOT NULL AND r.reachable=1 "
             f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated,l.created)<? "
@@ -545,22 +546,26 @@ def refresh_pending_checks(service):
                 read[key] = _fresh_checks(service, r["repo"], r["head"])
             if read[key]:
                 with service.store.transaction() as c:
-                    if apply_checks(c, r["id"], r["head"], read[key]) not in (None, "pending"):
+                    if apply_checks(c, r["id"], r["head"], read[key], since=r["updated"]) not in (None, "pending"):
                         left.append(r["id"])
         except Exception:
             logging.getLogger("tico.github").exception("Checks read failed for %s #%s", r["repo"], r["number"])
     return left
 
 
-def apply_checks(c, link_id, head, checks):
+def apply_checks(c, link_id, head, checks, since=None):
     """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
     pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
-    Returns the link's checks state, or None when the read no longer applies (another head, a closed PR)."""
+    `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
+    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
+    applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
     detail = H._json(link.get("detail_json"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
     if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+        return None
+    if since is not None and link.get("updated") != since:
         return None
     checks = dict(list(checks.items())[-100:])
     state = _overall(checks)
