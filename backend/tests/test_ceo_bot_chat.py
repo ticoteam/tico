@@ -257,6 +257,22 @@ def test_the_owner_pastes_a_screenshot_into_the_ceo_bot_chat_and_its_turn_reads_
     attachment, = message["refs"]["attachments"]
     assert (attachment["name"], attachment["title"], attachment["kind"]) == ("image.png", "Screenshot", "image")
     assert sent.json()["fast"] is False                      # a picture always goes to the CEO Bot's turn
+    def stored(c):
+        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("messages", "message_assets", "bot_files", "blobs")]
+    with api.app.state.store.read() as c:
+        after = stored(c)
+    # The same send again (a retry after a lost answer) gives the same message and keeps nothing twice; other content
+    # under that key is a conflict, refused before anything is stored.
+    def again(picture):
+        return api.post("/api/v2/uploads/assistant/messages", data={"text": "What is wrong here?", "titles": '["Screenshot"]'},
+                        files={"files": ("image.png", picture, "image/png")},
+                        headers={**headers("ana-test"), "Idempotency-Key": "paste-1"})
+    replay = again(data)
+    assert replay.status_code == 200 and replay.json() == sent.json(), replay.text
+    changed = again(data + b"\0")
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "idempotency_conflict", changed.text
+    with api.app.state.store.read() as c:
+        assert stored(c) == after
     # The CEO Bot's turn for that message can open the picture.
     r = runner(api)
     assign(api, r, "goal-manager")
@@ -267,8 +283,6 @@ def test_the_owner_pastes_a_screenshot_into_the_ceo_bot_chat_and_its_turn_reads_
     assert downloaded.status_code == 200, downloaded.text
     assert downloaded.content == data
     # Ben (an admin) talks to his Assistant, whose room stays text only: refused, and nothing is said.
-    def stored(c):
-        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("messages", "message_assets", "bot_files", "blobs")]
     with api.app.state.store.read() as c:
         before = stored(c)
     # The same key again, with the same and with other content, is refused the same way: no cached success, nothing kept.
