@@ -497,6 +497,63 @@ def test_edit_workflows_gets_workflows_write_only_on_a_flagged_grant_the_install
         {'full_name': 'Acme/product', 'access': 'write', 'run_workflows': True}]
 
 
+def test_all_ticked_repos_lets_one_repository_run_workflows(api, gh):
+    """Dev 641: under All ticked repos the Owner ticks Run workflows for one repository. It needs Write, only that
+    repository gets the Actions token, and it is kept apart from Chosen repos' ticks, as each mode keeps its own."""
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    for name in ('product', 'docs'):
+        put(api, 'repositories/Acme/' + name, {'enabled': True})
+    tick = [{'full_name': 'acme/product', 'run_workflows': True}]
+    data = put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_access': 'write', 'all_repos': tick})
+    assert data['all_repos'] == [{'full_name': 'Acme/product', 'run_workflows': True}]
+    assert {r['full_name']: r.get('run_workflows', False) for r in data['effective']} == {
+        'Acme/docs': False, 'Acme/emp-cpo': False, 'Acme/product': True}
+    gh.permissions = {'actions': 'write', 'checks': 'read', 'statuses': 'read'}
+    assert write_tokens(turn_token(api).json()) == {'Acme/docs': (), 'Acme/emp-cpo': (), 'Acme/product': ('actions',)}
+
+    def refused(body, words):
+        r = api.put('/api/v2/bots/cpo/repositories', json=body, headers={**auth(), 'Idempotency-Key': uuid.uuid4().hex})
+        assert r.status_code == 422 and words in r.text, r.text
+    refused({'mode': 'all', 'all_access': 'read', 'all_repos': tick}, 'needs All ticked repos set to Write')
+    # Only a repository All ticked repos reaches: not a bot repository, not the bot's own, not an unticked one.
+    for name in ('Acme/bot-sales', 'Acme/emp-cpo', 'Acme/nowhere', 'Other/product'):
+        refused({'mode': 'all', 'all_repos': [{'full_name': name, 'run_workflows': True}]}, 'Choose' if
+                name.startswith('Other') else 'is not one of the ticked repositories')
+    assert put(api, 'bots/cpo/repositories', {'mode': 'all'})['all_repos'] == data['all_repos']
+    # Chosen repos with write on product has no tick of its own; back to All ticked repos, the tick applies again.
+    chosen = put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [{'full_name': 'Acme/product', 'access': 'write'}]})
+    assert not any(r.get('run_workflows') for r in chosen['effective'] + chosen['chosen'])
+    assert chosen['all_repos'] == data['all_repos'] and chosen['workflows_stopped'] == ['Acme/product']
+    back = put(api, 'bots/cpo/repositories', {'mode': 'all'})
+    assert [r['full_name'] for r in back['effective'] if r.get('run_workflows')] == ['Acme/product']
+    # Health names it while the installation lacks Actions: write.
+    gh.permissions = {'actions': 'read', 'checks': 'read', 'statuses': 'read'}
+    api.app_state.github_app.live.clear()
+    api.app_state.github_app.cache.clear()
+    assert turn_token(api).json()['workflows_withheld']['repositories'] == ['Acme/product']
+    checks = {x['id']: x for x in api.get('/api/v2/health', headers=auth()).json()['checks']}
+    assert 'cpo: Acme/product' in checks['github_workflows']['summary']
+    # Unticked, or All ticked repos turned to Read: the tick goes, said on the reply, and Write does not bring it back.
+    off = put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_repos': [{'full_name': 'Acme/product', 'run_workflows': False}]})
+    assert off['workflows_stopped'] == ['Acme/product'] and off['all_repos'] == []
+    put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_repos': tick})
+    read = put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_access': 'read'})
+    assert read['workflows_stopped'] == ['Acme/product'] and read['all_repos'] == []
+    write = put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_access': 'write'})
+    assert not any(r.get('run_workflows') for r in write['effective'])
+    # A repository since unticked in Settings keeps its tick and may lose it, but never gains one.
+    put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_repos': tick})
+    put(api, 'repositories/Acme/product', {'enabled': False})
+    refused({'mode': 'all', 'all_repos': [{'full_name': 'Acme/product', 'edit_workflows': True}]},
+            'is not one of the ticked repositories')
+    kept = put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_repos': tick})
+    assert kept['all_repos'] == data['all_repos'] and not any(r.get('run_workflows') for r in kept['effective'])
+    put(api, 'bots/cpo/repositories', {'mode': 'all', 'all_repos': [{'full_name': 'Acme/product', 'run_workflows': False}]})
+    with api.app_state.store.read() as c:
+        assert R.metadata(c, R.ALL_STORED['run_workflows']) == {} and R.metadata(c, R.WORKFLOWS) == {}
+
+
 def test_a_refused_workflows_write_token_falls_back_and_keeps_the_grants_actions(api, gh):
     flagged_grants(api, gh)
     # The installation reports Workflows: write, but GitHub refuses every token asking for it.

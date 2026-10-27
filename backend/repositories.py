@@ -25,6 +25,9 @@ WORKFLOW_EDITS = 'repository-workflow-edit-grants'
 FLAGS = (('run_workflows', WORKFLOWS, 'Running workflows', 'run workflows', 'workflows_stopped'),
          ('edit_workflows', WORKFLOW_EDITS, 'Editing workflow files', 'edit workflow files', 'workflow_edits_stopped'))
 STORED = {flag: key for flag, key, *_ in FLAGS}
+# The same opt-ins on All ticked repos, per repository, kept apart from the chosen grants' so each mode keeps its own
+# (as a switch to own keeps the chosen rows): {bot: [owner/name, ...]}. They apply while All ticked repos is Write.
+ALL_STORED = {flag: key + ':all' for flag, key in STORED.items()}
 
 
 def metadata(c, key):
@@ -161,6 +164,7 @@ class Reads:
         self.creation = metadata(c, 'repository-creation-grants')
         self.product_creation = metadata(c, PRODUCT_GRANTS)
         self.flags = {flag: metadata(c, key) for flag, key, *_ in FLAGS}
+        self.all_flags = {flag: metadata(c, key) for flag, key in ALL_STORED.items()}
         self._enabled = self._bot_repos = self._all = None
 
     def _rows(self, sql, keys):
@@ -183,6 +187,15 @@ class Reads:
                          [r[0] for r in self.c.execute('SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0')])
         return self._all
 
+    def all_ticked(self, org):
+        """{lowercase name: owner/name} of the shared repositories All ticked repos reaches: the enabled ones, less
+        bot repositories."""
+        from .github_app import repo_of
+        repos, shared = self.all_mode()
+        bot_repos = {str(repo_of(repo, org) or '').lower() for repo in repos}
+        return {name.lower(): name for name in shared
+                if name.lower() not in bot_repos and not name.split('/')[1].lower().startswith('bot-')}
+
 
 def access(c, bot, org, reads=None):
     """`reads` (a `Reads` covering `bot`) when the caller answers for many bots."""
@@ -203,19 +216,26 @@ def access(c, bot, org, reads=None):
         for r in chosen:
             if r['access'] == 'write' and r['full_name'].lower() in flagged:
                 r[flag] = True
+    # All ticked repos' own per-repository opt-ins, whatever the mode: the editor shows them there, and they apply
+    # while that mode is on with Write.
+    ticked = {}
+    for flag, stored in reads.all_flags.items():
+        for name in stored.get(bot) or ():
+            ticked.setdefault(str(name).lower(), {'full_name': str(name)})[flag] = True
     grants = {}
     if mode == 'all':
-        repos, shared = reads.all_mode()
-        bot_repos = {str(repo_of(repo, org) or '').lower() for repo in repos}
-        grants = {name.lower(): {'full_name': name, 'access': all_access} for name in shared
-                  if name.lower() not in bot_repos and not name.split('/')[1].lower().startswith('bot-')}
+        grants = {key: {'full_name': name, 'access': all_access} for key, name in reads.all_ticked(org).items()}
+        for key, grant in grants.items():
+            if all_access == 'write':
+                grant.update({flag: True for flag in STORED if ticked.get(key, {}).get(flag)})
     elif mode == 'chosen':
         grants = {r['full_name'].lower(): r for r in chosen if reads.enabled(r['full_name'])}
     if own:
         grants[own.lower()] = {'full_name': own, 'access': 'write'}
     missing = reads.missing
     effective = [r for _, r in sorted(grants.items()) if (r['full_name'].lower() not in missing or r['full_name'].lower() == str(own).lower()) and org and r['full_name'].split('/')[0].lower() == org.lower()]
-    return {'mode': mode, 'all_access': all_access, 'chosen': chosen, 'effective': effective,
+    return {'mode': mode, 'all_access': all_access, 'chosen': chosen, 'all_repos': [ticked[k] for k in sorted(ticked)],
+            'effective': effective,
             'create_repositories': bot == _botops() or reads.creation.get(bot) is True,
             'create_product_repositories': product_creation(reads.product_creation, bot)}
 
@@ -273,8 +293,44 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
                 flagged[flag].add(name.lower())
             else:
                 flagged[flag].discard(name.lower())
+    # All ticked repos' opt-ins, per repository, on the same terms as a chosen grant's: write access (All ticked repos
+    # set to Write), an Owner's or admin's own click. Left out, a repository keeps its tick while access stays Write.
+    all_access = body.all_access or before['all_access']
+    reach = Reads(c, [bot]).all_ticked(org)
+    named = {r['full_name'].lower(): r['full_name'] for r in before['all_repos']}
+    all_was = {flag: {r['full_name'].lower() for r in before['all_repos'] if r.get(flag)} for flag in STORED}
+    all_flagged = {flag: set(names) for flag, names in all_was.items()}
+    for grant in body.all_repos or []:
+        name = repo_of(grant.full_name, org)
+        if not name or name.split('/')[0].lower() != org.lower():
+            raise Problem('github_repo', 'Choose a repository in the connected organization', 422)
+        named.setdefault(name.lower(), reach.get(name.lower()))
+        for flag, _, label, verb, _ in FLAGS:
+            value = getattr(grant, flag)
+            if value and all_access != 'write':
+                raise Problem('github_repo', label + ' needs All ticked repos set to Write', 422)
+            if value is not None and value != (name.lower() in all_was[flag]) and (
+                    not team_list or not H.is_human(actor) or not own_click):
+                raise Problem('forbidden', 'Only an Owner or admin lets a bot ' + verb + ', themselves in Settings > '
+                              'Repositories', 403)
+            # One since unticked in Settings > Repositories may keep its tick or lose it, never gain one.
+            if value and name.lower() not in reach and name.lower() not in all_was[flag]:
+                raise Problem('github_repo', name + ' is not one of the ticked repositories All ticked repos reaches', 422)
+            if value:
+                all_flagged[flag].add(name.lower())
+            elif value is False:
+                all_flagged[flag].discard(name.lower())
+    if all_access != 'write':
+        all_flagged = {flag: set() for flag in STORED}          # Read for every ticked repository: the ticks go
+    for flag, stored in ALL_STORED.items():
+        if all_flagged[flag] != all_was[flag]:
+            flags = metadata(c, stored)
+            flags[bot] = sorted(named[key] for key in all_flagged[flag])
+            if not flags[bot]:
+                flags.pop(bot)
+            save_metadata(c, stored, flags)
     config = json.loads(c.execute('SELECT config_json FROM bot_config WHERE bot=?', (bot,)).fetchone()[0] or '{}')
-    config.update(repo_access_mode=body.mode, repo_all_access=body.all_access or before['all_access'])
+    config.update(repo_access_mode=body.mode, repo_all_access=all_access)
     c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps(config), bot))
     if body.chosen is not None:
         c.execute('DELETE FROM bot_repo_access WHERE bot=?', (bot,))
@@ -300,7 +356,8 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         grants[bot] = bool(product)                           # an explicit choice either way; an off must stick
         save_metadata(c, PRODUCT_GRANTS, grants)
     after = access(c, bot, org)
-    # Kept flags apply again when a grant returns to effect (Own or All back to Chosen): that is a gain too.
+    # Kept flags apply again when a grant returns to effect (Own or All back to Chosen, Own or Chosen back to All): that is
+    # a gain too.
     for flag, _, _, verb, _ in FLAGS:
         had = {r['full_name'].lower() for r in before['effective'] if r.get(flag)}
         if any(r.get(flag) and r['full_name'].lower() not in had for r in after['effective']) and (
@@ -343,7 +400,7 @@ def started(before, after):
     out = {}
     for flag, *_, key in FLAGS:
         names = []
-        for kind in ('effective', 'chosen'):
+        for kind in ('effective', 'chosen', 'all_repos'):
             had = {r['full_name'].lower() for r in before[kind] if r.get(flag)}
             names += [r['full_name'] for r in after[kind] if r.get(flag)
                       and r['full_name'].lower() not in had and r['full_name'] not in names]
@@ -626,7 +683,9 @@ def workflow_health(service, accepted, refused=False, flag='run_workflows'):
 
 
 def _workflow_grants(c, flag):
-    return [bot + ': ' + name for bot, names in sorted(metadata(c, STORED[flag]).items()) for name in names or ()]
+    """`bot: owner/name` for each grant with `flag`, a chosen grant's or an All ticked repos tick."""
+    return sorted({bot + ': ' + name for key in (STORED[flag], ALL_STORED[flag])
+                   for bot, names in metadata(c, key).items() for name in names or ()})
 
 
 def workflows_waiting(c, flag='run_workflows'):
@@ -741,6 +800,12 @@ class Grant(Contract):
     edit_workflows: bool | None = None
 
 
+class TickedRepo(Contract):
+    full_name: str
+    run_workflows: bool | None = None
+    edit_workflows: bool | None = None
+
+
 class RepoAccessUpdate(Contract):
     create_repositories: bool | None = None
     # On by default; the Owner or an admin turns it off, only the Owner back on. Left out, the bot keeps what it has.
@@ -748,6 +813,8 @@ class RepoAccessUpdate(Contract):
     mode: Literal['own', 'all', 'chosen']
     all_access: Literal['read', 'write'] | None = None
     chosen: list[Grant] | None = None
+    # All ticked repos' per-repository opt-ins (they apply while it is Write); left out, each keeps what it holds.
+    all_repos: list[TickedRepo] | None = None
 
 
 class RepoUpdate(Contract):

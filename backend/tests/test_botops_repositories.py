@@ -152,6 +152,40 @@ def test_an_owner_or_admin_asking_botops_to_tick_run_workflows_gets_a_confirm_ca
             "human:" + name
 
 
+@pytest.mark.parametrize("option,words", CARDS)
+def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops, repos, option, words):
+    """Dev 641: a repository's own tick under All ticked repos is the person's own click too, both ways, and the
+    catalogue cards it from the body."""
+    from backend.tests.test_mcp import call as mcp
+    put(api, "bots/ops/repositories", {"mode": "all"}, token="ana-test")
+    before = effective(api)
+    ana = turn(api, botops, person="ana-test", text="Tick " + option + " on product for ops")
+    body = {"mode": "all", "all_repos": [{"full_name": "Acme/product", option: True}]}
+    card = act(api, ana, "PUT", "bots/ops/repositories", body)
+    assert card.status_code == 200 and card.json()["needs_confirm"] is True, card.text
+    assert effective(api) == before
+    assert _stored_card(api, card.json())["description"] == "ops: " + words + "."
+    err, shown = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "value": body}, ana["token"])
+    assert not err and shown["needs_confirm"] is True, shown
+    post(api, f"assistant/actions/{card.json()['action']['id']}/confirm", {}, token="ana-test")
+    assert {"full_name": "Acme/product", "access": "write", option: True} in effective(api)
+    cleared = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "all", "all_repos": [
+        {"full_name": "Acme/product", option: False}]})
+    assert cleared.json()["needs_confirm"] is True
+    assert {"full_name": "Acme/product", "access": "write", option: True} in effective(api)
+    # Nor can it keep a tick for later while the bot is on Chosen repos.
+    put(api, "bots/ops/repositories", {"mode": "chosen"}, token="ana-test")
+    later = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "all_repos": [
+        {"full_name": "Acme/docs", option: True}]})
+    assert later.json()["needs_confirm"] is True, later.text
+    assert get(api, "bots/ops/repositories", "ana-test")["all_repos"] == [{"full_name": "Acme/product", option: True}]
+    # Changing its own repositories in the person's turn, BotOps never ticks one for itself, not even for later.
+    itself = act(api, ana, "PUT", "bots/botops/repositories", {"mode": "chosen", "all_repos": [
+        {"full_name": "Acme/docs", option: True}]})
+    assert itself.status_code == 403 and "Only an Owner or admin lets a bot" in itself.text, itself.text
+    assert get(api, "bots/botops/repositories", "ana-test")["all_repos"] == []
+
+
 def test_a_declined_run_workflows_card_changes_nothing(api, botops, repos):
     ana = turn(api, botops, person="ana-test", text="Tick Run workflows on product for ops")
     card = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [FLAG]}).json()
@@ -195,7 +229,8 @@ def test_the_catalogue_puts_run_workflows_on_a_card_in_the_bots_own_words(api, b
     ana = turn(api, botops, person="ana-test", text="Tick Run workflows on product for ops")
     err, shown = mcp(api, "hub_settings_show", {"key": "bot.repositories", "bot": "ops"}, ana["token"])
     assert not err and shown["setting"]["class_when"] == {"class": "confirm", "body": {
-        "chosen.run_workflows": [True], "chosen.edit_workflows": [True], "create_product_repositories": [True]}}, shown
+        "chosen.run_workflows": [True], "chosen.edit_workflows": [True], "all_repos.run_workflows": [True],
+        "all_repos.edit_workflows": [True], "create_product_repositories": [True]}}, shown
     assert "Run workflows or Edit workflow files tick" in shown["setting"]["why"] and "Confirm card" in shown["setting"]["why"]
     err, card = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops",
                                               "value": {"mode": "chosen", "chosen": [FLAG]}}, ana["token"])

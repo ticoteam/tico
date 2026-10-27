@@ -200,6 +200,7 @@ ENTRIES = TEAM_RULES + [
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
       value="json", card=_card("repos", "set-repos"), words="run edit workflows actions ci product",
       confirm_when=(("chosen.run_workflows", (True,)), ("chosen.edit_workflows", (True,)),
+                    ("all_repos.run_workflows", (True,)), ("all_repos.edit_workflows", (True,)),
                     ("create_product_repositories", (True,))),
       why="A Run workflows or Edit workflow files tick (a kept one coming back too), turning Create product "
           "repositories back on (the owner only), or taking access away needs a Confirm card: running or editing "

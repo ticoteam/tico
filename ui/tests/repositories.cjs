@@ -42,7 +42,9 @@ function fixtures() {
 const effective = (data) => {
   const own = [{full_name: 'acme/bot-release-captain', access: 'write'}];
   const b = data.bot;
-  if (b.mode === 'all') return own.concat(data.repositories.filter(r => r.enabled && !r.bot_repo).map(r => ({full_name: r.full_name, access: b.all_access})));
+  const ticks = name => b.all_access !== 'write' ? {} : Object.fromEntries(['run_workflows', 'edit_workflows']
+    .filter(flag => (b.all_repos || []).some(t => t.full_name === name && t[flag])).map(flag => [flag, true]));
+  if (b.mode === 'all') return own.concat(data.repositories.filter(r => r.enabled && !r.bot_repo).map(r => ({full_name: r.full_name, access: b.all_access, ...ticks(r.full_name)})));
   if (b.mode === 'chosen') return own.concat(b.chosen);
   return own;
 };
@@ -233,12 +235,35 @@ async function owner(browser) {
   // All ticked repos carries Read or Write; Own repo only leaves just the bot's own.
   await box.locator('label:has(input[type=radio][value=all])').first().click();
   await box.locator('.brepo-all').waitFor();
-  assert.equal(await box.locator('.brepo-list').count(), 0);
   await page.waitForFunction(() => /acme\/sdk-js write/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
   assert.equal(lastWrite(writes, '/api/v2/bots/release-captain/repositories').mode, 'all');
+  // Dev 641: All ticked repos lists its repositories, each with Run workflows and Edit workflow files of its own,
+  // kept apart from Chosen repos' ticks (acme/mobile's Run workflows there was turned off above).
+  const allRuns = name => box.locator(`[data-brepo-all="${name}"] [data-brepo-run]`);
+  assert.deepEqual(await box.locator('[data-brepo-all]').evaluateAll(els => els.map(el => el.dataset.brepoAll)),
+    ['acme/api', 'acme/data-pipeline', 'acme/design-system', 'acme/infra', 'acme/mobile', 'acme/sdk-js', 'acme/web']);
+  assert.equal(await box.locator('[data-brepo-all] input:disabled').count(), 0, 'Write: every option can be ticked');
+  assert.equal(await box.locator('[data-brepo-why]').count(), 0);
+  await allRuns('acme/web').check();
+  await page.waitForFunction(() => /acme\/web write \+ workflows/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
+  assert.deepEqual(lastWrite(writes, '/api/v2/bots/release-captain/repositories').all_repos, [{full_name: 'acme/web', run_workflows: true}]);
+  assert.equal(await allRuns('acme/web').evaluate(el => el === document.activeElement), true, 'the keyboard stays on the tick');
+  assert.equal(await allRuns('acme/sdk-js').isChecked(), false, 'one repository only');
+  assert.equal(await box.locator('[data-brepo-all="acme/web"] [data-brepo-edit]').isChecked(), false);
+  await settled(page);
+  await shot(page, 'bot-repositories-all-desktop-dark.png');
+  // Read for all ticked repos: the options stay, greyed, with the reason; the tick goes.
   await box.locator('.brepo-all label:has(input[value=read])').click();
   await page.waitForFunction(() => /acme\/sdk-js read/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText || ''));
-  assert.deepEqual((({mode, all_access}) => ({mode, all_access}))(lastWrite(writes, '/api/v2/bots/release-captain/repositories')), {mode: 'all', all_access: 'read'});
+  assert.deepEqual((({mode, all_access, all_repos}) => ({mode, all_access, all_repos}))(lastWrite(writes, '/api/v2/bots/release-captain/repositories')),
+    {mode: 'all', all_access: 'read', all_repos: [{full_name: 'acme/web', run_workflows: false}]});
+  assert.equal(await box.locator('[data-brepo-all]').count(), 7, 'greyed, not removed');
+  assert.equal(await box.locator('[data-brepo-all] input:not(:disabled)').count(), 0);
+  assert.equal(await allRuns('acme/web').isChecked(), false);
+  assert.match(await box.locator('[data-brepo-why]').innerText(), /need Write/);
+  assert.match(await box.locator('[data-brepo-all="acme/web"] label:has([data-brepo-run])').getAttribute('title'), /Needs Write for all ticked repos/);
+  await settled(page);
+  await shot(page, 'bot-repositories-all-read-desktop-dark.png');
   await box.locator('label:has(input[type=radio][value=own])').click();
   await page.waitForFunction(() => document.querySelector('#bot-editor .brepo-eff')?.innerText.trim() === 'Effective\nacme/bot-release-captain write'
     || /^Effective\s+acme\/bot-release-captain write$/.test(document.querySelector('#bot-editor .brepo-eff')?.innerText.trim() || ''));
