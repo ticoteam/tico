@@ -22,12 +22,15 @@ function assistantPrefill(text) {
   box.dispatchEvent(new Event('input'));
   box.focus();
 }
-function assistantPill() {
+// `files`: the server says this chat is the CEO Bot's (GET /v2/assistant `ceo`), the only one whose uploads it takes.
+function assistantPill(files) {
   const slug = myChatBot();
-  if (ASSISTANT_PILL?.slug === slug) return ASSISTANT_PILL;
+  if (ASSISTANT_PILL?.slug === slug && ASSISTANT_PILL.attach === files) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
-  return ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files: meCeo(), send: assistantSend,
+  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files, send: assistantSend,
     label: meCeo() ? `Message ${myChatName()}` : 'Message the Assistant', placeholder: 'Ask anything…'}));
+  ASSISTANT_PILL.attach = files;
+  return ASSISTANT_PILL;
 }
 const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints" aria-label="Suggestions">${
   ASSISTANT_HINTS.map(t => `<button class="ghost" type="button" data-hint="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
@@ -68,9 +71,9 @@ async function pageAssistant() {
     window.assistantChat?.off($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
   }
-  const P = assistantPill(), thread = $('#conv-thread');
+  const files = !!d.ceo && d.bot === slug, P = assistantPill(files), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
-  if (meCeo()) chatDropZone($('#pane-chat'), P);
+  if (files) chatDropZone($('#pane-chat'), P);
   if (ASSISTANT_DRAFT) { assistantPrefill(ASSISTANT_DRAFT); ASSISTANT_DRAFT = ''; }
   bindChatSwipe(thread);
   thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });

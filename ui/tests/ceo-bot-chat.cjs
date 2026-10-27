@@ -135,6 +135,15 @@ const view = (over) => ({available: true, state: 'active', can_turn_on: false, r
       assert.deepEqual(errors, [], 'paused: no page errors');
       await page.close();
     }
+    // An owner whose chat the server does not give to the CEO Bot (not set up yet) gets no attach: the server takes words only there.
+    {
+      const {page, errors} = await open(browser, owner, view({bot: 'coo', ceo: false, name: 'Assistant'}), 'Chief');
+      await page.goto('https://tico-ui.test/#/assistant');
+      await page.locator('#chat-composer .p-text').waitFor();
+      assert.equal(await page.locator('#chat-composer .p-attach').count(), 0, 'owner without the CEO Bot chat: no attach button');
+      assert.deepEqual(errors, [], 'owner without the CEO Bot chat: no page errors');
+      await page.close();
+    }
     // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
       const admin = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
