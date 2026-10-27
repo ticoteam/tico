@@ -217,3 +217,58 @@ def test_a_private_child_is_never_named_in_its_parent_s_reason(api):
         assert wait(c, mine, owner="human:ana")["blocked_reason"] == "Waiting on a private task"
         H.task_update(c, "bot:ops", secret, status="done", note="Reviewed")
         assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: A private task is done"
+
+
+def test_removing_the_last_blocker_reopens_a_bot_task_and_words_a_person_s(api):
+    from backend import task_relations as TR
+    with api.app.state.store.transaction() as c:
+        for owner, actor, what in (("bot:ops", "human:ben", "form"), ("human:ana", "human:ana", "menu")):
+            tid = bot_task(c, f"Ship the {what}", owner=owner, actor=actor)
+            blocker = bot_task(c, f"Pick the {what} vendor", owner="bot:cpo")
+            TR.add_blocker(c, H.KEEPER, tid, blocker)
+            row = wait(c, tid, owner=owner)
+            assert row["status"] == "waiting" and row["blocked_reason"] == f"Waiting on cpo: Pick the {what} vendor"
+            TR.remove_blocker(c, H.KEEPER, tid, blocker)
+            row = H.task(c, tid)
+            if owner == "bot:ops":
+                assert row["status"] == "open"
+                assert row["note"] == "Pick the form vendor no longer blocks it; nothing left to wait on"
+            else:
+                assert row["status"] == "waiting"
+                assert row["blocked_reason"] == "Nothing left to wait on: Pick the menu vendor no longer blocks it"
+
+
+def test_moving_a_child_in_or_out_recomputes_both_parents(api):
+    from backend import task_relations as TR
+    with api.app.state.store.transaction() as c:
+        mine = bot_task(c, "Plan the party", owner="human:ana", actor="human:ana")
+        child = bot_task(c, "Book the band", parent=mine, actor="human:ana")
+        assert wait(c, mine, owner="human:ana")["blocked_reason"] == "Waiting on ops: Book the band"
+        TR.set_parent(c, "human:ana", child, None)
+        assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: Book the band moved away"
+
+        bots = bot_task(c, "Plan the dinner", actor="human:ana")
+        assert wait(c, bots)["blocked_reason"] == task_holds.NOTHING
+        TR.set_parent(c, "human:ana", child, bots)
+        row = H.task(c, bots)
+        assert row["status"] == "waiting" and row["blocked_reason"] == "Waiting on ops: Book the band"
+        TR.set_parent(c, "human:ana", child, None)
+        row = H.task(c, bots)
+        assert row["status"] == "open" and row["note"] == "Book the band moved away; nothing left to wait on"
+
+        # A subtask filed under a waiting parent is named at once.
+        wait(c, mine, owner="human:ana")
+        bot_task(c, "Order the cake", owner="bot:cpo", parent=mine, actor="human:ana")
+        assert H.task(c, mine)["blocked_reason"] == "Waiting on cpo: Order the cake"
+
+
+def test_deleting_the_only_child_clears_the_parent_s_hold(api):
+    from backend.task_delete import delete_tasks
+    with api.app.state.store.transaction() as c:
+        mine = bot_task(c, "Plan the trip", owner="human:ana", actor="human:ana")
+        # A person's subtask: a bot's would carry its queued wake, and a task carrying work is not deleted.
+        child = bot_task(c, "Book the train", owner="human:ben", parent=mine, actor="human:ana")
+        wait(c, mine, owner="human:ana")
+        report = delete_tasks(c, [child], apply=True, actor="human:ana")
+        assert report["applied"], report["refused"]
+        assert H.task(c, mine)["blocked_reason"] == "Nothing left to wait on: Book the train was deleted"

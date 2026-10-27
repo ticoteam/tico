@@ -5625,6 +5625,10 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if number is not None:
         _task_event(conn, row["id"], actor, "number", None, number, "")
     _set_status(conn, actor, {**row, "status": None}, status="open", type=type)
+    if parent:
+        # A waiting parent now waits on this subtask too: its reason names it (backend/task_holds.py).
+        from . import task_holds
+        task_holds.refresh(conn, parent["id"])
     public = visibility or type_get(conn, task(conn, row['id'])['type_id'])['default_visibility']
     if public not in ('public', 'private'):
         refuse(conn, actor, 'kind', 'visibility is public or private')
@@ -6147,7 +6151,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         conn.execute("UPDATE tasks SET blocked_kind='dependency',blocked_reason=? WHERE id=? AND coalesce(blocked_kind,'')<>'manual'", ("Waiting on " + person_name(conn, person), task_id))
     if (task(conn, task_id) or {}).get("status") == "waiting":
         # Its reason follows what holds it after any change: a person wait set or cleared, a note, a status
-        # (backend/task_holds.py). Someone else clearing the person it waited on clears that hold.
+        # (backend/task_holds.py). Someone else clearing the person it waited on clears that hold. The owner clearing
+        # it in its own write chose the status that write leaves (often waiting on something untracked): no reopen.
         from . import task_holds
         gone = row.get("waiting_on") if (not person and row.get("waiting_on") and row["status"] == "waiting"
                                          and status in (None, "waiting") and actor != row["owner"]) else None

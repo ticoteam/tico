@@ -166,11 +166,16 @@ def refresh_many(conn, task_ids, cleared=None):
         refresh(conn, task_id, cleared)
 
 
+def title(conn, row):
+    """A child or blocker named in what cleared: a private one by no title, as _task_hold names it."""
+    from . import hubdb as H
+    return "A private task" if H.task_private(conn, row) else _line(row["title"], 120)
+
+
 def ended(conn, row, status):
     """`row` just finished as `status`: its parent and the tasks it blocked lose a hold."""
     from . import hubdb as H, task_relations as TR
-    title = "A private task" if H.task_private(conn, row) else _line(row["title"], 120)   # as _task_hold names it
-    what = f"{title} {'is done' if status == 'done' else 'was ' + H.TASK_ENDED[status]}"
+    what = f"{title(conn, row)} {'is done' if status == 'done' else 'was ' + H.TASK_ENDED[status]}"
     parent = TR.parent_of(conn, row["id"])
     if parent:
         refresh(conn, parent, what)
