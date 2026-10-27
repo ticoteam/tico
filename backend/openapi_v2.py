@@ -1287,7 +1287,7 @@ STABLE.extend([
     ("/api/v2/bots/{bot}/profile", "get", "Bots", "getBotProfile",
      "A bot's profile and the values it runs on", "BotProfileState"),
     ("/api/v2/bots/{bot}/profile", "post", "Bots", "setBotProfile",
-     "Set the bot's profile (doer, reviewer, lead, responder, monitor, custom); leaving custom deletes the wake rules it "
+     "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it "
      "copied and needs confirm_drop_rules", "BotProfileState"),
 ])
 SCHEMAS.update({

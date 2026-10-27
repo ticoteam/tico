@@ -506,9 +506,9 @@ tickets type is given three editable rows when it is created or renamed: **QA Fi
 ticket, **Pending Release** is a note to the Release Manager, and **In QA** wakes QA only. Delete a row and it stays
 deleted.
 
-A bot's **profile** (Doer, Reviewer, Lead, Responder, Monitor, Custom) adds a few bot-level rows of its own: a Reviewer wakes for
+A bot's **profile** (Doer, Reviewer, Lead, Manager, Responder, Monitor, Custom) adds a few bot-level rows of its own: a Reviewer wakes for
 its review and QA requests and people and notes the rest, a Lead gets everything but people, escalations and approvals in a daily
-digest, a Responder and a Monitor note the rest. `hub rule list` shows them as the profile's, and a Custom bot's copies as its own
+digest, a Manager wakes for people, tasks given to it, its own clock and its exceptions list and notes the rest, a Responder and a Monitor note the rest. `hub rule list` shows them as the profile's, and a Custom bot's copies as its own
 ([Profiles](how-it-works.md#profiles)).
 
 Once a week, **Suggest quieter rules** (Settings > System routines) turns each rule above 50% no-op over 7 days with at
@@ -777,10 +777,10 @@ again the decision is history (`current` false, no `state`: "Resumed by BotOps a
 only; no titles or bodies, except that a decision's note, which can name the task, is shown to a reader who may open
 the run's conversation.
 
-For the engineering type's manager, the same response includes `exceptions[]`: one current row per ticket and cause,
-with the ticket, cause and `since`. It reads factory records for tickets without a job for 45 minutes, failed or cut
-runs, empty builder or review pools, repeated refusals and failed merges. A failed merge includes its PR number and
-head. The list is a read only view; it does not route work or wake the manager for ordinary tickets.
+For the engineering type's manager, and nobody else, the same response includes `exceptions[]`: the board's exceptions
+list ([Software factory](software-factory.md)), one row per subject and kind, oldest first, each with its `cause` and
+`since`. A row about a ticket carries the ticket (with its step and owner), and `check` when the open check below it is
+what stands; a failed merge carries its PR number and head.
 
 Type create and update also accept `bots` (`parties`, `read` or `work`). With `work`, any bot may
 change a task of that type and close it once it is in a ready step, so a deploy bot can move shipped

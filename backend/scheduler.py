@@ -137,8 +137,19 @@ def run_propose_demotions(store, auth, at, failures=None):
         run.did(SR.words_of(found["made"], "rule suggested", "No rules to suggest"))
 
 
+def run_engineering_exceptions(store, auth, at, failures=None):
+    # Plain code (backend/pipeline_exceptions.py): a manager on the Manager profile is woken with its board's exceptions
+    # only when an entry is new since the last list; no entry, or no new one, is a quiet run.
+    with SR.recording(store, "engineering_exceptions", failures) as run:
+        from . import pipeline_exceptions
+        with store.transaction() as c:
+            woke = pipeline_exceptions.deliver(c, stamp(at))
+        run.did(SR.words_of(woke, "manager woken", "No new exceptions"), quiet=not woke)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
-         "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report, "propose_demotions": run_propose_demotions}
+         "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report, "propose_demotions": run_propose_demotions,
+         "engineering_exceptions": run_engineering_exceptions}
 
 
 def run_now(store, auth, key, actor):
@@ -645,6 +656,14 @@ class Scheduler:
                         aged = step_age.sweep(c, stamp(at))
                 except Exception as exc:
                     failures.append({"step_age": type(exc).__name__})
+                # A turn that ended and left its ticket or check in progress with nothing queued: its owner, once.
+                nudged = []
+                try:
+                    from . import step_age
+                    with self.store.transaction() as c:
+                        nudged = step_age.turn_ended(c, stamp(at))
+                except Exception as exc:
+                    failures.append({"turn_ended": type(exc).__name__})
                 # Work piling up at a step with a backlog setting: whoever it names hears of it (backend/step_backlog.py).
                 backlogged = []
                 try:
@@ -674,6 +693,7 @@ class Scheduler:
                          "asked for a status": aged.get("asked") or [], "late tickets told": aged.get("late") or [],
                          "checks timed out": timed_out, "tickets allocated": allocated, "backlogs reported": backlogged,
                          "late tickets nobody told": aged.get("untold") or [],
+                         "owners woken after an idle turn": nudged,
                          "tickets failed": aged.get("failed") or []}
                 run.did(SR.words_of(acted, none="Nothing stalled"), quiet=not any(acted.values()))
                 # ...and queued jobs whose message their bot may no longer read, which no claim would ever take.

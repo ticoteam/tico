@@ -1777,7 +1777,7 @@
         ]
       },
       "post": {
-        "summary": "Set the bot's profile (doer, reviewer, lead, responder, monitor, custom); leaving custom deletes the wake rules it copied and needs confirm_drop_rules",
+        "summary": "Set the bot's profile (doer, reviewer, lead, manager, responder, monitor, custom); leaving custom deletes the wake rules it copied and needs confirm_drop_rules",
         "operationId": "setBotProfile",
         "parameters": [
           {
@@ -23565,6 +23565,7 @@
               "doer",
               "reviewer",
               "lead",
+              "manager",
               "responder",
               "monitor",
               "custom"

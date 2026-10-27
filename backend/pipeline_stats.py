@@ -338,12 +338,14 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     busy = {b for b, q in queues.items() if any(q[k] for k in ("running", "queued", "held", "dead", "uncertain",
                                                                 "decisions"))}
     busy |= set(failures["by_bot"])
-    exceptions = pipeline_exceptions.report(c, auth, who, typ, now=now)
+    # Only the type's manager reads its exceptions list (backend/pipeline_exceptions.py); everyone else has no key.
+    exceptions = pipeline_exceptions.report(c, auth, who, typ, at=now)
     return {"now": now, "type": {"id": typ["id"], "name": typ["name"]},
             "filters": {"owner": owner_actor, "label": label, "updated_since": changed, "snoozed": snoozed,
                         "bot": bot, "since": window},
             "total": len(rows), "truncated": truncated, "steps": steps, **loose,
-            "queues": {b: queues[b] for b in sorted(busy)}, "failures": failures, "exceptions": exceptions}
+            "queues": {b: queues[b] for b in sorted(busy)}, "failures": failures,
+            **({"exceptions": exceptions} if exceptions is not None else {})}
 
 
 def install(app, store, auth):

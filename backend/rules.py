@@ -136,6 +136,7 @@ WAKE_EVENTS = {
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
+    "exceptions": "the type manager's exceptions list has a new entry",
 }
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
@@ -168,7 +169,7 @@ WHEN_ROLES = ("owner", "requester", "qa", "release_manager", "other")
 # rows in the table). A row naming an event is tried at the bot scope after the bot's own rows; a `*` row is the
 # profile's "everything else" and is tried last of all, after the team's rows, so a type or team rule that names an
 # event (a release waking QA) still reaches a bot whose profile makes everything else a note.
-PROFILES = ("doer", "reviewer", "lead", "responder", "monitor", "custom")
+PROFILES = ("doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
 # Time-based events a bot set for itself (its routines, due dates, snoozes): a bot that works to a clock is woken by
 # them whatever its profile says about news.
 OWN_TIMERS = (("routine", "its routine ran"), ("schedule", "a scheduled run came"), ("due", "a task's due date came"),
@@ -209,6 +210,13 @@ def _profile_rules():
     add("lead", "profile_lead_digest", "*", BATCH, "anything else Tico reports: held for the daily digest",
         {"actor": ["keeper"]})
     add("lead", "profile_lead_note", "*", NOTE, "anything else a bot says")
+    # A manager works by exception: its schedule, a person, work given to it and its exceptions list wake it; a ticket's
+    # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
+    add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
+    add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
+    add("manager", "profile_manager_exceptions", "exceptions", WAKE, "its exceptions list has a new entry")
+    timers("manager", OWN_TIMERS + OWN_WORK)
+    add("manager", "profile_manager_note", "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
     add("monitor", "profile_monitor_assignment", "assignment", WAKE, "its watcher filed a task",
         {"actor": ["keeper"]})

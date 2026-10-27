@@ -1,247 +1,392 @@
-"""The engineering manager's one exception list, read from factory records.
+"""The engineering manager's one exceptions list, read from factory records (docs/software-factory.md).
 
-This is a view over task, run, pool and pull-request state. It makes no routing or notification decisions; each live
-cause is emitted once for its ticket and cause, with the first time that cause appeared.
-"""
-import re
+Head of Engineering has no step on any ticket. A ticket that moves through its steps is nobody's news; the manager
+reads, about hourly, the few things that did not move on their own and fixes their causes:
 
+- `stuck`: a ticket, or the open check filed below it, with no live, queued or held run for STUCK_MINUTES and nothing
+  recorded to wait on (a snooze, an ask, an approval, a blocker, a wait on a pull request or a release); and a ticket
+  at a check step with no check filed and no wait for one. Each names its owner and since when it has had no run.
+- `run`: the newest run on the ticket or its open check failed, was cut or is uncertain (waits for its owner's review),
+  with no later run that finished. A second cut of the same work is the same entry.
+- `pool`: a ticket waiting for a reviewer longer than STUCK_MINUTES, or at once when the step's pool is empty.
+- `slots` / `backlog`: a builder holding more tickets than its step's `assign` slots, or a step over its `backlog`.
+- `outage`: a review move Tico cannot retry because GitHub cannot be read (one entry, every ticket it holds); a pool bot
+  that is crashed, quarantined, limited or offline.
+- `refusal`: a refused move Tico is no longer retrying (move_retry gave up after RETRY_FOR), or one rule refusing a
+  write on the ticket twice in a day with no retry pending.
+- `merge`: an open pull request GitHub reports as conflicting, with its number and head.
+
+An entry is one per subject (a ticket, a bot, a step or a service) and kind; `since` is when that cause began. The list
+is a read: it routes nothing. The hourly pass (`deliver`, system routine `engineering_exceptions`) wakes a manager
+whose profile is `manager` with it only when an entry is new since the last list it was sent, so a week of tickets
+that move on their own costs the manager no turn."""
 from . import task_privacy as privacy
 from .store import H
 
-NO_JOB_AFTER_SECONDS = 45 * 60
+STUCK_MINUTES = 45
+REFUSAL_HOURS = 24
+FAILED = ("failed", "interrupted", "expired")
 MAX_EXCEPTIONS = 500
-CHECK_TITLE = re.compile(r"^(?:Review [12]|QA|Post Release QA|Security)(?:\b|:)", re.I)
+MAX_LINES = 40                  # lines in the wake; the rest is in `hub pipeline`
+EVENT = "exceptions.sent"
+WAKE = "exceptions"
+PROFILE = "manager"
+BOT_HELD = ("crashed", "quarantined", "limited")
 
 
-def _event_times(c, ticket_ids):
-    if not ticket_ids:
+def reads_list(c, slug):
+    """Whether this bot works from the exceptions list instead of per-ticket notices: its profile is `manager`."""
+    from . import rules
+    try:
+        return bool(slug) and rules.profile_of(c, slug) == PROFILE
+    except Exception:  # noqa: BLE001 - a profile that cannot be read keeps the notices it had
+        return False
+
+
+def _check_children(c, ids):
+    """{child id: ticket id} for the open checks (Review, QA, Security) filed below these tickets."""
+    from .check_pools import CHECK_TITLE
+    if not ids:
         return {}
-    marks = ",".join("?" * len(ticket_ids))
     out = {}
-    for row in c.execute(
-            "SELECT task_id, max(ts) AS entered FROM task_events e JOIN tasks t ON t.id=e.task_id "
-            f"WHERE e.task_id IN ({marks}) AND e.field='step' AND e.new=t.step_id GROUP BY e.task_id", ticket_ids):
-        out[row["task_id"]] = row["entered"]
+    for part in H.chunks(sorted(ids)):
+        for row in c.execute(
+                "SELECT t.id, t.title, r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+                f"WHERE r.kind='parent' AND r.to_task IN ({','.join('?' * len(part))}) "
+                f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})", (*part, *H.ACTIVE_STATUSES)):
+            if CHECK_TITLE.match(str(row["title"] or "").strip()):
+                out[row["id"]] = row["to_task"]
     return out
 
 
-def _ticket_ids_for_messages(c, messages, child_to_ticket):
-    found = set()
-    for message in messages:
-        try:
-            ids = privacy.message_tasks(c, dict(message), include_run=False, current=True)
-        except Exception:
-            continue
-        for task_id in ids:
-            found.add(child_to_ticket.get(task_id, task_id))
-    return found
+def _entered(c, ids):
+    """{task id: when it last entered its step or status}; a task created into it has its creation time."""
+    out = {}
+    for part in H.chunks(sorted(ids)):
+        out.update(dict(c.execute(
+            f"SELECT task_id, max(ts) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
+            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+    return out
 
 
-def _working_jobs(c, ticket_ids, child_to_ticket):
-    """Tickets with queued or live work, including a check task filed below the ticket."""
-    if not ticket_ids:
-        return set()
-    related = ticket_ids | set(child_to_ticket)
-    marks = ",".join("?" * len(related))
-    messages = c.execute(
-        "SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-        "WHERE j.state IN ('queued','uncertain') AND (cv.task_id IN (" + marks + ") OR "
-        "json_extract(m.refs_json,'$.task') IN (" + marks + ")) UNION "
-        "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-        "JOIN conversations cv ON cv.id=m.conversation_id WHERE a.state IN ('leased','running') AND "
-        "(cv.task_id IN (" + marks + ") OR json_extract(m.refs_json,'$.task') IN (" + marks + "))",
-        (*related, *related, *related, *related)).fetchall()
-    return _ticket_ids_for_messages(c, messages, child_to_ticket) & ticket_ids
+def _runs(c, row):
+    """(live, newest finished attempts newest first, held or queued job states) for the owner's work on one task: its
+    attempts in the task's lanes, and the jobs written into its room or naming it."""
+    slug = H.actor_id(row.get("owner") or "")
+    if not H.is_bot(row.get("owner") or "") or not H._has_table(c, "attempts"):
+        return False, [], []
+    lanes, _root = H._session_lanes(c, row)
+    attempts = H._rows(c.execute(
+        "SELECT a.id, a.job_id, a.state, a.created, a.finished, a.result_json, a.stop_requested, d.end_reason "
+        "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.bot=? AND a.lane IN (?,?) "
+        "ORDER BY coalesce(a.finished,a.created) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
+    live = any(a["state"] in ("leased", "running") for a in attempts)
+    jobs = [r[0] for r in c.execute(
+        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs_json,'$.task')=?)",
+        (slug, row.get("conversation_id") or "", row["id"]))]
+    return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 
 
-def _runs(c, who, ticket_ids, child_to_ticket, add, now):
-    """A current failed/cut run is one cause per ticket; a later successful run clears that episode."""
-    if not ticket_ids:
-        return
-    actor = privacy.actor(who)
-    related = ticket_ids | set(child_to_ticket)
-    marks = ",".join("?" * len(related))
-    bots = {row[0][4:] for row in c.execute(
-        "SELECT owner FROM tasks WHERE id IN (" + marks + ")", list(related))
-        if isinstance(row[0], str) and row[0].startswith("bot:")}
-    if not bots:
-        return
-    bot_marks = ",".join("?" * len(bots))
-    since = H.shift(now, days=-7)
-    rows = c.execute(
-        "SELECT a.id,a.job_id,a.bot,a.state,a.created,a.started,a.finished,a.thread_id,a.result_json,a.stop_requested,"
-        "d.end_reason FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
-        f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({bot_marks}) "
-        "AND coalesce(a.finished,a.created)>=? ORDER BY coalesce(a.finished,a.created),a.id LIMIT 5001",
-        (*sorted(bots), since)).fetchall()
-    if not rows:
-        return
-    privacy.prime_attempts(c, [r["id"] for r in rows])
+def _waits(c, row, at):
+    """Why a quiet task is not stuck, or None: something is recorded that it waits on."""
+    reason = H.stall_skip(c, row, at)
+    return None if reason in (None, "sweeps_off", "live_session") else reason
+
+
+def _label(c, row):
+    step = c.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id") or "",)).fetchone()
+    return {"id": row["id"], "number": row.get("number"), "title": str(row.get("title") or "")[:150],
+            "step": step[0] if step else None, "owner": H.actor_id(row.get("owner") or "") or None}
+
+
+class _List:
+    """Entries keyed by (subject, kind): a repeat keeps the earliest `since`."""
+
+    def __init__(self):
+        self.items = {}
+
+    def add(self, subject, kind, cause, since, **extra):
+        if not since:
+            return
+        key = (subject, kind)
+        found = self.items.get(key)
+        if found:
+            found["since"] = min(found["since"], str(since))
+            return
+        self.items[key] = {"key": f"{subject}:{kind}", "kind": kind, "cause": cause, "since": str(since), **extra}
+
+
+def _stuck(c, out, rows, children, at):
+    """Tickets and their open checks with no run for STUCK_MINUTES and nothing to wait on; failed or cut runs."""
+    from . import check_pools
     from .pipeline_stats import cause_of
-    timeline = []
-    for row in rows:
-        try:
-            if not privacy.attempt_readable(c, actor, row["id"]):
+    tickets = {r["id"]: r for r in rows}
+    by_ticket = {}
+    for child_id, ticket_id in children.items():
+        by_ticket.setdefault(ticket_id, []).append(child_id)
+    work = list(rows) + [H.task(c, child_id) for child_id in children]
+    entered = _entered(c, [w["id"] for w in work if w])
+    cutoff = H.shift(at, minutes=-STUCK_MINUTES)
+    manager = {}
+    for item in work:
+        if not item or item["status"] not in H.ACTIVE_STATUSES:
+            continue
+        ticket = tickets.get(children.get(item["id"], item["id"]))
+        if not ticket:
+            continue
+        if item["id"] in children:
+            reader = manager.setdefault(ticket["type_id"], H.type_manager(c, ticket))
+            if not reader or not H.task_private_readable(c, H.bot_actor(reader), item):
+                continue        # a check the manager cannot read is not named on its list
+        live, finished, jobs = _runs(c, item)
+        label = _label(c, ticket)
+        check = None if item["id"] == ticket["id"] else {"id": item["id"], "title": str(item["title"] or "")[:150],
+                                                         "owner": H.actor_id(item.get("owner") or "") or None}
+        subject = "ticket:" + ticket["id"]
+        extra = {"ticket": label, **({"check": check} if check else {})}
+        start = entered.get(item["id"]) or item.get("created")
+        newest = finished[0] if finished else None
+        if "uncertain" in jobs:
+            out.add(subject, "run", "a run is uncertain and waits for its owner's review",
+                    (newest or {}).get("finished") or start, **extra)
+        elif newest and newest["state"] in FAILED and (newest["finished"] or newest["created"]) >= start:
+            streak = []
+            for a in finished:
+                if a["state"] not in FAILED:
+                    break
+                streak.append(a)
+            first = streak[-1]
+            word = "was cut" if newest["stop_requested"] or newest["state"] == "interrupted" else "failed"
+            out.add(subject, "run", f"the last run {word} ({cause_of(newest)})"
+                    + (f", {len(streak)} in a row" if len(streak) > 1 else ""),
+                    first["finished"] or first["created"], **extra)
+        if live or jobs or not H.is_bot(item.get("owner") or ""):
+            continue
+        if item["id"] == ticket["id"] and by_ticket.get(item["id"]):
+            continue            # its open check is the work: that check is what is looked at
+        if item["status"] != "doing" and item["id"] == ticket["id"]:
+            found = check_pools.pool(c, item.get("step_id"))
+            if (not found or not check_pools._prs(c, item, found[0])
+                    or check_pools.waiting(c, item["id"]) or start > cutoff or _waits(c, item, at)):
                 continue
-            affected = privacy.attempt_tasks(c, row["id"]) & ticket_ids
-        except Exception:
+            out.add(subject, "stuck", f"no check filed at {label['step']} and none waiting", start, **extra)
             continue
-        for ticket_id in affected:
-            kind = "run was cut" if row["stop_requested"] or row["state"] == "interrupted" else "run failed"
-            cause = cause_of(row)
-            when = row["finished"] or row["created"]
-            timeline.append((when, row["id"], ticket_id, (ticket_id, kind, cause)))
-    # A later completed attempt on the same ticket resolves earlier run failures.
-    successes = c.execute(
-        f"SELECT id,created,started,finished FROM attempts WHERE state='completed' AND bot IN ({bot_marks}) "
-        "AND coalesce(finished,created)>=? ORDER BY coalesce(finished,created),id LIMIT 5001",
-        (*sorted(bots), since)).fetchall()
-    for attempt in successes:
-        try:
-            affected = privacy.attempt_tasks(c, attempt["id"]) & ticket_ids
-        except Exception:
+        last = max(x for x in (start, (newest or {}).get("finished") or (newest or {}).get("created")) if x)
+        if last > cutoff or _waits(c, item, at):
             continue
-        when = attempt["finished"] or attempt["created"]
-        for ticket_id in affected:
-            timeline.append((when, attempt["id"], ticket_id, None))
-    failure_by_ticket = {}
-    for when, _attempt_id, ticket_id, key in sorted(timeline):
-        if key is None:
-            for old in [item for item in failure_by_ticket if item[0] == ticket_id]:
-                del failure_by_ticket[old]
-        else:
-            failure_by_ticket.setdefault(key, when)
-    for (ticket_id, kind, cause), when in failure_by_ticket.items():
-        add(ticket_id, f"{kind}: {cause}", when)
+        who = (check or label)["owner"]
+        out.add(subject, "stuck", f"no run for {STUCK_MINUTES} minutes" + (f" on {check['title']}" if check else "")
+                + f" (owner {who})", last, **extra)
 
 
-def _pool_exceptions(c, active, add):
-    """Consume the review pool wait rows written by check_pools; no wait table means no pool finding."""
-    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='check_waits'").fetchone():
+def _pools(c, out, rows, at):
+    """Tickets waiting for a reviewer: an empty pool at once, a busy one after STUCK_MINUTES."""
+    from . import check_pools
+    tickets = {r["id"]: r for r in rows}
+    if not tickets or not H._has_table(c, "check_waits"):
         return
-    for wait in c.execute("SELECT w.ticket_id,w.step_id,w.reason,w.created,s.name AS step_name FROM check_waits w "
-                          "LEFT JOIN task_steps s ON s.id=w.step_id WHERE w.state='waiting' ORDER BY w.created,w.id"):
-        if wait["ticket_id"] not in active:
+    cutoff = H.shift(at, minutes=-STUCK_MINUTES)
+    for wait in c.execute("SELECT w.ticket_id, w.step_id, w.title, w.reason, w.created FROM check_waits w "
+                          "WHERE w.state='waiting' ORDER BY w.created, w.id"):
+        ticket = tickets.get(wait["ticket_id"])
+        if not ticket or ticket.get("step_id") != wait["step_id"]:
             continue
-        reason = str(wait["reason"] or "").strip()
-        if "pool" not in reason.lower() and "reviewer" not in reason.lower() and "builder" not in reason.lower():
+        found = check_pools.pool(c, wait["step_id"])
+        empty = not found or not found[1]
+        if not empty and wait["created"] > cutoff:
             continue
-        pool = "builder" if str(wait["step_name"] or "").casefold() == "on deck" else "review"
-        add(wait["ticket_id"], f"empty {pool} pool: " + (reason or "no member is available"), wait["created"])
+        cause = (f"{wait['title']}: the step's pool is empty" if empty else
+                 f"{wait['title']}: no reviewer free for {STUCK_MINUTES} minutes ({wait['reason'] or 'all busy'})")
+        out.add("ticket:" + ticket["id"], "pool", cause, wait["created"], ticket=_label(c, ticket))
 
 
-def _refusals(c, rows, add):
-    """A repeated gate refusal is read from the existing move_retry event history."""
-    active = {r["id"]: r for r in rows}
-    grouped = {}
-    for event in c.execute(
-            "SELECT task_id,ts,old,new FROM task_events WHERE field='move_retry' ORDER BY ts,rowid"):
-        ticket = active.get(event["task_id"])
-        if not ticket or event["old"] != ticket.get("step_id"):
-            continue
-        detail = H._json(event["new"], {}) or {}
-        cause = str(detail.get("problem_code") or detail.get("kind") or
-                    ("GitHub unavailable" if detail.get("outage") else "review gate refused the move"))
-        key = (event["task_id"], cause, str(detail.get("head") or ""), str(event["old"] or ""))
-        grouped.setdefault(key, []).append(event["ts"])
-    for (ticket_id, cause, _head, _step), times in grouped.items():
-        if len(times) >= 2:
-            add(ticket_id, "refusal repeated twice", min(times))
+def _slots(c, out, typ, rows):
+    """Builders over their step's slots, and steps over their backlog."""
+    from . import step_flow, task_allocator
+    steps = H._rows(c.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position", (typ["id"],)))
+    by_step = {}
+    for r in rows:
+        by_step.setdefault(r.get("step_id"), []).append(r)
+    for step in steps:
+        flow = step_flow.of(step) if step_flow._ready(c) else {}
+        assign = flow.get("assign") or {}
+        slots = int(assign.get("slots") or task_allocator.DEFAULT_SLOTS)
+        for slug in assign.get("pool") or []:
+            held = task_allocator.in_hand(c, slug, typ["id"], step)
+            if held > slots:
+                mine = sorted((r for r in rows if r.get("owner") == "bot:" + slug), key=lambda r: r.get("updated") or "")
+                since = (mine[slots] if len(mine) > slots else (mine[-1] if mine else {})).get("updated")
+                out.add("bot:" + slug, "slots", f"{slug} holds {held} tickets, over its {slots} slots at {step['name']}",
+                        since or step.get("updated") or H.now(), bot=slug)
+        backlog = flow.get("backlog") or {}
+        here = by_step.get(step["id"]) or []
+        over = backlog.get("over")
+        if isinstance(over, int) and len(here) > over:
+            oldest = min((r.get("updated") or r.get("created") for r in here), default=None)
+            out.add("step:" + step["id"], "backlog", f"{len(here)} tickets at {step['name']}, over its backlog of {over}",
+                    oldest, step=step["name"])
 
-    # Refusals that carry a task id are also part of the shared refusal ledger. Keep the count keyed by the rule,
-    # which avoids merging unrelated causes on one ticket.
+
+def _pool_bots(c, typ):
+    """Every bot named in this type's assign pools and check pools."""
+    from . import check_pools, step_flow
+    found = set()
+    for step in H._rows(c.execute("SELECT * FROM task_steps WHERE type_id=?", (typ["id"],))):
+        flow = step_flow.of(step) if step_flow._ready(c) else {}
+        found.update((flow.get("assign") or {}).get("pool") or [])
+        pooled = check_pools.pool(c, step["id"])
+        if pooled:
+            found.update(pooled[1])
+    return sorted(found)
+
+
+def _outages(c, out, typ, rows, at):
+    """GitHub unreadable at a review move (one entry for every ticket it holds), and pool bots that cannot work."""
+    from . import check_pools, move_retry
+    held, since = [], None
+    for row in rows:
+        found = move_retry.remembered(c, row, H.parse_ts(at))
+        if found and found[1].get("outage"):
+            held.append(row.get("number") or row["id"])
+            first = found[1].get("since") or found[0]["ts"]
+            since = min(since, first) if since else first
+    if held:
+        out.add("service:github", "outage", f"GitHub cannot be read at a review move; Tico retries {len(held)} "
+                "ticket(s) every few minutes", since, tickets=held[:50])
+    for slug in _pool_bots(c, typ):
+        row = c.execute("SELECT b.state, s.state AS status, s.updated_at FROM bots b LEFT JOIN bot_status s "
+                        "ON s.bot=b.slug WHERE b.slug=?", (slug,)).fetchone()
+        if not row or row["state"] != "active":
+            continue            # a paused or archived bot is someone's choice, not an outage
+        if row["status"] in BOT_HELD:
+            out.add("bot:" + slug, "outage", f"{slug} is {row['status']}", row["updated_at"] or at, bot=slug)
+        elif not check_pools.online(c, slug):
+            seen = c.execute("SELECT max(r.last_seen) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                             "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
+            out.add("bot:" + slug, "outage", f"{slug}'s computer is offline", seen or at, bot=slug)
+
+
+def _refusals(c, out, rows, at):
+    """Refused moves no longer retried, and one rule refusing the same ticket twice in a day with no retry pending."""
+    from . import move_retry
+    tickets = {r["id"]: r for r in rows}
+    if not tickets:
+        return
+    now = H.parse_ts(at)
+    retried = set()
+    for row in rows:
+        last = move_retry._latest(c, row["id"])
+        if not last or last["field"] != move_retry.FIELD or last["old"] != row.get("step_id"):
+            continue
+        detail = H._json(last["new"], {}) or {}
+        if move_retry.remembered(c, row, now):
+            retried.add(row["id"])
+            continue
+        if detail.get("state") == "waiting":
+            out.add("ticket:" + row["id"], "refusal", f"the move to {detail.get('step')} was refused "
+                    f"({detail.get('kind') or 'gate'}) and Tico stopped retrying it", detail.get("since") or last["ts"],
+                    ticket=_label(c, row))
     counted = {}
-    for event in c.execute("SELECT ts,rule,detail_json FROM refusals ORDER BY ts,id"):
-        detail = H._json(event["detail_json"], {}) or {}
-        ticket_id = detail.get("task")
-        if ticket_id not in active:
-            continue
-        key = (ticket_id, str(event["rule"] or "refused write"))
-        counted.setdefault(key, []).append(event["ts"])
-    for (ticket_id, rule), times in counted.items():
+    since = H.shift(at, hours=-REFUSAL_HOURS)
+    for event in c.execute("SELECT ts, rule, detail_json FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
+        task_id = (H._json(event["detail_json"], {}) or {}).get("task")
+        if task_id in tickets and task_id not in retried:
+            counted.setdefault((task_id, str(event["rule"] or "a rule")), []).append(event["ts"])
+    for (task_id, rule), times in counted.items():
         if len(times) >= 2:
-            add(ticket_id, "refusal repeated twice", min(times))
+            out.add("ticket:" + task_id, "refusal", f"refused {len(times)} times by {rule}", times[0],
+                    ticket=_label(c, tickets[task_id]))
 
 
-def report(c, auth, who, typ, rows=None, now=None):
-    """Return the current exceptions visible to the engineering type's manager.
+def _merges(c, out, rows):
+    """Open pull requests GitHub reports as conflicting."""
+    for row in rows:
+        for link in c.execute("SELECT number, pr_sha, detail_json, mergeable, updated, created FROM task_links "
+                              "WHERE task_id=? AND kind='pr' AND state IN ('open','draft') AND mergeable='conflict' "
+                              "ORDER BY created", (row["id"],)):
+            head = (H._json(link["detail_json"], {}) or {}).get("head_sha") or link["pr_sha"] or ""
+            if link["number"] and head:
+                out.add("ticket:" + row["id"], "merge", f"PR #{link['number']} cannot merge: it conflicts at {head[:12]}",
+                        link["updated"] or link["created"], ticket=_label(c, row), pr=link["number"], head=head)
 
-    The same visibility-filtered ticket rows used by Pipeline are passed in when available. This keeps private work
-    out of the manager's report unless the normal task authorization lets them read it.
-    """
-    if not typ or typ.get("role") != "engineering":
-        return []
-    manager = H.type_manager(c, {"type_id": typ["id"]})
-    if not manager or privacy.actor(who).actor != "bot:" + manager:
-        return []
-    now = now or H.now()
+
+def build(c, typ, rows=None, at=None):
+    """Every current exception on an engineering type, oldest first. `rows` are the type's open tickets when the
+    caller has them. No visibility filter: `report` and `deliver` give it only to the type's manager."""
+    at = at or H.now()
     if rows is None:
-        rows = H.tasks(c, status=H.ACTIVE_STATUSES, lane="company", type_id=typ["id"],
-                       limit=5000, visible=auth.task_sql(c, who), order="step")
-    rows = [dict(r) for r in rows]
-    by_id = {r["id"]: r for r in rows}
-    ids = set(by_id)
-    if not ids:
-        return []
-    # Include an active check task's run when it is the current work for the ticket.
-    child_to_ticket = {}
-    marks = ",".join("?" * len(ids))
-    for child in c.execute(
-            "SELECT t.id,t.title,r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
-            f"WHERE r.kind='parent' AND r.to_task IN ({marks}) AND t.status IN "
-            "('open','doing','waiting','review','ready')", list(ids)):
-        if CHECK_TITLE.match(str(child["title"] or "").strip()):
-            child_to_ticket[child["id"]] = child["to_task"]
+        rows = H._rows(c.execute(
+            f"SELECT * FROM tasks WHERE type_id=? AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
+            "ORDER BY created LIMIT 5000", (typ["id"], *H.ACTIVE_STATUSES)))
+    rows = [dict(r) for r in rows if r["status"] in H.ACTIVE_STATUSES]
+    out = _List()
+    children = _check_children(c, {r["id"] for r in rows})
+    _stuck(c, out, rows, children, at)
+    _pools(c, out, rows, at)
+    _slots(c, out, typ, rows)
+    _outages(c, out, typ, rows, at)
+    _refusals(c, out, rows, at)
+    _merges(c, out, rows)
+    return sorted(out.items.values(), key=lambda e: (e["since"], e["key"]))[:MAX_EXCEPTIONS]
 
-    items = {}
 
-    def add(ticket_id, cause, since, *, pr=None, head=None):
-        task = by_id.get(ticket_id)
-        if not task or not since:
-            return
-        key = (ticket_id, cause)
-        current = items.get(key)
-        when = str(since)
-        step = c.execute("SELECT name FROM task_steps WHERE id=?", (task.get("step_id") or "",)).fetchone()
-        if current:
-            current["since"] = min(current["since"], when)
-            if pr is not None:
-                current.update({"pr": pr, "head": head})
-            return
-        items[key] = {"ticket": {"id": task["id"], "number": task.get("number"), "title": task.get("title"),
-                                 "step": step[0] if step else None},
-                      "cause": str(cause), "since": when,
-                      **({"pr": pr, "head": head} if pr is not None else {})}
+def report(c, auth, who, typ, rows=None, at=None):
+    """The list for Pipeline: only the type's manager reads it, over the tickets it may read."""
+    from .roadmap_flow import ENGINEERING
+    if not typ or typ.get("role") != ENGINEERING:
+        return None
+    manager = H.type_manager(c, {"type_id": typ["id"]})
+    if not manager or privacy.actor(who) != H.bot_actor(manager):
+        return None             # someone else, or a caller acting for another reader
+    if rows is None:
+        rows = H.tasks(c, status=H.ACTIVE_STATUSES, type_id=typ["id"], limit=5000, visible=auth.task_sql(c, who))
+    return build(c, typ, rows, at)
 
-    # A ticket can wait with no job while it sits at any step; a queued, uncertain or running job counts as work.
-    busy = _working_jobs(c, ids, child_to_ticket)
-    entered = _event_times(c, list(ids))
-    for task in rows:
-        since = entered.get(task["id"]) or task.get("created")
-        when = H.parse_ts(since)
-        if task["id"] not in busy and when and (H.parse_ts(now) - when).total_seconds() >= NO_JOB_AFTER_SECONDS:
-            add(task["id"], "no job for 45 minutes", H.shift(since, seconds=NO_JOB_AFTER_SECONDS))
 
-    _runs(c, who, ids, child_to_ticket, add, now)
-    _pool_exceptions(c, ids, add)
-    _refusals(c, rows, add)
+def render(entries, more=0):
+    lines = []
+    for e in entries:
+        t = e.get("ticket") or {}
+        subject = (f"#{t['number']} {t['title']}" if t.get("number") is not None else t.get("title")) if t else \
+            (e.get("bot") or e.get("step") or e["key"].split(":", 1)[0])
+        lines.append(f"- {subject}: {e['cause']}, since {str(e['since'])[:16].replace('T', ' ')}Z"
+                     + (f" [{t['step']}]" if t.get("step") else ""))
+    if more:
+        lines.append(f"- and {more} more: `hub pipeline` lists every one.")
+    return "\n".join(lines)
 
-    # GitHub's current mergeability is the persisted result of a failed/conflicted merge. A new head or a clean
-    # merge removes the exception on the next webhook refresh.
-    for task in rows:
-        for link in c.execute("SELECT number,pr_sha,detail_json,mergeable,updated,created,state FROM task_links "
-                              "WHERE task_id=? AND kind='pr' AND state NOT IN ('merged','shipped','closed') "
-                              "ORDER BY updated,created",
-                              (task["id"],)):
-            if link["mergeable"] != "conflict":
-                continue
-            detail = H._json(link["detail_json"], {}) or {}
-            head = detail.get("head_sha") or link["pr_sha"] or ""
-            if not link["number"] or not head:
-                continue
-            add(task["id"], "failed merge", link["updated"] or link["created"],
-                pr=link["number"], head=head)
 
-    ordered = sorted(items.values(), key=lambda row: (row["since"], row["ticket"].get("number") or 0,
-                                                      row["cause"], row.get("pr") or 0))
-    return ordered[:MAX_EXCEPTIONS]
+def deliver(c, at=None):
+    """The hourly pass: each engineering type whose manager reads the list gets one wake with it, only when an entry
+    is new since the last list it was sent. Returns the managers woken."""
+    from . import rules
+    from .roadmap_flow import ENGINEERING
+    at = at or H.now()
+    woke = []
+    for typ in H._rows(c.execute("SELECT * FROM task_types WHERE role=? AND manager IS NOT NULL ORDER BY id",
+                                 (ENGINEERING,))):
+        slug = typ["manager"]
+        if not reads_list(c, slug):
+            continue
+        reader = H.bot_actor(slug)
+        entries = [e for e in build(c, typ, at=at)
+                   if not e.get("ticket") or H.task_private_readable(c, reader, H.task(c, e["ticket"]["id"]))]
+        keys = sorted(e["key"] for e in entries)
+        last = c.execute("SELECT detail_json FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
+                         (EVENT, typ["id"])).fetchone()
+        sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
+        new = [k for k in keys if k not in sent]
+        if new:
+            shown = entries[:MAX_LINES]
+            text = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new). Fix each cause: move a ticket by "
+                    "hand, reassign it, or close a duplicate. Tickets that move on their own are not listed.\n\n"
+                    + render(shown, len(entries) - len(shown)))
+            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"]}, wake=True)
+            if not ok:
+                continue        # nobody could be told: the same entries are new again on the next pass
+            woke.append(slug)
+        if new or set(keys) != sent:
+            # The list as it stands is what the next pass compares with; an entry that cleared and comes back is new.
+            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new)})
+    return woke

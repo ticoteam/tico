@@ -9,7 +9,8 @@
 - `every_hours` (default EVERY_HOURS): one warning per step (and owner) at most this often while it stays over.
 
 The warning is written into the room of the oldest ticket waiting there, as a `blocker` wake, which a Lead's profile
-lets through at once. Nobody is told twice in one sweep, and a target that cannot be resolved is skipped."""
+lets through at once. Nobody is told twice in one sweep, and a target that cannot be resolved is skipped. A type's
+manager on the Manager profile is not told: the backlog is on its exceptions list (backend/pipeline_exceptions.py)."""
 from . import hubdb as H
 
 EVENT = "task.step_backlog"
@@ -55,11 +56,13 @@ def clean(c, actor, raw):
 
 def _targets(c, rule, row, owner):
     from .lifecycle import _manager_actor
+    from .pipeline_exceptions import reads_list
     out = []
     for who in rule["notify"]:
         if who == "manager":
+            # A manager that works from its exceptions list reads the backlog there, not as a notice.
             slug = H.type_manager(c, row)
-            who = H.bot_actor(slug) if slug else ""
+            who = H.bot_actor(slug) if slug and not reads_list(c, slug) else ""
         elif who == "owner":
             who = owner if per_owner(rule) else ""
         elif who == "owner_manager":
