@@ -429,8 +429,9 @@ def operation_issues(c, who, auth):
         if bot["state"] == "archived":
             # An archived bot whose agent still holds a working credential goes on reporting in to nobody; it fails
             # quietly on its own box, so Health says it.
-            if still_reporting(c, slug):
-                add("agent", bot["display_name"] + "'s " + ("OpenClaw" if still_reporting(c, slug)["harness"] == "openclaw" else "Hermes")
+            reporting = still_reporting(c, slug)
+            if reporting:
+                add("agent", bot["display_name"] + "'s " + ("OpenClaw" if reporting["harness"] == "openclaw" else "Hermes")
                     + " agent is still reporting in, but the bot is archived",
                     "Restore it, or revoke its credential.", bot=slug, severity="warning",
                     needs_person=bool(auth.bot_manager(c, who, slug)),
