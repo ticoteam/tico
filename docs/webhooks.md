@@ -437,6 +437,34 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 
 More in [Permissions](permissions.md#outgoing-webhooks) and the [API](api.md#outgoing-webhooks).
 
+## Changing where an integration sends
+
+An endpoint with secret headers keeps their values for one address. When you save a new **URL** on **Edit endpoint** that
+sends those values to another service, Tico asks first. The service is the scheme, host and port. For an endpoint with
+secret headers, a different path or query also counts. Changing the address of an endpoint with no saved secret values does
+not ask.
+
+The question shows the old and new scheme, host and port, whether the path is the same, and the names of the secret headers.
+It never shows a value. Pick one:
+
+- **Keep and send to the new address**: the secret headers keep their values and go to the new address.
+- **Clear and re-enter**: the values are removed. Each secret header keeps its name, marked "needs value", and the endpoint
+  pauses until you type every value again or remove the header. An endpoint you paused yourself stays paused.
+- **Cancel**: nothing is saved. The old address and values stay.
+
+The same choice is on the command line. Changing the address needs the revision you read:
+
+```
+hub webhook update acme --url https://hooks.example.org/tico --expected-revision 4 --credentials clear
+```
+
+Whoever may edit the endpoint decides: its creator, an admin or the owner. If BotOps makes the change for someone, it asks
+in a Confirm card in that person's BotOps chat, and only that person can tap it.
+
+Each move adds one entry to **History** (`integration.destination_changed`): who made it and when, the old and new scheme,
+host and port, for a webhook whether the path is the same, and which secret headers were kept or cleared. Values never
+appear in it.
+
 ## Sleep when idle
 
 On a server Tico hosts, the owner or an admin can have Tico stop the server after 1 to 24 quiet hours. A call through Tico Gateway

@@ -148,6 +148,26 @@ under 24 hours, including any fallback; its run details explain the shorter limi
 The Gateway counts each call against the install, its key, the model and the bot. It gets an id for the bot that only
 your server can make, never the bot's name.
 
+## Changing where an integration sends
+
+A saved Gateway key goes only to the **Gateway URL** it was saved with. Before you change that URL to another service,
+Tico asks what to do with the key. It asks when the new address differs in scheme (`https` or `http`), host or port.
+Going back to the default, `https://updates.tico.team/v1/gateway`, counts as a change too. Changing the key alone does not
+ask.
+
+The question shows the old and new scheme, host and port, and the name of the saved key. It never shows the key. Pick one:
+
+- **Keep and send to the new address**: the saved key goes to the new address. Models and **Connect automatically** stay on.
+- **Clear and re-enter**: the key is removed and the new address is saved in the same step. Models and **Connect
+  automatically** turn off, and Tico sends no check. Paste a key for the new address to turn them back on.
+- **Cancel**: nothing is saved. The old address and key stay.
+
+Only the owner can change the Gateway, so the owner decides. If BotOps makes the change for you, it asks in a Confirm card
+in your BotOps chat, and only you can tap it.
+
+Each move adds one entry to **History**: who made it and when, the old and new scheme, host and port, and whether the key
+was kept or cleared. The key never appears in it.
+
 ## Pick a Tico model for a bot
 
 While the Gateway is connected, choose **Tico AI Gateway** as a bot's harness / provider in **Settings → Bots**
