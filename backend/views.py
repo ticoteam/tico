@@ -766,7 +766,8 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False):
     elif not location["awake"]:
         label = "Saved — waiting for " + ((location["machine"] or {}).get("label")
                                           or "a registered computer") + " to stay awake"
-    elif settings and org_turns.snapshot(c, settings)['at_stop']:
+    elif settings and org_turns.admission(c)['at_stop']:
+        # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
     elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
             c, location["machine"]["runner_id"])["overloaded"]:
