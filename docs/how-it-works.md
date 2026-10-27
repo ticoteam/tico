@@ -93,7 +93,7 @@ review task at 3 a day. A refusal counts toward the pause only when it repeats o
 rule, same words): at 10 such repeats the bot is paused for an hour and resumes by itself. A bot's first try at
 something new that is refused is recorded, not counted, until 30 refusals of any kind in a day, which also pause it
 for an hour (a loop over new targets). A refused label change (rule `label`, which says who may make it instead)
-counts once per task an hour, however often the bot retries it. Words that name another bot's folder or a `secrets/` path are written
+counts once per task an hour, however often the bot retries it. A bulk change, such as a close over many tasks, counts once toward the pause however many tasks it skips; each skipped task keeps its own refusal on record. Words that name another bot's folder or a `secrets/` path are written
 as they are: naming a path opens nothing, so it is never refused or counted, only recorded (`path.mentioned`).
 A message or task comment to a paused or quarantined bot, from a person or a bot, is kept and runs when it is back;
 the reply's `warning` says so and when that is. Bot sends are bounded while it is held: once the messages from bots

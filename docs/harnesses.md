@@ -177,6 +177,10 @@ A subscription quota response is a usage limit. The runner uses its configured f
 signed-in provider when automatic fallback is on. Without a fallback it keeps the work queued; an explicit
 usage-window reset holds it until that time. **Try now** still lifts the hold after a person renews the plan.
 
+A queued fallback job shows `resumes ~HH:MM UTC` on its job line and in Health, with the date when it is not today. The
+job shows a reset only when the provider's limit names one as `resets HH:MM am (UTC)` or `pm (UTC)`. A saved review of a
+run that wrote something shows the provider's limit text and its UTC reset in the same way.
+
 The current OpenAI and Claude choices, reviewed 2026-10-03, are:
 
 | Harness | Model | Model ID | Released |

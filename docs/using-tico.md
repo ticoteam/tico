@@ -327,7 +327,7 @@ Tags give related tasks a shared label, metadata and a Markdown checklist. A chi
 Click a tag chip to open its notes and tasks. The task filter uses tags. Existing label strings,
 `hub task label` and `--label` continue to use the same keys. Unknown keys create plain tags.
 
-Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A template holds a reusable checklist and
+Open **Settings > Tasks**, under **Task tags**, to create tags or templates. A tag key is at most 40 characters: the form stops there, and a longer key is cut to 40. A template holds a reusable checklist and
 metadata defaults. Open it and choose a key under **Make a tag** to copy those defaults into a new
 tag; later template edits leave existing instances alone. Put the instance on tasks. Templates
 cannot be attached directly.

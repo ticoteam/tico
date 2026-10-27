@@ -98,7 +98,9 @@ whenever the CEO Bot runs its status pass, and once an hour, because data goes s
 
 A sub-goal, a goal that supports another goal, is coloured in exactly the same way as a goal with no parent: from its own
 KPIs, check-ins and tasks. Its parent does not decide or hold back its colour. A sub-goal with data gets its colour on the
-next status pass, including one that had no colour before; a sub-goal with no data stays uncoloured. A colour a person set
+next status pass, including one that had no colour before; a sub-goal with no data stays uncoloured. The sub-goal's owner,
+the owner of the goal it serves, or someone above either may give it its first colour by hand, and again when a dropped
+sub-goal with no colour is reopened. A colour a person set
 stays, and the CEO Bot only suggests a different one. Turning the regular checks off changes nothing, as for any goal.
 
 ### A human can override

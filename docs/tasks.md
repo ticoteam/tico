@@ -22,6 +22,10 @@ Your selection is remembered, shared links carry it, and new
 tasks start with that type. Clearing filters keeps the selected type. Older combined views and
 deleted types fall back to General.
 
+The open list stays current without a reload. Tico reads it in full at least every 15 minutes while the Tasks page is on
+screen, and again when the page comes back after more than 10 minutes away. On a phone, pull down at the top of the Tasks
+page to read the list in full at once; a pull that does not pass the mark does nothing.
+
 Picking a step sets the task's status. Steps can move in any order. Bots, older runners and
 existing scripts can keep setting `status`:
 
