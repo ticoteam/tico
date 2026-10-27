@@ -17,15 +17,16 @@ def running(api):
 
 
 def cut(api, machine, attempt, *, minutes='60', command='git push origin HEAD', approval=False,
-        end_reason=None, **flags):
+        end_reason=None, tool_payload=None, silent=False, **flags):
     if approval:
         with api.app.state.store.transaction() as c:
             message = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
             c.execute('INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)',
                       ('used-approval', 'publish', message, 'bot:ops', H.now(), H.now()))
     events = [
-        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started',
-                                            'item_id': 'shell', 'summary': command}},
+        ({'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': False}} if silent else
+         {'seq': 1, 'kind': 'tool', 'payload': tool_payload or {'tool': 'exec_command', 'status': 'started',
+                                                            'item_id': 'shell', 'summary': command}}),
         {'seq': 2, 'kind': 'message', 'payload': {'text': 'Branch saved and pushed; review is next.'}},
         {'seq': 3, 'kind': 'diagnostic', 'payload': {
             'end_reason': end_reason or f'Timeout: max_run_minutes ({minutes} minutes)'}},
@@ -100,7 +101,8 @@ def test_second_consecutive_cut_stays_held_with_open_review_and_no_saved_decisio
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert why in review['reason'] and review['stopped'] == 'twice'
     with api.app.state.store.read() as c:
-        assert why in c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()[0]
+        body = c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()[0]
+        assert why in body and 'recorded exec_command' not in body
         assert not c.execute('SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?',
                              (first['job_id'], second['id'])).fetchone()
     assert sweep(api) == [] and job_state(api, first['job_id']) == 'uncertain'
@@ -161,3 +163,39 @@ def test_retry_flags_cannot_bypass_irreversible_action_check(api, flags):
     cut(api, machine, first, command='gh pr merge 42', **flags)
     assert job_state(api, first['job_id']) == 'uncertain'
     assert 'merge pull request' in get(api, 'bots/ops/execution-review')['jobs'][0]['reason']
+
+
+def test_silent_harness_timeout_continues_once_under_explicit_restart_policy(api):
+    machine, _, first = running(api)
+    cut(api, machine, first, silent=True)
+    assert job_state(api, first['job_id']) == 'queued'
+    resumed = next_attempt(api, machine, first)
+    assert resumed['recovery'] == {'resume_session': True}
+    assert 'Check what already happened first' in resumed['message']['body']
+    cut(api, machine, resumed, silent=True)
+    assert job_state(api, first['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'twice'
+
+
+@pytest.mark.parametrize(('payload', 'label'), [
+    ({'tool': 'mcp__acme__merge_pull_request', 'status': 'started', 'summary': 'private-marker'},
+     'merge pull request'),
+    ({'tool': 'exec_command', 'status': 'started', 'summary': 'private-marker',
+      'outside_actions': ['publish package']}, 'publish package'),
+])
+def test_second_cut_names_outside_effects_from_tool_or_classified_event(api, payload, label):
+    machine, _, first = running(api)
+    cut(api, machine, first)
+    second = next_attempt(api, machine, first)
+    cut(api, machine, second, tool_payload=payload)
+    assert job_state(api, first['job_id']) == 'uncertain'
+    assert claim(api, machine) is None
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'changed' and label in review['reason']
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE owner='bot:botops' AND status='open'").fetchone()[0]
+        assert 'cut by the run time limit twice in a row' in body and f'recorded {label}' in body
+        assert 'private-marker' not in body + review['reason']
+        assert not c.execute('SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?',
+                             (first['job_id'], second['id'])).fetchone()

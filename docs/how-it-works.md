@@ -395,6 +395,8 @@ thread compact its session first; if that run fails the same way, the next one s
 The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
 any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
 A named merge, publish, send, payment or consumed approval still holds the run for BotOps to check.
+Like restart recovery, a time-limit continuation also permits a harness that does not report tool calls
+when no named outside action or consumed approval was recorded; it must check previous work before continuing.
 Two consecutive time-limit cuts hold the job with an open review task; a run that finishes inside its limit
 resets that count. Provider quotas and the Gateway credential lifetime limit keep their existing recovery rules.
 

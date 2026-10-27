@@ -4461,12 +4461,12 @@ class Execution:
                         # The review names what makes the run unsafe to repeat: each outside action, and any
                         # approval it consumed, before the tools it merely used.
                         named = [*facts['outside'], *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')']
-                                                      if facts['consumed'] else [])] or acted
+                                                      if facts['consumed'] else [])]
                         reviewer = privacy.actor(Identity('bot:' + H.FLEET_MAINTAINER, 'bot'))
                         can_review = (privacy.message_readable(c, reviewer, msg)
                                       and privacy.attempt_readable(c, reviewer, row['attempt_id']))
                         if can_review:
-                            self._hand_to_maintainer(c, row, msg, task, named, again=bool(held),
+                            self._hand_to_maintainer(c, row, msg, task, named or acted, again=bool(held),
                                                      reason=('was ' + why + (f"; recorded {', '.join(named)}" if named else '')) if limit_cap else None)
                         else:
                             self._hand_to_operator(c, row, msg, again=bool(held))
