@@ -4,7 +4,7 @@
 
 // The picker reads its choices and their one-line descriptions from GET /v2/profiles, so a profile the server adds
 // shows with no UI change. The labels here are for history rows and a picker drawn before that answer lands.
-const PROFILE_LABELS = {doer: 'Doer', reviewer: 'Reviewer', lead: 'Lead', responder: 'Responder', monitor: 'Monitor', custom: 'Custom'};
+const PROFILE_LABELS = {doer: 'Doer', reviewer: 'Reviewer', lead: 'Lead', manager: 'Manager', responder: 'Responder', monitor: 'Monitor', custom: 'Custom'};
 const PROFILE_PULLS = [['all', 'Any open task'], ['review', 'Review and QA only'], ['none', 'Nothing']];
 const PROFILE_TAKES = [['all', 'Any task'], ['review', 'Review and QA only'], ['watcher', "Its watcher's tasks"], ['none', 'None']];
 let PROFILE_LIST = null, PROFILE_LOAD = null;

@@ -32,7 +32,7 @@ The words Tico uses, and what each replaces.
 - **Tools**: everything a bot uses: its model and harness, GitHub, Slack, Google, AWS.
 - **Model** and **Harness**: kinds of tool. The model (GPT 6.1 Sol, Claude Opus 5.5) and the harness it runs in (Codex, Claude Code).
 - **AI provider**: the account a model comes from.
-- **Profile**: what wakes a bot and which tasks it takes: Doer, Reviewer, Lead, Responder, Monitor or Custom ([Profiles](how-it-works.md#profiles)). It grants no right. Set it in Settings > Bots > Edit.
+- **Profile**: what wakes a bot and which tasks it takes: Doer, Reviewer, Lead, Manager, Responder, Monitor or Custom ([Profiles](how-it-works.md#profiles)). It grants no right. Set it in Settings > Bots > Edit.
 - **Credential**: a stored secret a bot is granted. "API key" or "token" only names what a service gives you, or sign-in.
 - **Template**: what you create a bot from.
 - **Setup**: a new bot's first conversation with its owner. Status **Needs setup**, button **Set up**. **Finish setup** is installing Tico.

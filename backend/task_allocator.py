@@ -40,14 +40,20 @@ def _available(c, slug):
     return bool(found) and found[0] not in ("archived", "paused")
 
 
+def held_between(c, type_id, assign_step):
+    """(after, before): a ticket is in its owner's hand at a step whose position is strictly between the assigning
+    step and the type's merged step."""
+    merged = F.merge_step(c, type_id)
+    return assign_step["position"], merged["position"] if merged else 10 ** 6
+
+
 def in_hand(c, slug, type_id, assign_step):
     """The bot's tickets on the type past the assigning step and before its merged step."""
-    merged = F.merge_step(c, type_id)
-    limit = merged["position"] if merged else 10 ** 6
+    after, before = held_between(c, type_id, assign_step)
     return c.execute(
         "SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id WHERE t.owner=? AND t.type_id=? "
         f"AND t.status NOT IN ({','.join('?' * len(FINISHED))}) AND s.position>? AND s.position<?",
-        ("bot:" + slug, type_id, *FINISHED, assign_step["position"], limit)).fetchone()[0]
+        ("bot:" + slug, type_id, *FINISHED, after, before)).fetchone()[0]
 
 
 def _open(c, slug):
