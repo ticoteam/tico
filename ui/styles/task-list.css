@@ -399,3 +399,18 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-refused .tl-note-text{display:block}
 @media (max-width:760px){.tl-refused .tl-note-text{display:-webkit-box}}
 .bcard-err{margin:6px 0 0;color:var(--fail);font-size:var(--t-sm);line-height:1.35;overflow-wrap:anywhere}
+/* Filtered for you: what the ask filter kept off the plate, folded at the foot of Needs you */
+.tl-filtered>summary{list-style:none;cursor:pointer}
+.tl-filtered>summary::-webkit-details-marker{display:none}
+.tl-filtered-row{display:flex;align-items:center;gap:12px;min-height:36px;padding:4px 22px 4px 18px;border-bottom:1px solid var(--line)}
+.tl-filtered-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tl-filtered-text .muted{margin-left:6px;font-size:var(--t-sm)}
+.tl-filtered-act{flex:none}
+@media (max-width:640px){.tl-filtered-row{flex-wrap:wrap;padding:6px 14px}.tl-filtered-act{margin-left:auto}}
+.ask-filter{display:grid;gap:12px;max-width:640px}
+.ask-filter label{display:grid;gap:4px}
+.ask-filter-modes{display:grid;gap:6px;border:0;padding:0;margin:0}
+.ask-filter-modes label{display:block}
+.ask-filter-replay{display:grid;gap:8px;margin-top:20px;max-width:none}
+.ask-filter-replay .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ask-filter-replay input[type=date]{max-width:180px}

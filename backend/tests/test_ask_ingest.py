@@ -490,3 +490,68 @@ def test_in_rehearsal_a_repeat_still_reaches_the_person(gate):
     api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
         assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]
+
+
+# ---- Hands needed and the way back to the team default ---------------------------------------------------------
+
+def test_a_chore_lands_in_hands_needed_on_its_own_budget(gate):
+    api, model, token = gate
+    plate(api, 30)
+    model.kind = "chore"
+    tid = file(api, token, "Grant ops read access to the billing repo", "One click in GitHub settings.")["task"]["id"]
+    assert on_plate(api, tid), "a chore reaches the person even over the decision budget"
+    cards = {it["id"]: it for it in get(api, "needs-you?limit=200", token="ben-test")["items"]}
+    assert cards[tid]["need"] == "hands"
+    assert not [k for k, it in cards.items() if k != tid and it["need"] == "hands"], "only the gate's chores group there"
+    with api.app.state.store.read() as c:
+        assert A.load(c, "human:ben")[1] == 1
+
+
+def test_a_person_goes_back_to_the_team_default(gate):
+    api, model, token = gate
+    assert get(api, "ask-ingest/settings", token="ben-test")["settings"]["own"] is True
+    r = api.delete("/api/v2/ask-ingest/settings", headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    assert r.json()["settings"] == {**get(api, "ask-ingest/settings", token="ben-test")["team"], "own": False}
+    plate(api, 15)
+    assert file(api, token)["task"]["owner"] == "human:ben", "the team default ships as Rehearsal"
+    assert api.delete("/api/v2/ask-ingest/settings", headers=headers(token)).status_code == 403
+
+
+# ---- the replay before On --------------------------------------------------------------------------------------
+
+def test_a_replay_judges_a_past_day_as_on_and_moves_nothing(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    plate(api, 15)
+    tid = file(api, token)["task"]["id"]
+    api.post("/api/v2/messages", json={"to": "ben", "text": "Which venue do you want?", "kind": "ask"}, headers=headers(token))
+    before, calls_before = (on_plate(api, tid), len(items(api))), len(calls(api))
+    day = H.now()[:10]
+    r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day, "limit": 1}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    first = r.json()
+    assert first["total"] == 2 and first["next_offset"] == 1
+    [one] = first["items"]
+    assert (one["kind"], one["ref"], one["would"], one["reason"]) == ("task", tid, A.SENT_BACK, "criteria")
+    assert one["load"] >= 15
+    rest = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day, "offset": 1},
+                    headers=headers("ben-test")).json()
+    assert [i["kind"] for i in rest["items"]] == ["loose"] and rest["next_offset"] is None
+    assert (on_plate(api, tid), len(items(api))) == before, "nothing on the plate moved, no item rows"
+    replayed = calls(api)[calls_before:]
+    assert len(replayed) == 2 and all('"mode": "replay"' in str(row) for row in replayed)
+    assert all("Which venue" not in str(row) and "Pick the launch date" not in str(row) for row in replayed)
+
+
+def test_a_replay_is_the_persons_own_or_an_admins(gate):
+    api, model, token = gate
+    day = H.now()[:10]
+    assert api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day},
+                    headers=headers("priya-test")).status_code == 403
+    assert api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day},
+                    headers=headers(token)).status_code == 403
+    api.app.state.judge = None
+    r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
+    assert r.status_code == 409, r.text

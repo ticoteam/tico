@@ -273,6 +273,7 @@ function pageSettings() {
       <section class="card"><header><h2>Listening</h2>${betaPill('listening')}</header><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></section>
     </div>` : ''}
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
+      <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <section class="card" id="set-task-settings-card"><header><h2>Task settings</h2></header><div id="set-task-settings"></div></section>
       <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
@@ -363,7 +364,7 @@ function settingsShow(tab) {
   settingsTabIntoView();
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); }
+  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void taskSettingsLoad(); void askFilterSettingsLoad(); }
   const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';

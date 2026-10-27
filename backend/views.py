@@ -1051,7 +1051,7 @@ def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing
 # What a card takes, as the groups Needs you shows in this order: a yes/no or a pick, money, an account to sign in to
 # or connect, something written to read and let go out, and everything else. Read from the card's own words, so the
 # same card always lands in the same group.
-NEED_GROUPS = ("decide", "pay", "connect", "review", "do")
+NEED_GROUPS = ("decide", "pay", "connect", "review", "hands", "do")     # hands: chores the ask filter grouped
 _NEED_PAY = re.compile(r"\b(pay|paid|payment|invoices?|billing|bills|subscription|renew(al)?|refund|purchase|"
                        r"top[- ]up|credit card|card on file|company card)\b", re.I)
 # Words that are about money only next to an amount: "spend $400", not "spend an hour"; "buy" but not "buy-in".
@@ -1594,9 +1594,12 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         return items
     rows = {r["id"]: r for kind in ("tasks", "waiting", "declined") for r in raw[kind]}
     at = H.now()
+    from . import ask_ingest
+    # The chores the ask filter let through under their own budget (backend/ask_ingest.py) group as Hands needed.
+    hands = ask_ingest.hands_ids(c, who.actor) if H.is_human(who.actor) else set()
     for item in items:
         item["pressing"] = pressing(item, at)
-        item["need"] = need_of(item)
+        item["need"] = "hands" if item.get("id") in hands else need_of(item)
         own = None
         if item["kind"] in ("question", "waiting", "task", "declined"):
             row = rows.get(item["id"]) or H.task(c, item["id"]) or item

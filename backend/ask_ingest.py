@@ -199,6 +199,40 @@ def _bot_line(c, actor):
     return (H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor)
 
 
+def _criteria(own):
+    return {f"line-{n}": line for n, line in enumerate(own["criteria"], 1)}
+
+
+def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False):
+    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error)."""
+    criteria = _criteria(own)
+    questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
+    if criteria:
+        questions["meets"] = J.with_options(qset["questions"]["meets"], criteria)
+    if items:
+        questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
+    state = {"item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
+             "asker": asker, "person": person_name}
+    result, error = _ask(engine, state, questions, qset["label"])
+    if result is not None and not isinstance(result, dict):
+        result, error = None, "shape"
+    answers = None
+    if result is not None:
+        try:
+            answers = read(J.check_answers(result.get("answers"), questions), qset["thresholds"], criteria, items)
+        except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError):
+            error = "shape"
+    detail = {"label": qset["label"], "questions": len(questions), "options": len(items),
+              "criteria": len(criteria), "kind": kind, "mode": "replay" if replay else own["mode"]}
+    if result is not None:
+        detail.update(audit_detail(result), answers=_summary(result.get("answers"), questions))
+    if error:
+        detail["error"] = error
+    with store.transaction() as c:
+        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+    return answers, call["id"], error
+
+
 def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
@@ -229,34 +263,9 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             items = open_items(c, person)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        criteria = {f"line-{n}": line for n, line in enumerate(own["criteria"], 1)}
-        questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
-        if criteria:
-            questions["meets"] = J.with_options(qset["questions"]["meets"], criteria)
-        if items:
-            questions["covered"] = J.with_options(qset["questions"]["covered"],
-                                                  {name: t for name, (_, t) in items.items()})
-        state = {"item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
-                 "asker": asker, "person": person_name}
-        result, error = _ask(engine, state, questions, qset["label"])
-        if result is not None and not isinstance(result, dict):
-            result, error = None, "shape"
-        answers = None
-        if result is not None:
-            try:
-                answers = read(J.check_answers(result.get("answers"), questions), qset["thresholds"], criteria, items)
-            except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError):
-                error = "shape"
-        detail = {"label": qset["label"], "questions": len(questions), "options": len(items),
-                  "criteria": len(criteria), "kind": kind, "mode": own["mode"]}
-        if result is not None:
-            detail.update(audit_detail(result), answers=_summary(result.get("answers"), questions))
-        if error:
-            detail["error"] = error
-        with store.transaction() as c:
-            call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+        answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
         return {**verdict, "answers": answers, "items": {n: i for n, (i, _) in items.items()},
-                "criteria": criteria, "call": call["id"], "error": error}
+                "criteria": _criteria(own), "call": call, "error": error}
     except Exception as exc:          # the gate never stops the write
         LOG.warning("Ask ingest preflight failed: %s", type(exc).__name__)
         return None
@@ -538,6 +547,74 @@ def outcome_counts(c, start, end):
             "let_through": let}
 
 
+REPLAY_PAGE = 25
+
+
+def _next_day(day):
+    import datetime as dt
+    return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
+_ACTIVE_AT = ("owner=? AND created<=? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
+              "AND COALESCE(snoozed_until,'')<=?")
+
+
+def replay_items(c, person, start, end, assistant_bot=None):
+    """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
+    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then."""
+    skip = H.bot_actor(assistant_bot) if assistant_bot else ""
+    out = [{"kind": "task", "ref": r["id"], "asker": r["requester"], "title": r["title"] or "", "text": r["body"] or "",
+            "created": r["created"]}
+           for r in c.execute("SELECT id,title,body,requester,created FROM tasks WHERE owner=? AND created>=? AND "
+                              "created<? AND requester LIKE 'bot:%' AND requester<>?", (person, start, end, skip))]
+    for m in H._rows(c.execute("SELECT * FROM messages WHERE to_actor=? AND kind='ask' AND created>=? AND created<? "
+                               "AND from_actor LIKE 'bot:%' AND from_actor<>?", (person, start, end, skip))):
+        msg = H.message(c, m["id"]) or m
+        tid = H.message_task_id(msg)
+        title = (H.task(c, tid) or {}).get("title", "") if tid else ""
+        body = str(m.get("body") or "")
+        out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
+                    "title": title or body.strip().split("\n")[0][:300], "text": body, "created": m["created"]})
+    return sorted(out, key=lambda it: it["created"])
+
+
+def load_at(c, person, at):
+    """Roughly how full the person's plate was at `at`: their tasks open then, snoozed ones left out."""
+    return c.execute(f"SELECT COUNT(*) FROM tasks WHERE {_ACTIVE_AT}", (person, at, at, at, at)).fetchone()[0]
+
+
+def open_items_at(c, person, at):
+    rows = c.execute(f"SELECT id,title FROM tasks WHERE {_ACTIVE_AT} ORDER BY created DESC LIMIT ?",
+                     (person, at, at, at, at, MAX_ITEMS)).fetchall()
+    return {f"item-{n}": (r["id"], r["title"] or "") for n, r in enumerate(rows, 1)}
+
+
+def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE):
+    """Rehearsal over a past day: each bot item put on `person` in [start, end) judged as it would have been, with
+    the person's settings now and their plate then, decided as if the filter were On. Writes only the judge.call
+    rows; nothing on any plate moves. Returns {items, total, next_offset}, or raises LookupError with no model."""
+    with store.read() as c:
+        own = settings(c, person)
+        everything = replay_items(c, person, start, end, store.settings.assistant_bot)
+        page = everything[offset:offset + limit]
+        qset = J.load_set(QUESTION_SET)
+        engine = server_engine(store, c, primary)
+        if engine is None:
+            raise LookupError("no decision model is on, or the month's spend cap is reached")
+        if used_today(c, H.KEEPER) + len(page) > daily_cap(store.settings, "bot"):
+            raise LookupError("today's decision calls would pass the daily cap")
+        person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
+        prepared = [(it, load_at(c, person, it["created"]), open_items_at(c, person, it["created"]),
+                     _bot_line(c, it["asker"])) for it in page]
+    out = []
+    for it, plate, items, asker in prepared:
+        answers, _, error = _judge(store, engine, qset, own, items, asker, person_name, it["title"], it["text"],
+                                   it["kind"], replay=True)
+        would, reason = (FAILED_OPEN, error) if error else decide(answers, own["budget"], own["chores_budget"], plate, 0)
+        out.append({"kind": it["kind"], "ref": it["ref"], "title": it["title"], "asker": it["asker"],
+                    "asker_name": asker, "created": it["created"], "load": plate, "would": would, "reason": reason})
+    nxt = offset + len(page)
+    return {"items": out, "total": len(everything), "next_offset": nxt if nxt < len(everything) else None}
+
+
 def install(app, store, auth):
     from fastapi import Request
     from pydantic import Field
@@ -581,6 +658,45 @@ def install(app, store, auth):
                 return {"settings": save(c, who.actor, target, body.model_dump()), "team": target == TEAM}
             except ValueError as exc:
                 raise Problem("validation", str(exc), 422)
+
+    @app.delete("/api/v2/ask-ingest/settings")
+    def ingest_settings_reset(request: Request):
+        """Back to the team default: the caller's own settings are removed; the next item uses the team's."""
+        who = request.state.identity
+        auth.domain(who)
+        person = person_of(who)
+        with store.transaction() as c:
+            c.execute("DELETE FROM ask_ingest_settings WHERE person=?", (person,))
+            H.event(c, who.actor, "ask_ingest.settings", person, {"reset": True})
+            return {"settings": settings(c, person)}
+
+    class Replay(Contract):
+        person: str = Field(max_length=200)
+        date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+        offset: int = Field(default=0, ge=0)
+        limit: int = Field(default=REPLAY_PAGE, ge=1, le=REPLAY_PAGE)
+
+    @app.post("/api/v2/ask-ingest/replay")
+    def ingest_replay(request: Request, body: Replay):
+        """Rehearsal over one past day (UTC) for a person, a page at a time, before anyone turns the filter On: what
+        On would have done with each bot item. The person, or an owner or admin. Nothing on any plate moves."""
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            person = H.resolve_actor(c, body.person)
+        if not person or not H.is_human(person):
+            raise Problem("not_found", "no such person", 404)
+        if person != who.actor and auth.company_role(who) not in ("owner", "admin"):
+            raise Problem("identity", "A replay is the person's own, or an owner's or admin's", 403)
+        start = f"{body.date}T00:00:00"
+        try:
+            end = _next_day(body.date)
+        except ValueError:
+            raise Problem("validation", "date is YYYY-MM-DD", 422)
+        try:
+            return replay(store, app.state.judge, person, start, end, body.offset, body.limit)
+        except LookupError as exc:
+            raise Problem("state", str(exc), 409)
 
     @app.post("/api/v2/ask-ingest/items/{item_id}/let-through")
     def ingest_let_through(request: Request, item_id: str):
