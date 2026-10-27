@@ -231,7 +231,8 @@ the bot owns, it gets its own room and session: the wake, the note and the bot's
 the bot's main chat gets one-line reports ([Sessions](sessions.md)).
 
 **A message to a bot may wake it, or wait.** One set of wake rules decides, each with an id: a person's message,
-an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`); a bot's own
+an ask, an approval and a gate verdict always wake the bot (`person_message`, `ask`, `approval`, `verdict`), except that a
+Manager hears of a verdict as a note (`profile_manager_note`); a bot's own
 write (`own_write`), news about a task that waits on something (`parked`), a stall check on a task that has not moved
 (`same_state`; Quiet task triage can let one wake through, see [Tasks](tasks.md)) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
@@ -503,7 +504,7 @@ window and a gap between sweeps, and it grants no right.
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
 | **Reviewer** | its review or QA request, a verdict it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a ticket it asked for ending declined, blocked or done, approvals | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
-| **Manager** | people, a task given to it, its own clock, its exceptions list having a new entry | a note for its next run | any task, started only when a person or a bot asks |
+| **Manager** | people, a task given to it, its own clock, its exceptions list having a new entry | a note for its next run, verdicts and its subtasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |
 | **Monitor** | its own watcher, people | a note | its watcher's tasks only |
 | **Custom** | what its rules say | its rules | what its settings say |

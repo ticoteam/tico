@@ -148,6 +148,12 @@ NOTE_EVENTS = {
 BATCH_EVENTS = {"completion": "a finished request", "review": "review comments", "ci": "a failing check",
                 "rule": "a notice a rule batched"}
 AWAITED_NAMES = frozenset(v[0] for v in AWAITED_EVENTS.values())
+# What a Manager-profile bot hears of as a note though it wakes every other bot: a ticket's verdicts and builder
+# hand-offs (wake_rules.always_wakes keys) and its subtasks' and blockers' results (wake_rules.awaited keys). Its
+# hourly run reads them; a person, an approval, a needs-action flag, a reply it waits on and its own wake_once,
+# resume, watcher, milestone and worktree waits still wake it.
+MANAGER_NOTE = "profile_manager_note"
+MANAGER_QUIET = frozenset({"gate", "handoff", "subtask", "blocker_done"})
 EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in AWAITED_EVENTS.values()},
           **{"batch_" + k: v for k, v in BATCH_EVENTS.items()}}
 # refs.wake spellings the writers use -> the event a rule names.
@@ -216,7 +222,7 @@ def _profile_rules():
     add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
     add("manager", "profile_manager_exceptions", "exceptions", WAKE, "its exceptions list has a new entry")
     timers("manager", OWN_TIMERS + OWN_WORK)
-    add("manager", "profile_manager_note", "*", NOTE, "anything else: ticket news waits for its next run")
+    add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
     add("monitor", "profile_monitor_assignment", "assignment", WAKE, "its watcher filed a task",
         {"actor": ["keeper"]})
@@ -600,6 +606,8 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(IGNORE, NO_RUN)
     cause = wake_rules.CAUSE.get()
     floor = wake_rules.always_wakes(conn, actor, target, kind, refs, body, cause, in_reply_to)
+    if floor in MANAGER_QUIET and _manager(conn, target):
+        return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if floor:
         return Decision(WAKE, floor_rule(floor, kind))
     event = event_of(actor, kind, refs, body)
@@ -610,6 +618,8 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     if row:
         return row
     key = wake_rules.awaited(refs)
+    if key in MANAGER_QUIET and _manager(conn, target):
+        return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if key:
         return Decision(WAKE, "awaited_" + key)
     if refs.get("wake_digest"):
@@ -624,6 +634,10 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
     return Decision(outcome, rule, HOLD_ROW if outcome == NOTE else None)
+
+
+def _manager(conn, target):
+    return profile_of(conn, H.actor_id(target)) == "manager"
 
 
 def decide(conn, actor, target, kind, refs, body, conv, in_reply_to=None):

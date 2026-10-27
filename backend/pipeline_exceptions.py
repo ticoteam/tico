@@ -90,8 +90,7 @@ def _runs(c, row):
 
 def _waits(c, row, at):
     """Why a quiet task is not stuck, or None: something is recorded that it waits on."""
-    reason = H.stall_skip(c, row, at)
-    return None if reason in (None, "sweeps_off", "live_session") else reason
+    return H.recorded_wait(c, row, at)
 
 
 def _label(c, row):

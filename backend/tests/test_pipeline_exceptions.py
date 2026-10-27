@@ -3,6 +3,7 @@ read about hourly, and no wake for a ticket's routine steps, subtask results, ch
 import json
 
 from backend import check_pools, pipeline_exceptions as PE, pipeline_stats, rules, step_age, step_backlog
+from backend import task_relations
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.test_api import api, get  # noqa: F401
@@ -21,6 +22,10 @@ def board(c, profile="manager"):
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r1','box','ana','h',?,?)",
                   (H.now(), H.now()))
     return H.type_get(c, typ["id"])
+
+
+def profile(c, slug, name):
+    c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.profile',?) WHERE bot=?", (name, slug))
 
 
 def settled(c):
@@ -199,7 +204,7 @@ def test_routine_ticket_events_never_wake_a_manager_and_file_no_review_without_a
         # Both tickets first: making one settles the jobs queued so far, and every event below must stay counted.
         row, late = ticket(c, typ, title), ticket(c, typ, title + " late")
         check = check_of(c, row, "Review 1: PR #7")
-        H.task_comment(c, "bot:ops", check["id"], "VERDICT: approve at " + HEAD)
+        H.task_comment(c, "bot:ops", check["id"], "VERDICT: approve PR #7 head " + HEAD)
         H.task_update(c, "bot:ops", check["id"], status="done", note="approve")
         H.task_update(c, "bot:cpo", row["id"], step="QA Fixes")
         H.task_update(c, "bot:cpo", row["id"], status="waiting", note="Waits on QA")
@@ -253,3 +258,89 @@ def test_a_turn_that_ends_doing_with_nothing_queued_wakes_its_owner_once_and_the
         [entry] = listed(c, typ, "stuck")
         assert entry["check"]["id"] == check["id"]
         assert rules.EVENTS["exceptions"]
+
+
+def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_manager_and_wake_any_other(api):
+    """The rule engine's floor (a real verdict, a builder hand-off) and its awaited results (a subtask's, a blocker's)
+    come before the profile's rows; on the Manager profile they still wait for its next run."""
+    with api.app.state.store.transaction() as c:
+        board(c)
+        parent = H.task_create(c, "bot:cpo", "Find why reviews stall", "Look.", "bot:coo", lint=False)
+        conv = H.conversation(c, parent["conversation_id"])
+        cases = [("bot:ops", "say", {"task": parent["id"]}, "Looked at it.\nVERDICT: approve PR #7 head " + HEAD),
+                 ("keeper", "notice", {"task": parent["id"], "handoff": "verdict"}, "Review 1 gave changes."),
+                 ("keeper", "notice", {"task": parent["id"], "subtask": "x", "wake": "subtask_finished"}, "Done."),
+                 ("keeper", "notice", {"task": parent["id"], "blocker_done": "x"}, "The blocker finished.")]
+        for name, outcome in (("manager", rules.NOTE), ("lead", rules.WAKE), ("doer", rules.WAKE)):
+            profile(c, "coo", name)
+            got = [rules.judge(c, actor, "bot:coo", kind, refs, body, conv) for actor, kind, refs, body in cases]
+            assert [d.outcome for d in got] == [outcome] * 4, (name, got)
+        # A person still wakes a manager, verdict or not.
+        profile(c, "coo", "manager")
+        person = rules.judge(c, "human:ana", "bot:coo", "say", {"task": parent["id"]}, "VERDICT: approve", conv)
+        assert person.outcome == rules.WAKE
+
+        # End to end: a child of the manager's own task finishes, and a task it waits on finishes.
+        def results(name):
+            profile(c, "coo", name)
+            mine = H.task_create(c, "bot:cpo", f"Sort the {name} pools", "Sort.", "bot:coo", lint=False)
+            child = H.task_create(c, "bot:coo", f"Count the {name} pool", "Count.", "bot:ops", parent_id=mine["id"])
+            waits = H.task_create(c, "bot:cpo", f"Wait for the {name} fix", "Wait.", "bot:coo", lint=False)
+            upstream = H.task_create(c, "bot:cpo", f"Ship the {name} fix", "Ship.", "bot:ops", lint=False)
+            task_relations.relate(c, "human:ana", upstream["id"], waits["id"], "blocks")
+            settled(c)
+            H.task_update(c, "bot:ops", child["id"], status="done", note="Three bots, one free")
+            H.task_update(c, "bot:ops", upstream["id"], status="done", note="Shipped")
+            return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='coo' "
+                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs_json,'$.task') "
+                             "IN (?,?)", (mine["id"], waits["id"])).fetchone()[0]
+
+        assert results("doer") >= 2, "control: a doer is woken for its child's result and its blocker finishing"
+        assert results("manager") == 0
+
+
+def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_until_it_is_really_idle(api):
+    """A reviewer's profile has no stall sweeps; what its check waits on is read all the same."""
+    with api.app.state.store.transaction() as c:
+        typ = board(c)
+        row = ticket(c, typ, minutes=200)
+        check = doing(c, check_of(c, row))
+        profile(c, "ops", "reviewer")
+        c.execute("UPDATE task_events SET ts=? WHERE task_id=?", (H.shift(H.now(), minutes=-120), check["id"]))
+        run(c, check, "completed", 60)
+        upstream = H.task_create(c, "bot:cpo", "Ship the base fix", "Ship.", "bot:cpo", lint=False)
+        settled(c)
+        conv = H.conversation(c, check["conversation_id"])
+
+        def ask():
+            m = H._write_message(c, "bot:ops", "bot:cpo", "Which head should I review?", conv, "ask",
+                                 {"task": check["id"]}, None, None)
+            return lambda: (c.execute("DELETE FROM jobs WHERE message_id=?", (m["id"],)),
+                            c.execute("DELETE FROM messages WHERE id=?", (m["id"],)))
+
+        def snooze():
+            c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", (H.shift(H.now(), hours=3), check["id"]))
+            return lambda: c.execute("UPDATE tasks SET snoozed_until=NULL WHERE id=?", (check["id"],))
+
+        def approval():
+            aid = H.new_id()
+            c.execute("INSERT INTO approvals(id,kind,task_id,requested_by,created) VALUES(?,?,?,?,?)",
+                      (aid, "send", check["id"], "bot:ops", H.now()))
+            return lambda: c.execute("DELETE FROM approvals WHERE id=?", (aid,))
+
+        def blocker():
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_by,created) VALUES(?,?,?,?,?)",
+                      (upstream["id"], check["id"], "blocks", "bot:cpo", H.now()))
+            return lambda: c.execute("DELETE FROM task_relations WHERE from_task=? AND kind='blocks'", (upstream["id"],))
+
+        for wait in (ask, snooze, approval, blocker):
+            undo = wait()
+            settled(c)
+            assert listed(c, typ, "stuck") == [], wait.__name__
+            assert step_age.turn_ended(c) == [], wait.__name__
+            undo()
+        [entry] = listed(c, typ, "stuck")
+        assert entry["check"]["id"] == check["id"], "nothing recorded: the idle reviewer's check is listed"
+        before = unheld_jobs(c, "ops")
+        assert step_age.turn_ended(c) == [check["id"]], "and its reviewer is woken"
+        assert unheld_jobs(c, "ops") == before + 1

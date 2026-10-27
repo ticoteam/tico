@@ -67,7 +67,7 @@ SPEC = {
     # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
     MANAGER: {**BASE, "label": "Manager", "pulls": "none", "sweeps": False, "batch_scope": "bot",
               "description": "Runs on its schedule over one exceptions list. Wakes for people, work given to it and its "
-                             "own timers; ticket news waits for its next run."},
+                             "own timers; ticket news, verdicts and subtask results wait for its next run."},
     RESPONDER: {**BASE, "label": "Responder", "pulls": "none", "sweeps": False, "takes": "none",
                 "description": "Answers people in chat. Wakes for people only and takes no tasks."},
     MONITOR: {**BASE, "label": "Monitor", "sweeps": False, "takes": "watcher",
