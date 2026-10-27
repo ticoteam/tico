@@ -782,16 +782,34 @@ def stopped_rows(c, who, auth, bot, limit=5):
     A choice saved while the bot's lane was busy (reconcile_job, deferred) keeps its job held: that job carries it as
     `decided`, and a row whose every job has one carries it too ("mixed" when they differ), so a refreshed card shows the outcome instead of
     offering a second choice that would be refused. `runs` counts every readable run; rows stop at `limit`."""
+    held = list(_readable_held(c, who, auth, bot))
+    job_ids = [row["job_id"] for row, _, _ in held]
+    jobs, attempts, recoveries = {}, {}, {}
+    for part in H.chunks(job_ids):
+        marks = ",".join("?" * len(part))
+        jobs.update({j["id"]: j for j in c.execute(f"SELECT * FROM jobs WHERE id IN ({marks})", part)})
+        for r in c.execute(
+                f"SELECT job_id, attempt_id, decision FROM job_recovery WHERE job_id IN ({marks})", part):
+            recoveries[(r["job_id"], r["attempt_id"])] = r["decision"]
+    aids = [row["attempt_id"] for row, _, _ in held if row["attempt_id"]]
+    for part in H.chunks(aids):
+        marks = ",".join("?" * len(part))
+        for a in c.execute(
+                f"SELECT id, state, result_json, stop_requested, started, finished FROM attempts "
+                f"WHERE id IN ({marks})", part):
+            attempts[a["id"]] = a
     rows, by_run = [], {}
 
     def handle(job):
-        saved = c.execute("SELECT decision FROM job_recovery WHERE job_id=? AND attempt_id=?",
-                          (job["id"], job["attempt_id"])).fetchone()
-        return {"id": job["id"], "attempt_id": job["attempt_id"], **({"decided": saved[0]} if saved else {})}
+        key = (job["id"], job["attempt_id"])
+        return {"id": job["id"], "attempt_id": job["attempt_id"],
+                **({"decided": recoveries[key]} if key in recoveries else {})}
 
-    for row, task, seen in _readable_held(c, who, auth, bot):
+    for row, task, seen in held:
         key = row["attempt_id"] or row["id"]
-        job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+        job = jobs.get(row["job_id"])
+        if not job:
+            continue
         if key in by_run:
             if by_run[key] is not None:
                 by_run[key]["jobs"].append(handle(job))
@@ -799,8 +817,7 @@ def stopped_rows(c, who, auth, bot, limit=5):
         if len(rows) >= limit:
             by_run[key] = None
             continue
-        attempt = c.execute("SELECT state,result_json,stop_requested,started,finished FROM attempts WHERE id=?",
-                            (row["attempt_id"],)).fetchone() if row["attempt_id"] else None
+        attempt = attempts.get(row["attempt_id"]) if row["attempt_id"] else None
         cause = stop_cause(attempt)
         facts = retry_facts(c, job, attempt["started"] if attempt else None, attempt["finished"] if attempt else None)
         by_run[key] = {"title": task["title"] if task else "A chat request" if seen else None,
