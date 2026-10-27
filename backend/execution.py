@@ -2700,15 +2700,8 @@ class Execution:
             return None
         note_claim(runner["id"], body)
         now = H.now()
-        if start_places.overdue(c):
-            return None
-        if c.execute("SELECT 1 FROM jobs j JOIN assignments a ON a.bot=j.bot WHERE a.runner_id=? "
-                     "AND j.state='queued' AND j.held=1 AND j.wake_class='quota-reset' "
-                     "AND j.hold_until<=? LIMIT 1", (who.runner_id, now)).fetchone():
-            return None  # the writer releases absolute reset holds before selecting work
-        if c.execute("SELECT 1 FROM attempts WHERE state IN ('leased','running') AND lease_until<=? LIMIT 1",
-                     (now,)).fetchone():
-            return None
+        if self.maintenance_due(c, who):
+            return None  # the writer expires lapsed leases and releases due reset holds before selecting work
         awake_since = self.waking(runner, now)
         if (awake_since != runner["awake_since"] or not runner["last_seen"]
                 or runner["last_seen"] <= H.shift(now, seconds=-CONTACT_EVERY)):
@@ -2773,17 +2766,36 @@ class Execution:
             return self.stamp_due(runner, now)
         self.stamp(c, who, runner, now)
 
-    def claim(self, c, who, body, selected=None, *, prepared=False):
+    def maintenance_due(self, c, who):
+        """Whether `maintain` has anything to do for this claim: a start place or lease that lapsed, or a quota
+        reset hold on one of this computer's bots that is due. Read-only, so an idle poll stays off the lock."""
+        now = H.now()
+        return bool(start_places.overdue(c) or c.execute(
+            "SELECT 1 FROM jobs j JOIN assignments a ON a.bot=j.bot WHERE a.runner_id=? "
+            "AND j.state='queued' AND j.held=1 AND j.wake_class='quota-reset' "
+            "AND j.hold_until<=? LIMIT 1", (who.runner_id, now)).fetchone() or c.execute(
+            "SELECT 1 FROM attempts WHERE state IN ('leased','running') AND lease_until<=? LIMIT 1",
+            (now,)).fetchone())
+
+    def maintain(self, c):
+        """What a claim cleans up before it looks for work: due quota resets released, and a bounded number of
+        lapsed leases expired, their work back in the queue."""
+        wake_presets.release_quota_resets(c)
+        self.expire(c, limit=CLAIM_MAINTENANCE)
+
+    def claim(self, c, who, body, selected=None, *, prepared=False, maintained=False):
+        """`maintained`: the claim route ran `maintain` in its own write before its read snapshot chose `selected`,
+        so a job that expiry requeued was there to choose, and this write rechecks only that job."""
         runner = self.runner(c, who)
         if runner:
             note_claim(runner["id"], body)
-        changes = c.total_changes
-        wake_presets.release_quota_resets(c)
-        self.expire(c, limit=CLAIM_MAINTENANCE)
-        if c.total_changes != changes:
-            # Expiry can put a lapsed job back in the queue after the read snapshot chose:
-            # choose afresh under this lock so it goes out now, not one poll later.
-            selected, prepared = None, False
+        if not maintained:
+            changes = c.total_changes
+            self.maintain(c)
+            if c.total_changes != changes:
+                # Expiry can put a lapsed job back in the queue after the read snapshot chose:
+                # choose afresh under this lock so it goes out now, not one poll later.
+                selected, prepared = None, False
         now = H.now()
         self.record_contact(now)
         # A claim is contact too, and on a machine waking for a few seconds it is the first

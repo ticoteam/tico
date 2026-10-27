@@ -25,12 +25,15 @@ first; a rename is carried.
 import json
 import sqlite3
 import threading
+import time
 
 from . import hubdb as H
 from .store import Problem
 
 BATCH = 100
 SPAN = 20000
+SLICE = 20          # rows walked between looks at the clock
+HOLD_MS = 200       # a sweep write gives the lock back after about this long, and queues again behind any waiter
 RUN_EVENTS = "('task.next-run.carried','attempt.input.moved')"
 
 
@@ -243,9 +246,9 @@ def settle(conn, keys):
     conn.executemany("INSERT OR IGNORE INTO read_index VALUES(?)", settled)
 
 
-def _write(conn, work):
+def _write(conn, work, gate=None):
     from .flight import begin
-    done = begin(conn)
+    done = begin(conn, gate=gate)
     try:
         work()
         conn.execute("COMMIT")
@@ -256,10 +259,30 @@ def _write(conn, work):
         done()
 
 
-def sweep(conn, batch=BATCH, span=SPAN, stop=None):
+def _settle_some(conn, keys, gate=None):
+    """Settle the first of `keys` in one write, SLICE rows at a time, until about HOLD_MS has passed; returns how many.
+
+    The walks run under the lock (a walk outside it could miss a change landing before its write), so a write is cut
+    short by time instead: a claim or heartbeat waiting at the gate goes before the next one (TK-INSRN53V)."""
+    settled = [0]
+
+    def work():
+        start = time.monotonic()
+        while settled[0] < len(keys):
+            piece = keys[settled[0]:settled[0] + SLICE]
+            settle(conn, piece)
+            settled[0] += len(piece)
+            if (time.monotonic() - start) * 1000 >= HOLD_MS:
+                break
+    _write(conn, work, gate)
+    return settled[0]
+
+
+def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
     """Settle the queued rows, then every message and run no pass has walked yet (a row any pass walked has a node of
-    its own in `read_deps`). Each `batch` is walked and written in its own short write transaction; the search reads
-    `span` rowids at a time outside the write lock. Returns how many rows it walked."""
+    its own in `read_deps`). Each `batch` is walked and written in short write transactions (`_settle_some`), each
+    admitted through `gate` (the server's writer queue) when one is given; the search reads `span` rowids at a time
+    outside the write lock. Returns how many rows it walked."""
     def stopped():
         return stop is not None and stop.is_set()
     done = 0
@@ -267,8 +290,7 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None):
         keys = [r[0] for r in conn.execute("SELECT key FROM read_dirty LIMIT ?", (batch,))]
         if not keys:
             break
-        _write(conn, lambda: settle(conn, keys))
-        done += len(keys)
+        done += _settle_some(conn, keys, gate)
     for table, prefix in (("messages", "m:"), ("attempts", "a:")):
         after = 0
         top = conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0]
@@ -277,11 +299,11 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None):
                 f"SELECT id FROM {table} t WHERE rowid>? AND rowid<=? AND NOT EXISTS "
                 f"(SELECT 1 FROM read_deps d WHERE d.key='{prefix}'||t.id) ORDER BY rowid", (after, after + span))]
             after += span
-            for start in range(0, len(keys), batch):
+            while keys:
                 if stopped():
                     return done
-                _write(conn, lambda chunk=keys[start:start + batch]: settle(conn, chunk))
-                done += len(keys[start:start + batch])
+                settled = _settle_some(conn, keys[:batch], gate)
+                keys, done = keys[settled:], done + settled
     return done
 
 
@@ -291,7 +313,7 @@ def loop(store, stop, seconds=10):
     while not stop.is_set():
         try:
             with store.read() as conn:
-                sweep(conn, stop=stop)
+                sweep(conn, stop=stop, gate=store.writer)
         except Exception as exc:
             logging.getLogger("tico.read_deps").error("Settling history reads failed: %s", type(exc).__name__)
         stop.wait(seconds)

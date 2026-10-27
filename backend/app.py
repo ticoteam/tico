@@ -6607,6 +6607,17 @@ def create_app(settings=None):
                                         request.headers.get("idempotency-key"), selected)
             if idle is not None:
                 return idle
+            # Only a registered computer's claim cleans up: anyone else is refused before any write.
+            due = (execution.runner(c, request.state.identity) is not None
+                   and execution.maintenance_due(c, request.state.identity))
+            if c.in_transaction:
+                c.rollback()
+        if due:
+            # Lapsed leases go back in the queue in a short write of their own, before the read below chooses: the
+            # claim's write then rechecks one job instead of choosing again under the lock (TK-INSRN53V).
+            store.write(request.state.identity, execution.maintain)
+            selected.clear()
+        with store.read() as c:
             if not selected:
                 selected.append(execution.candidate(c, request.state.identity, body,
                                                     execution.runner(c, request.state.identity)))
@@ -6616,7 +6627,7 @@ def create_app(settings=None):
                 c.rollback()
             def work(write):
                 return execution.claim(write, request.state.identity, body,
-                                       selected=selected[0], prepared=True)
+                                       selected=selected[0], prepared=True, maintained=True)
             return mutate(request, body, work)
 
     @app.post("/api/v2/attempts/{aid}/renew")

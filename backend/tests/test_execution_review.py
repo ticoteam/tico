@@ -864,6 +864,56 @@ def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_p
     assert [d['state'] for d in sweep(api)] == ['queued']     # one real stop: resumed, not dismissed
 
 
+def test_a_claim_expires_lapsed_leases_in_its_own_write_and_rechecks_one_job_under_the_lock(api, monkeypatch):
+    # TK-INSRN53V (102 bots): expiry inside the claim's write, then the full selection it forced there, held the lock
+    # 7-26 s. The route expires first in a short write; the read after it sees the requeued job; the claim's write
+    # rechecks that one job and hands it out on this same claim.
+    from backend.execution import Execution
+    machine, message, lapsed = setup_attempt(api)
+    expire(api, lapsed['id'])
+    ready(api, machine, ['ops'])
+    seen, inside = [], [False]
+    original_claim, original_expire, original_candidate = Execution.claim, Execution.expire, Execution.candidate
+
+    def claim_(self, c, *a, **k):
+        inside[0] = True
+        try:
+            return original_claim(self, c, *a, **k)
+        finally:
+            inside[0] = False
+
+    def expire_(self, c, **k):
+        seen.append(('expire', inside[0], c.write_transaction))
+        return original_expire(self, c, **k)
+
+    def candidate_(self, c, *a, **k):
+        seen.append(('candidate', inside[0], k.get('job_id')))
+        return original_candidate(self, c, *a, **k)
+    monkeypatch.setattr(Execution, 'claim', claim_)
+    monkeypatch.setattr(Execution, 'expire', expire_)
+    monkeypatch.setattr(Execution, 'candidate', candidate_)
+    attempt = claim(api, machine)
+    assert attempt and attempt['job_id'] == lapsed['job_id']
+    assert ('expire', False, True) in seen                       # its own write, before the claim's
+    assert not [s for s in seen if s[0] == 'expire' and s[1]]    # never under the claim's lock
+    assert [s for s in seen if s[0] == 'candidate' and s[1]] == [('candidate', True, lapsed['job_id'])]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM attempts WHERE id=?", (lapsed['id'],)).fetchone()[0] == 'expired'
+
+
+def test_an_idle_claim_with_nothing_lapsed_takes_no_write(api, monkeypatch):
+    from backend.tests.test_api import runner
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    claim(api, machine)                                          # the contact stamp is due once
+    store = api.app.state.store
+    writes = []
+    original = store.write
+    monkeypatch.setattr(store, 'write', lambda *a, **k: writes.append(a) or original(*a, **k))
+    assert claim(api, machine) is None and writes == []
+
+
 # A finished turn whose runner stalled before handing it in (Dev 242; Oct 17-18, results 15 to 76 minutes after the
 # lease lapsed). Each shape: the model finished, the lease lapsed, something decided the job, then the result came.
 
