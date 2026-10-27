@@ -1,6 +1,7 @@
 """Goals agreed in words (backend/goal_read_back.py; spec chat-first-goals.md, criteria 1-5, 8, 9, 11, 12): the CEO Bot
 asks Tico to read back changes in the owner's chat, and the owner's yes to that message saves exactly what it read
 back, or nothing."""
+import json
 
 from backend import goal_read_back as GR
 from backend import goals as G
@@ -46,7 +47,8 @@ def read_back(api, attempt, *changes, expected=200):
 
 
 def save(api, attempt, step, expected=200, ref="turn"):
-    return asked(api, step["path"].removeprefix("/api/v2/"), step["body"], attempt["token"], ref, expected=expected)
+    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body_json"]), attempt["token"], ref,
+                 expected=expected)
 
 
 NEW_GOAL = {"kind": "goal_create", "title": "Get 100 companies to try Tico", "owner": "ops",
@@ -72,7 +74,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     # Before the yes, nothing saves, cited or not.
     first, measure = back["changes"][0]["steps"]
     assert save(api, attempt, first, expected=403)["error"]["code"] == "not_agreed"
-    assert post(api, "goals", first["body"], token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
+    assert post(api, "goals", json.loads(first["body_json"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
     attempt = reply(api, r, attempt, "yes")
     assert room_messages(api)[-2]["id"] == back["message_id"]
     made = save(api, attempt, first)
@@ -190,10 +192,10 @@ def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": target["id"], "title": "Ship the docs"})
     step = back["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
-    for changed in ({**step, "body": {"title": "Ship the docs v2"}},                       # another value
-                    {**step, "body": {"title": "Ship the docs", "owner": "coo"}},          # another field
-                    {**step, "path": f"/api/v2/goals/{other['id']}"},                      # another goal
-                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body": {"why": "Ship the docs"}}):
+    for changed in ({**step, "body_json": '{"title": "Ship the docs v2"}'},                       # another value
+                    {**step, "body_json": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
+                    {**step, "path": f"/api/v2/goals/{other['id']}"},                             # another goal
+                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body_json": '{"why": "Ship the docs"}'}):
         assert save(api, attempt, changed, expected=403)["error"]["code"] == "not_agreed"
     assert [get(api, "goals/" + g["id"])["goal"]["title"] for g in (target, other)] == ["Launch the docs",
                                                                                           "Keep the bots running"]

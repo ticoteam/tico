@@ -850,7 +850,8 @@ def install(app, store, auth, mutate, settings):
                                    turn["message_id"] if turn else None, None, delivered_at=H.now())
             H.event(c, who.actor, GR.EVENT, msg["id"], {"changes": changes})
             return {"message_id": msg["id"], "text": text,
-                    "changes": [{k: ch[k] for k in ("n", "kind", "text", "steps")} for ch in changes]}
+                    "changes": [{"n": ch["n"], "kind": ch["kind"], "text": ch["text"],
+                                 "steps": [GR.shown(st) for st in ch["steps"]]} for ch in changes]}
         return write(request, body, work)
 
     @app.get("/api/v2/goals/read-back/{mid}")
@@ -890,7 +891,7 @@ def install(app, store, auth, mutate, settings):
                 else:
                     reason = why_not
                 out.append({"n": ch["n"], "kind": ch["kind"], "text": ch["text"],
-                            "steps": [{**st, "path": GR.step_path(st, ch, done), "saved": (ch["n"], i) in done}
+                            "steps": [{**GR.shown(st, GR.step_path(st, ch, done)), "saved": (ch["n"], i) in done}
                                       for i, st in enumerate(ch["steps"])],
                             "saved": saved, "agreed": None if yes is None else ch["n"] in yes, "reason": reason,
                             "link": gid and goal_link(gid)})

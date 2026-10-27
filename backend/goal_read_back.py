@@ -206,6 +206,13 @@ def canonical(c, path, body, actor):
     return data
 
 
+def shown(step, path=None):
+    """A save as an answer shows it: the body as the exact JSON to send, which the display names added to every stable
+    answer (backend/names.py: `owner_name` beside `owner`) cannot change."""
+    return {"method": step["method"], "path": path or step["path"],
+            "body_json": json.dumps(step["body"], ensure_ascii=False, separators=(",", ":"))}
+
+
 def step_path(step, change, done):
     created = (done.get((change["n"], 0)) or {}).get("goal_id")
     return step["path"].replace(NEW, created) if NEW in step["path"] and created else step["path"]
