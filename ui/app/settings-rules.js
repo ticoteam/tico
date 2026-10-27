@@ -613,7 +613,7 @@ async function taskTriggerEditor(rule, preset = null) {
   const base = rule || preset || {}, when = base.when || {}, params = base.params || {}, first = v => ruleList(v)[0] || '';
   const opt = ruleOpt, cap = w => w ? w[0].toUpperCase() + w.slice(1) : w;
   const scopes = ruleScopeChoices().filter(([k]) => RULE_TASK_SCOPES.includes(k))
-    .map(([k, v]) => [k, k === 'bot' ? "Bot (the task's owner)" : v]);
+    .map(([k, v]) => [k, k === 'bot' ? 'Bot that owns the task' : v]);
   let kind = base.scope_kind && RULE_TASK_SCOPES.includes(base.scope_kind) ? base.scope_kind : scopes[0]?.[0] || 'team';
   if (!rule && !scopes.some(([k]) => k === kind) && scopes.length) kind = scopes[0][0];
   const scopeId0 = rule ? rule.scope_id : kind === base.scope_kind ? base.scope_id || '' : '';
@@ -677,10 +677,17 @@ async function taskTriggerEditor(rule, preset = null) {
     const names = cur && !list.includes(cur) ? [cur, ...list] : list;
     return `<label>${label}<select name="${field}"${required ? ' required' : ''}><option value="">${required ? 'Choose' : 'Any'}</option>${names.map(n => opt(n, n, cur)).join('')}</select></label>`;
   };
+  // A step the newly chosen type does not have is dropped, so a Trigger is never saved on a step it can't enter; the
+  // first paint keeps the stored step even when the type no longer lists it.
+  const keep = (name, stored) => {
+    if (!form.dataset.painted) return stored;
+    const cur = value(name), list = steps();
+    return list && !list.includes(cur) ? '' : cur;
+  };
   const restep = () => {
     const needs = form.elements.event.value === 'task.step_changed';
-    dialog.querySelector('[data-rule-step]').innerHTML = stepField('step', needs ? 'Step it enters' : 'Step', value('step') || (form.dataset.painted ? '' : first(when.step)), needs);
-    dialog.querySelector('[data-rule-param="move_step"]').innerHTML = stepField('param_step', 'To step', value('param_step') || (form.dataset.painted ? '' : params.step || ''), true);
+    dialog.querySelector('[data-rule-step]').innerHTML = stepField('step', needs ? 'Step it enters' : 'Step', keep('step', first(when.step)), needs);
+    dialog.querySelector('[data-rule-param="move_step"]').innerHTML = stepField('param_step', 'To step', keep('param_step', params.step || ''), true);
     form.dataset.painted = '1';
     shown();
   };

@@ -71,7 +71,8 @@ function taskSettingsSentence(r, type) {
 function taskSettingsRow(r, type) {
   const isJob = !!r.key, source = taskSettingsSource(r);
   const change = !!r.can_change, on = isJob ? r.on : r.enabled && !r.paused;
-  const quiet = r.then !== 'wake' && !(r.then === 'action' && r.params?.action === 'wake_bot');
+  // A new task wakes the bot that gets it, so create_task counts as a wake.
+  const quiet = r.then !== 'wake' && !(r.then === 'action' && ['wake_bot', 'create_task'].includes(r.params?.action));
   const link = taskSettingsLink(isJob ? {job: r.key} : {rule: r.id, bot: r.scope_kind === 'bot' ? r.scope_id : '', type: r.scope_kind === 'type' ? r.scope_id : ''});
   const state = (r.built_in && !change) || (isJob && !r.switch) ? 'Always on' : r.paused ? RULE_PAUSED : on === false ? 'Off' : 'On';
   const profile = r.profile || (r.created_by === 'profile' ? r.note?.match(/^From the ([^:]+) profile:/i)?.[1] : '');

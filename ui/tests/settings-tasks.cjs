@@ -240,7 +240,7 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
       ['A task is created', 'A task enters a step', 'A task is done', 'A task is declined', 'A task is closed']);
     assert.deepEqual(await tf.locator('[name="action"] option').allInnerTexts(),
       ['Add a note', 'Set a wait', 'Link a task', 'Move the step', 'Close the task', 'Wake a bot', 'Create a task', 'Send a webhook']);
-    assert.deepEqual(await tf.locator('[name="scope_kind"] option').allInnerTexts(), ['Team', 'Task type', "Bot (the task's owner)"]);
+    assert.deepEqual(await tf.locator('[name="scope_kind"] option').allInnerTexts(), ['Team', 'Task type', 'Bot that owns the task']);
     assert.deepEqual(await tf.locator('[data-rule-when-task] label').evaluateAll(l => l.map(x => x.firstChild.textContent.trim())), ['Type', 'Step', 'Tag', 'Owner', 'Requester']);
     assert.doesNotMatch(await tf.innerText(), /\b(WHEN|THEN|rule)\b/i);
 
@@ -255,6 +255,12 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     assert.equal(writes.length, before, 'no step, no save');
     assert.equal(await tf.isVisible(), true);
     assert.deepEqual(await tf.locator('[name="step"] option').allInnerTexts(), ['Choose', 'In QA', 'QA Fixes', 'Pending Release']);
+    // A step the newly chosen type lacks is cleared, not kept, so the Trigger cannot be saved on it.
+    await tf.locator('[name="step"]').selectOption('QA Fixes');
+    await tf.locator('[name="scope_id"]').selectOption('general');
+    assert.equal(await tf.locator('[name="step"]').inputValue(), '');
+    assert.deepEqual(await tf.locator('[name="step"] option').allInnerTexts(), ['Choose', 'Open']);
+    await tf.locator('[name="scope_id"]').selectOption('dev');
     // Back to the section's Trigger: create a task for PR Reviewer, saved once under Dev tickets.
     await tf.locator('[name="event"]').selectOption('task.created');
     await tf.locator('[name="action"]').selectOption('create_task');
@@ -270,6 +276,7 @@ const settingRow = (page, id) => card(page).locator(`[data-task-setting="${id}"]
     await page.waitForFunction(() => document.querySelector('[data-task-trigger="created"] [data-task-setting="r-new"]'));
     assert.match(await settingRow(page, 'r-new').innerText(), /When a task of type Dev tickets is created, create a task for PR Reviewer\./);
     assert.match(await settingRow(page, 'r-new').innerText(), /This type/);
+    assert.match(await settingRow(page, 'r-new').innerText(), /Wakes/, 'a new task wakes the bot that gets it');
 
     // 3 and 4 in the Rules list: Trigger and Action words, the failed Action's detail and time, the paused state.
     await page.evaluate(() => { location.hash = '#/settings/rules'; });
