@@ -83,11 +83,10 @@ def holds(conn, row):
 
 
 def _task_hold(conn, row, kind, other):
-    """A child or blocker as a hold. One its task's readers may not read is named by neither title nor owner: the
-    reason is shown wherever the task is (check_blocked.detail's rule)."""
+    """A child or blocker as a hold. A private one is named by neither title nor owner: the reason is shown to everyone
+    who reads the task (its guest and its parties' managers too), and not all of them read the other task."""
     from . import hubdb as H
-    if H.task_private(conn, other) and (not H.task_private(conn, row) or not all(
-            H.task_private_readable(conn, who, other) for who in (row["owner"], row["requester"]) if who)):
+    if H.task_private(conn, other):
         return {"kind": "private", "on": None, "what": "a private task"}
     return {"kind": kind, "on": other["owner"], "what": _line(other["title"])}
 
