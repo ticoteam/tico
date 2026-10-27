@@ -2072,6 +2072,9 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from .computer_keys import listing_by_runner
+            # One pass for every computer's own keys (not one SELECT per runner).
+            keys_by_runner = listing_by_runner(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2118,9 +2121,9 @@ def install_views(app, store, auth, mutate, task_view):
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
                 from .model_login import cleared_logins, key_cleared_logins
-                from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
-                keys = computer_key_listing(c, row["id"])
+                # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
+                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
                 # name, whether it is the "Every computer" one, and every computer it serves.
                 served = shared_keys.get(row["id"]) or {}

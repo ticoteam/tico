@@ -200,6 +200,17 @@ def listing(c, runner_id):
     return out
 
 
+def listing_by_runner(c):
+    """{runner_id: listing(...)} for every computer in one pass (Operations listing)."""
+    out = {}
+    for row in c.execute("SELECT k.runner_id, k.runtime, k.created, cr.env, cr.preview FROM computer_keys k "
+                         "JOIN credentials cr ON cr.id=k.credential_id WHERE k.state=? "
+                         "ORDER BY k.created", (ACTIVE,)):
+        out.setdefault(row["runner_id"], {})[row["runtime"]] = {
+            "env": row["env"], "preview": row["preview"], "since": row["created"]}
+    return out
+
+
 def _readiness(runner, runtime):
     """What `runner` last reported for `runtime`: its readiness row, or {}."""
     import json
