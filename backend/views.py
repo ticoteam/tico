@@ -1803,6 +1803,10 @@ def fleet_snapshot(c, auth, identity, task_view):
             "SELECT id,bot,state,started,lease_until,created FROM attempts "
             "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
         live_by_bot.setdefault(row["bot"], []).append(row)
+    # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
+    shown = [row["slug"] for row in bot_rows
+             if row["slug"] in allowed and access.get(row["slug"], auth.FULL)["read"]]
+    prime_machines(c, shown)
     bots = []
     for row in bot_rows:
         slug = row["slug"]
