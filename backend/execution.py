@@ -1,5 +1,6 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
+import functools
 import json
 import re
 import secrets
@@ -122,20 +123,26 @@ def claimed_busy(runner_id, fresh=CLAIMED_FRESH):
     return seen[0], frozenset(tuple(entry.split("|", 1)) for entry in seen[1] if "|" in entry)
 
 
+@functools.lru_cache(maxsize=256)
+def _capability_set(capabilities_json):
+    """Parse a runner's capabilities_json once; claim/Health ask several flags per computer."""
+    return frozenset(H._json(capabilities_json, []) or [])
+
+
 def lanes_on(runner):
-    return LANES in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and LANES in _capability_set(runner["capabilities_json"])
 
 
 def roots_on(runner):
-    return ROOTS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and ROOTS in _capability_set(runner["capabilities_json"])
 
 
 def task_goals_on(runner):
-    return TASK_GOALS in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and TASK_GOALS in _capability_set(runner["capabilities_json"])
 
 
 def capacity_continue_on(runner):
-    return CAPACITY_CONTINUE in set(H._json(runner["capabilities_json"], []) or []) if runner else False
+    return bool(runner) and CAPACITY_CONTINUE in _capability_set(runner["capabilities_json"])
 
 
 def session_task_id(c, bot, config, task_id, roots):
