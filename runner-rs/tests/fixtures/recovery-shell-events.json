@@ -1,0 +1,396 @@
+[
+  {
+    "command": "gh pr merge 42 --squash --body synthetic-private-marker",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    }
+  },
+  {
+    "command": "npm publish --token synthetic-private-marker",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "npm",
+      "outside_actions": [
+        "publish package"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "npm",
+      "outside_actions": [
+        "publish package"
+      ]
+    }
+  },
+  {
+    "command": "docker image push registry.acme.example/acme/app:1",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "docker",
+      "outside_actions": [
+        "publish package"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "docker",
+      "outside_actions": [
+        "publish package"
+      ]
+    }
+  },
+  {
+    "command": "hub webhook send 1",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub",
+      "outside_actions": [
+        "send webhook"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub",
+      "outside_actions": [
+        "send webhook"
+      ]
+    }
+  },
+  {
+    "command": "stripe payment_intents confirm 1",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "stripe",
+      "outside_actions": [
+        "make payment"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "stripe",
+      "outside_actions": [
+        "make payment"
+      ]
+    }
+  },
+  {
+    "command": "gh pr view 42",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": []
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": []
+    }
+  },
+  {
+    "command": "hub task show 42",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub",
+      "outside_actions": []
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "hub",
+      "outside_actions": []
+    }
+  },
+  {
+    "command": "cat note.txt",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": []
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cat",
+      "outside_actions": []
+    }
+  },
+  {
+    "command": "cargo publish",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cargo",
+      "outside_actions": [
+        "publish package"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cargo",
+      "outside_actions": [
+        "publish package"
+      ]
+    }
+  },
+  {
+    "command": "twine upload dist/acme.whl",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "twine",
+      "outside_actions": [
+        "publish package"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "twine",
+      "outside_actions": [
+        "publish package"
+      ]
+    }
+  },
+  {
+    "command": "gh api repos/acme/tico/pulls/3/merge -X PUT",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    }
+  },
+  {
+    "command": "sendmail -t < /tmp/notice",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "sendmail",
+      "outside_actions": [
+        "send email"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "sendmail",
+      "outside_actions": [
+        "send email"
+      ]
+    }
+  },
+  {
+    "command": "/bin/bash -lc \"cd /tmp;gh pr merge 42\"",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cd",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "cd",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    }
+  },
+  {
+    "command": "gh 'pr' merge 42",
+    "codex": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "shell",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    },
+    "claude": {
+      "kind": "tool",
+      "thread_id": "th",
+      "turn_id": "tu",
+      "tool": "Bash",
+      "status": "started",
+      "item_id": "tool-1",
+      "parent_id": null,
+      "summary": "gh",
+      "outside_actions": [
+        "merge pull request"
+      ]
+    }
+  }
+]

@@ -68,6 +68,22 @@ def held(api, task):
     return current
 
 
+def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatch):
+    task = ticket(api, f'Tests: head {HEAD}: 9 passed, 0 failed')
+    with api.app.state.store.transaction() as c:
+        typ = H.type_get(c, task['type_id'])
+        H.type_update(c, H.KEEPER, typ['id'], steps=[
+            {'id': s['id'], 'name': 'Code review' if s['name'] == 'Review 1' else s['name'],
+             'status': s['status']} for s in typ['steps']])
+    reads = github(api, monkeypatch, {'python': 'failure'})
+    response = move(api, task, 'Code review')
+    assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'the renamed step reads GitHub afresh'
+    assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
+    assert 'python' in response.text
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step']['name'] == 'Blocked' and 'CI failing' in current['blocked_reason']
+
+
 def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
     task = ticket(api, STALE)
     token = bot_token(api)
@@ -75,6 +91,30 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
     r = ask(api, token, task)
     assert r.status_code == 200, r.text
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'the question read GitHub afresh'
+    question = r.json()['task']
+    assert question['status'] == 'waiting' and question['waiting_on'] == 'human:ana'
+    # This is the builder's decision question, not a blocked judging check. The minute sweep agrees.
+    with api.app.state.store.transaction() as c:
+        task_blocked.sweep(c, H.now())
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
+
+
+def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypatch):
+    task = ticket(api, STALE)
+    github(api, monkeypatch, GREEN)
+    check = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review 1: PR #412',
+        'body': 'Review the candidate.', 'relations': [{'task': task['id'], 'kind': 'parent'}]})
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cmo', check['id'], status='waiting', note='Review runner unavailable')
+        held_row = H.task(c, task['id'])
+        assert held_row['blocked_kind'] == 'check'
+        since = held_row['blocked_since']
+    assert task_blocked.fresh(api.app.state.github_app, force=True) == []
+    current = get(api, 'tasks/' + task['id'])['task']
+    assert current['step']['name'] == 'Blocked' and current['blocked_since'] == since
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, 'bot:cmo', check['id'], status='doing')
     current = get(api, 'tasks/' + task['id'])['task']
     assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
 

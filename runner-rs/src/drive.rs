@@ -309,6 +309,10 @@ impl Runner {
                 }
                 if kind == "turn_completed" {
                     outcome = if event["status"] == "interrupted" { "interrupted".into() } else { "completed".into() };
+                    if outcome == "interrupted" {
+                        // This is a host's acknowledged end, unlike losing its connection or timing out.
+                        self.state.append(aid, "diagnostic", &json!({"interruption_complete": true}))?;
+                    }
                     // A turn that gave the login up ends here, between a native goal's turns too; a goal that runs
                     // across turns is not continued once the lease is lost.
                     complete = yielding.is_some() || salvage.is_some() || !(goal_running && across_turns && outcome == "completed");
@@ -561,6 +565,26 @@ mod tests {
             .await
             .expect("the drive ends");
         (drove, carried, goal)
+    }
+
+    #[tokio::test]
+    async fn only_an_acknowledged_interruption_records_the_terminal_recovery_receipt() {
+        for status in ["interrupted", "completed"] {
+            let (url, sent) = lapsed_hub().await;
+            let (runner, dir) = runner_at(&url);
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
+            tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": status})).unwrap();
+            let drove = drive_turn(&runner, &host, &mut rx, &flags(true), "th-1").await.unwrap();
+            assert_eq!(drove.outcome, status);
+            let events: Vec<Value> = sent.lock().unwrap().iter().filter_map(|request| {
+                let (path, body) = request.split_once(' ')?;
+                path.ends_with("/events").then(|| serde_json::from_str::<Value>(body).unwrap())
+            }).flat_map(|body| body["events"].as_array().cloned().unwrap_or_default()).collect();
+            assert_eq!(events.iter().any(|e| e["kind"] == "diagnostic" && e["payload"]["interruption_complete"] == true),
+                       status == "interrupted", "{events:?}");
+            std::fs::remove_dir_all(dir).ok();
+        }
     }
 
     #[tokio::test]

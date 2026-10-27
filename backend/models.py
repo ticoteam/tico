@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 import re
 
-from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
+from pydantic import AfterValidator, BeforeValidator, BaseModel, ConfigDict, Field, SecretStr, StrictBool, StrictInt, StrictStr, ValidationError, WrapValidator, model_serializer, model_validator
 
 Text = Annotated[str, Field(min_length=1, max_length=200_000)]
 ID = Annotated[str, Field(min_length=1, max_length=200)]
@@ -175,6 +175,13 @@ class TaskRelationRef(Contract):
     kind: RelationKind = "related"
 
 
+class TaskBlocker(Contract):
+    """What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."""
+    repo: str = Field(min_length=3, max_length=200)
+    status: StrictInt = Field(ge=100, le=599)
+    endpoint: str = Field(min_length=1, max_length=200)
+
+
 class TaskCreate(Contract):
     visibility: Literal['public', 'private'] | None = None
     # Publishing at creation needs explicit public text; the internal title and body are never copied.
@@ -193,6 +200,7 @@ class TaskCreate(Contract):
     change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(default_factory=list, max_length=3000)
     qa: StrictBool | None = None
     qa_not_checkable_live: StrictBool = False
+    blocker: TaskBlocker | None = None
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
     # Wait for the owner's next run instead of starting one (a bot owner only).
@@ -258,12 +266,61 @@ class TaskUpdate(Contract):
         return self
 
 
+class TaskFilter(Contract):
+    """The tasks a bulk change applies to: the filters `GET /api/v2/tasks` takes, with the same meanings."""
+    owner: ID | None = None
+    requester: ID | None = None
+    status: str | None = Field(default=None, max_length=200)     # comma-separated, as the list takes it
+    lane: Lane | None = None
+    label: str | None = Field(default=None, max_length=200)      # a tag's key
+    type: ID | None = None
+    step: str | None = Field(default=None, min_length=1, max_length=200)
+    number: TaskNumber | None = None
+    updated_since: str | None = Field(default=None, max_length=100)
+    member: ID | None = None
+    role: str | None = Field(default=None, max_length=100)
+    snoozed: Literal["hide", "only", "all"] | None = None
+    ids: list[ID] | None = Field(default=None, min_length=1, max_length=100)
+
+
+class TaskBulk(Contract):
+    """One change to every task `filter` selects (`POST /api/v2/task-bulk`): `action` names it and its one field
+    carries the value: `step` (id or name), `status`, `owner`, `add` or `remove` (tags, for `tags`), or none for
+    `close`. `note` goes with each task's change, as on a single update."""
+    filter: TaskFilter
+    action: Literal["step", "status", "owner", "tags", "close"]
+    step: str | None = Field(default=None, min_length=1, max_length=200)
+    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    owner: ID | None = None
+    add: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
+    remove: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
+    note: str | None = Field(default=None, max_length=20_000)
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def one_change(self):
+        given = {name for name in ("step", "status", "owner") if getattr(self, name) is not None}
+        if self.add or self.remove:
+            given.add("tags")
+        if given != ({self.action} if self.action != "close" else set()):
+            takes = {"step": "step", "status": "status", "owner": "owner", "tags": "add or remove", "close": "no value"}
+            raise ValueError(f"action {self.action} takes {takes[self.action]} and nothing else")
+        return self
+
+
 class TaskStepInput(Contract):
     public_name: str | None = Field(default=None, max_length=200)      # "" keeps the step off public pages
     id: ID | None = None
     name: ID
     position: int | None = None
     status: Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]
+    # The bots that may do this step's check, and how many open checks each may hold (backend/check_pools.py).
+    # Left out, a step keeps what it had; an empty list makes it no check step.
+    check_pool: list[ID] | None = Field(default=None, max_length=40)
+    check_limit: int | None = Field(default=None, ge=1, le=20)
+    # What the step does with a ticket (backend/step_flow.py): where a check's pass or other outcome sends it, the
+    # merged step, a skip tag, a check timeout. Left out, a step keeps what it had; {} clears it.
+    flow: dict | None = None
 
 
 # What every bot may do with a type's tasks beyond its own (hubdb.TYPE_BOTS): parties keeps them to

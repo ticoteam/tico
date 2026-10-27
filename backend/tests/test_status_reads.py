@@ -206,17 +206,16 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     finished = finish_private(store, "busy-1")
 
     def read():
-        # Only the status task read's own work is counted: the page's other reads (open questions, approvals,
-        # cached rows) vary with what earlier reads left behind. Each step goes to the statement last started.
-        ours, steps, prefix = [False], [0], f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks"
+        steps = [0]
         with store.read_transaction() as c:
-            c.set_trace_callback(lambda sql: ours.__setitem__(0, sql.startswith(prefix)))
-            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + ours[0]), 1)
             inputs = privacy.status_inputs(c, slugs)
-            c.set_progress_handler(None, 1)
-            c.set_trace_callback(None)
             actors = ["bot:" + slug for slug in slugs]
             marks = " IN (" + ",".join("?" * len(actors)) + ")"
+            # Only the task read is counted: each new task also gets a room under a random id, and where those ids
+            # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
+            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {tuple(t) for t in c.execute(
                 f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) "

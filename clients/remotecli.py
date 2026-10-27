@@ -196,7 +196,7 @@ def run(args, who=None):
             return hubtools.BY_NAME["hub_run_export"]["fn"](client, {"attempt": args.attempt})
         found = hubtools.run_export_full(client, args.attempt)
         return {"written": hubtools.write_fixture(found, Path(args.out or "."))}
-    if fn in ("task child create", "task tree"):
+    if fn in ("task child create", "task tree", "task bulk"):
         return via_tool(client, args)
     if fn in ("task requesters", "task requester-save", "task requester-remove", "task publication-preview",
               "task comment-moderate", "roadmap tasks"):
@@ -442,6 +442,11 @@ def run(args, who=None):
                     payload[field] = (getattr(args, field) == "yes") if field == "qa" else getattr(args, field)
             if args.label:
                 payload["labels"] = [x.strip() for one in args.label for x in one.split(",") if x.strip()]
+            if getattr(args, "blocker", None):
+                repo, status, endpoint = args.blocker
+                if not status.isdigit():
+                    raise SystemExit("hub: --blocker STATUS is an HTTP status number, e.g. 403")
+                payload["blocker"] = {"repo": repo, "status": int(status), "endpoint": endpoint}
             if args.top:
                 payload["top"] = True
             if args.link:

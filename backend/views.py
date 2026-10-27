@@ -1813,6 +1813,18 @@ def install_views(app, store, auth, mutate, task_view):
         for bot, conversation in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active'"):
             goals.setdefault(bot, []).append(conversation)
         company = providers.load(c, store.settings)
+        latest_run = {row["bot"]: row["id"] for row in c.execute(
+            "SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY finished DESC,id DESC) AS n "
+            "FROM turns WHERE finished IS NOT NULL) WHERE n=1")}
+        from .usage_records import ran_on
+        run_views = ran_on(c, list(latest_run.values()))
+        latest_models = {}
+        for slug, turn_id in latest_run.items():
+            segments = run_views[turn_id].get("segments") or []
+            families = {part["family"] for part in segments if part.get("family")}
+            family = next(iter(families)) if len(families) == 1 and all(part.get("family") for part in segments) else None
+            models = list(dict.fromkeys(part.get("model") for part in segments if part.get("model")))
+            latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
         from .report_order import positions
@@ -1880,10 +1892,20 @@ def install_views(app, store, auth, mutate, task_view):
                 resolved_runtime, resolved_model = providers.resolve(company, config)
             except providers.ProviderError:
                 resolved_runtime = resolved_model = ""
+            resolved_provider = (providers.MODEL_BY_ID.get(resolved_model or "") or {}).get("provider", "")
+            resolved_provider_label = providers.PROVIDER_BY_ID.get(resolved_provider, {}).get("label", "")
+            resolved_model_label = (providers.MODEL_BY_ID.get(resolved_model or "") or {}).get("label") or resolved_model
+            latest_family, latest_model = latest_models.get(slug, (None, ""))
+            show_latest = bool(latest_model) and (not latest_family or latest_family != resolved_provider)
             own = bool(providers._named(config.get("runtime")) or providers._named(config.get("model")))
             # The effort it runs at, said beside the model on hover; empty when the bot has none.
             resolved_effort = str(config.get("reasoning_effort") or config.get("effort") or bot.get("effort") or "") if resolved_runtime else ""
-            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model, "resolved_effort": resolved_effort,
+            rows.append({**config, "resolved_runtime": resolved_runtime, "resolved_model": resolved_model,
+                         "resolved_model_label": resolved_model_label,
+                         "resolved_provider": resolved_provider_label, "resolved_effort": resolved_effort,
+                         "latest_runtime_model": latest_model if show_latest else "",
+                         "latest_runtime_provider": providers.PROVIDER_BY_ID.get(latest_family, {}).get("label")
+                         if show_latest and latest_family else "Unknown provider" if show_latest else "",
                          "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug),

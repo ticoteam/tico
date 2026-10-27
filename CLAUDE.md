@@ -26,7 +26,10 @@ bot's turn do it themselves): at most `TICO_HEAVY_SLOTS` (2) such runs at once p
 "waiting for heavy-job slot (n holders)", so start them detached. Hosted CI skips it. Better still, run them off the
 shared computer: `python3 scripts/remote.py -- <command>` (or `TICO_HEAVY_REMOTE=1` for anything that goes through
 `heavy.sh`) runs it on a fresh RunsOn VM against the pushed HEAD, then prints its last lines and exits with its code.
-It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
+It needs `gh` signed in with permission to dispatch workflows; a test file or two you changed still runs locally (in a bot's
+turn with `TICO_HEAVY_REMOTE=1`, a pytest run naming up to three test files stays local and a whole suite goes remote).
+The factory simulation (`python -m evals.factory.run`, evals/factory/README.md) runs end-to-end board scenarios and
+goes to RunsOn by default. Locally, a PR runs only the tests for what it changed; for each release, run the full suite once on its frozen candidate. `--release` runs every test (slow included, `ui-tests.cjs --all`) and the Docker
 whole-product checks before a tag (docs/releasing.md). There is no budget on how many tests the suite has: write as many as a change needs, as long as each one
 guards a real failure (a privacy or permission boundary, migrations and data safety, a core task/run flow, a
 regression, an edge case that would lose or duplicate work). No tests of wording, copy or docs, trivial getters or
