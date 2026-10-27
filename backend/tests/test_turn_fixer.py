@@ -21,10 +21,15 @@ def busy(machine, bots=()):
 
 
 def fix(api):
+    """The scheduler's free → read draft → tend split, so tests hit the production path."""
     from backend import turn_fixer
     store = api.app.state.store
     with store.transaction() as c:
-        return turn_fixer.run(c, api.app.state.execution, store.settings, 'ana')
+        freed = turn_fixer.free(c, api.app.state.execution)
+    with store.read() as c:
+        draft = turn_fixer.draft_finding(c, store.settings, force=bool(freed))
+    with store.transaction() as c:
+        return freed, turn_fixer.tend(c, store.settings, 'ana', freed, draft)
 
 
 def state(api, aid):
@@ -178,3 +183,48 @@ def test_a_wait_that_needs_the_person_tells_the_owner_at_once(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='human:ana' AND kind='notice' "
                          "AND body LIKE '%needs a login%'").fetchone()[0] == 1
+
+
+def test_finding_classification_is_not_under_the_writer(api, monkeypatch):
+    """A due finding classifies the fleet on a read connection; the writer only installs the draft."""
+    from contextlib import contextmanager
+    from backend import org_turns, start_places
+
+    one_person(api)
+    waiters(api, n=39, running=1)
+    store = api.app.state.store
+    with store.transaction() as c:
+        org_turns.observe(c, store.settings, detailed=False)
+        incident = org_turns.saved(c, org_turns.INCIDENT)
+        incident['finding'] = {'updated_at': H.shift(H.now(), minutes=-2), 'text': 'stale'}
+        org_turns.save(c, org_turns.INCIDENT, incident)
+
+    writing = {'on': False}
+    real_txn = store.transaction
+    real_summary = start_places.summary
+    seen = {'during_write': 0, 'during_read': 0}
+
+    @contextmanager
+    def wrapped_txn(*a, **k):
+        writing['on'] = True
+        try:
+            with real_txn(*a, **k) as c:
+                yield c
+        finally:
+            writing['on'] = False
+
+    def watched(c, *a, **k):
+        if writing['on']:
+            seen['during_write'] += 1
+        else:
+            seen['during_read'] += 1
+        return real_summary(c, *a, **k)
+
+    monkeypatch.setattr(store, 'transaction', wrapped_txn)
+    monkeypatch.setattr(start_places, 'summary', watched)
+    fix(api)
+    assert seen['during_read'] >= 1
+    assert seen['during_write'] == 0
+    with store.read() as c:
+        found = org_turns.saved(c, org_turns.INCIDENT)['finding']
+    assert 'Likely bottleneck' in found['text']
