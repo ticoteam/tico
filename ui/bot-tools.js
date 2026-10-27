@@ -191,7 +191,18 @@
       render();
     }
     refresh();
-    const timer = setInterval(() => { if (!host.isConnected) clearInterval(timer); else refresh(); }, 60000);
+    // Same as Files: do not refresh tools for a hidden tab; wake when it is shown again.
+    const onVis = () => {
+      if (!host.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
+      if (!document.hidden) refresh();
+    };
+    const timer = setInterval(() => {
+      if (!host.isConnected) {
+        clearInterval(timer); document.removeEventListener('visibilitychange', onVis); return;
+      }
+      if (!document.hidden) refresh();
+    }, 60000);
+    document.addEventListener('visibilitychange', onVis);
   }
 
   // The Tools card under More: one line a tool (icon, name, its key values, status) that opens to every detail,

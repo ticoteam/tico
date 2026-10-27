@@ -79,7 +79,19 @@
       } catch (e) { state.error = e.message || 'Could not load the files.'; render(); }
     };
     load();
-    const timer = setInterval(() => { if (!host.isConnected) clearInterval(timer); else load(); }, 60000);
+    // Background tabs used to keep hitting the Files list every minute; that endpoint is
+    // statement-heavy (#1659) and multiplies across open bot pages. Resume when the tab is shown again.
+    const onVis = () => {
+      if (!host.isConnected) { document.removeEventListener('visibilitychange', onVis); return; }
+      if (!document.hidden) load();
+    };
+    const timer = setInterval(() => {
+      if (!host.isConnected) {
+        clearInterval(timer); document.removeEventListener('visibilitychange', onVis); return;
+      }
+      if (!document.hidden) load();
+    }, 60000);
+    document.addEventListener('visibilitychange', onVis);
   }
 
   window.botFiles = {mount};
