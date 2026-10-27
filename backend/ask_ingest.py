@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS ask_ingest_settings(
  criteria_json TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ask_ingest_items(
  id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
- mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
+ message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
  call_id TEXT, created TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created);
 CREATE INDEX IF NOT EXISTS ask_ingest_items_ref ON ask_ingest_items(ref);
@@ -198,15 +198,16 @@ def _bot_line(c, actor):
     return (H.bot(c, H.actor_id(actor)) or {}).get("display_name") or H.actor_id(actor)
 
 
-def preflight(store, primary, who, person, title, text, kind="task"):
-    """Ask the set about one item for `person`, outside any transaction. Returns the verdict `apply` reads: {person,
-    mode, answers (typed values, None where under threshold), options, call, error}; None when the write is not
-    gated (a person's, not to a person, mode Off). Never raises."""
+def preflight(store, primary, who, target, title, text, kind="task"):
+    """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
+    `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
+    call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
     try:
-        if not gated(who, store.settings.assistant_bot) or not H.is_human(person):
+        if not target or not gated(who, store.settings.assistant_bot):
             return None
         with store.read() as c:
-            if not H.human(c, H.actor_id(person)):
+            person = H.resolve_actor(c, target)
+            if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
                 return None
             own = settings(c, person)
             if own["mode"] == OFF:
@@ -217,10 +218,11 @@ def preflight(store, primary, who, person, title, text, kind="task"):
                 qset = J.load_set(QUESTION_SET)
             except J.JudgeError as exc:
                 LOG.warning("Ask ingest is off: %s", exc.detail)
-                return {**verdict, "error": "question_set"}
+                return None
             engine = server_engine(store, c, primary)
             if engine is None:
-                return {**verdict, "error": "spend_cap" if over_spend_cap(c, store.settings) else "unconfigured"}
+                # No decision model at all is Decide off: nothing to record. The month's cap is a failure kept.
+                return {**verdict, "error": "spend_cap"} if over_spend_cap(c, store.settings) else None
             if used_today(c, H.KEEPER) >= daily_cap(store.settings, "bot"):
                 return {**verdict, "error": "budget"}
             items = open_items(c, person)
@@ -385,11 +387,12 @@ def apply(c, verdict):
             "acts": mode == ON and outcome in (SENT_BACK, FYI)}
 
 
-def record(c, verdict, decided, ref):
-    """One `ask_ingest_items` row for the gated item `ref` (a task id), and the call's `decision.outcome`."""
-    c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,mode,outcome,would,reason,load,call_id,created) "
-              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-              (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, decided["mode"],
+def record(c, verdict, decided, ref, message_id=None):
+    """One `ask_ingest_items` row for the gated item `ref` (a task id; `message_id` the question asked on it), and
+    the call's `decision.outcome`."""
+    c.execute("INSERT INTO ask_ingest_items(id,person,asker,kind,ref,message_id,mode,outcome,would,reason,load,call_id,"
+              "created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (H.new_id(), verdict["person"], verdict["asker"], verdict["kind"], ref, message_id, decided["mode"],
                decided["outcome"], decided["would"], decided["reason"], decided["load"], verdict.get("call"), H.now()))
     if verdict.get("call"):
         H.event(c, H.KEEPER, "decision.outcome", verdict["call"],
@@ -397,9 +400,20 @@ def record(c, verdict, decided, ref):
                  "action": decided["outcome"] if decided["mode"] == ON else "rehearsal"})
 
 
+def withdraw_loose(c, asker, message_id, person):
+    """A sent-back question outside any task leaves the person's Needs you at once (`loose_asks_to` reads open
+    asks only); it stays in the bot's thread, superseded, as a withdrawn task question does."""
+    c.execute("UPDATE messages SET superseded_at=? WHERE id=?", (H.now(), message_id))
+    H.event(c, asker, "ask.withdrawn", message_id, {"to": person, "by": "ask_ingest"})
+    H.recount(c, [asker])
+
+
 def reply(decided):
-    """What the write's reply says of the gate."""
-    return {k: decided[k] for k in ("mode", "outcome", "would", "reason", "text")}
+    """What the write's reply says of the gate: only when it has something to tell the asker (sent back, FYI, or
+    what On would have done); an item that went through, or failed open, reads as before."""
+    if not decided or not decided["text"]:
+        return {}
+    return {"ingest": {k: decided[k] for k in ("mode", "outcome", "would", "reason", "text")}}
 
 
 # ---- what the person reads and sets -------------------------------------------------------------------------------
@@ -411,10 +425,18 @@ def filtered(c, person, since):
     for row in H._rows(c.execute(
             "SELECT * FROM ask_ingest_items WHERE person=? AND created>=? AND would IN (?,?,?) "
             "ORDER BY created DESC LIMIT 200", (person, since, *OFF_PLATE))):
-        task = H.task(c, row["ref"])
-        if not task or not H.task_private_readable(c, person, task):
-            continue
-        out.append({"id": row["id"], "task": task["id"], "title": task.get("title") or "", "asker": row["asker"],
+        if row["kind"] == "loose":
+            said = H.message(c, row["ref"])
+            if not said or said.get("to_actor") != person or said.get("deleted_at"):
+                continue
+            task, title = None, (said.get("body") or "").strip().split("\n")[0][:300]
+        else:
+            task = H.task(c, row["ref"])
+            if not task or not H.task_private_readable(c, person, task):
+                continue
+            title = task.get("title") or ""
+        out.append({"id": row["id"], "kind": row["kind"], "task": task["id"] if task else None,
+                    "message": row["message_id"], "title": title, "asker": row["asker"],
                     "asker_name": _bot_line(c, row["asker"]), "outcome": row["outcome"], "would": row["would"],
                     "reason": row["reason"], "mode": row["mode"], "created": row["created"],
                     "let_through_at": row["let_through_at"]})

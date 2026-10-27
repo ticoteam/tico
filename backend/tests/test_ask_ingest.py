@@ -68,6 +68,11 @@ def file(api, token, title="Pick the launch date", body="Two dates: Nov 3 or Nov
     return r.json()
 
 
+def items(api):
+    with api.app.state.store.read() as c:
+        return H._rows(c.execute("SELECT * FROM ask_ingest_items ORDER BY created"))
+
+
 def calls(api):
     with api.app.state.store.read() as c:
         return H._rows(c.execute("SELECT * FROM events WHERE action='judge.call' AND target LIKE 'person-ask-ingest@%'"))
@@ -124,7 +129,8 @@ def test_a_clear_task_under_budget_reaches_the_person(gate):
     plate(api, 4)
     out = file(api, token)
     assert out["task"]["owner"] == "human:ben"
-    assert out["ingest"]["outcome"] == A.THROUGH and out["ingest"]["text"] == ""
+    assert "ingest" not in out, "an item that goes through reads as before"
+    assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "under_budget")]
     assert len(model.calls) == 1 and model.calls[0]["label"].startswith("person-ask-ingest@")
     assert "Pick the launch date" == model.calls[0]["state"]["item"]["title"]
 
@@ -153,7 +159,8 @@ def test_meeting_a_criterion_gets_it_through_at_that_load(gate):
     plate(api, 15)
     model.meets = "$200 a month"
     out = file(api, token, "Raise the Gateway cap to $400 a month")
-    assert out["task"]["owner"] == "human:ben" and out["ingest"]["reason"] == "criteria"
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    assert [(i["outcome"], i["reason"]) for i in items(api)] == [(A.THROUGH, "criteria")]
 
 
 def test_a_status_line_is_fyi_and_stays_with_the_bot(gate):
@@ -192,9 +199,11 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     out = file(api, token)
     if model.hold:
         model.hold.set()
-    assert out["task"]["owner"] == "human:ben" and out["ingest"]["outcome"] == A.FAILED_OPEN
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    [item] = items(api)
+    assert item["outcome"] == A.FAILED_OPEN and item["ref"] == out["task"]["id"]
     if how == "cap":
-        assert out["ingest"]["reason"] == "budget" and not model.calls
+        assert item["reason"] == "budget" and not model.calls
     else:
         [call] = calls(api)
         assert ('"error": "%s"' % how) in call["detail_json"]
@@ -206,6 +215,15 @@ def test_a_persons_own_task_for_someone_is_not_gated_but_counts(gate):
     assert out["owner"] == "human:ben" and not model.calls
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == (1, 0)
+
+
+def test_no_decision_model_is_decide_off(gate):
+    api, model, token = gate
+    api.app.state.judge = None
+    api.app.state.store.settings.rehearsal = True
+    plate(api, 120)
+    out = file(api, token)
+    assert out["task"]["owner"] == "human:ben" and "ingest" not in out and not items(api) and not calls(api)
 
 
 def test_mode_off_asks_nothing(gate):
@@ -247,3 +265,114 @@ def test_settings_are_a_persons_own_and_the_team_default_is_an_admins(gate):
     r = api.put("/api/v2/ask-ingest/settings", headers=headers("ben-test"),
                 json={"mode": "loud", "budget": 8, "chores_budget": 3, "criteria": []})
     assert r.status_code == 422
+
+
+# ---- questions and waits ---------------------------------------------------------------------------------------
+
+def own_task(api, token, title="Plan the November launch"):
+    r = api.post("/api/v2/tasks", json={"owner": "ops", "title": title, "body": "Dates and venue."},
+                 headers=headers(token))
+    assert r.status_code == 200 and "ingest" not in r.json(), r.text
+    return r.json()["task"]
+
+
+def on_plate(api, tid, person="human:ben"):
+    with api.app.state.store.read() as c:
+        plate = H.needs_you(c, person)
+    return tid in {t["id"] for t in plate["tasks"] + plate["waiting"]}
+
+
+def test_a_sent_back_question_on_a_task_is_withdrawn_at_once(gate):
+    api, model, token = gate
+    plate(api, 15)
+    tid = own_task(api, token)["id"]
+    question = {"questions": [{"id": "date", "header": "Date", "question": "Which launch date do you want?",
+                               "options": [{"label": "Nov 3", "then": "Launch on Nov 3"},
+                                           {"label": "Nov 10", "then": "Launch on Nov 10"}]}], "who": "ben"}
+    r = api.post(f"/api/v2/tasks/{tid}/comments", json={"text": "Which launch date do you want?", "ask": question},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    assert not on_plate(api, tid)
+    with api.app.state.store.read() as c:
+        assert not [a for a in H.open_task_asks(c, H.task(c, tid)) if a["to_actor"] == "human:ben"]
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert (item["kind"], item["task"], item["outcome"]) == ("question", tid, A.SENT_BACK) and item["message"]
+
+
+def test_a_sent_back_task_question_does_not_wait_on_the_person(gate):
+    api, model, token = gate
+    plate(api, 15)
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    task = r.json()["task"]
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    with api.app.state.store.read() as c:
+        row = H.task(c, task["id"])
+    assert row["status"] != "waiting" and row["waiting_on"] is None
+    assert not on_plate(api, task["id"])
+
+
+def test_in_rehearsal_a_task_question_still_reaches_the_person(gate):
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "rehearsal", "budget": 10, "chores_budget": 5, "criteria": []})
+    plate(api, 15)
+    r = api.post("/api/v2/task-questions", json={"on": "human:ben", "question": "Which launch date do you want?"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, r.json()["task"]["id"])["waiting_on"] == "human:ben"
+    assert on_plate(api, r.json()["task"]["id"])
+    assert (r.json()["ingest"]["outcome"], r.json()["ingest"]["would"]) == (A.THROUGH, A.SENT_BACK)
+
+
+def test_a_progress_line_as_a_wait_is_fyi_and_no_wait_is_set(gate):
+    api, model, token = gate
+    model.kind = "status"
+    task = own_task(api, token, "Ship the release")
+    r = api.post(f"/api/v2/tasks/{task['id']}", headers=headers(token),
+                 json={"version": task["version"], "status": "waiting", "waiting_on": "ben",
+                       "note": "Merged; release at 17:00Z"})
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.FYI
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["waiting_on"] is None and A.load(c, "human:ben") == (0, 0), "nothing on the plate"
+    assert model.calls[-1]["state"]["item"]["text"] == "Merged; release at 17:00Z"
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert (item["kind"], item["outcome"]) == ("wait", A.FYI)
+
+
+def test_a_clear_wait_under_budget_is_set(gate):
+    api, model, token = gate
+    task = own_task(api, token, "Pick the venue")
+    r = api.post(f"/api/v2/tasks/{task['id']}", headers=headers(token),
+                 json={"version": task["version"], "status": "waiting", "waiting_on": "ben",
+                       "note": "Venue A or B? I recommend A; I book it Friday if no answer."})
+    assert r.status_code == 200, r.text
+    assert "ingest" not in r.json() and [i["outcome"] for i in items(api)] == [A.THROUGH]
+    with api.app.state.store.read() as c:
+        # A bot's wait on a person is one small subtask they own (hubdb._ask_in_subtask), on their plate.
+        assert A.load(c, "human:ben") == (1, 0)
+
+
+def test_a_sent_back_loose_question_leaves_needs_you(gate):
+    api, model, token = gate
+    plate(api, 15)
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": "Which launch date do you want?", "kind": "ask"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["ingest"]["outcome"] == A.SENT_BACK
+    with api.app.state.store.read() as c:
+        assert H.loose_asks_to(c, "human:ben") == []
+    [item] = get(api, "ask-ingest/filtered", token="ben-test")["items"]
+    assert (item["kind"], item["title"], item["task"]) == ("loose", "Which launch date do you want?", None)
+
+
+def test_a_persons_question_is_not_gated(gate):
+    api, model, token = gate
+    r = api.post("/api/v2/messages", json={"to": "ben", "text": "Lunch at noon?", "kind": "ask"},
+                 headers=headers("priya-test"))
+    assert r.status_code == 200, r.text
+    assert "ingest" not in r.json() and not model.calls

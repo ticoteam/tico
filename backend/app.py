@@ -2684,7 +2684,25 @@ def create_app(settings=None):
 
     @app.post("/api/v2/messages")
     def say(request: Request, body: M.MessageCreate):
-        return mutate(request, body, lambda c: send(c, request.state.identity, body))
+        who = request.state.identity
+        # Ask ingest (backend/ask_ingest.py): a bot's question to a person outside any task is judged before it is
+        # written; sent back with the filter on, it is withdrawn as soon as it is asked.
+        ingest = None
+        if body.kind == "ask" and not (body.refs or {}).get("task") and not body.in_reply_to:
+            ingest = ask_ingest.preflight(store, app.state.judge, who, body.to, body.text.strip().split("\n")[0][:300],
+                                          body.text, kind="loose")
+
+        def work(c):
+            message = send(c, who, body)
+            if not ingest or message.get("to_actor") != ingest["person"] or message.get("kind") != "ask" or \
+                    H.message_task_id(H.message(c, message["id"]), H.conversation(c, message["conversation_id"])):
+                return message
+            gate = ask_ingest.apply(c, ingest)
+            ask_ingest.record(c, ingest, gate, message["id"], message["id"])
+            if gate["acts"]:
+                ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
+            return {**message, **ask_ingest.reply(gate)}
+        return mutate(request, body, work)
 
     @app.get("/api/v2/messages/{mid}")
     def message(request: Request, mid: str):
@@ -3651,7 +3669,7 @@ def create_app(settings=None):
         return {"task": task_view(H.task(c, row["id"]), c, visible_sql=auth.task_sql(c, who), who=who),
                 **({"readback": readback} if readback else {}),
                 **({"joined": {"task": joins["id"], "title": joins["title"], "owner": joins["owner"]}} if joins else {}),
-                **({"ingest": ask_ingest.reply(gate)} if gate else {}),
+                **ask_ingest.reply(gate),
                 **({"warning": note} if note else {}), **({"warnings": row["warnings"]} if row.get("warnings") else {})}
 
     def review_preflight(who, tid, step=None, child_title=None, status=None, task_type=None):
@@ -3703,20 +3721,9 @@ def create_app(settings=None):
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
-        ingest = ingest_preflight(request.state.identity, body.owner, body.title, body.body)
+        ingest = ask_ingest.preflight(store, app.state.judge, request.state.identity, body.owner, body.title, body.body)
         return mutate(request, body, lambda c: task_create(c, request.state.identity, body, review_prs=snapshots,
                                                            ingest=ingest))
-
-    def ingest_preflight(who, owner, title, text, kind="task"):
-        """Ask ingest's one call for a bot's item to a person, outside the write (backend/ask_ingest.py); None when
-        the write is not gated."""
-        if not ask_ingest.gated(who, settings.assistant_bot):
-            return None
-        with store.read() as c:
-            person = H.resolve_actor(c, owner) if owner else None
-        if not person or not H.is_human(person):
-            return None
-        return ask_ingest.preflight(store, app.state.judge, who, person, title, text, kind=kind)
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -3727,7 +3734,7 @@ def create_app(settings=None):
         with store.read() as c:
             return check(c, auth, who, body)
 
-    def task_update_one(c, caller, tid, body, snapshots, view=True):
+    def task_update_one(c, caller, tid, body, snapshots, view=True, ingest=None):
         """One task's change, as `POST /api/v2/tasks/{tid}` makes it and each task of a bulk change
         (`POST /api/v2/task-bulk`, which needs no view of each task back): the same permissions, events and wakes."""
         # A person's request to BotOps can purge tasks that are not really needed, as that person.
@@ -3763,23 +3770,45 @@ def create_app(settings=None):
                 H.task_comment(c, "bot:" + BOTOPS, task_id, note, wake=False)
                 note = ""
             H.task_close(c, who.actor, task_id, note=note, quiet=body.quiet, mover=mover(c, who) or None)
-            warnings = None
+            warnings, gate = None, None
         else:
             fields = body.model_dump(exclude={"version", "close", "on_behalf_of"})
             privacy.require_wait(c, caller, row, body.waiting_on)
+            if ingest and row["owner"] == who.actor and row.get("waiting_on") != ingest["person"] and \
+                    H.resolve_actor(c, body.waiting_on) == ingest["person"]:
+                # Ask ingest (backend/ask_ingest.py): sent back or FYI with the filter on, the wait is not set.
+                gate = ask_ingest.apply(c, ingest)
+                ask_ingest.record(c, ingest, gate, task_id)
+                if gate["acts"]:
+                    fields["waiting_on"] = None
+                    if fields.get("status") == "waiting":
+                        fields["status"] = None
+            else:
+                gate = None
             if "size" in body.model_fields_set and body.size is None:
                 fields["clear_size"] = True
             warnings = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
                                      receipt_owner=Access.load_owner(c, settings)["email"]).get("warnings")
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
         return {**({"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who)} if view else {}),
-                **({"warnings": warnings} if warnings else {})}
+                **({"warnings": warnings} if warnings else {}),
+                **(ask_ingest.reply(gate) if not body.close else {})}
 
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
         snapshots = review_preflight(caller, tid, step=body.step, status=body.status, task_type=body.type)
-        return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots))
+        ingest = None
+        if body.waiting_on and ask_ingest.gated(caller, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, caller, auth.resolve_task(c, caller, tid))
+                except Problem:
+                    row = None
+            if row and row["owner"] == caller.actor:
+                ingest = ask_ingest.preflight(store, app.state.judge, caller, body.waiting_on, row["title"],
+                                              body.note or row.get("note") or "", kind="wait")
+        return mutate(request, body, lambda c: task_update_one(c, caller, tid, body, snapshots, ingest=ingest))
 
     # One bulk change holds the write lock for every task it changes, and answers with a line for each:
     # past this many matching tasks it is refused whole, and the caller narrows the filter.
@@ -4020,8 +4049,21 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
         """A comment on a task. It wakes the bot on the task when the comment is meant for it
-        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task."""
+        (H.comment_wakes); anyone else's is saved for the bot's next turn on the task. A bot's question to a person
+        passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it is asked."""
         who = request.state.identity
+        ingest = None
+        if body.ask and ask_ingest.gated(who, settings.assistant_bot):
+            with store.read() as c:
+                try:
+                    row = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    row = None
+            if row:
+                asked = body.ask.who or (row["owner"] if who.actor == row["requester"] else row["requester"])
+                ingest = ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text,
+                                              kind="question")
+
         def work(c):
             mark = H.jobs_mark(c)
             task_id = auth.resolve_task(c, who, tid)
@@ -4050,6 +4092,12 @@ def create_app(settings=None):
                 extra["needs_action"] = True
             msg = H.task_comment(c, who.actor, task_id, body.text, wake=wake, ask=ask, public=body.public, approval_id=body.approval_id,
                                  extra_refs=extra or None)
+            gate = None
+            if ingest and ask and msg.get("to_actor") == ingest["person"]:
+                gate = ask_ingest.apply(c, ingest)
+                ask_ingest.record(c, ingest, gate, task_id, msg["id"])
+                if gate["acts"]:
+                    H.task_ask_resolve(c, who.actor, task_id, msg["id"])
             copies = [H.task_comment(c, who.actor, task_id, body.text, wake=False, ask=H.mention_ask(body.text, person))
                       for person in people]
             for item in attached:
@@ -4063,7 +4111,7 @@ def create_app(settings=None):
             waits = bot_to_bot.held_reason(msg)
             return {"comment": msg, "comments": comments, **H.comment_delivery(c, msg, copies, since=mark),
                     **({"warning": held} if held else {}), **({"held": waits} if waits else {}),
-                    **({"visuals": report} if report else {})}
+                    **({"visuals": report} if report else {}), **ask_ingest.reply(gate)}
         result = mutate(request, body, work)
         if body.attachments:
             app.state.file_metadata.wake.set()   # a chat file shared here is a new task copy: preview it now
