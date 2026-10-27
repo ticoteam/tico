@@ -26,7 +26,8 @@ def _name(c, actor):
 
 def who_to_ask(c, auth, settings, asker, e, target, to=""):
     """The identity of the one person to ask: `to` (a person's id) when named and they may; else an admin who may
-    (the owner, for a setting only the owner or a task mover changes, or when no admin may). Never the asker."""
+    (the owner, for a setting only the owner or a task mover changes, or when no admin may; then anyone else who may,
+    such as a bot's owner). Never the asker."""
     from . import settings_catalog
     found = []
     for row in c.execute("SELECT id FROM humans ORDER BY lower(coalesce(name, id)), id"):
@@ -40,11 +41,12 @@ def who_to_ask(c, auth, settings, asker, e, target, to=""):
         if settings_catalog.may(c, auth, who, e, target, settings):
             found.append(who)
     if not found:
-        raise Problem("no_one", f"{_name(c, to) if to else 'No one else on the team'} may change {e.name}"
-                      + ("" if to else ": ask the owner in Settings"), 409)
+        raise Problem("no_one", f"{_name(c, to) if to else 'No one else on the team'} may change {e.name}", 409)
     owners = [w for w in found if w.role == "owner"]
-    admins = [w for w in found if w.role != "owner"]
-    return (owners or admins)[0] if e.who in ("owner", "mover") else (admins or owners)[0]
+    admins = [w for w in found if w.role != "owner" and auth.bot_admin(w)]
+    others = [w for w in found if w.role != "owner" and not auth.bot_admin(w)]      # a bot's owners, task movers
+    order = (owners, admins, others) if e.who in ("owner", "mover") else (admins, owners, others)
+    return next(group[0] for group in order if group)
 
 
 def check_asker(c, asker, asked, instruction):
@@ -73,8 +75,9 @@ def file(c, auth, settings, asker, chosen, e, card, room, bot, note=""):
             f"The Confirm card in your chat with BotOps does it: {action.get('description') or action['summary']}.\n\n"
             + (f"{asker_name} said: {note}\n\n" if note else "")
             + f"Confirm or cancel that card. Either settles this request, and {asker_name} is told.")
-    task = H.task_create(c, "bot:" + BOTOPS, f"{asker_name} asks you to change {e.name}"[:200], body, chosen.actor,
-                         requester_actor=asker.actor, lint=False)
+    # Filed as the asker, who is then its requester: the request is theirs, BotOps or the Assistant only carried it.
+    task = H.task_create(c, asker.actor, f"{asker_name} asks you to change {e.name}"[:200], body, chosen.actor,
+                         lint=False)
     ask = {"task": task["id"], "asker": asker.actor, "room": room["id"], "bot": bot, "key": e.key,
            "what": e.name}
     c.execute("UPDATE assistant_actions SET ask_json=? WHERE id=?", (json.dumps(ask), action["id"]))

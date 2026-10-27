@@ -145,7 +145,7 @@ ENTRIES = TEAM_RULES + [
     S("computer.revoke", "Revoke a computer", COMPUTERS, "operator", "confirm", "POST", "computers/{computer}/revoke",
       value="json", card=_card("devices")),
     S("sleep.hours", "Sleep when idle", COMPUTERS + " > Sleep when idle", "admin", "direct", "POST", "sleep", "hours",
-      "number", _card("devices", "settings-sleep"), "sleep#hours"),
+      "number", _card("devices", "settings-sleep"), "sleep#sleep.hours"),
     S("models.providers", "Models", COMPUTERS + " > Models", "owner", "confirm", "PUT", "providers", value="json",
       card=_card("devices", "settings-models"), read="providers", words="model provider fallback"),
     S("models.gateway", "Tico AI Gateway", COMPUTERS + " > Models", "owner", "person", "PUT", "providers/gateway",

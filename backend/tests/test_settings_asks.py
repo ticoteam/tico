@@ -41,25 +41,26 @@ def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card
     """Acceptance 14. Cara may not change Sleep when idle (an admin's). BotOps refuses her, naming who may; on her yes
     Ben, the admin, gets one request: the card in his BotOps chat and a task he owns that Cara requested. Nothing
     changes until his tap, which runs as him; the task is then done, and Cara is told in her chat with BotOps."""
-    before = get(api, "sleep")["hours"]
+    before = get(api, "sleep")["sleep"]["hours"]
     cara = turn(api, botops, person="cara-test", text="Sleep after 3 quiet hours")
     err, refused = mcp(api, "hub_settings_set", {"key": "sleep.hours", "value": 3}, cara["token"])
     finish(api, botops, cara)
-    assert err and refused["error"] == "forbidden" and refused["who_may"] == "The owner or an admin", refused
+    assert err and refused["error"] == "forbidden", refused
+    assert "Only the owner or an admin changes" in refused["detail"], refused
     err, got = ask(api, botops, "cara", "sleep.hours", 3, note="Nights are quiet")
     assert not err and got["asked"] == {"person": "human:ben", "name": got["asked"]["name"]}, got
     assert "Nothing has changed yet" in got["detail"], got
     [(task, card)] = asks(api, "ben")
     assert task["owner"] == "human:ben" and task["requester"] == "human:cara" and task["status"] == "open", task
     assert "Nights are quiet" in task["body"] and card["status"] == "pending" and card["path"] == "/api/v2/sleep"
-    assert get(api, "sleep")["hours"] == before                                # nothing until Ben's tap
+    assert get(api, "sleep")["sleep"]["hours"] == before                       # nothing until Ben's tap
     with api.app.state.store.read() as c:
         room = c.execute("SELECT * FROM conversations WHERE id=?", (card["conversation_id"],)).fetchone()
     assert "human:ben" in room["participants_json"] and "bot:botops" in room["participants_json"]
     assert not asks(api, "ana") and not asks(api, "cara")                      # one request, to one person
     tap = post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")["action"]
     assert tap["status"] == "done", tap
-    assert get(api, "sleep")["hours"] == 3
+    assert get(api, "sleep")["sleep"]["hours"] == 3
     [(task, card)] = asks(api, "ben")
     assert task["status"] == "done", task
     [said] = told(api, "cara", card["id"])
@@ -67,13 +68,13 @@ def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card
 
 
 def test_cancelling_an_asked_card_declines_the_request_and_tells_the_asker(api, botops):
-    before = get(api, "sleep")["hours"]
+    before = get(api, "sleep")["sleep"]["hours"]
     err, got = ask(api, botops, "cara", "sleep.hours", 5)
     assert not err, got
     [(_, card)] = asks(api, "ben")
     post(api, f"assistant/actions/{card['id']}/cancel", {}, "ben-test")
     [(task, _)] = asks(api, "ben")
-    assert task["status"] == "declined" and get(api, "sleep")["hours"] == before, task
+    assert task["status"] == "declined" and get(api, "sleep")["sleep"]["hours"] == before, task
     [said] = told(api, "cara", card["id"])
     assert "said no" in said and "nothing changed" in said, said
 
@@ -97,26 +98,65 @@ def test_no_ask_for_a_setting_the_asker_may_change_or_one_only_a_person_changes(
     err, got = ask(api, botops, "ben", "sleep.hours", 3)
     assert err and got["error"] == "may", got                                  # Ben may: he sets it
     err, got = ask(api, botops, "cara", "hooks.wake_url", "https://wake.acme.example/x")
-    assert err and got["error"] == "person_only" and got["who_may"] == "The owner", got
+    assert err and got["error"] == "person_only" and "the owner changes it in Settings" in got["detail"], got
     err, got = ask(api, botops, "cara", "sleep.hours", 3, to="cara")
     assert err and got["error"] == "no_one", got                               # never the asker
     assert not asks(api, "ben") and not asks(api, "ana")
 
 
 def test_a_bot_on_its_own_rights_cannot_ask_for_anyone(api, botops):
-    err, got = mcp(api, "hub_settings_ask", {"key": "sleep.hours", "value": 3}, "finance-test")
-    assert err and got["error"] == "forbidden", got
+    attempt = turn(api, botops, person="cara-test", text="Ask an admin")
+    refused = act(api, attempt, "POST", "settings/catalog/sleep.hours/ask", {"value": 3}, ref=None)
+    finish(api, botops, attempt)
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden", refused.text
     assert not asks(api, "ben")
 
 
 def test_a_members_raw_refused_write_names_who_may_as_hub_settings_does(api, botops):
-    """Build item 9: the route's own refusal of Cara's revoke said only "You cannot revoke this runner"; through
-    BotOps it now carries the catalogue's who-may line, as `hub settings set` gives it."""
+    """Build item 9. Through BotOps, a member's raw write to a setting that isn't theirs is refused in the catalogue's
+    words, as `hub settings set` gives them: a computer she doesn't operate gets no card her tap would fail ("a card,
+    then refused"), and a trigger Ana made, whose route said only who may change it in its own words, names it too."""
     machine = runner(api)
-    cara = turn(api, botops, person="cara-test", text="Revoke that computer")
-    refused = act(api, cara, "POST", f"computers/{machine['runner_id']}/revoke", {})
+    trigger = post(api, "triggers", {"name": "Ana's trigger"})["trigger"]
+    cara = turn(api, botops, person="cara-test", text="Revoke that computer and rename that trigger")
+    revoke = act(api, cara, "POST", f"computers/{machine['runner_id']}/revoke", {})
+    rename = act(api, cara, "POST", f"triggers/{trigger['id']}", {"name": "Cara's now"})
     finish(api, botops, cara)
-    assert refused.status_code == 403, refused.text
-    error = refused.json()["error"]
-    assert error["who_may"] == "The computer's operator, an admin or the owner", error
-    assert error["fix"].startswith("Only the computer's operator, an admin or the owner changes Revoke a computer")
+    for refused, name, who in ((revoke, "Revoke a computer", "The computer's operator, an admin or the owner"),
+                               (rename, "Incoming trigger", "The person who made it, an admin or the owner")):
+        assert refused.status_code == 403, refused.text
+        error = refused.json()["error"]
+        assert error["who_may"] == who and error["fix"].startswith("Only " + who[0].lower() + who[1:]), error
+        assert name in error["fix"], error
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM assistant_actions WHERE owner='human:cara'").fetchone()
+        assert c.execute("SELECT revoked_at FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0] is None
+
+
+def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_it(api):
+    """The same from Cara's Assistant: with her words cited, Ben gets the request and she is told in her Assistant
+    chat; without them, nothing is asked. The raw refusal of her release time names who may, as `hub settings` does."""
+    from backend.tests.test_api import as_member, headers
+    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.test_settings_assistant import mcp as assistant_mcp
+    as_member(api, "cara@acme.example")
+    r, attempt = assistant_turn(api, "cara-test", "Yes, ask an admin to set the release to 09:30")
+    token = attempt["token"]
+    err, got = assistant_mcp(api, "hub_settings_ask", {"key": "release.times", "value": "09:30"}, token)
+    assert err and got["error"] == "on_behalf_of", got                         # not cited: nothing asked
+    assert not asks(api, "ben")
+    err, got = assistant_mcp(api, "hub_settings_ask", {"key": "release.times", "value": "09:30",
+                                                       "on_behalf_of": "turn"}, token)
+    assert not err and got["asked"]["person"] == "human:ben", got
+    [(task, card)] = asks(api, "ben")
+    assert task["requester"] == "human:cara" and card["path"] == "/api/v2/release-schedule", (task, card)
+    post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")
+    assert get(api, "release-schedule")["times"] == ["09:30"]
+    [said] = told(api, "cara", card["id"])
+    with api.app.state.store.read() as c:
+        room = c.execute("SELECT m.conversation_id, v.room_key FROM messages m JOIN conversations v ON "
+                         "v.id=m.conversation_id WHERE m.body=?", (said,)).fetchone()
+    assert room["room_key"] == "assistant", dict(room)
+    raw = api.patch("/api/v2/release-schedule", json={"times": ["10:00"]},
+                    headers={**headers(token), "X-Tico-On-Behalf-Of": "turn"})
+    assert raw.status_code == 403 and raw.json()["error"]["who_may"] == "The owner or an admin", raw.text

@@ -310,15 +310,21 @@ def refusal(e, base=""):
                    f"({e.where}): ask one of them, or open {link}", 403, extra={"link": link, "who_may": who_text(e)})
 
 
-def raw_refusal(method, path, body=None, base=""):
+def raw_refusal(c, auth, who, method, path, body=None, base="", settings=None):
     """For a person's own write that its route refused (403), as BotOps or the Assistant made it for them: the line
-    `hub settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one
-    entry's (or its route is only entries with the same who) and that who is not everyone; else None."""
+    `hub settings` gives for that setting (`refusal`), as `{"fix", "link", "who_may"}`, when the request is one entry's
+    (or its route is only entries with the same who), that who is not everyone, and the entry's own check refuses this
+    person too (so a refusal for another reason keeps the route's words); else None."""
+    from .route_renames import new_path
+    path = new_path(path) or path                   # `/runners/<id>/revoke` is `computers/{computer}/revoke`
     found = matched(method, path, body)
-    rows = [found[0]] if found else [e for e, _ in routed(method, path)]
-    if not rows or len({e.who for e in rows}) != 1 or rows[0].who in ("anyone", "self"):
+    rows = [found[:2]] if found else routed(method, path)
+    if not rows or len({e.who for e, _ in rows}) != 1 or rows[0][0].who in ("anyone", "self"):
         return None
-    said = refusal(rows[0], base)
+    e, target = rows[0]
+    if may(c, auth, who, e, target, settings):
+        return None
+    said = refusal(e, base)
     return {"fix": said.detail, "link": said.extra["link"], "who_may": said.extra["who_may"]}
 
 
