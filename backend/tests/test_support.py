@@ -234,7 +234,8 @@ def test_the_ticket_round_trip_keeps_to_hq_s_documented_contract(environment, mo
     (tid, held), = hq.tickets.items()
     assert TICKET_ID.fullmatch(tid) and mine["status"] == "open"
     assert hq.calls() == [("POST", "/v1/support", "", None,
-                           {"message": "The board will not load", "version": "0.2.17", "install_id": install_id})]
+                           {"message": "The board will not load", "source": "person", "version": "0.2.17",
+                            "install_id": install_id})]
     secret = held["secret"]
     assert secret not in json.dumps(api.get("/api/v2/support/tickets", headers=signed_in()).json())
 
