@@ -20,7 +20,8 @@ A step's `flow` (all keys optional):
   (backend/task_allocator.py).
 - `gate`: true on steps a ticket enters only with green CI and a test receipt at its head (backend/review_gate.py).
 - `check`: the kind of check the step asks for: `review`, `qa` or `release_qa` (after the release). Every rule about
-  reviews, QA, waivers and check pools finds its steps by this, never by their names (`check_kind`, `titled`).
+  reviews, QA, waivers and check pools finds its steps by this, never by their names (`check_kind`, `titled`). A saved
+  flow that leaves `check` out keeps the step's kind; `"check": null` clears it.
 
 Step references are stored by step id, so renaming a step keeps its flow; the API takes names or ids."""
 import json
@@ -87,6 +88,10 @@ def clean(c, actor, raw, existing):
         if flow["check"] not in CHECK_KINDS:
             H.refuse(c, actor, "kind", "A step's check is " + ", ".join(CHECK_KINDS))
         out["check"] = flow["check"]
+    elif "check" not in flow and check_kind(existing):
+        # A flow sent without `check` (a steps file written before steps had kinds) keeps the step's kind: losing it
+        # quietly makes its QA request an open child that holds the ticket. Send `"check": null` to clear it.
+        out["check"] = check_kind(existing)
     for key in ("on_merge", "can_hold", "gate"):
         if flow.get(key) is not None:
             if not isinstance(flow[key], bool):
