@@ -619,8 +619,7 @@ def remove_blocker(conn, actor, task_id, blocker_id, mover=None, note="", keeper
     from .task_blocked import reconcile
     reconcile(conn, task_id)
     from . import task_holds
-    # A live blocker taken off is a hold cleared: the last one sends a bot's task back to work (task_holds.refresh).
-    # A finished one held nothing, so only the words follow.
+    # A completed blocker no longer holds the task. A stale relation from before cleanup is not a hold being cleared.
     live = blocker and blocker["status"] in H.ACTIVE_STATUSES
     task_holds.refresh(conn, task_id, f"{task_holds.title(conn, blocker)} no longer blocks it" if live else None)
     from .check_blocked import changed
