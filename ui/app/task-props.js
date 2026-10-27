@@ -86,7 +86,10 @@ function taskPropsHTML(t, opts = {}) {
   // Part of: the parent's title is a link to it, × takes the task out; empty, a picker finds one. Blockers and
   // other relations are in the Related section.
   const parent = taskParent(t);
-  if (parent) {
+  if (parent && !parent.id) {
+    // A private parent this reader cannot open (a task filed from private work): named only as "a private task".
+    rows.push(row('parent', 'Part of', txt(parent.title), {words: parent.title}));
+  } else if (parent) {
     rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
       + `<button type="button" class="prop-v prop-link" data-open-task="t${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
       + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');

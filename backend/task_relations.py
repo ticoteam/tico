@@ -199,6 +199,9 @@ def _parts(values):
         yield values[i:i + 400]
 
 
+PRIVATE_PARENT = "a private task"
+
+
 def grouped(conn, task_ids, visible_sql="1"):
     """{task id: {kind: [{id, title, status, owner, direction}]}} for each of `task_ids`.
 
@@ -227,6 +230,18 @@ def grouped(conn, task_ids, visible_sql="1"):
             entry = {"id": row["id"], "title": row["title"], "status": row["status"], "owner": row["owner"],
                      "direction": row["direction"]}
             out[row["here"]].setdefault(row["kind"], []).append(entry)
+        if visible_sql == "1":
+            continue
+        # A company-visible task filed from private work (task_privacy.from_private) under a private parent the reader
+        # cannot open: the parent is there, as "a private task", with nothing of it but that.
+        for row in conn.execute(
+                "SELECT r.from_task FROM task_relations r INDEXED BY task_relations_from "
+                "JOIN tasks c ON c.id=r.from_task JOIN tasks p ON p.id=r.to_task "
+                f"WHERE r.from_task IN ({marks}) AND r.kind='parent' AND c.private=0 "
+                "AND (p.private IS NULL OR p.private<>0) "
+                f"AND NOT EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))", part):
+            out[row["from_task"]]["parent"] = [{"id": None, "title": PRIVATE_PARENT, "status": None, "owner": None,
+                                               "direction": "out", "private": True}]
     return out
 
 

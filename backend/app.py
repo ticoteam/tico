@@ -3477,9 +3477,11 @@ def create_app(settings=None):
         private they are its requester, so its two parties are the bot and them."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
-        if privacy.private_execution(c, who):
+        if body.from_private:
+            pass                        # company-visible, its words checked (task_privacy.from_private)
+        elif privacy.private_execution(c, who):
             if body.private is False:
-                raise Problem("privacy", "Private task work cannot create company-visible tasks", 403)
+                raise Problem("privacy", privacy.COMPANY_REFUSAL, 403)
             body = body.model_copy(update={"private": True})
         request_id = body.request_id
         handoff = who.role == "bot" and who.actor != "bot:" + BOTOPS and not who.via
@@ -3498,9 +3500,14 @@ def create_app(settings=None):
         # The same checks the dry-run makes (task_privacy.require_create); a subtask for a person under a private
         # task with no person on it, filed by the bot that owns it, makes them its one guest.
         guest = privacy.require_create(c, source, body.private, owner, H.task(c, parent_id) if parent_id else None,
-                                       actor=who.actor, title=body.title, body=body.body)
+                                       actor=who.actor, title=body.title, body=body.body,
+                                       from_private_work=body.from_private, criteria=body.acceptance_criteria,
+                                       links=body.links)
+        # The private tasks a company-visible task from private work comes from: their history says so.
+        kept = privacy.from_private(c, source, owner, H.task(c, parent_id) if parent_id else None) \
+            if body.from_private else []
         # A private run's subtask for a bot that cannot read its parent: sealed, the history says so (Dev 632).
-        sealed = (not guest and privacy.private_execution(c, source)
+        sealed = (not guest and not kept and privacy.private_execution(c, source)
                   and privacy.sealed_for(c, source, owner, H.task(c, parent_id) if parent_id else None) is not None)
         auth.require_bot_contact(c, who, owner, task_id=parent_id, kind="task")
         # A subtask is the shape that parks the filer as `waiting` and makes it care when the
@@ -3528,9 +3535,9 @@ def create_app(settings=None):
             body = body.model_copy(update={"private": None})
         if actual_bot and H.private_tasks_default(c, actual_bot):
             body = body.model_copy(update={"private": True})
-        private = bool((body.private if body.private is not None else
-                        H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner))
-                       or parent and H.task_private(c, parent))
+        private = not kept and bool((body.private if body.private is not None else
+                                     H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner))
+                                    or parent and H.task_private(c, parent))
         if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         from . import blocker_asks
@@ -3585,8 +3592,15 @@ def create_app(settings=None):
                             own_room=H.actor_id(owner) != settings.assistant_bot, review_prs=review_prs,
                             receipt_owner=Access.load_owner(c, settings)["email"],
                             change_paths=body.change_paths, qa=body.qa,
-                            qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins))
+                            qa_not_checkable_live=body.qa_not_checkable_live, quiet_notice=bool(joins),
+                            from_private=bool(kept))
         c.execute("UPDATE tasks SET acceptance_json=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        for source_row in kept:
+            # The private task's readers see what was filed; the new task's, only that it came from private work.
+            H._task_event(c, source_row["id"], who.actor, "filed_from_private", None, row["id"],
+                          f"Filed a company-visible task from this private task: {body.title}")
+        if kept:
+            H._task_event(c, row["id"], who.actor, "from_private", None, who.actor, "Filed from a private task")
         if sealed:
             # The parent's readers see who it went to; the subtask's see who filed it, and nothing of the parent.
             H._task_event(c, parent_id, who.actor, "handed", None, owner,

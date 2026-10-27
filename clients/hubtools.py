@@ -565,6 +565,11 @@ def tag_update(api, args):
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
+       "from_private": {"type": "boolean", "default": False,
+                        "description": "From a run on your own private task with no person on it: a company-visible "
+                                       "task for a bot, carrying only its own words (no 12 words copied from the private "
+                                       "work, no secret-shaped value, no file or link of it). Parent: that private task, "
+                                       "or none"},
        "parent": _s("Parent task id (or 8-character short id), when this is one part of a bigger task. Blocked on a "
                     "person's approval or input for your task? File it for them with your task as parent"),
        "request_id": _s("A person's message this task carries: BotOps continuing its own chat, or another bot handing "
@@ -604,7 +609,7 @@ def task_create(api, args):
     if args.get("parent"):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model", "check_role", "visibility",
-                  "public_title", "public_summary"):
+                  "public_title", "public_summary", "from_private"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
