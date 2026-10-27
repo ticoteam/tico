@@ -165,8 +165,9 @@ The question shows the old and new scheme, host and port, and the name of the sa
 Only the owner can change the Gateway, so the owner decides. If BotOps makes the change for you, it asks in a Confirm card
 in your BotOps chat, and only you can tap it.
 
-Each move adds one entry to **History**: who made it and when, the old and new scheme, host and port, and whether the key
-was kept or cleared. The key never appears in it.
+Each move is recorded once in Tico's audit log as `integration.destination_changed`: who made it and when, the old and
+new scheme, host and port, and whether the key was kept or cleared. The key never appears in it. Settings > History does
+not list it.
 
 ## Pick a Tico model for a bot
 

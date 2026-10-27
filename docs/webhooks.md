@@ -461,9 +461,9 @@ hub webhook update acme --url https://hooks.example.org/tico --expected-revision
 Whoever may edit the endpoint decides: its creator, an admin or the owner. If BotOps makes the change for someone, it asks
 in a Confirm card in that person's BotOps chat, and only that person can tap it.
 
-Each move adds one entry to **History** (`integration.destination_changed`): who made it and when, the old and new scheme,
-host and port, for a webhook whether the path is the same, and which secret headers were kept or cleared. Values never
-appear in it.
+Each move is recorded once in Tico's audit log as `integration.destination_changed`: who made it and when, the old and
+new scheme, host and port, whether the path is the same, and which secret headers were kept or cleared. Values never
+appear in it. Settings > History does not list it.
 
 ## Sleep when idle
 
