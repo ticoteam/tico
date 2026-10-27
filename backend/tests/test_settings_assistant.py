@@ -163,14 +163,20 @@ def stored_rule(api, rule_id):
     return row["enabled"], row["then_outcome"], json.loads(row["params_json"]).get("action"), row["revision"]
 
 
+KEEPS_THE_STORED_ACTION = ({"expected_revision": 1, "on": True},
+                           {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}},
+                           {"expected_revision": 1, "then": None, "params": None, "on": True},
+                           {"expected_revision": 1, "then": "action", "params": None, "on": True})
+
+
 def test_the_assistant_cannot_partially_enable_or_edit_a_stored_outbound_wake_rule(api):
     rule, quiet = outbound_and_quiet_rules(api)
     before = stored_rule(api, rule["id"])
     r, attempt = assistant_turn(api, "ana-test", "Update my wake rules")
     token = attempt["token"]
     cited = {**headers(token), "X-Tico-On-Behalf-Of": "turn"}
-    for value in ({"expected_revision": 1, "on": True},
-                  {"expected_revision": 1, "event": "assignment", "when": {"state": "open"}}):
+    # Left out or sent as null, the rule's action and params stay the stored send-out (rules.update).
+    for value in KEEPS_THE_STORED_ACTION:
         # Neither the catalogue nor the write itself, sent on the person's words: the body keeps the stored send-out.
         err, refused = mcp(api, "hub_settings_set", {"key": "rules.wake", "id": rule["id"], "value": value,
                                                      "on_behalf_of": "turn"}, token)
@@ -188,15 +194,31 @@ def test_a_card_never_holds_a_change_to_a_stored_outbound_wake_rule(api, monkeyp
     monkeypatch.setattr(assistant_mod, "catalogue_card", lambda method, path: True)
     rule, quiet = outbound_and_quiet_rules(api)
     r, attempt = assistant_turn(api, "ana-test", "Turn my wake rules on")
-    refused = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
-                                              "path": f"/api/v2/rules/{rule['id']}",
-                                              "body": {"expected_revision": 1, "on": True}},
-                   token=attempt["token"], expected=422)
-    assert "not the person's own to change in Settings" in refused["error"]["detail"], refused
+    for value in KEEPS_THE_STORED_ACTION:
+        refused = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
+                                                  "path": f"/api/v2/rules/{rule['id']}", "body": value},
+                       token=attempt["token"], expected=422)
+        assert "not the person's own to change in Settings" in refused["error"]["detail"], (value, refused)
     card = post(api, "assistant/actions", {"summary": "Wake rule on", "method": "POST",
                                            "path": f"/api/v2/rules/{quiet['id']}",
                                            "body": {"expected_revision": 1, "on": True}}, token=attempt["token"])
     assert card["action"]["status"] == "pending", card
+
+
+def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
+    # A repository's id is owner/name, two segments of its route: the card names the route the Settings page uses.
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+                  ("repo-acme", "Acme/product", "2026-10-27T00:00:00Z"))
+    put(api, "access/rules", {"assistant_direct": False})
+    r, attempt = assistant_turn(api, "ana-test", "Switch off the product repository")
+    err, card = mcp(api, "hub_settings_set", {"key": "repo.enabled", "id": "Acme/product", "value": "off",
+                                              "on_behalf_of": "turn"}, attempt["token"])
+    assert not err and card["needs_confirm"] is True, card
+    assert card["action"]["path"] == "/api/v2/repositories/Acme/product", card["action"]
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT enabled FROM repositories WHERE full_name='Acme/product'").fetchone()[0] == 0
 
 
 # ------------------------------------------------------------------ the same request to BotOps and to the Assistant

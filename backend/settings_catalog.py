@@ -22,7 +22,7 @@ Settings card writes to a route no entry covers.
   public(e, base)                what a caller sees of an entry, with its card's full link
   plan(c, auth, who, e, value, target)  {"run": {method, path, body}}, the Confirm card, or a refusal naming who may
   matched(method, path, body)    the entry and target a request is exactly the body of, and its class
-  stored_class(c, method, path, body)  `matched`, a partial wake-rule update classed by the rule it keeps
+  stored_class(c, method, path, body)  `matched`, a wake-rule update classed with the stored rule it keeps
 """
 import json
 import re
@@ -201,7 +201,14 @@ def path_for(e, target, template=None):
         raise Problem("validation", f"{e.name} is set per {e.target}: name one with --{e.target}", 422)
     path = template
     for name in TARGETS:
-        if "{" + name + "}" in path:
+        if "{" + name + "}" in path and name == "id" and path.startswith("repositories/"):
+            # A repository's id is its full name, and the route takes it as two segments: `{owner}/{repo}`.
+            owner, _, repo = str(target[name]).partition("/")
+            if not owner or not repo or "/" in repo:
+                raise Problem("validation", f"{e.name} names a repository as owner/name", 422)
+            from urllib.parse import quote
+            path = path.replace("{id}", quote(owner, safe="") + "/" + quote(repo, safe=""))
+        elif "{" + name + "}" in path:
             from urllib.parse import quote
             # Routine IDs use `<bot>:<routine-key>`; keep the colon in its path segment so Confirm cards can
             # validate the same route string the Settings API accepts without permitting a slash escape.
@@ -381,21 +388,23 @@ def matched(method, path, body):
                 continue
         elif any(body.get(k) != v for k, v in e.extra.items()):
             continue
-        if e.key == "rules.wake" and ("then" not in body or "params" not in body):
-            # A partial update keeps the stored rule's action, which this body does not show: `stored_class` reads it.
+        if e.key == "rules.wake":
+            # An update keeps the stored rule's action and params wherever it leaves them out or sends null
+            # (rules.update), which this body alone does not show: `stored_class` reads the rule for every update.
             return e, target, "stored"
         return e, target, kind_for(e, body)
     return None
 
 
 def merged_wake(row, update):
-    """A wake-rule update as the route will save it: its action and params, where it leaves them out, the stored rule's."""
+    """A wake-rule update as the route will save it: its action and params, where it leaves them out or sends null,
+    the stored rule's."""
     params = update.get("params") if update.get("params") is not None else json.loads(row["params_json"])
     return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
 
 
 def stored_class(c, method, path, body):
-    """`matched`, with a partial wake-rule update classed by what the route will save, as `plan` classes it: turning on
+    """`matched`, with a wake-rule update classed by what the route will save, as `plan` classes it: turning on
     or editing a stored rule that sends outside is person-only however little the body says."""
     found = matched(method, path, body)
     if not found or found[2] != "stored":
