@@ -244,3 +244,27 @@ def test_the_assistant_may_card_every_catalogue_route_botops_may():
         path = "/api/v2/" + re.sub(r"\{\w+\}", "x", e.route)
         if e.kind != "person":
             assert valid_operation(e.method, path, None, "assistant") == valid_operation(e.method, path, None, "botops"), e.key
+
+
+@pytest.mark.parametrize("role", ["owner", "admin", "member"])
+def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role):
+    """Stage 1's sweep (test_settings_parity) asked of the person's Assistant on their cited words: every entry ran, was
+    a card or was refused exactly as for BotOps, gaps included."""
+    from backend.tests import test_settings_parity as parity
+    from backend.tests.test_api import runner
+    token, person = parity.PEOPLE[role]
+    objects = parity._objects(api, runner(api))
+    r, attempt = assistant_turn(api, token, "Change my settings")
+    wrong, unproven = [], {}
+    for e in ENTRIES:
+        with api.app.state.store.read() as c:
+            want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
+        got = parity.ask(api, attempt, e, objects, person, token)
+        if got in ("ran", "card", "refused"):
+            if got != want:
+                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}")
+        else:
+            unproven[e.key] = got
+    assert not wrong, "\n".join(wrong)
+    new = {k: v for k, v in unproven.items() if k not in parity.NOT_PROVEN}
+    assert not new, new

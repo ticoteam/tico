@@ -332,7 +332,9 @@ def _pattern(route):
     """An entry's route as a regex over the path a request names, one group per target."""
     out, at = "", 0
     for m in re.finditer(r"\{(" + "|".join(TARGETS) + r")\}", route):
-        out += re.escape(route[at:m.start()]) + "(?P<" + m.group(1) + ">[^/]+)"
+        # A repository's id is its full name, `owner/name`: the route takes both (PUT /api/v2/repositories/{owner}/{repo}).
+        one = "[^/]+/[^/]+" if route.startswith("repositories/") and m.group(1) == "id" else "[^/]+"
+        out += re.escape(route[at:m.start()]) + "(?P<" + m.group(1) + ">" + one + ")"
         at = m.end()
     return re.compile("/api/v2/" + out + re.escape(route[at:]))
 
