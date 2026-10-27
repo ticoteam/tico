@@ -72,8 +72,8 @@ def test_private_notice_retains_output_fences_without_a_task_attachment(api):
     from backend.tests.test_api import unrelated_task_managers
     r = machine(api)
     with api.app.state.store.transaction() as c:
-        unrelated_task_managers(c)
         task, blocker = parked(c, incident=True)
+        unrelated_task_managers(c)
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task['id'],))
         msg, job = sent_job(c, H.task(c, task['id']), 'bot:cpo', 'Private incident news',
                             {'news': 'step_entered'})
