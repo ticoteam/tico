@@ -2836,6 +2836,22 @@ def _close_open_asks(conn, actor, target, kind, msg):
     # exactly the thing you want to be able to look up later.
     event(conn, actor, "message.answered_by_reply", msg["id"],
           {"asks": open_asks, "bot": target})
+    for task_id in dict.fromkeys(filter(None, (
+            scope_id if scope == MESSAGE_TASK_SQL else message_task_id(m, conversation(conn, m["conversation_id"]))
+            for m in (message(conn, mid) for mid in open_asks)))):
+        _answered_holds(conn, actor, task_id, open_asks, target)
+
+
+def _answered_holds(conn, actor, task_id, ask_ids, asker):
+    """`actor` just answered `ask_ids` on `task_id`. A wait on them for those questions ends once none to them is open,
+    and the task's reason follows; when that was its last hold, the bot that asked goes back to work
+    (backend/task_holds.py)."""
+    from . import task_holds
+    before = (task(conn, task_id) or {}).get("waiting_on")
+    drop_asked_waits(conn, task_id, ask_ids, "")
+    row = task(conn, task_id) or {}
+    held = row.get("owner") == asker or row.get("waiting_on") != before
+    task_holds.refresh(conn, task_id, f"{task_holds.name(conn, actor)} answered your question" if held else None)
 
 
 LIBRARIAN_LITERAL = re.compile(
@@ -3138,9 +3154,7 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about:                               # an answered question on a task changes the task
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), about))
         if asked.get("kind") == "ask":
-            from . import task_holds
-            held = (task(conn, about) or {}).get("owner") == asked["from_actor"]
-            task_holds.refresh(conn, about, f"{task_holds.name(conn, actor)} answered your question" if held else None)
+            _answered_holds(conn, actor, about, [message_id], asked["from_actor"])
     _recount(conn, asked["from_actor"])     # it no longer waits on whoever answered
     if is_human(actor) and asked.get("kind") == "ask":
         hook(conn, "needs_you.answered", message_id, lambda: {"id": message_id, "to": actor, "from": asked["from_actor"],
@@ -5022,11 +5036,14 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     hook(conn, "task.commented", task_id, lambda: _task_facts(conn, task_id, actor, comment_id=msg["id"]), actor, revision=msg["id"])
     if actor != KEEPER or ask:
         conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))
-    if row["status"] == "waiting" and row.get("waiting_on") == actor:
+    now_row = task(conn, task_id) or {}
+    if now_row.get("status") == "waiting" and now_row.get("waiting_on") == actor:
         # The person it waited on has spoken: the next move is the bot's, and it leaves their
         # Needs you. The bot sets it waiting on them again if it still needs something.
         conn.execute("UPDATE tasks SET waiting_on=NULL WHERE id=?", (task_id,))
         _task_event(conn, task_id, actor, "waiting_on", actor, None, "")
+        from . import task_holds
+        task_holds.refresh(conn, task_id, f"{task_holds.name(conn, actor)} replied")
     if ask or row.get("waiting_on") == actor:
         _recount(conn, row["owner"])
     if wake and is_bot(target) and is_human(actor):

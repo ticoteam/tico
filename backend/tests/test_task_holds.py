@@ -337,3 +337,34 @@ def test_a_question_from_a_private_source_is_not_quoted_in_a_company_task_s_reas
         plain = bot_task(c, "Renew the cleaning contract")
         ask(c, plain, "Keep the same cleaner?")
         assert wait(c, plain)["blocked_reason"] == f"Waiting on {ana}: Keep the same cleaner?"
+
+
+def test_answering_on_any_route_ends_the_wait_on_that_person(api):
+    """Criterion 6 over the API: a bot's task waiting on Ana for her question goes back to work once she answers, whether
+    she answers the question itself, comments on its task or picks on its card."""
+    def asked(c, title):
+        tid = bot_task(c, title)
+        q = H.task_comment(c, "bot:ops", tid, "Which month should the report use?", wake=False, ask={
+            "questions": [{"id": "month", "header": "Month", "question": "Which month should the report use?",
+                           "multi": False, "other": True,
+                           "options": [{"label": "July", "description": ""}, {"label": "August", "description": ""}]}],
+            "who": "human:ana"})
+        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on="human:ana", note="Waiting on Ana's pick.")
+        assert H.task(c, tid)["blocked_reason"].startswith(f"Waiting on {task_holds.name(c, 'human:ana')}")
+        return tid, q["id"]
+
+    with api.app.state.store.transaction() as c:
+        direct, direct_q = asked(c, "Report month (direct)")
+        commented, _ = asked(c, "Report month (comment)")
+        picked, picked_q = asked(c, "Report month (pick)")
+    post(api, f"messages/{direct_q}/answer", {"text": "July"})
+    post(api, f"tasks/{commented}/comments", {"text": "July, please."})
+    post(api, f"tasks/{picked}/answers", {"target": {"comment": picked_q}, "answers": {"month": ["July"]}})
+    with api.app.state.store.read() as c:
+        ana = task_holds.name(c, "human:ana")
+        for tid in (direct, commented, picked):
+            row = H.task(c, tid)
+            assert not H.open_task_asks(c, row), tid
+            assert (row["status"], row["waiting_on"]) == ("open", None), (tid, row["status"], row["blocked_reason"])
+            assert row["note"] == f"{ana} answered your question; nothing left to wait on"
+            assert tid not in [t["id"] for t in H.needs_you(c, "human:ana")["waiting"]]
