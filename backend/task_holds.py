@@ -65,9 +65,9 @@ def holds(conn, row):
                 if check:
                     out.append({"kind": "check", "on": check.get("on"), "what": _line(check.get("why"))})
             continue
-        out.append({"kind": "child", "on": child["owner"], "what": _line(child["title"])})
+        out.append(_task_hold(conn, row, "child", child))
     own = {r[0] for r in conn.execute(TR.CHILD_IDS, (row["id"],))}
-    out += [{"kind": "blocker", "on": b["owner"], "what": _line(b["title"])}
+    out += [_task_hold(conn, row, "blocker", b)
             for b in TR.live_blockers(conn, row["id"], H.ACTIVE_STATUSES) if b["id"] not in own]
     for a in H._rows(conn.execute("SELECT * FROM approvals WHERE task_id=? AND decision IS NULL ORDER BY created",
                                   (row["id"],))):
@@ -82,12 +82,22 @@ def holds(conn, row):
     return out
 
 
+def _task_hold(conn, row, kind, other):
+    """A child or blocker as a hold. One its task's readers may not read is named by neither title nor owner: the
+    reason is shown wherever the task is (check_blocked.detail's rule)."""
+    from . import hubdb as H
+    if H.task_private(conn, other) and (not H.task_private(conn, row) or not all(
+            H.task_private_readable(conn, who, other) for who in (row["owner"], row["requester"]) if who)):
+        return {"kind": "private", "on": None, "what": "a private task"}
+    return {"kind": kind, "on": other["owner"], "what": _line(other["title"])}
+
+
 def words(conn, found):
     """The Blocked reason for these holds: the first named in full, the rest counted."""
     if not found:
         return NOTHING
     first = found[0]
-    if first["kind"] == "external":
+    if first["kind"] in ("external", "private"):
         text = f"Waiting on {first['what']}"
     else:
         who = name(conn, first["on"]) if first["on"] else "a person"
@@ -137,7 +147,8 @@ def refresh(conn, task_id, cleared=None, at=None):
     if cleared and H.is_bot(row["owner"]):
         note = f"{cleared}; nothing left to wait on"
         H._set_status(conn, H.KEEPER, row, "open", note=note)
-        conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, task_id))
+        conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, task_id))
+        task_blocked.bump(conn, row)
         H._task_event(conn, task_id, H.KEEPER, "note", row.get("note"), note, "")
         return "open"
     text = f"{LEFT}: {cleared}" if cleared else NOTHING
@@ -245,7 +256,8 @@ def backfill(conn, at=None):
             note = ("Back to open: nothing Tico tracks was holding it (no open question, child task, blocker, "
                     "approval or person to wait on). Continue it, ask, or finish it.")
             H._set_status(conn, H.KEEPER, row, "open", note=note)
-            conn.execute("UPDATE tasks SET note=?, version=version+1 WHERE id=?", (note, row["id"]))
+            conn.execute("UPDATE tasks SET note=? WHERE id=?", (note, row["id"]))
+            task_blocked.bump(conn, row)
             H._task_event(conn, row["id"], H.KEEPER, "note", row.get("note"), note, "")
             opened.setdefault(row["owner"], []).append(row)
         else:
