@@ -2998,6 +2998,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     # Token saving 2/9: a wake its bot's own write caused, or news about a parked task, waits for the next run. The
     # rules engine (backend/rules.py) decides, names the rule on the message (refs.rule) and fails open.
     from . import rules as wake_rule_engine
+    if isinstance(refs, dict) and wake_rule_engine.PARKED_NOTICE in refs:
+        refs = {k: v for k, v in refs.items() if k != wake_rule_engine.PARKED_NOTICE}
     decision = wake_rule_engine.judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
     if decision and decision.outcome in ("ask", "action"):
         decision = wake_rule_engine.carry_out(conn, decision, actor, target, kind, refs, body, conv)

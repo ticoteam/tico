@@ -3311,6 +3311,7 @@ class Execution:
         origin = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0],
                            include_deleted=True)
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
+        origin_notice = wake_rule_engine.notice_only(origin)
         capabilities = c.execute("SELECT capabilities_json FROM runners WHERE id=?", (attempt["runner_id"],)).fetchone()
         lanes, roots = lanes_on(capabilities), roots_on(capabilities)
         if lanes:
@@ -3341,6 +3342,8 @@ class Execution:
             # never hide this lane's follow-ups.
             if taken >= 10:
                 break
+            if origin_notice and row["kind"] != "notice":
+                continue                    # a notice result cannot answer a separate question; give it its own turn
             if i % PRIME_QUEUED == 0 and len(candidates) > 1 and c.total_changes == read_at:
                 # Every poll of a running turn checks the whole backlog queued for its bot: a dozen reads per
                 # message, a few times a second, unless the next ones are read together. Rows read before a write
@@ -4493,8 +4496,11 @@ class Execution:
                                                 f"Stopped by {stopper(c, row['stop_requested'])}; not resumed.",
                                                 H.KEEPER, action='job.auto_reconcile'))
                     continue
-                if task and task['status'] in ('done', 'closed'):
-                    note = (f"Dismissed automatically: the task \"{task['title']}\" was already {task['status']} "
+                delivery_task = task
+                if wake_rule_engine.notice_only(msg):
+                    delivery_task = H.task(c, H.message_task_id(msg, conv) or "")
+                if delivery_task and delivery_task['status'] in ('done', 'closed'):
+                    note = (f"Dismissed automatically: the task \"{delivery_task['title']}\" was already {delivery_task['status']} "
                             "when the interrupted delivery was reviewed, so there was nothing left to deliver.")
                     decided.append(self._decide(c, row, row['attempt_id'], 'dismiss', note, H.KEEPER,
                                                 action='job.auto_reconcile'))

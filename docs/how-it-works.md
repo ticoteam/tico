@@ -242,6 +242,12 @@ single tasks can override these with rules of their own (Settings → Rules → 
 rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and
 runs that did nothing per rule ([Querying Tico with SQL](hub-sql.md)).
 
+Urgent task news covered by an existing urgent rule can still reach the bot when the task waits on an open
+dependency: incident news, a party's blocker or action request, and direct review or sign-off requests keep their
+existing audiences and deciding rules. The bot reads that news in a notice turn without starting the held task.
+Quiet, ignore, own-write, snooze and duplicate controls still apply. The dependency stays in place and continues
+to prevent task start and Doing or Review moves; other parked waits keep their existing behavior.
+
 **The Mac is asleep.** Everything on hub.acme.example stays available and accepts work. After 60 s
 without a heartbeat the bot shows *offline* and new messages show *Saved — waiting for <computer>*.
 A sleeping Mac is not reliably absent: macOS wakes it for a few seconds at a time to check the
