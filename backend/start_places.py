@@ -123,8 +123,9 @@ def reserve(c, attempt, settings=None):
 
 
 def summary(c, runner_id, settings, default=None):
-    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Read once per computer
-    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total)."""
+    """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Pass one company
+    Default across every computer in a listing (Health, Operations, /computers): without it each summary rebuilds
+    pools/groups/spend while classifying queued bots."""
     from .read_cache import value
     return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
 

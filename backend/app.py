@@ -5725,14 +5725,17 @@ def create_app(settings=None):
 
     def computer_rows(c, who):
         from .performance import load_status
+        from . import usage_limits
         from .start_places import summary as turn_counts, describe as describe_turns
         online = {r["id"] for r in _online_runners(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
         rows = []
+        # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
+        limits = usage_limits.company(c)
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
-            counts = turn_counts(c, r["id"], settings)
+            counts = turn_counts(c, r["id"], settings, limits)
             turns = {"turn_counts": counts, "turn_summary": describe_turns(counts)}
             detailed = everyone or r["operator"] == mine or r["accepts_member_bots"]
             if not detailed:

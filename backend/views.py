@@ -2073,6 +2073,11 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            from . import usage_limits
+            from .start_places import summary, describe
+            # One company Default for every computer's queue classify: without it each summary rebuilds
+            # pools/groups/spend for every queued bot (same waste Health's snapshot already dropped).
+            limits = usage_limits.company(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2086,8 +2091,7 @@ def install_views(app, store, auth, mutate, task_view):
                 bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
                         if a[0] not in hidden]
                 value = dict(row)
-                from .start_places import summary, describe
-                value["turn_counts"] = summary(c, row["id"], store.settings)
+                value["turn_counts"] = summary(c, row["id"], store.settings, limits)
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
