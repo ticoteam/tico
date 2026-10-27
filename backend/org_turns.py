@@ -57,8 +57,8 @@ def admission(c):
 
 
 def snapshot(c, settings):
-    """Classify every computer's queue once for a finding or Health detail. Share one company Default so each
-    claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding them per bot."""
+    """Classify every computer's queue once for a finding or the turn-levels settings view. Share one company
+    Default so each claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding it per bot."""
     from . import usage_limits
     from .start_places import summary
     default = usage_limits.company(c)
