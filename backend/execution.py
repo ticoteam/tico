@@ -482,6 +482,33 @@ def restart_reported(c, attempt_id):
                 and result.get('text') == 'Runner restarted during execution')
 
 
+def run_limit_minutes(c, attempt_id):
+    """Recognize the runner's terminal run-budget cut, never a provider quota or Gateway limit."""
+    row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] not in ('interrupted', 'expired'):
+        return None
+    result = json.loads(row['result_json'] or '{}')
+    if result.get('outcome') != 'interrupted':
+        return None
+    from .run_diagnostics import reason
+    match = re.fullmatch(r'Timeout: max_run_minutes \(([0-9]+(?:\.[0-9]+)?) minutes\)',
+                         reason(c, row, 'interrupted'))
+    return match[1] if match and float(match[1]) > 0 else None
+
+
+def run_limit_cuts(c, job):
+    """Count consecutive started attempts of this job, including folded inputs, up to the hold cap."""
+    cuts = 0
+    rows = c.execute("SELECT id FROM attempts WHERE started IS NOT NULL AND (job_id=? OR id IN "
+                     "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?)) "
+                     "ORDER BY started DESC,created DESC,rowid DESC LIMIT 2", (job['id'], job['message_id']))
+    for row in rows:
+        if run_limit_minutes(c, row['id']) is None:
+            break
+        cuts += 1
+    return cuts
+
+
 def outside_actions(c, job, started, finished):
     actions = set()
     # Tool output may mention a command without executing it. Prefer the invocation's start summary and
@@ -544,16 +571,18 @@ def retry_facts(c, job, started, finished):
                        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?))",
                        (job['id'], job['message_id'])).fetchone()[0]
     restart = restart_reported(c, job['attempt_id'])
-    outside = outside_actions(c, job, started, finished) if restart else []
+    timeout = run_limit_minutes(c, job['attempt_id'])
+    outside = outside_actions(c, job, started, finished) if restart or timeout else []
     result = c.execute("SELECT result_json FROM attempts WHERE id=?", (job['attempt_id'],)).fetchone()
     result = json.loads(result[0] or '{}') if result else {}
     fallback_unknown = result.get('outcome') == 'interrupted' and result.get('primary_held') and result.get('fallback')
     return {'calls': calls, 'acted': acted, 'consumed': consumed, 'reported': reported, 'starts': starts,
-            'restart': restart, 'outside': outside, 'approval_kinds': sorted({a['kind'] for a in approvals}),
-            # Explicit restart policy holds only named irreversible effects or consumed approvals. A silent
+            'restart': restart, 'timeout': timeout, 'limit_cuts': run_limit_cuts(c, job) if timeout else 0,
+            'outside': outside, 'approval_kinds': sorted({a['kind'] for a in approvals}),
+            # Explicit restart/time-limit policy holds only named irreversible effects or consumed approvals. A silent
             # host alone is not such an effect; the continuation must check prior work before proceeding.
             'fallback_unknown': bool(fallback_unknown),
-            'safe': not fallback_unknown and not consumed and (not outside if restart else reported and not acted)}
+            'safe': not fallback_unknown and not consumed and (not outside if restart or timeout else reported and not acted)}
 
 # Tool calls that only read: a run that made nothing else repeats nothing when it runs again. Claude's and Codex's
 # own names. A subagent's launch is listed because its own calls are reported and judged one by one. A shell command
@@ -2721,7 +2750,8 @@ class Execution:
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
                             "login_class": login_class(c, task, msg, routine),
-                            "recovery": {"resume_session": restart_reported(c, row["attempt_id"])} if recovery else None,
+                            "recovery": {"resume_session": bool(restart_reported(c, row["attempt_id"]) or
+                                                                 run_limit_minutes(c, row["attempt_id"]))} if recovery else None,
                             "computer_label": runner["label"], "computer_logins_v1": True,
                             # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
                             "onboarding": (parked["onboarding_state"] if parked else "") or "",
@@ -3639,7 +3669,10 @@ class Execution:
             config_row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row['bot'],)).fetchone()
             hold.setdefault('failed_fallback', {})[row['bot']] = fallback_mark(json.loads(config_row[0] or '{}'))
             login_holds._save(c, hold)
+        timeout_cut = run_limit_minutes(c, aid)
         requeue = not rejected_acted if rejected else limited or retryable or silent or yielded or reset_wait
+        if timeout_cut:
+            requeue = False  # every run-budget cut goes through the same effect and consecutive-cut judgement
         if body.outcome == 'interrupted' and body.primary_held and body.fallback and not reset_wait:
             requeue = False  # a yield or limit flag cannot turn unknown fallback effects into a safe retry
         c.execute("UPDATE jobs SET state=? WHERE id=?",
@@ -3947,6 +3980,8 @@ class Execution:
         outage = silent and tico_code == gateway.UNAVAILABLE
         self.account_failure(c, row, body, aid, conv, failure,
                              counts=not (stopped or limited or busy or yielded or outage))
+        if not stopped and timeout_cut:
+            self.auto_reconcile(c, attempt_id=aid)
         return {"attempt_id": aid, "outcome": body.outcome, "message": reply}
 
     def account_failure(self, c, row, body, aid, conv, failure, counts):
@@ -4014,6 +4049,14 @@ class Execution:
             if facts['fallback_unknown']:
                 stopped = 'unknown'
                 reason = 'BotOps must review this interrupted fallback: its output or effects cannot be ruled out.'
+            elif facts['timeout']:
+                named = ', '.join([*facts['outside'],
+                                   *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')'] if facts['consumed'] else [])])
+                stopped = 'changed' if named else 'twice' if facts['limit_cuts'] >= 2 else 'restarted'
+                reason = ('The job was cut by the run time limit twice in a row; review it before continuing.'
+                          if facts['limit_cuts'] >= 2 else 'The run reached its time limit.')
+                if named:
+                    reason += f' It recorded {named}; check this outside action before resuming.'
             elif facts['restart'] and (facts['outside'] or facts['consumed']):
                 stopped = 'changed'
                 named = ', '.join([*facts['outside'],
@@ -4252,7 +4295,7 @@ class Execution:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (key,))
         return released
 
-    def auto_reconcile(self, c):
+    def auto_reconcile(self, c, *, attempt_id=None):
         """Settle the interrupted work nobody needs to look at, so a person is only asked about
         a run that actually did something.
 
@@ -4264,6 +4307,10 @@ class Execution:
           consumed no approval: it read, it thought, it was cut off. Running it again repeats
           nothing. This needs a host that reports its tool calls (`reports_tools`); a run from a
           host that does not is silent either way, so it is held like one that acted.
+
+        A reported max_run_minutes cut uses this same recovery path immediately. It allows one continuation,
+        carries the task's hand-off note, and holds a second consecutive cut for review instead of dismissing it.
+        A completed attempt breaks the consecutive-cut streak.
 
         A computer-reported restart resumes on the next sweep even after a shell or local edit, unless a consumed
         approval or a named merge, publish, send or payment requires review. Its note gives the interruption time
@@ -4308,7 +4355,8 @@ class Execution:
                          "LEFT JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
                          "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                          "WHERE j.state='uncertain' AND j.attempt_id IS NOT NULL "
-                         "ORDER BY j.created", (cutoff,)).fetchall()
+                         "AND (? IS NULL OR j.attempt_id=?) "
+                         "ORDER BY j.created", (cutoff, attempt_id, attempt_id)).fetchall()
         for row in rows:
             with isolated(c, "auto_reconcile", row["id"]):
                 prior = c.execute("SELECT action,detail_json FROM events WHERE target=? AND action IN "
@@ -4333,10 +4381,10 @@ class Execution:
                                                        "AND target=?", (row['attempt_id'],)).fetchone()
                 calls, acted, safe = [], [], False
                 facts = retry_facts(c, row, row['started'], row['finished'])
-                if not held or facts['restart']:
+                if not held or facts['restart'] or facts['timeout']:
                     calls, acted, safe = facts['calls'], facts['acted'], facts['safe']
                 started = facts['starts']
-                if not row['aged'] and not freed and not facts['restart'] and not (safe and started <= 1):
+                if not row['aged'] and not freed and not facts['restart'] and not facts['timeout'] and not (safe and started <= 1):
                     continue  # the usual wait: a person may look first
                 msg = H.message(c, row['message_id'])
                 conv = H.conversation(c, msg['conversation_id']) if msg else None
@@ -4386,7 +4434,7 @@ class Execution:
                     continue
                 # Only runs that started count: a claim that lapsed before its run began (a computer offline, the
                 # hub unreachable) says nothing about the request itself.
-                if started > 1:
+                if started > 1 and not facts['timeout']:
                     # Stopped twice the same way: not bad luck. Let it go and hand the cause to BotOps.
                     note = ("Dismissed automatically: this request stopped partway twice, so it is not retried "
                             "again. BotOps is looking into why.")
@@ -4396,14 +4444,17 @@ class Execution:
                         self._tell_maintainer(c, row, msg)
                     decided.append(decision)
                     continue
-                if not safe:
+                limit_cap = facts['timeout'] and facts['limit_cuts'] >= 2
+                if not safe or limit_cap:
+                    why = ('cut by the run time limit twice in a row' if limit_cap else
+                           'Review required before repeating possible effects.')
                     # Held: running it again could repeat an outside action. While it stays held with no decision,
                     # BotOps has an open task for it: one closed or done is reopened on a later sweep.
                     if not held and row['attempt_id']:
                         H.event(c, H.KEEPER, 'job.held', row['attempt_id'], {'job_id': row['id'], 'tools': acted,
                                    'outside_actions': facts['outside'], 'consumed_approval': bool(facts['consumed']),
                                    'owner': H.bot_actor(H.FLEET_MAINTAINER),
-                                   'reason': 'Review required before repeating possible effects.'})
+                                   'reason': why})
                     elif held:
                         acted = (json.loads(held[0] or '{}') or {}).get('tools') or []
                     if row['attempt_id']:
@@ -4415,11 +4466,12 @@ class Execution:
                         can_review = (privacy.message_readable(c, reviewer, msg)
                                       and privacy.attempt_readable(c, reviewer, row['attempt_id']))
                         if can_review:
-                            self._hand_to_maintainer(c, row, msg, task, named, again=bool(held))
+                            self._hand_to_maintainer(c, row, msg, task, named, again=bool(held),
+                                                     reason=('was ' + why + (f"; recorded {', '.join(named)}" if named else '')) if limit_cap else None)
                         else:
                             self._hand_to_operator(c, row, msg, again=bool(held))
                     continue
-                if (not facts['restart'] and row['attempt_state'] == 'expired' and row['started'] and row['finished']
+                if (not facts['restart'] and not facts['timeout'] and row['attempt_state'] == 'expired' and row['started'] and row['finished']
                         and row['finished'] > H.shift(H.now(), seconds=-RESULT_GRACE)):
                     # Its lease lapsed but its runner never said the turn stopped: the finished turn may still come
                     # in (`settles_late`), and running it again now would answer the request twice.
@@ -4437,6 +4489,14 @@ class Execution:
                             "Check what already happened first, then continue in this provider session. "
                             "No consumed approval or named irreversible outside action was recorded. " +
                             (note if not acted else ''))
+                if facts['timeout']:
+                    line = f"Reached its {facts['timeout']}-minute run limit; continuing"
+                    note = (line + '. Check what already happened first, then continue in this provider session. '
+                            'No consumed approval or named irreversible outside action was recorded.')
+                    if task and task.get('note'):
+                        note += '\n\nHand-off note on the task:\n' + task['note']
+                    if task:
+                        H.task_comment(c, H.KEEPER, task['id'], line, wake=False)
                 decided.append(self._decide(c, row, row['attempt_id'], 'resume', note, H.KEEPER,
                                             action='job.auto_reconcile'))
         for bot, said in limit_said.items():
@@ -4472,14 +4532,14 @@ class Execution:
         H.status_set(c, H.KEEPER, bot, focus=line, reason="Held runs settled")
         H.event(c, H.KEEPER, "limit.held_settled", bot, dict(said))
 
-    def _hand_to_maintainer(self, c, row, msg, task, acted, again=False):
+    def _hand_to_maintainer(self, c, row, msg, task, acted, again=False, *, reason=None):
         """One open BotOps task per bot to review its held runs: BotOps, not a person, recovers a stopped run.
         `again`: the run was held on an earlier sweep. Reopen its review if it was closed while work remained."""
         maintainer = H.FLEET_MAINTAINER
         if row['bot'] == maintainer or not H.bot(c, maintainer):
             return
         title = H.HELD_REVIEW_TITLE.format(bot=row['bot'])
-        did = f"used {', '.join(acted)}" if acted else "ran on a host that does not report its tool calls"
+        did = reason or (f"used {', '.join(acted)}" if acted else "ran on a host that does not report its tool calls")
         about = f" on the task \"{task['title']}\" (owner {owner_name(c, task['owner'])})" if task else ""
         review = c.execute("SELECT id,body,status FROM tasks WHERE title=? AND owner=? "
                            "ORDER BY (status IN ('open','doing','waiting','review','ready')) DESC,created DESC "
