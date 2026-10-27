@@ -700,26 +700,29 @@ def _copied_runs(text):
 
 
 # A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
-# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as a
-# path segment of a GitHub link (whose other segments are then judged one by one). A bare hex run, one after a common
-# word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
+# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as
+# the commit, tree or blob segment of a GitHub link (whose other segments are then judged one by one). A bare hex run,
+# one after a common word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
 SHA = r"[0-9a-f]{40}"
 COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision)\b)[\s:=#@`*]*\b" + SHA + r"\b")
 GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
 
 
 def _without_commits(text):
-    text = COMMIT_REF.sub(" ", text)
-    return GITHUB_PATH.sub(lambda m: " ".join(part for part in m.group(1).split("/") if not re.fullmatch(SHA, part)),
-                           text)
+    def link(m):
+        parts = m.group(1).split("/")
+        return " ".join(part for i, part in enumerate(parts)
+                        if not (re.fullmatch(SHA, part) and i and parts[i - 1] in ("commit", "commits", "tree", "blob")))
+    return GITHUB_PATH.sub(link, COMMIT_REF.sub(" ", text))
 
 
 # The preview's long run reaches across `/`, `_` and `-`, so a branch, a session or a dated path would read as a secret.
 # A run is let through only when it reads as one of those: each piece between the separators a word, a number or a short
-# token, with at most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
+# token (a word is lowercase or capitalised and a number at most eight digits, as a key's pieces are neither), with at
+# most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
 # A base64 or base64url value split by a separator has long mixed pieces, so it is still judged whole.
 REF_UUID = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")
-REF_PIECE = re.compile(r"[A-Za-z]*|[0-9]+|[A-Za-z0-9]{1,4}")
+REF_PIECE = re.compile(r"[a-z]{0,16}|[A-Z][a-z]{0,15}|[0-9]{0,8}|[A-Za-z0-9]{1,4}")
 REF_ID = re.compile(r"[0-9a-f]{7,12}")
 
 

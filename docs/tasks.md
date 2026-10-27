@@ -1295,11 +1295,14 @@ those stays "not found" for it, and its notices and run prompt leave the parent 
 
 - Every private task the run carries that the other bot cannot read must have no person on it (no person requester,
   owner or guest), nor any private task above it. Otherwise the create is refused, naming the person: ask them with
-  `hub task question`, or have them file the subtask.
+  `hub task question`, or have them file the subtask. When the person is on a task above that the filer cannot read,
+  the refusal leaves their name out and says to ask the filer's own requester to file it.
 - The subtask is private; a company-visible one is refused, as for any create from private work.
 - Its words may not carry the private work: a secret-shaped value, or 12 or more words in a row copied from a private
   task the other bot cannot read, is refused naming the check (never the text). Rewrite it and file again; it does not
-  count toward quarantine.
+  count toward quarantine. A full commit id is fine after a commit word (`head <sha>`, `base <sha>`) or in a GitHub
+  commit link, and so are branch, session and dated path names; a word mixing letters and digits inside a long name
+  (`pr1714-...`) reads as secret-shaped, so write it apart (`pr-1714-...`).
 - The parent's history records "Handed to <bot> in a private subtask"; the subtask's records who filed it.
 - When the subtask is done, the parent's owner is woken on the parent, as for any subtask. Its words do not reach the
   parent's other readers.
