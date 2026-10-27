@@ -581,6 +581,8 @@ pub(crate) struct Drove {
     pub(crate) reply: String,
     pub(crate) tokens: Value,
     pub(crate) limited: bool,
+    /// The model produced a message or tool call, so a saved fallback must retain its own work.
+    pub(crate) acted: bool,
     /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
     pub(crate) capacity: bool,
     /// The model was at capacity after the turn acted: no fallback or fresh thread may take it, but its own thread can
@@ -597,7 +599,7 @@ pub(crate) struct Drove {
 
 impl Drove {
     fn interrupted() -> Drove {
-        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, capacity: false, continues: false, retryable: false, turn: String::new(), yielded: false }
+        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, acted: false, capacity: false, continues: false, retryable: false, turn: String::new(), yielded: false }
     }
 }
 
@@ -1780,8 +1782,9 @@ impl Runner {
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
                 // Keep the actual fallback thread under this job, separate from every normal conversation session.
+                // A refusal before any message or tool call can still use the next ready fallback.
                 // A host that has not confirmed its provider session cannot promise strict continuation.
-                if (drove.limited && !drove.capacity || drove.continues) && source_continue()
+                if (drove.limited && !drove.capacity && drove.acted || drove.continues) && source_continue()
                     && (!h.confirms_threads() || h.confirmed(&th).is_some()) {
                     let saved = h.session_id(&th);
                     let kept_runtime = if crate::harness_tools::caps(&hop.runtime, &hop.harness).persistent_session {
@@ -2306,7 +2309,7 @@ impl Runner {
 
     /// The assigned subscription cannot run here: a failed, retryable result that names it, and a heartbeat now.
     fn settle_unavailable(&self, aid: &str, u: &crate::profiles::Unavailable, drove: &mut Drove, rejected: &mut Option<(String, String)>, out: &mut Option<Value>) {
-        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, capacity: false, continues: false, retryable: true, turn: drove.turn.clone(), yielded: false };
+        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, acted: drove.acted, capacity: false, continues: false, retryable: true, turn: drove.turn.clone(), yielded: false };
         *rejected = None;
         let _ = self.state.append(aid, "diagnostic", &json!({"text": u.problem, "detail": {"runtime": u.runtime}}));
         *out = Some(u.detail());
@@ -4217,6 +4220,8 @@ else:
                 "Selected model is at capacity. Please try a different model.",
                 "Usage limit reached; resets at 2099-01-01T07:00:00Z");
             if quota { std::fs::write(&script, code).unwrap(); }
+            // The saved primary already belongs to this clear epoch; a later clear must still discard it.
+            runner.state.epoch_moved("ops", "", "bot", 3).unwrap();
             runner.state.save_session("ops", "bot", "codex", "primary-untouched").unwrap();
             let mut first = capacity_attempt("a-side", None);
             first["job_id"] = json!("job-side");
