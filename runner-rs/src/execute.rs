@@ -1381,6 +1381,7 @@ impl Runner {
                 shared: crate::sessions::is_shared(&config),
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
+                require_existing_session: !continuing.is_empty(),
             };
             let mut resumed = false;
             if side_run {
@@ -1439,7 +1440,7 @@ impl Runner {
                 left: left.clone(),
                 confirmed: Mutex::new(None),
             });
-            if fresh.is_none() && !side_run && (continuing.is_empty() || resumed) {
+            if fresh.is_none() && !side_run && continuing.is_empty() {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -1559,8 +1560,9 @@ impl Runner {
                         self.confirm_thread(f, &session).await?;
                     }
                 }
-                // A fresh session that never came up leaves the previous session in place; a side session is never kept.
-                if !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
+                // A continuation already has its saved thread: never write it back over a Clear, a replacement,
+                // or a refused resume. A fresh session that never came up and a side session are not kept.
+                if continuing.is_empty() && !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
                     keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
                 }
                 Ok::<(), Fail>(())
@@ -1719,6 +1721,7 @@ impl Runner {
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
+                    require_existing_session: false,
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
@@ -3279,6 +3282,9 @@ for line in sys.stdin:
             if let Some(thread) = continuing {
                 attempt["continue_thread"] = json!(thread);
             }
+            if let Some(epoch) = extra.get("test_session_epoch") {
+                attempt["session_epoch"] = epoch.clone();
+            }
             tokio::time::timeout(Duration::from_secs(60), self.runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
             let seen = self.seen.lock().unwrap().clone();
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-codex-{n}/complete"))).map(|(_, _, b)| b).collect();
@@ -3349,6 +3355,19 @@ for line in sys.stdin:
             assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
             assert_eq!(rig.methods().iter().filter(|m| *m == "turn/start").count(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn a_cleared_capacity_continuation_never_resurrects_its_session() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"test_session_epoch": 1}), Some(&first)).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(rig.saved().is_none(), "Clear must survive continuation settlement");
+        assert_eq!(rig.methods(), ["thread/start", "turn/start"]);
+        assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
     }
 
     #[tokio::test]
@@ -4137,6 +4156,7 @@ else:
         assert_eq!(done["outcome"], "interrupted", "{done:?}");
         assert!(done["fallback"].is_null(), "{done:?}");
         assert!(!dir.join("prompts.jsonl").exists(), "no fresh thread or fallback was given the request");
+        assert!(runner.state.session("ops", "bot", "codex").unwrap().is_none(), "lost continuation must not save its thread");
         let events = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with("/attempts/a-lost/events"))
             .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect::<Vec<_>>();
         assert!(events.iter().any(|e| e.to_string().contains("could not be resumed")), "{events:?}");

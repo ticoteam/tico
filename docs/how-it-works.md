@@ -326,7 +326,7 @@ model's turn included; a quota hold already in force keeps its own end. Only a r
 or used a tool is a run that did nothing. After the run acted, a runner that kept its thread queues one continuation
 on that same thread after the two-minute hold, with a note to carry on without repeating completed work. It never
 hands that continuation to a fallback or a fresh thread. If the thread cannot resume, or the continuation hits
-capacity again, the run waits for review as *uncertain*. Older runners that cannot keep the thread hold it for
+capacity again, the run waits for review as *uncertain*. A missing CLI session is never rebuilt for a continuation, and a cleared session stays cleared. Older runners that cannot keep the thread hold it for
 review immediately, and are never handed a continuation: it waits in the queue for a runner that can continue it. A quota or billing refusal ("Quota exceeded. Check your plan and
 billing details.") stays a usage limit as above. While it
 holds, no bot starts a run on that login: a bot whose fallback (its own, or the company's default) is signed in on

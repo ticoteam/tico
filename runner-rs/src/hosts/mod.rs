@@ -170,6 +170,8 @@ pub struct Settings {
     /// How long a Claude turn that has answered may wait on nothing but its background shells before it ends and
     /// leaves them running (`background_wait_s`); None waits for them, as before.
     pub background_wait: Option<std::time::Duration>,
+    /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
+    pub require_existing_session: bool,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.

@@ -3652,7 +3652,8 @@ class Execution:
                 tico_code = gateway.run_code(tico_error)
         gateway_connection.forget(c, aid)
         silent = False
-        if body.outcome == "failed" and not limited and not retryable and not stopped and not repeated_capacity:
+        # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
+        if body.outcome == "failed" and not limited and not retryable and not stopped and not continuing:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
