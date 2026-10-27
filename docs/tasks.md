@@ -138,6 +138,8 @@ A Dev tickets type is given the Dev board's flow once: reviews send their feedba
 whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
 released steps never hold. Change any of it on the steps.
 
+GitHub access is reported restored only after a successful current head and checks read. An expired or cancelled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
+
 ## Automatic starts
 
 Assigned bot work starts as soon as its computer has a free turn. Tico picks the highest-ranked eligible
@@ -1038,7 +1040,7 @@ marked it already. Paused or stopped: the task stays open and the main chat gets
 harnesses, and older runners, work it from the prompt alone.
 
 When the requester (or a person) closes a task its bot had already marked done or sent for review, the bot is not
-woken; a close note that differs from the bot's own done note still reaches it, without starting a run.
+woken; a person's close note that differs from the bot's own done note reaches an active bot as a wake. Routine completions with nothing said are batched; paused bots read them on their next run.
 
 When a bot's task is blocked on a person's approval or input, the bot files a subtask for them under it
 (`hub task create --owner <person> --parent <task> ...`, or `hub task question ... --parent <task>` for a pick or
@@ -1404,3 +1406,4 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 ## Task settings
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
+

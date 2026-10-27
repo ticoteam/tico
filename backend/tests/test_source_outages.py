@@ -213,6 +213,7 @@ def test_a_safe_lost_lease_resumes_once_then_waits_without_a_botops_task(api, mo
         assert not c.execute("SELECT 1 FROM events WHERE action='job.review_requested'").fetchone()
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 0
         assert 'second lost lease' in H.status(c, 'ops')['focus']
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
 
 def test_a_hundred_queued_notices_restore_as_one_carrier_with_their_history(api, monkeypatch):
@@ -446,6 +447,7 @@ def test_live_fallback_handoff_survives_a_lease_loss_without_replacing_the_prima
         assert not c.execute("SELECT 1 FROM events WHERE action='job.review_requested'").fetchone()
         assert not c.execute('SELECT 1 FROM tasks').fetchone()
         assert 'second lost lease' in H.status(c, 'ops')['focus']
+    assert get(api, 'bots/ops/execution-review')['jobs'] == []
 
 
 def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_lease(api, monkeypatch):
@@ -471,3 +473,35 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
         assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result_json,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
+
+
+def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatch):
+    at(monkeypatch, '2026-10-27T01:00:00.000000Z')
+    with api.app.state.store.transaction() as c:
+        managers(c)
+        source_outages.observe(c, 'github:acme/project', 'GitHub checks access', waiting=1)
+    at(monkeypatch, '2026-10-31T01:00:00.000000Z')
+    with api.app.state.store.transaction() as c:
+        # The remembered move is gone: whether expired, cancelled or closed, that proves no successful read.
+        source_outages.sync(c, api.app.state.store.settings)
+        assert len(notices(c)) == 2
+        prs = [{'id': 'pr', 'repo': 'acme/project'}]
+        source_outages.github_read(c, prs, {'pr': {'error': True, 'why': 'GitHub answered 403'}})
+        assert len(notices(c)) == 2
+        source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
+        source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
+        source_outages.sync(c, api.app.state.store.settings)
+        assert len(notices(c)) == 4
+        assert all('available again' in row['body'] for row in notices(c)[2:])
+
+
+def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):
+    from backend import completion_notes
+    with api.app.state.store.transaction() as c:
+        for n in range(1002):
+            completion_notes.record(c, 'bot:ops', f'synthetic-{n}')
+        rows = c.execute("SELECT body FROM notes WHERE to_actor='bot:ops'").fetchall()
+        assert len(rows) == 1 and '1002 tasks' in rows[0][0]
+        saved = json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                                    (completion_notes.PREFIX + 'bot:ops',)).fetchone()[0])
+        assert len(saved['tasks']) == completion_notes.MAX_BATCH and saved['count'] == 1002

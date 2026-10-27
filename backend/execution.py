@@ -641,6 +641,16 @@ def owner_name(c, actor):
     return row.get("display_name") or row.get("name") or H.actor_id(actor)
 
 
+def quiet_source_wait(c, job, facts=None):
+    """A proven safe second computer loss needs source recovery, not a person's effects review."""
+    if not job['attempt_id'] or c.execute(
+            "SELECT count(*) FROM attempts WHERE job_id=? AND started IS NOT NULL", (job['id'],)).fetchone()[0] < 2:
+        return False
+    attempt = c.execute('SELECT started,finished FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
+    facts = facts or retry_facts(c, job, attempt['started'], attempt['finished'])
+    return facts['safe'] and facts['lease_lost']
+
+
 def _readable_held(c, who, auth, bot):
     """The bot's runs saved for later that `who` may read, oldest first, each with its task when `who` may read that
     under the same rule as reading it (`auth.task_sql`), else None. A run on a task `who` may not read comes with
@@ -650,6 +660,9 @@ def _readable_held(c, who, auth, bot):
                          "WHERE j.bot=? AND j.state='uncertain' ORDER BY j.created", (bot,)):
         if not (privacy.message_readable(c, privacy.actor(who), row)
                 and (not row["attempt_id"] or privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"]))):
+            continue
+        job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
+        if quiet_source_wait(c, job):
             continue
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
         task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
@@ -4305,6 +4318,9 @@ class Execution:
                        'text': str(json.loads(e['payload_json']).get('text', ''))[:4000]}
                       for e in reversed(events)]
             facts = retry_facts(c, row, attempt['started'] if attempt else None, attempt['finished'] if attempt else None)
+            if quiet_source_wait(c, row, facts):
+                # A safe second computer loss waits for the source, not a person's effects decision.
+                continue
             calls, acted = facts['calls'], facts['acted']
             # `stopped` is what the review card leads with (ui/app/settings.js executionReview), by the same rule the
             # sweep retries by: only a run `auto_reconcile` would call safe, on its first start, is 'read'.

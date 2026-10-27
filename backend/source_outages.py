@@ -98,11 +98,22 @@ def sync(c, settings):
         for link in links(c, dict(row)):
             # All checks for the same repository share access; PR numbers never split an incident.
             source = 'github:' + (link.get('repo') or (link.get('url') or '').split('/pull/')[0]).lower()
+            saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                              (PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32],)).fetchone()
+            proof = H._json(saved[0], {}) if saved else {}
+            if proof and not proof.get('active') and (detail.get('at') or '') <= proof.get('updated', ''):
+                continue  # A successful read supersedes this old refusal, even if the ticket has not moved.
             entry = github.setdefault(source, {'tasks': set(), 'since': detail.get('since')})
             entry['tasks'].add(row['id'])
     for source, entry in github.items():
         observe(c, source, 'GitHub checks access', waiting=len(entry['tasks']), since=entry['since'])
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
+    # A move's expiry, close or cancellation is not evidence that GitHub's access recovered.
+    for key, raw in c.execute('SELECT key,value_json FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
+        value = H._json(raw, {}) or {}
+        if value.get('active') and value.get('source', '').startswith('github:') and key not in seen:
+            observe(c, value['source'], value['kind'], waiting=0)
+            seen.add(key)
     for (runner_id,) in c.execute('SELECT id FROM runners').fetchall():
         if performance.load_status(c, runner_id, now=H.parse_ts(H.now()).timestamp())['overloaded']:
             source = 'computer:' + runner_id
@@ -110,7 +121,7 @@ def sync(c, settings):
             seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])
     for key, raw in c.execute('SELECT key,value_json FROM registry_metadata WHERE key LIKE ?', (PREFIX + '%',)).fetchall():
         value = H._json(raw, {}) or {}
-        if value.get('active') and key not in seen:
+        if value.get('active') and key not in seen and not value.get('source', '').startswith('github:'):
             # The digest is already the durable identity; finish through the same transition writer without hashing twice.
             _finish(c, key, value)
 
@@ -138,3 +149,14 @@ def batch_waiters(c, bot):
     for jobs in groups.values():
         if len(jobs) > 1:
             wake_presets._release(c, bot, jobs)
+
+
+def github_read(c, prs, snapshots):
+    """Only a complete successful head/checks read confirms access recovery; stale moves prove nothing."""
+    repos = {}
+    for pr in prs:
+        if pr.get('repo'):
+            repos.setdefault(pr['repo'].lower(), []).append(snapshots.get(pr['id']))
+    for repo, results in repos.items():
+        if results and all(r and not r.get('error') and r.get('head_sha') for r in results):
+            observe(c, 'github:' + repo, 'GitHub checks access', active=False)
