@@ -122,14 +122,20 @@ def reserve(c, attempt, settings=None):
     return {"reserved": True, "start_until": until}
 
 
-def summary(c, runner_id, settings, default=None):
+def summary(c, runner_id, settings, default=None, *, classify=True):
     """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Read once per computer
-    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total)."""
+    in a snapshot: Health asks for each computer's twice (its own line, and the company's turn total).
+
+    `classify=False` still counts leased waits and queued jobs, but does not run claim_refusal per queued bot.
+    Health uses that when the company is below its warning level; Computers/operations and an active warning
+    keep the full classification.
+    """
     from .read_cache import value
-    return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
+    return value(c, ("start_summary", runner_id, bool(classify)),
+                 lambda: _summary(c, runner_id, settings, default, classify))
 
 
-def _summary(c, runner_id, settings, default):
+def _summary(c, runner_id, settings, default, classify=True):
     from . import performance
     out = dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS)
     groups = {}
@@ -152,6 +158,13 @@ def _summary(c, runner_id, settings, default):
             out['starting'] += 1
         else:
             out['queued'] += 1
+    if not classify:
+        # Queued jobs still count; why each bot cannot start is left to Health's stuck/queue checks.
+        n = c.execute("SELECT count(*) FROM jobs j JOIN assignments a ON a.bot=j.bot "
+                      "WHERE a.runner_id=? AND j.state='queued'", (runner_id,)).fetchone()[0]
+        out['queued'] += n
+        out['waits'] = sorted(groups.values(), key=lambda g: (g['oldest'], g['reason']))
+        return out
     # Quota and readiness waits need not be leased to a worker to be visible.
     from .execution import claim_refusal
     from .store import readiness_document

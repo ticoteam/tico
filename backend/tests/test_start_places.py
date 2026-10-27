@@ -52,6 +52,34 @@ def test_four_counts_separate_37_login_waiters(api):
     assert next(c for c in health['checks'] if c['id'] == 'turns:' + rid)['summary'].endswith(machine['turn_summary'])
 
 
+def test_health_below_warning_skips_queued_bot_classification(api, monkeypatch):
+    """Health Turns lines below warning count queued jobs without claim_refusal per bot."""
+    from backend import execution, start_places
+    computer = fleet(api, attempts=0, trees=0)
+    assign(api, computer, 'finance')
+    ready(api, computer, ['ops', 'finance'])
+    post(api, 'chat/finance', {'text': 'Queued while healthy'})
+    calls = {'n': 0}
+    real = execution.claim_refusal
+
+    def counted(*args, **kwargs):
+        calls['n'] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(execution, 'claim_refusal', counted)
+    with api.app.state.store.read() as c:
+        light = start_places.summary(c, computer['runner_id'], api.app.state.store.settings, classify=False)
+        full = start_places.summary(c, computer['runner_id'], api.app.state.store.settings, classify=True)
+    assert light['queued'] >= 1 and full['queued'] + full['waiting'] >= 1
+    # Light path must not invoke claim_refusal; full path may.
+    before = calls['n']
+    with api.app.state.store.read() as c:
+        start_places.summary(c, computer['runner_id'], api.app.state.store.settings, classify=False)
+    assert calls['n'] == before
+    health = get(api, 'health')
+    assert any(c['id'] == 'turns:' + computer['runner_id'] for c in health['checks'])
+
+
 def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
     """Spec 2: a different login starts immediately on an otherwise idle computer."""
     computer = waiters(api)
