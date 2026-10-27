@@ -528,7 +528,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
     from . import org_turns
-    company_stopped = settings and org_turns.snapshot(c, settings)['at_stop']
+    # Admission is enough for the company-stop gate: a full snapshot classifies every queued bot and held the
+    # writer for seconds on a live install. Detailed wait counts stay on the company-turns check below.
+    company_stopped = settings and org_turns.admission(c)['at_stop']
     busy, running, turns = set(), {}, {}
     for r in c.execute("SELECT id,bot,runner_id,coalesce(started,created) since FROM attempts "
                        "WHERE state IN ('leased','running') ORDER BY since"):
@@ -1499,7 +1501,9 @@ def view(c, who, settings, auth, github, config):
         from . import org_turns
         incident = org_turns.saved(c, org_turns.INCIDENT)
         if incident.get('opened_at'):
-            value = org_turns.snapshot(c, settings)
+            # in_use / warning / stop come from admission. The fixer's saved finding already holds the detailed
+            # queue classification; rebuilding a fleet snapshot on every Health poll is not needed here.
+            value = org_turns.admission(c)
             # The turn fixer's finding (backend/turn_fixer.py) once it has run: one per incident, rewritten in place.
             found = (incident.get('finding') or {}) if incident.get('active') else {}
             text = (found.get('text') or f"{value['in_use']} company turns in use; warning {value['warning']}, "
