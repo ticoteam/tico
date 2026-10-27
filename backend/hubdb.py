@@ -2493,11 +2493,12 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
-    watcher's for a Monitor. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
+    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2505,14 +2506,17 @@ def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
                      "WHERE b.slug=?", (actor_id(target),))
     if row and resolve_harness(_json(row["config_json"], {}) or {}) in SYNCED_HARNESSES:
         name = row["display_name"] or actor_id(target)
-        refuse(conn, actor, "external-bot", f"{name} works on another platform and only syncs its chat here, so it "
-               "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
+        return ("external-bot", f"{name} works on another platform and only syncs its chat here, so it "
+                "never sees tasks. Write to it in its chat, or give this task to a bot that runs in Tico.")
     if row:
         from . import profiles
-        found = profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
-                                 actor, title, parent, routine, owner=target)
-        if found:
-            refuse(conn, actor, *found)
+        return profiles.refusal(conn, row["display_name"] or actor_id(target), _json(row["config_json"], {}) or {},
+                                actor, title, parent, routine, owner=target)
+
+
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+        refuse(conn, actor, *found)
 
 
 def recruiting(conn, target):

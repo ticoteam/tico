@@ -369,8 +369,13 @@ def test_a_check_timeout_keeps_unrelated_human_and_bot_subtasks_open(api):
             assert step_flow.check_step(c, child) is None
 
 
-@pytest.mark.parametrize("state", ["quarantined", "planned", "paused", "archived", "inactive", "", None])
-def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api, state):
+@pytest.mark.parametrize("unavailable", [
+    {"state": "quarantined"}, {"state": "planned"}, {"state": "paused"}, {"state": "archived"},
+    {"state": ""}, {"state": None},
+    {"onboarding_state": "needs_setup"}, {"onboarding_state": "needs_onboarding"},
+    {"config": {"profile": "responder"}}, {"config": {"harness": "dots"}},
+])
+def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api, unavailable):
     from backend import task_allocator
     with api.app.state.store.transaction() as c:
         typ = H.type_create(c, H.KEEPER, "Check queue", [
@@ -381,7 +386,13 @@ def test_allocator_skips_inactive_pool_members_and_assigns_remaining_checks(api,
         checks = [H.task_create(c, "human:ana", f"Review 1: synthetic check {i}", "Check messages.", "human:ana",
                                 type=typ["id"], parent_id=parent["id"], private=False, lint=False)
                   for i, parent in enumerate(parents)]
-        c.execute("UPDATE bots SET state=? WHERE slug='cmo'", (state,))
+        if "state" in unavailable:
+            c.execute("UPDATE bots SET state=? WHERE slug='cmo'", (unavailable["state"],))
+        if "onboarding_state" in unavailable:
+            c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot='cmo'", (unavailable["onboarding_state"],))
+        for key, value in unavailable.get("config", {}).items():
+            c.execute("UPDATE bot_config SET config_json=json_set(config_json, ?, ?) WHERE bot='cmo'",
+                      ("$." + key, value))
 
         assert task_allocator.allocate(c) == [(check["id"], "cpo") for check in checks]
         assert all(H.task(c, check["id"])["owner"] == "bot:cpo" for check in checks)
