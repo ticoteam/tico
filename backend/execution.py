@@ -834,13 +834,17 @@ def left_by_keeper(c, who, bot):
     """How many of the bot's runs saved for later that `who` may read rode on a stopped run whose own request the
     keeper already settled (auto_reconcile): it decided that one and could not decide these safely, so nobody else
     was going to look at them."""
-    return sum(privacy.message_readable(c, privacy.actor(who), row)
-               and privacy.attempt_readable(c, privacy.actor(who), row["attempt_id"])
-               for row in c.execute("SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
-                                    "JOIN attempts a ON a.id=j.attempt_id "
-                                    "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
-                                    "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
-                                    (bot, H.KEEPER)).fetchall())
+    actor = privacy.actor(who)
+    rows = list(c.execute(
+        "SELECT m.*,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "JOIN attempts a ON a.id=j.attempt_id "
+        "JOIN job_recovery r ON r.job_id=a.job_id AND r.attempt_id=a.id "
+        "WHERE j.bot=? AND j.state='uncertain' AND j.id<>a.job_id AND r.actor=?",
+        (bot, H.KEEPER)))
+    # One privacy prime (status/operations used to call message_readable per row here).
+    shown = {m["id"] for m in privacy.readable_messages(c, actor, [{"id": r["id"]} for r in rows])}
+    privacy.prime_attempts(c, [r["attempt_id"] for r in rows if r["id"] in shown and r["attempt_id"]])
+    return sum(r["id"] in shown and privacy.attempt_readable(c, actor, r["attempt_id"]) for r in rows)
 
 
 def limit_streak(c, bot):
