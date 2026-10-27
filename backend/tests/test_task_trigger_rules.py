@@ -95,9 +95,10 @@ def test_missing_bot_and_throwing_action_preserve_task_and_row_error_time(api, m
         H.task_update(c, H.KEEPER, tid, note="Must roll back")
         raise RuntimeError("private content must never enter shared rule settings")
     monkeypatch.setitem(R.TASK_RUNNERS, "note", failing)
+    bot = H.bot
+    monkeypatch.setattr(H, "bot", lambda c, slug: None if slug == "cpo" else bot(c, slug))
     with api.app.state.store.transaction() as c:
         task = make(c)
-        c.execute("DELETE FROM bots WHERE slug='cpo'")
         H.task_update(c, "human:ana", task["id"], status="done", note="Saved original")
         assert H.task(c, task["id"])["status"] == "done"
         assert H.task(c, task["id"])["note"] == "Saved original"
