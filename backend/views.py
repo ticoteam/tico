@@ -1721,6 +1721,10 @@ def fleet_snapshot(c, auth, identity, task_view):
                 index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
             queued[m["bot"]] = queued.get(m["bot"], 0) + 1
+    # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
+    shown = [row["slug"] for row in bot_rows
+             if row["slug"] in allowed and access.get(row["slug"], auth.FULL)["read"]]
+    prime_machines(c, shown)
     bots = []
     for row in bot_rows:
         slug = row["slug"]
