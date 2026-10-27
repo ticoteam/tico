@@ -8,8 +8,8 @@ job metadata is attached to the live routine rows, retaining their schedule and 
 BUILTINS = (
     ("dedupe", "created", "Refuse it if an unfinished task (of any type) with the same title already exists between the same people (same parent)."),
     ("ceo_limit", "created", "Limit the CEO Bot to five ordinary items a day (UTC) in one person's Needs you; urgent asks go through."),
-    ("review_pr", "created", "Refuse a Review 1 or Review 2 subtask with no linked pull request, failing checks, an unreadable current version, or no passing test evidence for the current code."),
-    ("review_duplicate", "created", "Refuse a second open Review 1, Review 2 or QA subtask of the same kind for the same pull request head. Security subtasks are not checked."),
+    ("review_pr", "created", "Refuse a review subtask (Review 1 or Review 2 on the Dev board) with no linked pull request, failing checks, an unreadable current version, or no passing test evidence for the current code."),
+    ("review_duplicate", "created", "Refuse a second open review or QA subtask for the same check step for the same pull request head. Security subtasks are not checked."),
     ("private_default", "created", 'Make it private if the requester\'s or owner\'s "private tasks" default is on.'),
     ("public_text", "created", "Refuse a bot's new task that carries public roadmap text while bots need a person's approval to publish. The bot must file it without that text, then ask for publication."),
     ("ask_check", "created", "Check the title and text for asks a person must answer first; note any problem on the task."),
@@ -19,7 +19,7 @@ BUILTINS = (
     ("created_wake", "created", 'Wake its owner: "New task from …". A bot\'s own task waits until the turn that filed it ends.'),
     ("human_wait", "created", "If a bot's task gets a subtask for a person, say once in that bot's main chat that it waits on them. A top-level task for a person says nothing."),
     ("roadmap", "step", "Move the linked Product roadmap item: Building, Ready to ship, Shipped (and back); only Engineering and Dev types linked to a roadmap item."),
-    ("review_gate", "step", "Before it enters Review 1 or Review 2 with a linked pull request, refuse the move if its checks are failing or the pull request cannot be read, and require a passing test receipt for the current code. Checks still running do not refuse it; a failed test at that code always does."),
+    ("review_gate", "step", "Before it enters a gated review step (Review 1 or Review 2 on the Dev board) with a linked pull request, refuse the move if its checks are failing or the pull request cannot be read, and require a passing test receipt for the current code. Checks still running do not refuse it; a failed test at that code always does."),
     ("questions", "finished", 'Drop its open questions to people (and its subtasks\'), except the requester\'s "is this done?" question.'),
     ("approvals", "finished", "Drop any yes/no approval it was waiting on."),
     ("completion", "finished", "Tell the bot that asked for it: at once if it is waiting on this result (Wakes); otherwise in its next batch of finished tasks (Quiet). Closes it accepted itself, and its own tasks, send nothing."),
@@ -81,11 +81,15 @@ def describe_rule(row):
 
 def builtins(c):
     engineering = [r[0] for r in c.execute("SELECT id FROM task_types WHERE role='engineering' OR name='Dev tickets'")]
+    from . import step_flow
+    # The steps the review gate guards: those whose flow has `gate`, whatever they are named.
+    gated = list(dict.fromkeys(s["name"] for t in engineering for s in step_flow.steps(c, t)
+                               if step_flow.of(s).get("gate"))) if step_flow._ready(c) else []
     return [{"id": "task-setting-" + key, "task_trigger": section, "task_action": words,
              "scope_kind": "builtin", "built_in": True, "enabled": True, "can_change": False,
              "then": "wake" if key == "created_wake" else "note",
              **({"task_types": engineering} if key in ("qa_tag", "roadmap", "review_pr", "review_duplicate", "review_gate") else {}),
-             **({"when": {"step": ["Review 1", "Review 2"]}} if key == "review_gate" else {}),
+             **({"when": {"step": gated}} if key == "review_gate" else {}),
              **({"task_effect": "Wakes / Quiet"} if key == "completion" else {}),
              "usage_available": False}
             for key, section, words in BUILTINS]

@@ -44,7 +44,6 @@ TOKEN_SAVER_SECONDS = 30 * 60           # a window this long or longer is what o
 DIGEST_HOUR = 9                         # a lead's digest, in the team's time zone
 MATERIALISED = "profile"                # `created_by` of the rows a custom profile copied into the rules table
 # Traditional gate requests require a parent; explicit release QA can cover an entire release.
-REVIEW_TITLE = re.compile(r"^(Review [12]|QA|Security)\b", re.I)
 RELEASE_QA_TITLE = re.compile(
     r"^(?:(?:Post[- ](?:Release|Launch)|Release)\s+QA(?:\s+(?:pass|sweep))?|Post[- ]Release\s+checks?)\s*(?::|$)", re.I)
 ACCEPTANCE_TITLE = re.compile(r"\blive acceptance\b", re.I)
@@ -202,12 +201,20 @@ def is_review_task(c, row, *, parent_id=None):
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
         return False
-    return bool(REVIEW_TITLE.match(title) or ACCEPTANCE_TITLE.search(title)
+    return bool(_check_title(c, H.task(c, parent_id), title) or ACCEPTANCE_TITLE.search(title)
                 or auto_tasks.review(c, row, parent_id=parent_id))
 
 
+def _check_title(c, parent, title):
+    """A request titled for one of the parent board's check steps (backend/step_flow.titled), or a Security check."""
+    from . import step_flow
+    from .check_pools import is_security
+    return bool(parent) and (is_security(title) or step_flow.is_kind(c, parent, title))
+
+
 def is_check(c, row):
-    """A check that finishes only with a verdict: titled Review 1/2, QA, Security or Post Release QA under a ticket another owner
+    """A check that finishes only with a verdict: titled for a check step of its ticket's board (Review 1/2, QA or Post
+    Release QA on the Dev board), or Security, under a ticket another owner
     holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
     and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
     child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
@@ -219,7 +226,7 @@ def is_check(c, row):
     parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
     title = str(row.get("title") or "").strip()
     return bool(parent and parent["owner"] != owner and
-                (REVIEW_TITLE.match(title) or RELEASE_QA_TITLE.match(title)))
+                (_check_title(c, parent, title) or RELEASE_QA_TITLE.match(title)))
 
 
 def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):

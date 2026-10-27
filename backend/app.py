@@ -3616,8 +3616,16 @@ def create_app(settings=None):
         from . import review_gate, step_flow
         # None is reserved for a genuinely unconfigured GitHub integration.
         # If a skipped preflight becomes applicable during mutation, fail closed.
-        if child_title is not None and not review_gate.REVIEW.match(child_title):
-            return {}
+        if child_title is not None:
+            # A child titled for one of the parent board's review steps; a parent this caller cannot read is
+            # refused by the create itself.
+            with store.read() as c:
+                try:
+                    parent = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    return {}
+                if not review_gate.is_review(c, parent, child_title):
+                    return {}
         if child_title is None and step is None and status is None and task_type is None:
             return {}
         with store.read() as c:

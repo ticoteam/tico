@@ -540,7 +540,7 @@ def _tell_requester(conn, actor, row, blocker):
     if not blocker or _engineering(conn, row) or not requester_hears_block(conn, row, blocker, actor):
         return
     parent = H.task(conn, parent_of(conn, row["id"]) or "")
-    if check_kind(row) and parent and _engineering(conn, parent) and parent["owner"] == row["requester"]:
+    if parent and check_kind(conn, row, parent) and _engineering(conn, parent) and parent["owner"] == row["requester"]:
         return                        # its builder hears once, on the ticket (check_blocked.notify)
     H._wake(conn, row, row["requester"], f"Blocked: {row['title']}: waits on {blocker['title']}",
             {"news": "task_blocked", "blocker": blocker["id"]}, quiet_bots=True)

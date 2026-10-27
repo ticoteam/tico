@@ -5488,7 +5488,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         ceo_bot.check_cap(conn, actor, target)      # at most 5 a day in one person's Needs you (backend/ceo_bot.py)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
-    if parent and review_gate.REVIEW.match(str(title).strip()):
+    if parent and review_gate.is_review(conn, parent, title):
         review_gate.check(conn, actor, parent, review_prs, require_pr=True, receipt_owner=receipt_owner)
     if parent:
         review_gate.refuse_second(conn, actor, parent, title, review_prs)
@@ -5666,7 +5666,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     ], "guidance": "Check for overlap. Reuse shared work; keep distinct decisions and deliverables separate."} if related else None
     if started_in:
         _task_started(conn, task(conn, row["id"]), started_in)
-    if parent and review_gate.ONE_OPEN.match(str(title).strip()):
+    if parent and review_gate.check_of(conn, parent, title):
         review_gate.remember_heads(conn, actor, row["id"], parent, review_prs)
     # A task a bot files for itself in one of its turns starts its own turn only once that turn has ended
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
