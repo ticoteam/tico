@@ -153,7 +153,7 @@ const expand = async page => {
     await page.waitForFunction(n => document.querySelectorAll('#tree .chev.col').length < n, left);
   }
 };
-// One color per name: words a name shares with another bot's are not muted or split off (Chris, Oct 27).
+// One color per name: words a name shares with another bot's are not muted or split off.
 const readable = (team, where) => {
   for (const row of team) {
     assert.equal(row.visible, true, `${row.name} ${where}`);
