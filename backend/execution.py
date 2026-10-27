@@ -4052,7 +4052,7 @@ class Execution:
             elif facts['timeout']:
                 named = ', '.join([*facts['outside'],
                                    *(['consumed approval (' + ', '.join(facts['approval_kinds']) + ')'] if facts['consumed'] else [])])
-                stopped = 'changed' if named else 'twice' if facts['limit_cuts'] >= 2 else 'restarted'
+                stopped = 'changed' if named else 'twice' if facts['limit_cuts'] >= 2 else 'timeout'
                 reason = ('The job was cut by the run time limit twice in a row; review it before continuing.'
                           if facts['limit_cuts'] >= 2 else 'The run reached its time limit.')
                 if named:

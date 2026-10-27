@@ -4,7 +4,7 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, claim, get, post
 from backend.tests.test_task_lanes import task_bot, new_task
-from backend.tests.test_execution_review import add_recovery_reviewer, job_state, sweep
+from backend.tests.test_execution_review import add_recovery_reviewer, job_state, rival, sweep
 
 
 def running(api):
@@ -41,6 +41,23 @@ def next_attempt(api, machine, first):
     assert resumed['job_id'] == first['job_id']
     post(api, f"attempts/{resumed['id']}/started", {'thread_id': 'saved-provider-thread'}, machine['token'])
     return resumed
+
+
+def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(api):
+    """A session fence delays recovery without changing the cause to a computer restart."""
+    machine, _, first = running(api)
+    other = rival(api, machine, first)
+    cut(api, machine, first)
+    assert job_state(api, first['job_id']) == 'uncertain'
+    review = get(api, 'bots/ops/execution-review')['jobs'][0]
+    assert review['stopped'] == 'timeout'
+    with api.app.state.store.read() as c:
+        assert not c.execute('SELECT 1 FROM job_recovery WHERE job_id=?', (first['job_id'],)).fetchone()
+    assert sweep(api) == []
+    post(api, f"attempts/{other['id']}/complete", {'outcome': 'completed', 'last_seq': 0,
+                                                  'text': 'Session work finished.'}, machine['token'])
+    assert [d['state'] for d in sweep(api)] == ['queued']
+    assert job_state(api, first['job_id']) == 'queued'
 
 
 def test_pushed_branch_timeout_requeues_same_job_lane_and_carries_task_handoff(api):
