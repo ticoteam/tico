@@ -1796,6 +1796,13 @@ def fleet_snapshot(c, auth, identity, task_view):
                 index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
             queued[m["bot"]] = queued.get(m["bot"], 0) + 1
+    # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
+    now = H.now()
+    live_by_bot = {}
+    for row in c.execute(
+            "SELECT id,bot,state,started,lease_until,created FROM attempts "
+            "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
+        live_by_bot.setdefault(row["bot"], []).append(row)
     bots = []
     for row in bot_rows:
         slug = row["slug"]
@@ -1812,10 +1819,7 @@ def fleet_snapshot(c, auth, identity, task_view):
         status = privacy.status(c, principal, source, tasks=bot_tasks.get(slug, [])) or {}
         location = machine(c, slug)
         # A bot with task lanes can have several turns out; the newest is the one shown, beside the count.
-        active = [a for a in c.execute(
-            "SELECT id,state,started,lease_until FROM attempts WHERE bot=? "
-            "AND state IN ('leased','running') AND lease_until>? ORDER BY created DESC",
-            (slug, H.now())).fetchall() if index.attempt(a["id"])]
+        active = [a for a in live_by_bot.get(slug, ()) if index.attempt(a["id"])]
         attempt = active[0] if active else None
         bots.append({"slug": slug, "name": row["display_name"],
                      "state": status.get("state") or row["state"],
