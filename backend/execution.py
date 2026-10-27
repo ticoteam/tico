@@ -43,34 +43,6 @@ HELD_UNREVIEWED = 2 * 3600
 # A failed turn whose only events are these produced nothing and touched nothing.
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
-
-
-def positive_effect(c, aid, body):
-    """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
-
-    Stream-kind silence alone used to requeue such a run as `attempt.no_effect_retry` despite recorded hub writes,
-    usage, partial text, pushes or consumed approvals. Those mean a blind retry is unsafe; hold for review instead.
-    """
-    if (getattr(body, "text", None) or "").strip():
-        return True
-    if getattr(body, "pushes", None):
-        return True
-    # Output only: input tokens prove the prompt was sent, which a provider bills before erroring too.
-    if getattr(body, "tokens_out", None):
-        return True
-    usage = getattr(body, "usage", None)
-    if usage is not None:
-        parts = [usage, *list(getattr(usage, "segments", None) or [])]
-        if any(getattr(part, "output_tokens", 0) for part in parts):
-            return True
-    if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
-        return True
-    row = c.execute("SELECT bot,coalesce(started,created) began FROM attempts WHERE id=?", (aid,)).fetchone()
-    if row and c.execute(
-            "SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL AND consumed_at>=? LIMIT 1",
-            ("bot:" + row["bot"], row["began"])).fetchone():
-        return True
-    return False
 PRE_START_TRIES = 10        # lapsed leases before start: a broken computer must not retry forever
 # A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
 # bot first waits this long, doubled for each try: an outage is not asked again every few seconds.
@@ -112,6 +84,34 @@ TASK_GOALS = "task_goals_v1"
 # other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
 CAPACITY_CONTINUE = "capacity_continue_v1"
 SOURCE_CONTINUE = "source_continue_v1"
+
+
+def positive_effect(c, aid, body):
+    """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
+
+    Stream-kind silence alone used to requeue such a run as `attempt.no_effect_retry` despite recorded hub writes,
+    usage, partial text, pushes or consumed approvals. Those mean a blind retry is unsafe; hold for review instead.
+    """
+    if (getattr(body, "text", None) or "").strip():
+        return True
+    if getattr(body, "pushes", None):
+        return True
+    # Output only: input tokens prove the prompt was sent, which a provider bills before erroring too.
+    if getattr(body, "tokens_out", None):
+        return True
+    usage = getattr(body, "usage", None)
+    if usage is not None:
+        parts = [usage, *list(getattr(usage, "segments", None) or [])]
+        if any(getattr(part, "output_tokens", 0) for part in parts):
+            return True
+    if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
+        return True
+    row = c.execute("SELECT bot,coalesce(started,created) began FROM attempts WHERE id=?", (aid,)).fetchone()
+    if row and c.execute(
+            "SELECT 1 FROM approvals WHERE requested_by=? AND consumed_at IS NOT NULL AND consumed_at>=? LIMIT 1",
+            ("bot:" + row["bot"], row["began"])).fetchone():
+        return True
+    return False
 
 
 def turns_here(c, runner_id):

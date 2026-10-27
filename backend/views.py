@@ -2201,7 +2201,7 @@ def install_views(app, store, auth, mutate, task_view):
                                       "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                       "FROM runners ORDER BY created"))
             from . import usage_limits
-            from .start_places import summaries
+            from .start_places import describe, summaries
             # One company Default for every computer's queue classify: without it each summary rebuilds
             # pools/groups/spend for every queued bot (same waste Health's snapshot already dropped).
             limits = usage_limits.company(c)
@@ -2217,7 +2217,6 @@ def install_views(app, store, auth, mutate, task_view):
                 hidden = set() if manage else unseen
                 bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
-                from .start_places import describe
                 value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
