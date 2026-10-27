@@ -32345,6 +32345,12 @@
               "read",
               "write"
             ]
+          },
+          "run_workflows": {
+            "type": "boolean"
+          },
+          "edit_workflows": {
+            "type": "boolean"
           }
         },
         "required": [

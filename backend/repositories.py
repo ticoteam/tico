@@ -399,7 +399,7 @@ def started(before, after):
     when Create product repositories turns back on. BotOps acting for a person puts these on a Confirm card
     (`bot_set`)."""
     out = {}
-    for flag, *_, key in FLAGS:
+    for flag, *_ in FLAGS:
         names = []
         for kind in ('effective', 'chosen', 'all_repos'):
             had = {r['full_name'].lower() for r in before[kind] if r.get(flag)}

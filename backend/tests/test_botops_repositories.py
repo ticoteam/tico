@@ -198,6 +198,18 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
     assert get(api, "bots/botops/repositories", "ana-test")["mode"] == "chosen"
 
 
+@pytest.mark.parametrize("option,words", CARDS)
+def test_a_tick_kept_on_chosen_repos_while_the_bot_is_on_own_repos_says_when_it_starts(api, botops, repos, option,
+                                                                                        words):
+    put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Tick " + option + " on product for ops")
+    card = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "own", "chosen": [
+        {"full_name": "Acme/product", "access": "write", option: True}]})
+    assert card.json()["needs_confirm"] is True, card.text
+    assert _stored_card(api, card.json())["description"] == \
+        "ops: " + words.replace(" in product:", " in product once Chosen repos is on with Write there:") + ".", card.text
+
+
 def test_a_declined_run_workflows_card_changes_nothing(api, botops, repos):
     ana = turn(api, botops, person="ana-test", text="Tick Run workflows on product for ops")
     card = act(api, ana, "PUT", "bots/ops/repositories", {"mode": "chosen", "chosen": [FLAG]}).json()
