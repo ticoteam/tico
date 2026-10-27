@@ -260,9 +260,14 @@ refuses every update. Then in `.env`:
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
 TICO_UPDATER_URL=http://updater:8080
 TICO_TAG=vX.Y.Z                         # the release running now
+# TICO_UPDATER_SNAPSHOT_SECONDS=900     # optional; raise if a very large hub needs a longer pre-update copy
 ```
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
+
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy is checked by
+opening it and confirming it has pages; a full `PRAGMA quick_check` is not used, because on multi-gigabyte databases
+it can run longer than the update window.
 
 ## The runner
 

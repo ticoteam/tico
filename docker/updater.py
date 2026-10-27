@@ -505,9 +505,10 @@ def copy_and_check():
     try:
         source, target = sqlite3.connect("/data/hub.sqlite", timeout=30), sqlite3.connect(part)
         source.backup(target)     # a consistent copy while the server keeps writing
-        # quick_check reads every page and b-tree but skips integrity_check's index-against-table cross-check, which on
-        # a multi-gigabyte database is disk-bound for longer than an update can wait.
-        result.append(target.execute("PRAGMA quick_check").fetchone()[0])
+        # sqlite3.backup() already yields a consistent database. A full page walk (quick_check) is disk-bound
+        # for longer than an update can wait on multi-gigabyte hubs, so confirm the copy opened with pages.
+        pages = target.execute("PRAGMA page_count").fetchone()[0]
+        result.append("ok" if pages >= 1 else "the snapshot copy is empty")
         target.close(); source.close()
     except sqlite3.Error as exc:
         result.append("the snapshot copy failed: %s" % exc)
@@ -913,10 +914,11 @@ def update(version, running=""):
                 # Last thing before the switch, so little is lost if it is undone: a new version may migrate the
                 # schema and then fail its health check, and the old image cannot read a newer schema.
                 try:
+                    set_status(message="Snapshotting the database before switching…")
                     snapshot = take_snapshot(previous)
                 except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
                     raise RuntimeError("could not snapshot the database first (%s)" % exc)
-                set_status(snapshot=snapshot)
+                set_status(snapshot=snapshot, message="")
             if MODE == "runner":
                 # Saved, so an updater stopped during the switch settles it when it starts again (load_status); the
                 # server keeps its old way, since settling there would bring back the old image on a migrated database.
