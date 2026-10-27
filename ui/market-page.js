@@ -383,7 +383,8 @@ async function mountBlank(shell) {
       marketResearchSet({at: filed, task: setup.task.id, base: null});
   }
   const watch = on => {
-    if (!on) { clearInterval(poll); poll = 0; } else if (!poll) poll = setInterval(() => void tick(), MARKET_RESEARCH_POLL);
+    if (!on) { clearInterval(poll); poll = 0; }
+    else if (!poll) poll = setInterval(() => { if (!document.hidden) void tick(); }, MARKET_RESEARCH_POLL);
   };
   const draw = () => {
     const row = marketResearchGet();
