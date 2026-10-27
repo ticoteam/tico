@@ -2,8 +2,8 @@
 //  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
 //    "What's new · 103 updates", and the phone's bottom bar is hidden; anywhere else, and once setup is
 //    done, everything is back;
-//  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, reads as distinct names
-//    at desktop width: the words the names share give way first, and each row's tooltip has the whole name.
+//  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
+//    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
 // TICO_SCREENSHOT_DIR=<dir> saves both screens at desktop and phone width, dark and light.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -140,14 +140,10 @@ async function wizard(browser, theme) {
   await phone.close();
 }
 
-// Each bot row: what it shows, whether the part after the shared words is cut, whether the shared words show (whole,
-// on the row's one line) or drop out, and its tooltip.
+// Each bot row: what it shows, whether its name is drawn in more than one piece, and its tooltip.
 const rows = page => page.locator('#tree a.node[data-org^="b:"]').evaluateAll(els => els.map(a => {
-  const rest = a.querySelector('.nm-rest') || a.querySelector('.nm'), lead = a.querySelector('.nm-lead');
-  const line = rest.getBoundingClientRect(), words = a.querySelector('.nm-words')?.getBoundingClientRect();
-  return {name: a.querySelector('.nm').textContent, rest: rest.textContent.trim(), cut: rest.scrollWidth > rest.clientWidth,
-          lead: !lead ? null : lead.getBoundingClientRect().top === line.top ? 'shown' : lead.getBoundingClientRect().top >= words.bottom ? 'dropped' : 'clipped',
-          leadCut: !!lead && lead.scrollWidth > lead.clientWidth, title: a.title,
+  const nm = a.querySelector('.nm');
+  return {name: nm.textContent, pieces: nm.querySelectorAll('span:not(.proj)').length, title: a.title,
           setup: !!a.querySelector('.tree-setup'), mark: !!a.querySelector('.rt'), visible: a.checkVisibility()};
 }));
 const expand = async page => {
@@ -157,14 +153,12 @@ const expand = async page => {
     await page.waitForFunction(n => document.querySelectorAll('#tree .chev.col').length < n, left);
   }
 };
+// One color per name: words a name shares with another bot's are not muted or split off (Chris, Oct 27).
 const readable = (team, where) => {
   for (const row of team) {
     assert.equal(row.visible, true, `${row.name} ${where}`);
     assert.equal(row.title, row.name, 'the tooltip has the whole name');
-    if (!row.lead) continue;                     // a name it shares no words with truncates as before
-    assert.equal(row.cut, false, `${row.name} keeps the part that tells it apart ${where}`);
-    assert.notEqual(row.lead, 'clipped', `${row.name}: the shared words show whole or not at all`);
-    assert.equal(row.leadCut, false);
+    assert.equal(row.pieces, 0, `${row.name} is one piece of text ${where}`);
   }
 };
 
@@ -179,9 +173,9 @@ async function created(browser, theme) {
   assert.equal(team.length, TEAM.length);
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
-  assert.deepEqual(heads.map(row => row.rest), ['Engineering', 'Finance', 'Marketing', 'Product']);
+  assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);
   assert.ok(heads.every(row => row.setup && row.mark), 'the harness mark and the Setup pill stay');
-  assert.equal(await page.locator('#tree [data-org="b:bookkeeper"] .nm-split').count(), 0, 'a name nobody shares is whole');
+  assert.equal(await page.locator('#tree .nm-split, #tree .nm-lead').count(), 0, 'no name is split at shared words');
   await shot(page, `created-desktop-${theme}`);
   await noNotice({page, notices});
   assert.deepEqual(errors, []);
@@ -203,17 +197,6 @@ async function created(browser, theme) {
   await phone.close();
 }
 
-async function leads(browser) {
-  const {page, close} = await open(browser, {theme: 'dark', needed: false, route: '#/tasks'});
-  const split = names => page.evaluate(names => Object.fromEntries(orgNameLeads(names)), names);
-  // Whole words only, never the whole name, and the longest prefix it shares with any one other name.
-  assert.deepEqual(await split(['Head of Product', 'Head of Product Marketing', 'Head of Sales', 'Headhunter', 'CMO']),
-    {'Head of Product': 'Head of ', 'Head of Product Marketing': 'Head of Product ', 'Head of Sales': 'Head of '});
-  assert.deepEqual(await split(['Content Marketer', 'Content  Writer', 'Support']), {'Content Marketer': 'Content ', 'Content  Writer': 'Content  '});
-  assert.deepEqual(await split(['Scout', 'Scout']), {});
-  await close();
-}
-
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
@@ -221,8 +204,7 @@ async function leads(browser) {
       await wizard(browser, theme);
       await created(browser, theme);
     }
-    await leads(browser);
-    console.log('PASS: on the wizard the sidebar shows setup and the team only, and the usage notice waits; after Create each bot row reads as its own name.');
+    console.log('PASS: on the wizard the sidebar shows setup and the team only, and the usage notice waits; after Create each bot row shows its whole name in one color.');
   } finally {
     await browser.close();
   }
