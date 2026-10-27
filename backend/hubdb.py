@@ -3154,6 +3154,9 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     if about and asked["from_actor"] == "bot:goal-manager" and is_human(actor):
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, task(conn, about), body)     # answered in Needs you: on to each asker
+    if about and is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, about, body)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
@@ -5039,6 +5042,9 @@ def task_comment(conn, actor, task_id, text, wake=True, *, ask=None, extra_refs=
     if is_human(actor) and row["owner"] == "bot:goal-manager":
         from . import ceo_merge
         ceo_merge.on_reply(conn, actor, row, text)     # a person's answer to the CEO Bot's merged item goes to each asker
+    if is_human(actor):
+        from . import ask_ingest
+        ask_ingest.on_reply(conn, actor, task_id, text)     # repeats the ask filter merged here hear the answer too
     return msg
 
 
@@ -6793,8 +6799,9 @@ def sweep_stranded(conn, at=None, grace_hours=STRANDED_GRACE_HOURS):
     return moved
 
 
-def task_ask(conn, actor, task_id, body):
-    """Rule 5's one clarifying question: the owner gets one ask before an answer comes back."""
+def task_ask(conn, actor, task_id, body, park=True):
+    """Rule 5's one clarifying question: the owner gets one ask before an answer comes back. `park` False leaves the
+    task's status as it is (a question ask ingest sends back, backend/ask_ingest.py)."""
     _writer(conn, actor)
     row = task(conn, task_id)
     if not row:
@@ -6810,7 +6817,7 @@ def task_ask(conn, actor, task_id, body):
     msg = say(conn, actor, row["requester"], body, conversation_id=row["conversation_id"],
               kind="ask", refs={"task": task_id})
     conn.execute("UPDATE tasks SET updated=? WHERE id=?", (now(), task_id))     # its question is part of it
-    if row["status"] in ("open", "doing", "review"):
+    if park and row["status"] in ("open", "doing", "review"):
         task_update(conn, actor, task_id, status="waiting")
     return msg
 

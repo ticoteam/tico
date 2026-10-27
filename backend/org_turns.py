@@ -63,10 +63,14 @@ def admission(c):
 
 
 def snapshot(c, settings):
+    """Classify every computer's queue once for a finding or the turn-levels settings view. Share one company
+    Default so each claim_refusal in the pass reuses the same pools/groups/spend memo instead of rebuilding it per bot."""
+    from . import usage_limits
     from .start_places import summary
+    default = usage_limits.company(c)
     counts = dict(running=0, starting=0, waiting=0, queued=0)
     for row in c.execute('SELECT id FROM runners'):
-        here = summary(c, row['id'], settings)
+        here = summary(c, row['id'], settings, default)
         for key in counts:
             counts[key] += here[key]
     return {**admission(c), **counts}

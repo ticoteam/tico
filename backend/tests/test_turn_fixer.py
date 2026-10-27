@@ -21,10 +21,16 @@ def busy(machine, bots=()):
 
 
 def fix(api):
+    """One pass the way the scheduler runs it: free, then the finding on a read connection, then tend."""
+    from contextlib import contextmanager
     from backend import turn_fixer
     store = api.app.state.store
-    with store.transaction() as c:
-        return turn_fixer.run(c, api.app.state.execution, store.settings, 'ana')
+
+    @contextmanager
+    def write(step):
+        with store.transaction() as c:
+            yield c
+    return turn_fixer.run_split(api.app.state.execution, store.settings, write, store.read, 'ana')
 
 
 def state(api, aid):
@@ -178,3 +184,71 @@ def test_a_wait_that_needs_the_person_tells_the_owner_at_once(api):
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM messages WHERE to_actor='human:ana' AND kind='notice' "
                          "AND body LIKE '%needs a login%'").fetchone()[0] == 1
+
+
+def stale_finding(api):
+    """An open incident whose finding is due for a rewrite."""
+    from backend import org_turns
+    one_person(api)
+    waiters(api, n=39, running=1)
+    store = api.app.state.store
+    with store.transaction() as c:
+        org_turns.observe(c, store.settings, detailed=False)
+        incident = org_turns.saved(c, org_turns.INCIDENT)
+        incident['finding'] = {'updated_at': H.shift(H.now(), minutes=-2), 'text': 'stale'}
+        org_turns.save(c, org_turns.INCIDENT, incident)
+
+
+def watch_writer(store, monkeypatch, module, name):
+    """Count calls of module.name made inside and outside a write transaction."""
+    from contextlib import contextmanager
+    writing = {'on': False}
+    seen = {'during_write': 0, 'during_read': 0}
+    real_txn, real = store.transaction, getattr(module, name)
+
+    @contextmanager
+    def wrapped_txn(*a, **k):
+        writing['on'] = True
+        try:
+            with real_txn(*a, **k) as c:
+                yield c
+        finally:
+            writing['on'] = False
+
+    def watched(*a, **k):
+        seen['during_write' if writing['on'] else 'during_read'] += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(store, 'transaction', wrapped_txn)
+    monkeypatch.setattr(module, name, watched)
+    return seen
+
+
+def test_finding_classification_is_not_under_the_writer(api, monkeypatch):
+    """A due finding classifies the fleet on a read connection; the writer only installs the draft."""
+    from backend import org_turns, start_places
+
+    stale_finding(api)
+    store = api.app.state.store
+    seen = watch_writer(store, monkeypatch, start_places, 'summary')
+    fix(api)
+    assert seen['during_read'] >= 1
+    assert seen['during_write'] == 0
+    with store.read() as c:
+        found = org_turns.saved(c, org_turns.INCIDENT)['finding']
+    assert 'Likely bottleneck' in found['text']
+
+
+def test_the_scheduler_builds_the_finding_outside_the_writer(api, monkeypatch):
+    """The scheduler tick itself takes the split pass: its turn fixer builds the finding on a read connection."""
+    from backend import org_turns, turn_fixer
+    from backend.scheduler import Scheduler
+
+    stale_finding(api)
+    store = api.app.state.store
+    seen = watch_writer(store, monkeypatch, turn_fixer, 'finding')
+    Scheduler(store, api.app.state.execution).tick()
+    assert seen == {'during_write': 0, 'during_read': 1}, seen
+    with store.read() as c:
+        found = org_turns.saved(c, org_turns.INCIDENT)['finding']
+    assert 'Likely bottleneck' in found['text']

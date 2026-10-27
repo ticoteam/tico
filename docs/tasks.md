@@ -341,6 +341,49 @@ request continues to occupy its slot until the runner removes it. When all linke
 finish, clean worktrees are released even while the task awaits release or post-release QA.
 Trees with unpushed work stay and show the reason. Keep the task at its real step; do not mark it Done or Closed just to free space.
 
+## What bots may put on you
+
+Bots can file a person more than they can decide. The ask filter judges each bot item before it lands on a person's
+Needs you: a task filed for them, a question to them (on a task or not) and a bot task set waiting on them. People's
+own writes (also through their Assistant), required approvals and Tico's own items are never filtered; they still
+count toward how full the plate is. When your Tico has a [decision model](how-it-works.md), one call per item asks
+the `person-ask-ingest` question set (`questions/person-ask-ingest.json`): is it clear, what kind of ask it is, which
+of your lines it meets, whether it repeats one of your open items, how urgent it is and whether the bot recommends
+something. Plain code then decides from the answers, your settings and your open items (snoozed ones left out):
+
+| The item | What happens |
+| --- | --- |
+| Repeats one of your open items | Joins it: the bot keeps its own, and your answer there goes back to it once. |
+| A progress note | FYI: stays with the bot; no wait is set. |
+| A hands-only chore (grant access, merge, add a key) | **Hands needed**, its own group, up to its own budget (5). |
+| Work the bot could do itself, or unclear | Sent back to the bot. |
+| Anything else, with B open items as your budget (10) | Under B: reaches you. B to 3B: also meets one of your lines. 3B to 10B: also recommends something and can't wait past today. 10B or more: only something that can't wait at all. |
+
+Something urgent (an outage, a security exposure, money being lost) always reaches you, unless it is only a progress
+note: that is FYI however urgent, and a repeat still joins your open item. Sent back is never a
+refusal: the write succeeds and stays with the bot, and its reply says why and what to do, naming the bot's manager.
+A question sent back from a bot's own task leaves that task's status and note as they were; the reason is a quiet
+comment on it.
+Anything the filter can't judge (no model, the spend or daily cap, an error, no answer in 10 seconds, an answer under
+its threshold) reaches you as before. Each call is a `judge.call` row that never holds the item's text, and Decide's
+readout counts the outcomes and what people let through.
+
+**Settings → Tasks → What bots may put on you** sets Off, Rehearsal or On, the budget, the chores budget and up to
+ten lines of what you want to be asked about; an owner or admin sets the team default everyone starts from, and
+**Use the team default** goes back to it. A change applies to the next item; nothing already on a plate moves. It
+ships as **Rehearsal**: nothing changes, and **Filtered for you**, a folded line at the foot of Needs you, lists what
+On would have done. With it On, the same line lists what was kept off today, and **Let it through** puts an item on
+your plate in one click and tells the bot once. **Replay a day** on the settings card judges one past day's bot
+items with your settings and your plate as it was then, so you can see what On would have done before you turn it
+on; nothing moves. A replay counts no chores already waiting (none were grouped before the filter), so it never shows
+"chores full". A bot handing its own task to you (one or many) is judged like a task filed for you, and each item is
+judged against your plate as it was just before it. An owner or admin replaying someone else's day sees only the
+titles they may read.
+
+API: `GET`/`PUT`/`DELETE /api/v2/ask-ingest/settings`, `GET /api/v2/ask-ingest/filtered?hours=24`,
+`POST /api/v2/ask-ingest/items/{id}/let-through`, `POST /api/v2/ask-ingest/replay` (`person`, `date`, `offset`, a page
+of up to 25; the person, or an owner or admin).
+
 ## Picking work back up
 
 Each completed turn on a task leaves a **checkpoint** on it: the turn's final reply, up to 1,500

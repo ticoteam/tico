@@ -122,10 +122,13 @@ def free(c, execution):
 
 def finding(c, settings, value):
     """The incident's one finding, from what the server already knows. Bounded: no task, message or login text."""
-    reasons, oldest, computers = {}, {}, []
+    from . import usage_limits
     from .performance import load_status
+    reasons, oldest, computers = {}, {}, []
+    # One company Default for the whole pass: each summary's claim_refusal used to rebuild pools/groups alone.
+    default = usage_limits.company(c)
     for runner in c.execute('SELECT id,label FROM runners WHERE revoked_at IS NULL ORDER BY id').fetchall():
-        here = start_places.summary(c, runner['id'], settings)
+        here = start_places.summary(c, runner['id'], settings, default)
         for wait in here['waits']:
             reasons[wait['reason']] = reasons.get(wait['reason'], 0) + wait['count']
             oldest[wait['reason']] = min(oldest.get(wait['reason'], wait['oldest']), wait['oldest'])
@@ -192,9 +195,30 @@ def _helper(c):
     return None
 
 
-def tend(c, settings, owner_id='', freed=0):
+def draft_finding(c, settings, *, force=False):
+    """Build the next finding on a read connection. Returns None when no active incident needs a rewrite.
+
+    The scheduler classifies here, outside the writer. `force` is set after dead starts were freed so wait counts
+    refresh even when the previous finding is still young.
+    """
+    incident = org_turns.saved(c, org_turns.INCIDENT)
+    if not incident.get('active') or not incident.get('id'):
+        return None
+    last = (incident.get('finding') or {}).get('updated_at')
+    if not force and last and not _older(last, FINDING_EVERY_S):
+        return None
+    value = org_turns.snapshot(c, settings)
+    return {'incident_id': incident['id'], 'finding': finding(c, settings, value)}
+
+
+def tend(c, settings, owner_id='', freed=0, draft=None):
     """Update the open incident's finding, hand what the fixer cannot fix to BotOps once, and tell the owner when due.
-    Returns the incident."""
+    Returns the incident.
+
+    `draft` is an optional finding built outside the writer (`draft_finding`). It is installed only when the same
+    incident is still active; otherwise this pass rebuilds under the lock so a cleared incident cannot keep a stale
+    finding.
+    """
     value = org_turns.observe(c, settings, detailed=False)
     incident = org_turns.saved(c, org_turns.INCIDENT)
     if not incident.get('id'):
@@ -208,7 +232,10 @@ def tend(c, settings, owner_id='', freed=0):
     else:
         last = (incident.get('finding') or {}).get('updated_at')
         if freed or not last or _older(last, FINDING_EVERY_S):
-            incident['finding'] = finding(c, settings, org_turns.snapshot(c, settings))
+            if (draft and draft.get('incident_id') == incident.get('id') and draft.get('finding')):
+                incident['finding'] = draft['finding']
+            else:
+                incident['finding'] = finding(c, settings, org_turns.snapshot(c, settings))
         found = incident['finding']
         if not incident.get('task_id') and _older(incident['opened_at'], FIX_WINDOW_S):
             helper = _helper(c)
@@ -238,10 +265,30 @@ def tend(c, settings, owner_id='', freed=0):
     return incident
 
 
-def run(c, execution, settings, owner_id=''):
-    """One pass: free the dead, then tend the incident. Returns (freed, incident)."""
+def run(c, execution, settings, owner_id='', draft=None):
+    """One pass in one writer: free the dead, then tend the incident. Returns (freed, incident).
+
+    For a caller that already holds one write transaction. The scheduler uses `run_split`, which keeps the fleet
+    classification out of the writer."""
     freed = free(c, execution)
-    return freed, tend(c, settings, owner_id, freed)
+    return freed, tend(c, settings, owner_id, freed, draft)
+
+
+def run_split(execution, settings, write, read, owner_id=None):
+    """The scheduler's pass: free the dead under one short write, classify the fleet for the finding on a read
+    connection (`draft_finding`), then tend the incident under a second short write. Claim renewals and events are
+    not parked behind every queued bot's refusal check. Returns (freed, incident).
+
+    `write(step)` and `read()` are context managers that give a connection; `owner_id` None means this
+    environment's owner, looked up under the first write."""
+    with write("turn_fixer.free") as c:
+        if owner_id is None:
+            owner_id = (execution.auth.owner_id(c) if execution.auth else '') or ''
+        freed = free(c, execution)
+    with read() as c:
+        draft = draft_finding(c, settings, force=bool(freed))
+    with write("turn_fixer.tend") as c:
+        return freed, tend(c, settings, owner_id, freed, draft)
 
 
 def words(freed, incident):

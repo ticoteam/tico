@@ -46,6 +46,7 @@ class FakeGitHub:
         self.history = set()                     # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
         self.refuse_actions_write = False        # refuse Actions: write whatever the live permissions say
+        self.refuse_workflows_write = False      # refuse Workflows: write whatever the live permissions say
         self.on_token = None                     # called with each token request's body before it is answered
 
     def __call__(self, request):
@@ -92,10 +93,11 @@ class FakeGitHub:
                 self.on_token(body)
             if self.refuse:
                 return httpx.Response(self.refuse[0], json={"message": self.refuse[1]})
-            if self.refuse_actions_write and body.get("permissions", {}).get("actions") == "write" or any(
+            if self.refuse_actions_write and body.get("permissions", {}).get("actions") == "write" or (
+                    self.refuse_workflows_write and body.get("permissions", {}).get("workflows") == "write") or any(
                     name in body.get("permissions", {}) and (name not in (self.permissions or {}) or
                    body["permissions"][name] == "write" and self.permissions[name] != "write")
-                   for name in ("actions", "checks", "statuses", "deployments")):
+                   for name in ("actions", "checks", "statuses", "deployments", "workflows")):
                 return httpx.Response(422, json={"message": "The permissions requested are not granted to this installation."})
             if body and any(name in self.missing for name in body.get("repositories", [])):
                 return httpx.Response(403 if self.forbidden else 422, json={"message": "Validation Failed"})
