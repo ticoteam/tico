@@ -271,13 +271,18 @@ const refreshConfig = async () => {
   catch { if (version === nativeVisualVersion()) await clearNativeVisualOrigin(); }
 };
 // With the app's poll (every 2 minutes while live events flow, 30 s without): a release the server just learned of
-// shows within a poll, not an hour.
+// shows within a poll, not an hour. A hidden tab does not poll; coming back refreshes once if the last answer is
+// stale (visibilitychange used to fire refreshConfig on hide too).
 let configAt = 0;
+const configEvery = () => (typeof liveConnected === 'function' && liveConnected() ? 120000 : 30000);
 setInterval(() => {
-  if (typeof liveConnected === 'function' && liveConnected() && Date.now() - configAt < 119000) return;
+  if (document.hidden || Date.now() - configAt < configEvery() - 1000) return;
   configAt = Date.now(); void refreshConfig();
 }, 30000);
-document.addEventListener('visibilitychange', refreshConfig);   // a tab that was in the background asks the moment it is shown again
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || Date.now() - configAt < configEvery()) return;
+  configAt = Date.now(); void refreshConfig();
+});
 // The main assistant is shown under the environment's assistant name, never its slug.
 // The built-in assistant reads as what it is (assistantName, ui/app/state.js).
 const assistantShownName = () => assistantName();
