@@ -1,8 +1,9 @@
 """The `tico/reviews` commit status: GitHub's copy of the past-review gate (review_gate.passed, Dev 567).
 
 When a Dev ticket's pull request head changes or one of its review or QA children records a verdict, the ticket is
-marked; the GitHub sync tick then posts, on each open linked PR's current head, `success` when every required Review
-1 and Review 2 slot approves the change the PR makes there, else `failure` naming the first missing slot. With the
+marked; the GitHub sync tick then posts, on each open linked PR's current head, `success` when at least one Review 1
+or Review 2 slot approves the change (and Security tickets also have a QA pass), else `failure` naming the first
+missing check. With the
 status required on the base branch, GitHub refuses a merge that skipped a review. Posting needs the GitHub App's
 Commit statuses permission set to Read and write; without it nothing is posted and the link records why.
 """
@@ -45,7 +46,7 @@ def mark_parent(c, row):
 
 def describe(missing):
     if not missing:
-        return "success", "Every required review approves this change"
+        return "success", "A review approves this change"
     first = missing[0]
     who = H.actor_id(first["reviewer"]) if first["reviewer"] else "its reviewer"
     text = f"{first['slot']} {first['why']}; re-review by {who}"

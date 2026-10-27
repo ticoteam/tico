@@ -3869,6 +3869,10 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         event(conn, actor, "tag.detach", ident, {"task_id": task_id})
     if old != keys:
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
+        if ("security" in old) != ("security" in keys):
+            from . import review_gate, review_status
+            if review_gate.engineering(conn, task_row):
+                review_status.mark(conn, task_id)
         if actor != KEEPER and ("qa" in old) != ("qa" in keys):
             from .repositories import metadata, save_metadata
             saved = metadata(conn, "qa-default:" + task_id)
@@ -5431,6 +5435,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         review_gate.remember_heads(conn, actor, row["id"], parent, review_prs)
         from . import review_status
         review_status.mark(conn, parent["id"])  # a newly asked review is a slot without a verdict
+    elif parent and re.match(r"^Security(?:\b|:)", str(title).strip(), re.I):
+        from . import review_status
+        review_status.mark(conn, parent["id"])  # a Security check makes this ticket's QA gate required
     # A task a bot files for itself in one of its turns starts its own turn only once that turn has ended
     # (execution.job_refusal): the filing turn may finish it first, and the claim then cancels the notice
     # rather than start a turn that finds nothing left to do (Dev 359).
@@ -5774,6 +5781,11 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if labels is not None:
         _set_task_tags(conn, actor, task_id, labels, note or "", approval_id=approval_id, approved=approved)
         sets.append("updated=:updated")
+    if title is not None and TR.parent_of(conn, task_id):
+        from . import review_gate, review_status
+        parent = task(conn, TR.parent_of(conn, task_id))
+        if parent and review_gate.engineering(conn, parent):
+            review_status.mark(conn, parent["id"])
     if owner is not None:
         new_owner = _reach(conn, actor, owner)
         if actor == TASK_MANAGER and new_owner != row["owner"]:

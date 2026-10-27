@@ -1,5 +1,4 @@
-"""A Dev ticket moves past review (In QA, Pending Release, Post Release QA, Done) only while every required Review 1
-and Review 2 slot approves the change its pull request makes now; a person may still move it (Dev 567)."""
+"""A Dev ticket moves past review with one current-change approval; Security tickets also need QA (Dev 567)."""
 import json
 
 import pytest
@@ -65,7 +64,7 @@ def test_an_open_changes_verdict_refuses_every_move_past_review_and_names_slot_r
             H.task_update(c, "bot:cpo", row["id"], step=target)
         text = str(refused.value)
         assert "Review 2 has `changes` at aaaaaaaaaaaa: ask inbox to re-review on head " + B in text
-        # Review 1 approved A too, and the fixes changed the code since: it re-reviews the delta as well.
+        # Neither slot approved the current change, so either reviewer may be re-asked.
         assert "Review 1 approved aaaaaaaaaaaa" in text and "could not compare" in text
         assert step(c, row) == "In Progress"
 
@@ -83,39 +82,50 @@ def test_a_slot_with_no_verdict_or_never_asked_refuses(api):
         assert step(c, row) == "In QA"
 
 
-def test_review_2_is_required_once_the_ticket_entered_it(api):
+def test_review_2_is_not_required_when_review_1_approves(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         verdict(c, child(c, row, "Review 1: PR #7", "bot:finance"), "approve", A)
         c.execute("UPDATE tasks SET note=? WHERE id=?", (f"Tests: head {A}: 9 passed, 0 failed", row["id"]))
         H.task_update(c, "human:ana", row["id"], step="Review 2")
-        with pytest.raises(Refused, match="Review 2 was never asked"):
-            H.task_update(c, "bot:cpo", row["id"], step="In QA")
+        H.task_update(c, "bot:cpo", row["id"], step="In QA")
+        assert step(c, row) == "In QA"
 
 
-def test_re_review_of_the_fixed_head_by_the_same_reviewer_lets_it_through(api):
+def test_one_reviewers_approval_of_the_current_change_satisfies_other_slot_changes(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
         r1, r2 = approved(c, row)
         verdict(c, r2, "changes", A)
         head(c, row, B)
-        again = child(c, row, "Review 2: PR #7", "bot:inbox")
-        verdict(c, again, "approve", B)
-        with pytest.raises(Refused, match="Review 1 approved aaaaaaaaaaaa") as refused:
-            H.task_update(c, "bot:cpo", row["id"], step="In QA")
-        assert "Review 2" not in str(refused.value)
-        verdict(c, r1, "approve", B)  # the same child, reopened for the delta
+        verdict(c, r1, "approve", B)
         H.task_update(c, "bot:cpo", row["id"], step="In QA")
         assert step(c, row) == "In QA"
 
 
-def test_a_later_changes_verdict_outranks_an_earlier_approve_in_another_child(api):
+def test_a_later_changes_verdict_invalidates_the_approval_in_that_same_slot(api):
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        r1, r2 = approved(c, row)
-        verdict(c, child(c, row, "Review 1: PR #7", "bot:finance"), "changes", A)
+        r1 = child(c, row, "Review 1: PR #7", "bot:finance")
+        verdict(c, r1, "approve", A)
+        verdict(c, r1, "changes", A)
         with pytest.raises(Refused, match="Review 1 has `changes`"):
             H.task_update(c, "bot:cpo", row["id"], step="In QA")
+
+
+def test_a_security_ticket_needs_qa_pass_on_the_current_change(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c)
+        H.task_update(c, "human:ana", row["id"], labels=["security"])
+        row = H.task(c, row["id"])
+        r1 = child(c, row, "Review 1: PR #7", "bot:finance")
+        verdict(c, r1, "approve", A)
+        qa = child(c, row, "QA: PR #7", "bot:ops")
+        with pytest.raises(Refused, match="Security QA has no verdict"):
+            H.task_update(c, "bot:cpo", row["id"], step="In QA")
+        verdict(c, qa, "pass", A)
+        H.task_update(c, "bot:cpo", row["id"], step="In QA")
+        assert step(c, row) == "In QA"
 
 
 @pytest.mark.parametrize("verdict_value", ["approve", "pass"])
@@ -156,8 +166,8 @@ def test_a_merged_pr_still_counts_and_a_person_may_move_it(api):
         r1, r2 = approved(c, row)
         verdict(c, r2, "changes", A)
         c.execute("UPDATE task_links SET state='merged' WHERE task_id=?", (row["id"],))
-        with pytest.raises(Refused, match="Review 2"):
-            H.task_update(c, "bot:cpo", row["id"], step="Pending Release")
+        H.task_update(c, "bot:cpo", row["id"], step="Pending Release")
+        assert step(c, row) == "Pending Release"
         H.task_update(c, "human:ana", row["id"], step="Pending Release")
         assert step(c, row) == "Pending Release"
 
@@ -264,7 +274,7 @@ def test_the_reviews_status_follows_the_slots_on_the_current_head(api, monkeypat
     service = github(api, monkeypatch, [A], {}, posted)
     review_status.sync(service, row["id"])
     assert posted == [("/repos/acme/app/statuses/" + A, {"state": "success", "context": "tico/reviews",
-                                                        "description": "Every required review approves this change"})]
+                                                        "description": "A review approves this change"})]
     review_status.sync(service, row["id"])
     assert len(posted) == 1  # the same status is not posted twice
     review_status._dirty.clear()
@@ -274,11 +284,42 @@ def test_the_reviews_status_follows_the_slots_on_the_current_head(api, monkeypat
     assert row["id"] in review_status._dirty  # marked once the verdict commits
     review_status.sync(service, row["id"])
     state, text = posted[-1][1]["state"], posted[-1][1]["description"]
-    assert state == "failure" and text.startswith("Review 2 has `changes`") and "inbox" in text and len(text) <= 140
+    assert state == "success" and text == "A review approves this change"
     with api.app.state.store.transaction() as c:
+        verdict(c, r1, "changes", A)
         verdict(c, child(c, row, "QA: PR #7", "bot:ops"), "approve", A)
     review_status.sync(service, row["id"])
-    assert posted[-1][1]["state"] == "failure"  # QA never fills Review 2
+    assert posted[-1][1]["state"] == "failure" and posted[-1][1]["description"].startswith("Review 1 has `changes`")
+
+
+def test_the_reviews_status_succeeds_with_one_current_approval(api, monkeypatch):
+    from backend import review_status
+    row, _, r2 = setup_ticket(api)
+    with api.app.state.store.transaction() as c:
+        verdict(c, r2, "changes", A)
+    posted = []
+    service = github(api, monkeypatch, [A], {}, posted)
+    review_status.sync(service, row["id"])
+    assert posted[-1][1] == {"state": "success", "context": "tico/reviews",
+                             "description": "A review approves this change"}
+
+
+def test_the_reviews_status_keeps_security_tickets_red_until_qa_passes(api, monkeypatch):
+    from backend import review_status
+    row, _, _ = setup_ticket(api)
+    review_status._dirty.clear()
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, "human:ana", row["id"], labels=["security"])
+        assert row["id"] not in review_status._dirty
+    assert row["id"] in review_status._dirty
+    posted = []
+    service = github(api, monkeypatch, [A], {}, posted)
+    review_status.sync(service, row["id"])
+    assert posted[-1][1]["state"] == "failure" and "Security QA" in posted[-1][1]["description"]
+    with api.app.state.store.transaction() as c:
+        verdict(c, child(c, H.task(c, row["id"]), "QA: security check", "bot:ops"), "pass", A)
+    review_status.sync(service, row["id"])
+    assert posted[-1][1]["state"] == "success"
 
 
 def test_without_the_statuses_permission_nothing_is_posted_and_the_link_says_why(api, monkeypatch):
@@ -358,7 +399,8 @@ def test_a_changes_verdict_survives_declining_unlinking_or_retitling_its_child(a
     from backend import task_relations as TR
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        r1, r2 = approved(c, row)
+        r1 = child(c, row, "Review 1: PR #7", "bot:finance")
+        verdict(c, r1, "approve", A)
         later = child(c, row, "Review 1: PR #7", "bot:finance")
         verdict(c, later, "changes", A)
         if hide == "decline":
@@ -437,3 +479,11 @@ def test_a_pr_missing_from_the_preflight_read_refuses(api):
         c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND url LIKE '%/8'", (json.dumps({"head_sha": A}), row["id"]))
         with pytest.raises(Refused, match="the PR was linked after GitHub was read"):
             H.task_update(c, "bot:cpo", row["id"], step="In QA", review_prs={link: {"head_sha": A, "at": H.now()}})
+
+
+def test_a_board_with_no_review_step_moves_even_while_its_pr_head_is_unknown(api):
+    with api.app.state.store.transaction() as c:
+        row = ticket(c, steps=["In Progress", "Done"])
+        H.task_link(c, "human:ana", row["id"], "https://github.com/acme/app/pull/8")  # no head yet
+        H.task_update(c, "bot:cpo", row["id"], step="Done")
+        assert step(c, row) == "Done"

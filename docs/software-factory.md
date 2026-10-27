@@ -94,12 +94,12 @@ ticket stays at its step with a Waiting tag.
 - **Reviewers and Security only comment.** They never move a ticket: a reviewer or Security bot that tries is refused
   and told to finish its review task with a verdict (`hub task done <id> --verdict approve|changes --head <sha>`). QA
   gives `pass` or `fail`. The Builder is woken once with the verdict and the head it judged.
-- **Past review only with every review approving the current change.** A bot's move to In QA, Pending Release,
-  Post Release QA or Done is refused while a required review slot's latest verdict is `changes` or missing, or approves
-  a head whose change differs from the pull request's current one by more than a clean merge of main. The refusal names
-  the slot, its reviewer and the head to re-review. Review 1 is required on a board that has it; Review 2 once it was
-  asked or the ticket entered it. Only a Review 1 or Review 2 subtask fills a slot: a QA verdict never does. A person
-  may still move the ticket.
+- **Past review needs one current approval.** A bot's move to In QA, Pending Release, Post Release QA or Done is
+  refused unless at least one Review 1 or Review 2 verdict approves the current change, or an earlier head whose
+  change is identical apart from a clean merge of main. A `changes` verdict is re-asked of that reviewer on the fixed
+  head when no other review approves the current change. Only a Review 1 or Review 2 subtask fills a review slot; QA
+  never does. Tickets labelled `security` or with a Security check also need a QA `pass` for the current change
+  before merge. After merge, an open Review 2 or QA card does not hold release steps. A person may still move the ticket.
 - **One check per head.** A ticket has one open Review 1, Review 2 or QA subtask for a pull request head; a second request
   for the same check on the same head is refused with the open one's id. A re-review asked of the same reviewer after a
   push is a new head, so a new check.

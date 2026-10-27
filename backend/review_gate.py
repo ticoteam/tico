@@ -94,7 +94,7 @@ def links(c, row):
             and p.get("state") not in ("merged", "closed", "shipped")]
 
 
-# A move into one of these steps passes review: every required review slot must approve the change the PR makes now.
+# A move into one of these steps passes review when at least one review slot approves the current change.
 PAST_REVIEW = ("In QA", "Pending Release", "Post Release QA", "Done")
 SLOT = re.compile(r"^Review ([12])(?:\b|:)", re.I)
 # The commit status context review_status posts.
@@ -123,13 +123,12 @@ def remember_verdict(c, actor, child, verdict, head):
 
 
 def slots(c, row):
-    """Each required review slot's verdicts on this ticket, oldest first, as (verdict, head, reviewer, child id).
+    """Review-slot verdicts on this ticket, oldest first, as (verdict, head, reviewer, child id).
     A verdict counts from the copy its ticket keeps (remember_verdict); a child with no copy, from before the copies,
     counts from its own events while it still carries the title it was filed with. Only a "Review 1" or "Review 2"
     child fills a slot: a QA verdict, `approve` or `pass`, never does, and neither does a verdict the ticket's own owner
-    gave or was the reviewer for. Review 1 is required on a board that has the step; Review 2 once it was asked or the
-    ticket entered it (small changes skip it, docs/software-factory.md). A child reopened for a new head keeps its old
-    verdict until it gives a new one."""
+    gave or was the reviewer for. The move gate accepts one slot whose latest verdict approves the current change; a
+    child reopened for a new head keeps its old verdict until it gives a new one."""
     from . import hubdb as H
     from . import task_relations as TR
     steps = {r["name"]: r["id"] for r in c.execute("SELECT id,name FROM task_steps WHERE type_id=?", (row.get("type_id"),))}
@@ -172,51 +171,110 @@ def slots(c, row):
     return required
 
 
+def _matches_head(link, head, approved, same):
+    return any(head.startswith(a) or a.startswith(head) or (same is not None and same(link, a, head))
+               for a in approved if a)
+
+
+def security_required(c, row):
+    """Security tickets keep the QA gate even though ordinary Dev tickets do not."""
+    from . import hubdb as H, task_relations as TR
+    tags = {str(t.get("key") or "").strip().lower() for t in row.get("tags", [])}
+    if "security" in tags:
+        return True
+    return any((child := H.task(c, child_id))
+               and re.match(r"^Security(?:\b|:)", str(child.get("title") or "").strip(), re.I)
+               for child_id in TR.child_ids(c, row["id"]))
+
+
+def _qa_missing(c, row, heads, same):
+    """Security tickets need a QA pass of the current change; ordinary QA never gates a move."""
+    from . import hubdb as H, task_relations as TR
+    if not security_required(c, row):
+        return []
+    open_ids = {p["id"] for p in H.task_links(c, row["id"])
+                if p["kind"] == "pr" and p.get("state") in ("open", "draft")}
+    heads = {link: head for link, head in heads.items() if link in open_ids}
+    if not heads:
+        return []  # QA is a pre-merge requirement and cannot hold a post-merge release step.
+    children, asked = [], []
+    for child_id in TR.child_ids(c, row["id"]):
+        child = H.task(c, child_id)
+        if child and re.match(r"^QA(?:\b|:)", str(child.get("title") or "").strip(), re.I):
+            if child.get("owner") != row.get("owner"):
+                asked.append(child["owner"])
+            events = c.execute("SELECT ts,rowid,actor,new FROM task_events WHERE task_id=? AND field='verdict' "
+                               "ORDER BY ts,rowid", (child_id,)).fetchall()
+            for event in events:
+                value, _, judged = str(event["new"] or "").partition(" ")
+                if event["actor"] != row.get("owner") and child.get("owner") != row.get("owner"):
+                    children.append((event["ts"], event["rowid"], value, judged.strip().lower(), child["owner"], child_id))
+    latest = {}
+    for event in sorted(children):
+        latest[event[5]] = event
+    good = [e for e in latest.values() if e[2] == "pass"]
+    for link, head in heads.items():
+        if not head:
+            continue
+        if any(_matches_head(link, head, [e[3]], same) for e in good):
+            continue
+        reviewer = good[-1][4] if good else (asked[-1] if asked else None)
+        reason = "has no verdict" if asked else "was never asked"
+        if children and children[-1][2] != "pass":
+            reason = f"has `{children[-1][2]}` at {children[-1][3][:12] or 'an unnamed head'}"
+        elif good:
+            reason = f"passed {good[-1][3][:12]}, and the change at {head[:12]} differs from it"
+        return [{"slot": "Security QA", "reviewer": reviewer, "head": head, "why": reason}]
+    return []
+
+
 def unapproved(c, row, heads, same=None):
-    """Why this ticket has not passed review: one entry per required slot that lacks an approval of the change at a
-    current PR head, else []. `heads` maps each judged PR link to its current head ('' when unknown); `same(link, a,
-    b)` says whether the change at head b equals the change at head a apart from a clean main merge
-    (freeze_guard.change_id), and is None when no comparison was read."""
+    """Why this ticket has not passed its review gate. One current-change approval in either review slot is enough;
+    security tickets also need a QA pass. `same` identifies a clean main-merge-only delta."""
     out = []
-    for name, slot in slots(c, row).items():
-        verdicts = slot["verdicts"]
-        reviewer = (verdicts[-1][2] if verdicts else (slot["asked"] or [None])[-1])
-        current = next((h for h in heads.values() if h), "")
-        if not verdicts:
-            out.append({"slot": name, "reviewer": reviewer, "head": current,
-                        "why": "has no verdict" if slot["asked"] else "was never asked"})
+    all_slots = slots(c, row)
+    current = next((h for h in heads.values() if h), "")
+    for link, head in heads.items():
+        if not head:
             continue
-        verdict, judged = verdicts[-1][0], verdicts[-1][1]
-        if verdict != "approve":
-            out.append({"slot": name, "reviewer": reviewer, "head": current,
-                        "why": f"has `{verdict}` at {judged[:12] or 'an unnamed head'}"})
-            continue
-        last_no = max((i for i, v in enumerate(verdicts) if v[0] != "approve"), default=-1)
-        approved = [v[1] for v in verdicts[last_no + 1:] if v[1]]
-        for link, head in heads.items():
-            if not head:
+        failures = []
+        for name, slot in all_slots.items():
+            verdicts = slot["verdicts"]
+            reviewer = verdicts[-1][2] if verdicts else (slot["asked"] or [None])[-1]
+            if not verdicts:
+                failures.append({"slot": name, "reviewer": reviewer, "head": head,
+                                 "why": "has no verdict" if slot["asked"] else "was never asked"})
                 continue
-            found = [True if head.startswith(a) or a.startswith(head) else same(link, a, head) if same else None
-                     for a in approved]
-            if True not in found:
-                shown = approved[-1][:12] if approved else "no named head"
-                why = (f"approved {shown}, and the change at {head[:12]} differs from it (more than a clean main merge)"
-                       if False in found else
-                       f"approved {shown}, and GitHub could not compare that change with the one at {head[:12]}")
-                out.append({"slot": name, "reviewer": reviewer, "head": head, "why": why})
+            verdict, judged = verdicts[-1][0], verdicts[-1][1]
+            if verdict != "approve":
+                failures.append({"slot": name, "reviewer": reviewer, "head": head,
+                                 "why": f"has `{verdict}` at {judged[:12] or 'an unnamed head'}"})
+                continue
+            if judged and (head.startswith(judged) or judged.startswith(head) or same and same(link, judged, head)):
                 break
+            shown = judged[:12] if judged else "no named head"
+            why = (f"approved {shown}, and the change at {head[:12]} differs from it (more than a clean main merge)"
+                   if judged and same and same(link, judged, head) is False else
+                   f"approved {shown}, and GitHub could not compare that change with the one at {head[:12]}")
+            failures.append({"slot": name, "reviewer": reviewer, "head": head, "why": why})
+        else:
+            # No review slot approved this PR's current change. A board with no review step keeps its existing flow.
+            if all_slots or security_required(c, row):
+                out.extend(failures or [{"slot": "Review 1", "reviewer": None, "head": head,
+                                         "why": "was never asked"}])
+    out.extend(_qa_missing(c, row, heads, same))
     return out
 
 
 def passed(c, actor, row, snapshots=None, step="the next step"):
-    """Refuse a move past review while a required Review 1 or Review 2 slot lacks an approval of the current change.
+    """Refuse a move past review until one slot approves the current change, plus QA on a Security ticket.
     A person may still move it; nothing is checked on a ticket with no linked pull request."""
     from . import hubdb as H
     if H.is_human(actor) or not engineering(c, row):
         return
     prs = judged_links(c, row)
-    if not prs:
-        return
+    if not prs or (not slots(c, row) and not security_required(c, row)):
+        return  # nothing to approve: a board with no review step, and no review ever asked
     heads = {}
     for pr in prs:
         detail = (snapshots or {}).get(pr["id"]) if snapshots is not None else None
