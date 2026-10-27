@@ -3782,6 +3782,14 @@ def create_app(settings=None):
                     unchecked[tid] = exc
 
         def work(c):
+            # Every task this call skips keeps its refusal on record, and the call counts once toward quarantine.
+            token = H.BULK_CALL.set(H.new_id())
+            try:
+                return bulk_work(c)
+            finally:
+                H.BULK_CALL.reset(token)
+
+        def bulk_work(c):
             # Chosen again under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped = [], [], []

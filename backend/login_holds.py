@@ -364,6 +364,36 @@ def turn_steps(c, attempt_id, runtime, result):
     return steps
 
 
+# This residual's display contract is deliberately narrower than the existing hold parser.
+_FALLBACK_RESET_RE = re.compile(r"\bresets ([0-9]{1,2}:[0-9]{2}[ap]m) \(UTC\)")
+
+
+def fallback_reset_notice(c, attempt_id):
+    """The fallback's original limit notice and named UTC reset, pinned to when this run ended."""
+    row = c.execute("SELECT result_json,handed_runtime,finished FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    result = json.loads(row['result_json'] or '{}') if row else {}
+    if not row or not result.get('fallback'):
+        return None
+    _, notice, limited = turn_steps(c, attempt_id, row['handed_runtime'], result)[-1]
+    # A reply may quote a reset without being the provider error that stopped this login.
+    notice = notice or ''
+    match = _FALLBACK_RESET_RE.search(notice)
+    if not limited or not match:
+        return None
+    reset = believable(reset_from_text(match[0], row['finished']), row['finished'])
+    return {'notice': notice, 'reset': _iso(reset)} if reset else None
+
+
+def fallback_resume_reason(c, attempt_id):
+    """A live named fallback hold's visible reason; never invent a reset for other errors."""
+    detail = fallback_reset_notice(c, attempt_id)
+    hold = for_attempt(c, attempt_id) if detail else {}
+    if hold.get('reset') and (hold.get('until') or '') > H.now():
+        until = hold['until']
+        return f"resumes ~{until[11:16]} UTC" + (f" on {until[:10]}" if until[:10] != H.now()[:10] else '')
+    return None
+
+
 def window(notice):
     """Which kind of limit a notice is: an API key's quota or billing refusal, or the plan's usage window."""
     from .execution import BILLING_LIMIT_RE

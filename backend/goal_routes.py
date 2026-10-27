@@ -578,21 +578,13 @@ def install(app, store, auth, mutate, settings):
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
                               "above them sets the colour", 403)
-            # A proposed goal's first colour is its acceptance: the parent's owner or someone above
-            # gives it, not the proposer.
-            # Removing one is not accepting it: whoever may edit a goal may drop it (an emptied goal on the Goals page is removed).
-            if row["status"] is None and row.get("parent_id") and body.status != "dropped" and not (
-                    who.actor == parent_owner(c, row) or stands_above(c, who, row["owner"])):
-                raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
-                              "it serves; that is the acceptance", 403)
             return {"goal": goal_view(c, who, G.set_status(c, who.actor, gid, body.status, body.note))}
         return mutate(request, body, work)
 
     @app.post("/api/v2/goals/{gid}/reopen")
     def goal_reopen(request: Request, gid: str, body: M.GoalReopen):
         """Reopen a done or dropped goal with a colour and one line why, or `auto` for the colour it had, worked out
-        again: whoever may set its colour. A proposed goal brought back with a colour is still accepted only by
-        whoever owns the goal it serves. `undo` alone puts a removed goal back as it was, from its history."""
+        again: whoever may set its colour. `undo` alone puts a removed goal back as it was, from its history."""
         who = request.state.identity
         def work(c):
             auth.domain(who)
@@ -601,10 +593,6 @@ def install(app, store, auth, mutate, settings):
             if not may_colour(c, who, row):
                 raise Problem("forbidden", "The goal's owner, the owner of the goal it serves, or someone "
                               "above them reopens it", 403)
-            if not body.undo and body.status != "auto" and G.was_proposed(c, row) and not (
-                    who.actor == parent_owner(c, row) or stands_above(c, who, row["owner"])):
-                raise Problem("forbidden", "A proposed goal gets its first colour from whoever owns the goal "
-                              "it serves; that is the acceptance", 403)
             return {"goal": goal_view(c, who, G.reopen(c, who.actor, gid, body.status, body.note, body.undo))}
         return mutate(request, body, work)
 

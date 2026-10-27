@@ -1041,7 +1041,7 @@ SCHEMAS = {
                                  required=["action"]),
     # Goals and KPIs
     "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
-                 "red, yellow, green, gray (no data), done, dropped; null while unscored or proposed"},
+                 "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"},
                  "status_note": "s", "status_by": "n", "status_at": "n",
                  "status_source": {"type": ["string", "null"], "description": "auto: worked out by the CEO Bot; person: set by hand and kept until handed back"},
                  "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: the colour the CEO Bot would choose, when it differs"},

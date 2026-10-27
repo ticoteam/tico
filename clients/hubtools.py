@@ -552,7 +552,7 @@ def tag_update(api, args):
 @tool("hub_task_create", "File a task for a bot or a person. A task for a person is a decision "
       "or a review: title says what you are asking, body under 120 words, and the body's first paragraph is "
       "the ask: one or two plain sentences saying what you need and what happens after, at most 40 words, with "
-      "no ids, hashes, file paths, s3:// links or tool names (refused otherwise), e.g. \"Approve the video tool "
+      "no ids, hashes, file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool "
       "trial for Thursday? If yes, I'll send the invite.\" Details go below it (a ticket on a custom "
       "type's board is exempt; asks stay on General). `dry_run` reports the "
       "checks a create would fail and writes nothing.",
@@ -870,7 +870,7 @@ def task_question(api, args):
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
                         "plain sentences saying what you need and what happens after, at most 40 words, no ids, hashes, "
-                        "file paths, s3:// links or tool names (refused otherwise), e.g. \"Approve the video tool trial "
+                        "file paths, s3:// links or tool names (\"PR #1555\" is fine; refused otherwise), e.g. \"Approve the video tool trial "
                         "for Thursday? If yes, I'll send the invite.\" It becomes one small task for them; this task "
                         "stays yours, blocked on it, and opens again with their answer. Or bot:<slug>: an active team bot "
                         "owning the first open linked blocked_by task. Link that prerequisite with hub_task_relate first; "
@@ -1213,7 +1213,8 @@ def goal_show(api, args):
 
 @tool("hub_goal_create", "Set a goal for yourself, under a goal you own, or for someone below "
       "you on the org chart. A parent is optional: with none the goal is simply not linked. With one "
-      "it has no colour until whoever owns the parent gives it one; that is the acceptance.",
+      "it supports that goal. It starts with no colour, which its data or a person (its owner, the owner of "
+      "the goal it serves, or someone above them) sets.",
       {"owner": _s("`me`, a bot slug, or a person id (`company` is the owner's)"),
        "title": _s("Plain English: what you are going for"),
        "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),

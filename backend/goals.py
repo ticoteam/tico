@@ -300,16 +300,11 @@ def set_status(conn, actor, goal_id, status, note=""):
 
 def _before_finish(conn, goal_id):
     """The status a done or dropped goal had while it was live: its last change from a live status (or none) to done
-    or dropped. None when it had no colour yet, as a proposed goal has none."""
+    or dropped. None when it had no colour yet."""
     row = conn.execute("SELECT old FROM goal_events WHERE goal_id=? AND field='status' AND new IN ('done','dropped') "
                        "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY ts DESC, rowid DESC LIMIT 1",
                        (goal_id,)).fetchone()
     return row[0] if row else None
-
-
-def was_proposed(conn, row):
-    """A finished goal that ended before anyone gave it a first colour: brought back, it is still a proposal."""
-    return row["status"] in ("done", "dropped") and bool(row["parent_id"]) and _before_finish(conn, row["id"]) is None
 
 
 def _before_drop(conn, goal_id):
@@ -332,10 +327,10 @@ def _before_drop(conn, goal_id):
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     """A done or dropped goal back in the live list. `status` is a colour, which sticks as one set by hand does, or
-    `auto`: the colour it had is put back and the CEO Bot works it out again (a proposed goal stays proposed). The
-    goals that moved up when it was dropped stay where they are. The history says it was reopened, and why. `undo`
-    is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its note, setter and time
-    when a person set it, read from the history; it takes no colour or note."""
+    `auto`: the colour it had is put back and the CEO Bot works it out again (a goal that never had one gets it from
+    its data, if any). The goals that moved up when it was dropped stay where they are. The history says it was
+    reopened, and why. `undo` is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its
+    note, setter and time when a person set it, read from the history; it takes no colour or note."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:

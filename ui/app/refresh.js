@@ -30,6 +30,7 @@ async function refresh(force) {
   if (S.me?.cloud) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
+  taskBuilderNoticesRefresh();
   if (BOT?.tab === 'chat' && !BOT.split) void loadBotChatTasks(BOT.slug);
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
@@ -115,6 +116,7 @@ function liveWire() {
     liveSoon('bots', () => {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       tipRefresh();
+      taskBuilderNoticesRefresh();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);

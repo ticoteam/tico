@@ -119,7 +119,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
-                                           set a goal; a parent is optional. With one, whoever owns the parent gives its first colour
+                                           set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
     hub goal status <id> auto              let the CEO Bot set the colour again (ends a colour set by hand)
@@ -1049,9 +1049,9 @@ def parser():
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it. "
                         "--note is then your ask to them: one or two plain sentences saying what you need and what "
-                        "happens after, with no ids, hashes, file paths or tool names. Or bot:<slug>, an active bot "
-                        "that owns the first open task this one is blocked by (hub task wait <id> --on task:<its task>); --note "
-                        "is then the reason shown beside its name")
+                        "happens after, at most 40 words, with no ids, hashes, file paths or tool names (\"PR #1555\" is "
+                        "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
+                        "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")
@@ -1293,7 +1293,7 @@ def parser():
     s = goal.add_parser("show")
     s.add_argument("id")
     s.set_defaults(fn="goal show")
-    s = goal.add_parser("create", help="set a goal; a parent is optional, and whoever owns it gives the first colour")
+    s = goal.add_parser("create", help="set a goal; a parent is optional, and it starts with no colour")
     s.add_argument("--owner", required=True, help="me, a bot slug, or a person id (company: a company goal, the owner only)")
     s.add_argument("--title", required=True)
     s.add_argument("--parent", help="the goal this one supports, if any; not needed")

@@ -241,6 +241,21 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(reviewed, ['builder', 'writer', 'writer', 'writer']);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
 
+    // A first timeout waiting on live session work retains the safe retry choice, without claiming a restart.
+    jobs.writer[0].stopped = 'timeout';
+    jobs.writer[0].pending_decision = null;
+    deferred = false;
+    await page.evaluate(() => executionReview('writer'));
+    const timed = page.locator('dialog.stopped-runs-dialog form[data-job="j2"]');
+    assert.match(await timed.locator('[data-stopped]').innerText(), /at its run time limit/);
+    assert.doesNotMatch(await timed.locator('[data-stopped]').innerText(), /restarted/);
+    assert.deepEqual(await timed.locator('.stopped-run-actions .row button').allInnerTexts(), ['Try again', 'Don’t retry']);
+    await timed.locator('button[value=resume]').click();
+    await timed.locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
+    assert.equal(decisions.at(-1).attempt_id, 'a-j2');
+    assert.equal(decisions.at(-1).acknowledge_uncertain_effects, true);
+    await page.locator('dialog.stopped-runs-dialog [data-close]').click();
+
     // Dev 561: after a refresh, a run whose choice was saved while the bot was busy (stopped_rows `decided`) says what
     // Tico will do and offers no second choice; one with a folded request saved offers only that choice, for the rest.
     holding.runs = [{...stoppedRun('Billing 3/5', true, ['r2']), decided: 'resume',
