@@ -45,12 +45,16 @@ def in_use(c):
 
     Queued jobs blocked on quota, a spending limit, readiness or a paused bot never became turns, and an attempt
     parked by the stop itself is not counted either: counting them kept the company at its stop with nothing running.
+
+    The first `state IN` term lets SQLite read only the partial index of active attempts (one_active_attempt_per_lane):
+    without it the OR scanned every attempt ever made, ~90 ms a call on a live install, on every claim.
     """
     now = H.now()
     return c.execute(
         "SELECT count(*) FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
-        "WHERE a.state='running' OR (a.state='leased' AND ((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) "
-        "OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?))))",
+        "WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' AND "
+        "((coalesce(p.wait_reason,'')!='' AND p.wait_reason!=?) OR (coalesce(p.wait_reason,'')='' AND a.lease_until>? "
+        "AND (NOT coalesce(p.managed,0) OR coalesce(p.start_until,'')>?)))))",
         (REASON, now, now)).fetchone()[0]
 
 
