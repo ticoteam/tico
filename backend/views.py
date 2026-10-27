@@ -142,6 +142,20 @@ def subscription_login(runtime, detail):
             and not re.search(r"(?i)api[ _-]?key", detail))
 
 
+def assignments_by_runner(c):
+    """One pass of assignments: {runner_id: [bot, ...]} ordered, and {runner_id: {non-archived bots}}.
+
+    Operations and Computers listing used to SELECT assignments once (or twice) per computer.
+    """
+    ordered, active = {}, {}
+    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.slug=a.bot "
+                         "ORDER BY a.bot"):
+        ordered.setdefault(row["runner_id"], []).append(row["bot"])
+        if row["state"] != "archived":
+            active.setdefault(row["runner_id"], set()).add(row["bot"])
+    return ordered, active
+
+
 def shared_logins(c, runner_id, readiness, assigned, access):
     """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
     at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
@@ -2072,6 +2086,8 @@ def install_views(app, store, auth, mutate, task_view):
             access = auth.bot_accesses(c, who)
             # The bots a member may not even see (an admin sees them all): left off another person's computer.
             unseen = set() if auth.bot_admin(who) else {bot for bot, a in access.items() if not a["see"]}
+            # One pass for every computer's assignments (not two SELECTs per runner).
+            placed, active_placed = assignments_by_runner(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2082,8 +2098,7 @@ def install_views(app, store, auth, mutate, task_view):
                 if not manage and row["revoked_at"]:
                     continue
                 hidden = set() if manage else unseen
-                bots = [a[0] for a in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (row["id"],))
-                        if a[0] not in hidden]
+                bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
                 from .start_places import summary, describe
                 value["turn_counts"] = summary(c, row["id"], store.settings)
@@ -2100,9 +2115,7 @@ def install_views(app, store, auth, mutate, task_view):
                 value["readiness"] = readiness_document(value.pop("readiness_json"))
                 from .repositories import metadata
                 value["repositories"] = metadata(c, "computer-repositories:" + row["id"]).get("repositories", "unknown")
-                assigned_here = {a[0] for a in c.execute(
-                    "SELECT a.bot FROM assignments a JOIN bots b ON b.slug=a.bot "
-                    "WHERE a.runner_id=? AND b.state<>'archived'", (row["id"],))}
+                assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
                                              if bot in assigned_here and bot not in hidden}
                 for report in value["readiness"].get("bots", {}).values():

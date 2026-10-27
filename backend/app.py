@@ -5691,6 +5691,8 @@ def create_app(settings=None):
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)
+        # One pass for every computer's bots (not one SELECT per runner).
+        placed, _ = views.assignments_by_runner(c)
         rows = []
         for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"):
             counts = turn_counts(c, r["id"], settings)
@@ -5703,8 +5705,7 @@ def create_app(settings=None):
                                  "platform": r["platform"] or "", "accepts_member_bots": False,
                                  **load_status(c, r["id"]), **turns})
                 continue
-            bots = [x["bot"] for x in c.execute("SELECT bot FROM assignments WHERE runner_id=? ORDER BY bot", (r["id"],))
-                    if (readable.get(x["bot"]) or {}).get("see")]
+            bots = [bot for bot in placed.get(r["id"]) or [] if (readable.get(bot) or {}).get("see")]
             rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in online,
                          "platform": r["platform"] or "", "operator": r["operator"],
                          "accepts_member_bots": bool(r["accepts_member_bots"]), "bots": bots,
