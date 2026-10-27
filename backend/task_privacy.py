@@ -714,15 +714,30 @@ def _without_commits(text):
                            text)
 
 
+# The preview's long run reaches across `/`, `_` and `-`, so a branch, a session or a dated path would read as a secret.
+# A run is let through only when it reads as one of those: each piece between the separators a word, a number or a short
+# token, with at most one short hex id (a task id or short sha) and at least one real word, once its UUIDs are taken out.
+# A base64 or base64url value split by a separator has long mixed pieces, so it is still judged whole.
+REF_UUID = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?![A-Za-z0-9])")
+REF_PIECE = re.compile(r"[A-Za-z]*|[0-9]+|[A-Za-z0-9]{1,4}")
+REF_ID = re.compile(r"[0-9a-f]{7,12}")
+
+
+def _workflow_ref(run):
+    pieces = re.split(r"[/_-]", REF_UUID.sub("", run))
+    ids = [piece for piece in pieces if not REF_PIECE.fullmatch(piece)]
+    return (len(ids) <= 1 and all(REF_ID.fullmatch(piece) for piece in ids)
+            and any(re.fullmatch(r"[A-Za-z]{3,}", piece) for piece in pieces))
+
+
 def secret_shaped(text):
     """Whether `text` holds a credential-shaped value: the token patterns and secret fields that mask one in a refusal
-    preview, or a long mixed run. The preview's run reaches across `/`, `_` and `-`, so a branch, a dated path or a
-    slug would read as a secret; here each piece between them is judged on its own."""
+    preview, or a long mixed run that is not a workflow reference (a branch, a session, a dated path)."""
     from .diagnostics import LONG, SECRET_FIELD, SECRETS, _looks_secret
     text = str(text or "")
     return (any(pattern.search(text) for pattern, _ in SECRETS) or bool(SECRET_FIELD.search(text))
-            or any(len(piece) >= 32 and _looks_secret(piece) for m in LONG.finditer(_without_commits(text))
-                   for piece in re.split(r"[/_-]", m.group(0))))
+            or any(_looks_secret(m.group(0)) and not _workflow_ref(m.group(0))
+                   for m in LONG.finditer(_without_commits(text))))
 
 
 def sealed_words(kept, title, body):

@@ -208,6 +208,11 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
     ("The vendor key is at 9f2c4e6a8b0d" + "1f3e5c7a9b2d4f6e8a0c1b3d5f7e, rotate it", "secret-shaped"),
     ("Review at head " + HEAD + "9f2c4e6a8b0d1f3e5c7a9b2d", "secret-shaped"),
     ("Push with keys/a1B2c3D4e5F6g7H8i9J0" + "k1L2m3N4o5P6q7R8s9/main", "secret-shaped"),
+    # A long opaque value split by one separator into pieces shorter than 32 is not a workflow reference.
+    *[(f"Use the vendor key Aa0Bb1Cc2Dd3Ee4Ff5Gg6Hh7{sep}Ii8Jj9Kk0" + "Ll1Mm2Nn3Oo4Pp5 to investigate the upload refusal.",
+       "secret-shaped") for sep in "/_-"],
+    ("Push with vendor/9f2c4e6a8b0d-1f3e5c7a" + "9b2d-4f6e8a0c1b3d", "secret-shaped"),
+    ("The vendor PIN is 9f2c4e6a8b0d-1234-5678" + "-9012-3456-7890", "secret-shaped"),
 ])
 def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
