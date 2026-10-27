@@ -695,10 +695,11 @@ def _copied_runs(text):
 
 
 # A commit id is long, mixed and unbroken like a secret, yet a review or QA subtask must name the exact head. Only the
-# shape heuristic lets one through, and only where it reads as a commit: after a commit word, or as a path segment of a
-# GitHub link (whose other segments are then judged one by one). A bare hex run stays secret-shaped, as old tokens were.
-SHA = r"[0-9a-f]{40}(?:[0-9a-f]{24})?"
-COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision|at)\b)[\s:=#@]*\b" + SHA + r"\b")
+# shape heuristic lets one through, and only where it reads as a commit: 40 hex digits right after a commit word, or as a
+# path segment of a GitHub link (whose other segments are then judged one by one). A bare hex run, one after a common
+# word such as "at", and a longer one stay secret-shaped, as hex tokens and keys have those shapes.
+SHA = r"[0-9a-f]{40}"
+COMMIT_REF = re.compile(r"(?i:\b(?:head|base|commit|commits|sha|merge|merged|rev|revision)\b)[\s:=#@`*]*\b" + SHA + r"\b")
 GITHUB_PATH = re.compile(r"\bhttps?://(?:www\.)?github\.com(/[^\s?#\"'<>]*)")
 
 

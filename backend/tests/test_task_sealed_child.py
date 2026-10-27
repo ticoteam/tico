@@ -111,7 +111,7 @@ def test_a_review_subtask_may_name_the_exact_head_and_its_commit_links(api):
     child = post(api, "tasks", repair(row["id"]), attempt["token"])
     built = run_for(api, "finance")
     body = repair(child["id"], "doc-updater", title="Review the upload order fix at its exact head", body=(
-        f"Review PR #1714 at head {HEAD}, base {'789aedce94db5d20f7d263f5b4873cb6521d0d4b'}.\n"
+        f"Review PR #1714 at head `{HEAD}`, base {'789aedce94db5d20f7d263f5b4873cb6521d0d4b'}.\n"
         f"https://github.com/acme/acme-services/commit/{HEAD}\n"
         f"https://github.com/acme/acme-services/pull/1714/commits/{HEAD}\n"
         f"End with VERDICT: approve PR #1714 head {HEAD}"))
@@ -197,6 +197,8 @@ def test_the_sealed_subtask_is_private_and_a_company_visible_one_is_refused(api)
     ("Use token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8 to push the fix", "secret-shaped"),
     ("Use the vendor key 9f2c4e" + "6a8b0d1f3e5c7a9b2d4f6e8a0c1b3d5f7e9a to push the fix", "secret-shaped"),
     ("Review at head " + HEAD + " with token ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "secret-shaped"),
+    ("The vendor key is at 9f2c4e6a8b0d" + "1f3e5c7a9b2d4f6e8a0c1b3d5f7e, rotate it", "secret-shaped"),
+    ("Review at head " + HEAD + "9f2c4e6a8b0d1f3e5c7a9b2d", "secret-shaped"),
 ])
 def test_the_sealed_subtasks_words_may_not_carry_the_private_work(api, words, check):
     row = task(api, "bot:cpo", "bot:ops", "Zip triage")
