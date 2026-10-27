@@ -6,6 +6,9 @@ told him nobody but he could do it.
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture). Everything here is synthetic: the test
 database, made-up bots and repositories, and no request leaves the test server.
 """
+import sqlite3
+from contextlib import closing
+
 import pytest
 
 from backend import settings_catalog
@@ -24,8 +27,8 @@ MANAGERS = ("bot", "creator", "operator")
 # not take it says so with a 422, which the test reports as not proven rather than passing.
 SAMPLES = {
     "team.rules.go_ahead_days": 3,
-    "people.allowed": {"allowed": [], "allowed_domains": ["acme.example"]},
-    "owner.transfer": {"person": "ben", "confirm": True},
+    "people.allowed": {"allowed": [], "allowed_domains": ["acme.example"], "expected_revision": 1},
+    "owner.transfer": {"person": "ben", "confirm": True, "expected_revision": 1},
     "people.add": {"email": "dee@acme.example"},
     "people.member_bot_limit": 3,
     "people.person.role": "admin",
@@ -43,7 +46,9 @@ SAMPLES = {
     "bot.owners": "ben",
     "bot.co_owners": {"add": ["ben"]},
     "bot.archive": {"expected_revision": 1},
-    "bot.access": {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": True}, "revision": 1},
+    "bot.access": {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": False, "people": ["ana"]},
+                   "revision": 1},
+    "team.budget": {"turns_per_hour": 10},
     "models.providers": {"enabled": ["openai"]},
     "bot.profile": {"description": "Keeps the books."},
     "bot.repositories": {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "write",
@@ -87,18 +92,24 @@ NOT_PROVEN = {
     "rules.wake.create": "422: the event name", "tasks.tag": "422: the body shape",
     "inbound.inbox.create": "422: the body shape", "inbound.inbox": "422: no synthetic inbox yet",
     "inbound.phone_request.cancel": "409: inbound is not configured",
+    # Confirm entries: the card is made, but the tap can't run on this fixture.
+    "bot.agent_credential.revoke": "tap 404: finance has no agent credential",
+    "webhooks.gateway.wake": "tap 404: the trigger has no Tico Gateway address (a member's tap is refused first)",
 }
 # Where the route and the catalogue disagree today, beyond this ticket (Bot repositories and Takes member bots are fixed
 # here): (entry, person) -> what the route does. Settings stage 2 takes these; the test fails when one is fixed (take it
 # out) or a new one appears.
 KNOWN_GAPS = {
     # "The person who made it" / "the computer's operator": the catalogue leaves it to the route, so a member who made
-    # none of these gets a Confirm card that their tap would be refused.
-    ("computer.revoke", "member"): "card", ("webhooks.incoming.rotate", "member"): "card",
-    ("webhooks.incoming.delete", "member"): "card", ("webhooks.gateway.wake", "member"): "card",
-    ("webhooks.outgoing", "member"): "card",
+    # none of these gets a Confirm card, and the route refuses their tap.
+    ("computer.revoke", "member"): "card, then refused", ("webhooks.incoming.rotate", "member"): "card, then refused",
+    ("webhooks.incoming.delete", "member"): "card, then refused",
+    ("webhooks.gateway.wake", "member"): "card, then refused", ("webhooks.outgoing", "member"): "card, then refused",
     # "Anyone", but the route keeps a team rule to the people who manage it.
     ("rules.wake", "member"): "refused",
+    # An admin changes a person's role, but only the owner makes or removes admins (Review 2 of PR #1700 had the sweep
+    # tap its cards, which found it).
+    ("people.person.role", "admin"): "card, then refused",
 }
 
 
@@ -120,6 +131,8 @@ def _objects(api, machine):
                                        "on": False}, "ana-test")
     ids["routines"] = post(api, "bots/finance/routines", {"title": "Parity", "text": "Check.", "cron": "0 9 * * *",
                                                           "timezone": "UTC"}, "ana-test")
+    ids["webhooks"] = post(api, "webhooks", {"name": "Parity hook", "url": "https://hooks.acme.example/parity",
+                                             "events": ["custom.*"]}, "ana-test")["webhook"]
     found = {}
     for key, made in ids.items():
         made = made.get(next(iter(made))) if isinstance(made, dict) and len(made) == 1 else made
@@ -129,7 +142,8 @@ def _objects(api, machine):
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
         c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-parity','finance','model','{}','human:ana',1,'prepared',?,?)", (now, now))
+                  "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
+                  ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None
     found["repositories"] = "Acme/product"
@@ -176,18 +190,38 @@ def outcome(answer):
     return f"{answer.status_code} {((data or {}).get('error') or {}).get('code', '')}".strip()
 
 
+def tapped(api, card, token):
+    """The person's own tap on a card: what the setting's route did with it (ran, refused, or the status it gave),
+    with the test database put back as it was before the tap, so the next entry starts from the same fixture. The
+    card is then cancelled, so the next one isn't over the cap on open cards."""
+    path = api.app.state.store.settings.db_path
+    with closing(sqlite3.connect(":memory:")) as kept:
+        with closing(sqlite3.connect(path)) as live:
+            live.backup(kept)
+        tap = post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token)["action"]
+        with closing(sqlite3.connect(path)) as live:
+            kept.backup(live)
+    post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token)
+    if tap["status"] == "done":
+        return "ran"
+    code = (tap.get("result") or {}).get("status_code")
+    return "refused" if code == 403 else f"tap {code}"
+
+
 def ask(api, attempt, e, objects, person, token):
-    """`hub settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card is
-    cancelled at once (as the person), so the next entry's card isn't over the cap on open cards."""
+    """`hub settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
+    from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
+    until then, so this is where the route says whether that person may."""
     target = _target(e, objects, person)
     planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e), **target})
     if planned.status_code == 200 and "run" in planned.json():
         run = planned.json()["run"]
         planned = act(api, attempt, run["method"], run["path"], run["body"])
     got = outcome(planned)
-    if got == "card":
-        post(api, f"assistant/actions/{planned.json()['action']['id']}/cancel", {}, token)
-    return got
+    if got != "card":
+        return got
+    tap = tapped(api, planned.json(), token)
+    return "card" if tap == "ran" else "card, then " + tap
 
 
 def sweep(api, botops, role, entries, objects=None):
@@ -202,7 +236,7 @@ def sweep(api, botops, role, entries, objects=None):
             want = expected(c, e, role, person)
         got = ask(api, attempt, e, objects, person, token)
         finish(api, botops, attempt)
-        if got in ("ran", "card", "refused"):
+        if got in ("ran", "card", "refused", "card, then refused"):
             if KNOWN_GAPS.get((e.key, role)) == got:
                 known.add((e.key, role))
             elif got != want:
@@ -226,14 +260,18 @@ def test_every_setting_does_what_the_catalogue_says_for_botops_acting_for_each_p
 
 
 def test_the_sweep_names_an_entry_whose_route_refuses_a_level_the_catalogue_allows(api, botops, monkeypatch):
-    """Acceptance 8. Release times said "anyone" (the route keeps it to the owner and admins), and Bot repositories
-    without its Run workflows rule (as on Oct 27): the sweep names both."""
+    """Acceptance 8. Release times said "anyone" (the route keeps it to the owner and admins); Takes member bots, a
+    Confirm entry, said "anyone" too (Review 2 of PR #1700: the card is made by the catalogue, so only the tap reaches
+    the route's admin check); and Bot repositories without its Run workflows rule (as on Oct 27). The sweep names each."""
     from dataclasses import replace
     entries = [replace(settings_catalog.entry("release.times"), who="anyone"),
+               replace(settings_catalog.entry("computer.member_bots"), who="anyone"),
                replace(settings_catalog.entry("bot.repositories"), confirm_when=(), why="")]
     monkeypatch.setattr(settings_catalog, "_entries", lambda: entries)
     objects = _objects(api, runner(api))
-    wrong, _, _ = sweep(api, botops, "member", entries[:1], objects)
-    assert wrong == ["release.times: catalogue says ran for the member (direct, anyone), the route refused"], wrong
-    wrong, _, _ = sweep(api, botops, "owner", entries[1:], objects)
+    wrong, _, _ = sweep(api, botops, "member", entries[:2], objects)
+    assert wrong == ["release.times: catalogue says ran for the member (direct, anyone), the route refused",
+                     "computer.member_bots: catalogue says card for the member (confirm, anyone), the route card, then "
+                     "refused"], wrong
+    wrong, _, _ = sweep(api, botops, "owner", entries[2:], objects)
     assert wrong == ["bot.repositories: catalogue says ran for the owner (direct, admin), the route card"], wrong

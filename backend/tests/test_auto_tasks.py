@@ -104,10 +104,12 @@ def test_setting_revision_permissions_and_private_counters(api):
     assert get(api, 'bots/ops', token='ben-test')['task_flow']['going'] == 0
 
 
-@pytest.mark.parametrize('step', ['Review 1', 'Post Release QA'])
-def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step):
+@pytest.mark.parametrize('step,kind', [('Review 1', 'review'), ('Post Release QA', 'release_qa'),
+                                       ('Second opinion', 'review')])
+def test_review_children_are_independent_and_uncapped_but_computer_capacity_still_applies(api, step, kind):
     machine = task_bot(api, lanes=True, capacity=10)
-    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': step, 'status': 'review'}]})['type']
+    typ = post(api, 'task-types', {'name': 'Review flow', 'steps': [{'name': step, 'status': 'review',
+                                                                     'flow': {'check': kind}}]})['type']
     parent = post(api, 'tasks', {'owner': 'finance', 'title': 'Implementation awaiting review', 'body': 'Review it.',
                                  'type': typ['id'], 'step': step})
     children = [post(api, 'tasks', {'owner': 'ops', 'title': f'Review change {i}', 'body': 'Review the change.',

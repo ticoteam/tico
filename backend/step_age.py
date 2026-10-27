@@ -194,15 +194,15 @@ def sweep(c, at=None):
 
 def _turn_items(c):
     """Working engineering tickets and the open checks below engineering tickets, still `doing`, owned by a bot."""
-    from .check_pools import CHECK_TITLE
+    from .check_pools import is_check_title
     rows = H._rows(c.execute(
         "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE y.role=? AND t.status=? "
         "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
     rows += [r for r in H._rows(c.execute(
-        "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
+        "SELECT t.*, p.type_id AS parent_type FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task JOIN task_types y ON y.id=p.type_id WHERE y.role=? AND t.status=? "
         "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
-        if CHECK_TITLE.match(str(r.get("title") or "").strip())]
+        if is_check_title(c, {"type_id": r.pop("parent_type")}, r.get("title"))]
     return rows
 
 

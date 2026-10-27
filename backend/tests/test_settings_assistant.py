@@ -16,6 +16,8 @@ from backend.settings_entries import ENTRIES
 from backend.store import Problem
 from backend.tests.test_api import api, as_member, get, headers, post, put  # noqa: F401  (fixture)
 from backend.tests.test_assistant import assistant_turn
+from backend.tests.test_botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
+from backend.tests.test_member_bots import botops  # noqa: F401  (fixture)
 from clients import hubtools
 from clients.tico import APIError
 
@@ -221,6 +223,36 @@ def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
         assert c.execute("SELECT enabled FROM repositories WHERE full_name='Acme/product'").fetchone()[0] == 0
 
 
+def test_run_workflows_is_a_card_in_the_assistant_chat_and_a_cited_write_never_skips_it(api, botops, repos):
+    """Criterion 10, and the route's own rule at the Assistant gate: a kept Run workflows tick coming back as
+    `{"mode": "chosen"}`, or taking access away, holds no tick in the body but is still the person's card."""
+    r, attempt = assistant_turn(api, "ana-test", "Let ops run workflows in product")
+    token = attempt["token"]
+    cited = {**headers(token), "X-Tico-On-Behalf-Of": "turn"}
+    before = effective(api)                                         # write on product, no workflows
+    err, card = mcp(api, "hub_settings_set", {"key": "bot.repositories", "bot": "ops", "on_behalf_of": "turn",
+                                              "value": {"mode": "chosen", "chosen": [FLAG]}}, token)
+    assert not err and card["needs_confirm"] is True and effective(api) == before != [FLAG], card
+    assert card["action"]["description"].startswith("ops: may run workflows in product: it can start CI"), card
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT proposer FROM assistant_actions WHERE id=?", (card["action"]["id"],)).fetchone()
+    assert row["proposer"] == "assistant"
+    post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")
+    assert effective(api) == [FLAG]
+    # The tick is kept, then comes back with a body that holds none: the route would card it, so the gate does.
+    put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
+    for value in ({"mode": "chosen"}, {"mode": "chosen", "chosen": [FLAG]}):
+        raw = api.put("/api/v2/bots/ops/repositories", json=value, headers=cited)
+        assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", raw.text
+        assert effective(api) == [], value
+    put(api, "bots/ops/repositories", {"mode": "chosen", "chosen": [FLAG]}, token="ana-test")
+    # Taking access away is the route's card too; sending again a tick that is on runs, as the route runs it.
+    raw = api.put("/api/v2/bots/ops/repositories", json={"mode": "own"}, headers=cited)
+    assert raw.status_code == 403 and effective(api) == [FLAG], raw.text
+    raw = api.put("/api/v2/bots/ops/repositories", json={"mode": "chosen", "chosen": [FLAG]}, headers=cited)
+    assert raw.status_code == 200 and effective(api) == [FLAG], raw.text
+
+
 # ------------------------------------------------------------------ the same request to BotOps and to the Assistant
 SAMPLE = {"bool": "on", "int": "3", "number": "1", "list": "a", "text": "x", "json": {"name": "x"}, "upload": "x"}
 
@@ -282,7 +314,7 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
         with api.app.state.store.read() as c:
             want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
         got = parity.ask(api, attempt, e, objects, person, token)
-        if got in ("ran", "card", "refused"):
+        if got in ("ran", "card", "refused", "card, then refused"):
             if got != want:
                 wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}")
         else:

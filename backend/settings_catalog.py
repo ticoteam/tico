@@ -285,8 +285,9 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
     (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
     when the owner's rule is off or the turn cites no words of the person's). `can_card(method, path)`: whether that
-    card can carry the route. `card_words(c, auth, who, e, body, target)`: the card's plain words, or the refusal the
-    person's own click would get (then no card is made); None when the entry has no words of its own."""
+    card can carry the route. `card_words(c, auth, who, e, body, target)`: for an entry whose class rests on what the
+    change does to stored state, the change tried as the person's own click: (needs a card, the card's plain words),
+    or the refusal that click would get (then no card is made); None for any other entry."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via in ACTING_FOR
 
@@ -321,13 +322,18 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, effective_u
     kind = kind_for(e, class_body)
     if kind == "person" and (acting_for or who.role not in ("owner", "human")):
         raise person_only()
+    tried = card_words(c, auth, who, e, body, target) if card_words and acting_for else None
+    if tried is not None:
+        # What the route itself does with the request: a kept Run workflows tick that comes back with
+        # `{"mode": "chosen"}` needs the card though the body holds no tick, and re-sending a tick that is on doesn't.
+        kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
     if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
         if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
-        words = card_words(c, auth, who, e, body, target) if card_words else None
+        words = tried and tried[1]
         if words:
             return propose(c, who, e.method, "/api/v2/" + request["path"], body, words[:300], what=words)
         return propose(c, who, e.method, "/api/v2/" + request["path"], body,
@@ -388,9 +394,10 @@ def matched(method, path, body):
                 continue
         elif any(body.get(k) != v for k, v in e.extra.items()):
             continue
-        if e.key == "rules.wake":
-            # An update keeps the stored rule's action and params wherever it leaves them out or sends null
-            # (rules.update), which this body alone does not show: `stored_class` reads the rule for every update.
+        if e.key in ("rules.wake", "bot.repositories"):
+            # Classed by what the change does to stored state, which this body alone does not show (`stored_class`):
+            # a wake-rule update keeps the stored action and params wherever it leaves them out or sends null
+            # (rules.update); a repository change can keep a Run workflows tick or take access away.
             return e, target, "stored"
         return e, target, kind_for(e, body)
     return None
@@ -403,13 +410,17 @@ def merged_wake(row, update):
     return {**update, "then": update.get("then") or row["then_outcome"], "params": params}
 
 
-def stored_class(c, method, path, body):
-    """`matched`, with a wake-rule update classed by what the route will save, as `plan` classes it: turning on
-    or editing a stored rule that sends outside is person-only however little the body says."""
+def stored_class(c, method, path, body, trial=None):
+    """`matched`, with a change classed by what it does to stored state, as `plan` classes it: turning on or editing
+    a stored wake rule that sends outside is person-only however little the body says, and a repository change is a
+    card when `trial(e, target, body)` (the change tried as the person's own click, `repositories.card_words`) says
+    the route would make one; with no trial, always."""
     found = matched(method, path, body)
     if not found or found[2] != "stored":
         return found
     e, target, _ = found
+    if e.key == "bot.repositories":
+        return e, target, "direct" if trial and not trial(e, target, body) else e.when_held
     row = c.execute("SELECT then_outcome, params_json FROM rules WHERE id=?", (target["id"],)).fetchone()
     return e, target, kind_for(e, merged_wake(row, body) if row else body)
 

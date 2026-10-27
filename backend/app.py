@@ -696,7 +696,13 @@ def create_app(settings=None):
                             record = assistant_instruction(c, request.state.identity, asked)
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
-                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw)
+                                def trial(e, target, body):
+                                    # The route's own rule (repositories.needs_card), tried and rolled back.
+                                    from . import repositories
+                                    with store.transaction() as tc:
+                                        return repositories.card_words(tc, settings, auth, request.state.identity,
+                                                                       target["bot"], body)[0]
+                                assistant_mod.require_direct_setting(c, request.method, request.url.path, raw, trial)
                             if approves:
                                 # Recorded on the approval: decided by the Assistant for the person, their words quoted.
                                 # The bot whose turn it is: the person's Assistant, or the owner's CEO Bot.
@@ -3631,8 +3637,16 @@ def create_app(settings=None):
         from . import review_gate, step_flow
         # None is reserved for a genuinely unconfigured GitHub integration.
         # If a skipped preflight becomes applicable during mutation, fail closed.
-        if child_title is not None and not review_gate.REVIEW.match(child_title):
-            return {}
+        if child_title is not None:
+            # A child titled for one of the parent board's review steps; a parent this caller cannot read is
+            # refused by the create itself.
+            with store.read() as c:
+                try:
+                    parent = auth.task(c, who, auth.resolve_task(c, who, tid))
+                except Problem:
+                    return {}
+                if not review_gate.is_review(c, parent, child_title):
+                    return {}
         if child_title is None and step is None and status is None and task_type is None:
             return {}
         with store.read() as c:

@@ -189,11 +189,12 @@ def instructed_setting(method, path, body=None):
     return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
 
 
-def require_direct_setting(c, method, path, body):
-    """403 unless the setting this cited write changes is direct once read against what is stored (a partial wake-rule
-    update keeps the stored rule's action): the same class `plan` gave it."""
+def require_direct_setting(c, method, path, body, trial=None):
+    """403 unless the setting this cited write changes is direct once read against what is stored (a wake-rule update
+    keeps the stored rule's action; a repository change is tried as the person's own click, `trial`): the same class
+    `plan` gave it."""
     from . import settings_catalog
-    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body))
+    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
     if not found or found[2] != "direct":
         e = found[0] if found else None
         raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
