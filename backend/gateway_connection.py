@@ -38,7 +38,7 @@ import time
 
 from clients import gateway as G
 
-from . import read_cache
+from . import destinations, read_cache
 from .store import H, Problem
 
 KEY = "gateway-connection"
@@ -106,6 +106,11 @@ def _row(c):
 def _write(c, record):
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (KEY, json.dumps(record, sort_keys=True)))
+
+
+def revision(c):
+    """The saved connection's revision: every save, clear and automatic key adds one."""
+    return int(_row(c).get("revision") or 0)
 
 
 def source(c, settings=None):
@@ -199,9 +204,27 @@ def _clean_url(value):
                       "query or password", 422) from None
 
 
+LABEL_KEY = "Gateway key"
+
+
+def destination_change(c, body, settings=None):
+    """What saving `body` would do to where the saved key goes (backend/destinations.py): None when it stays with the
+    same service (a path on the same origin is the same service) or no key is saved here, else the safe old and new
+    destination. An empty URL is Tico's address, so going back to it from another is a change too."""
+    before = _row(c)
+    if env_key(settings) or not before.get("key"):
+        return None
+    return destinations.change(G.base_url(before.get("url") or ""), G.base_url(_clean_url(body.get("url"))))
+
+
 def save(c, vault, who, body, now, settings=None):
     """Save a key (and URL), or only the URL with the key left as it is. Returns the record before and after, both
-    without the key."""
+    without the key.
+
+    A new address for another service while a key is saved is held (`destinations.held`) until the body says what
+    happens to the key: `credentials: "keep"` sends it to the new address, `"clear"` drops it in the same write (Tico
+    models turn off, connecting automatically stays off, and no check is sent). A key typed in the same save replaces
+    the saved one, so nothing saved moves. Either way the change leaves one `integration.destination_changed` event."""
     owner_only(who)
     if env_key(settings):
         raise Problem("environment", f"The server's environment sets the gateway key ({ENV_KEY}); change it there", 409)
@@ -210,6 +233,10 @@ def save(c, vault, who, body, now, settings=None):
         raise Problem("conflict", "The Gateway connection changed since you opened it; reload and try again", 409)
     secret = body.get("key")
     new_url = _clean_url(body.get("url"))
+    option = destinations.choice(body.get("credentials"))
+    moved = destination_change(c, body, settings)
+    if moved and not secret and not option:
+        raise destinations.held("gateway", moved, [LABEL_KEY], before.get("revision"), G.LABEL)
     after = {**before, "url": new_url if new_url != G.DEFAULT_BASE else "", "revision": int(before.get("revision") or 0) + 1,
              "updated": now, "updated_by": who.actor}
     if secret:
@@ -220,12 +247,20 @@ def save(c, vault, who, body, now, settings=None):
         after["preview"] = secret[:3] + "…" + secret[-3:] if len(secret) >= 12 else "••••••"
         for field in ("origin", "key_id", "rotate_after"):
             after.pop(field, None)                        # a pasted key is the owner's: never rotated or replaced
+    elif moved and option == destinations.CLEAR:
+        for field in ("key", "preview", "origin", "key_id", "rotate_after"):
+            after.pop(field, None)
+        after["auto"] = {"off": True, "at": now}          # never enrolled again at the new address behind the owner's back
     elif not before.get("key"):
         raise Problem("key", "Paste the gateway key Tico gave you", 422)
     after.pop("check", None)
     _write(c, after)
     H.event(c, who.actor, "gateway.connection.saved", PROVIDER,
-            {"key_changed": bool(secret), "url": after["url"] or G.DEFAULT_BASE, "revision": after["revision"]})
+            {"key_changed": bool(secret), "destination": destinations.safe(G.base_url(after["url"])),
+             "revision": after["revision"]})
+    if moved:
+        destinations.record(c, who, "gateway", PROVIDER, moved, [LABEL_KEY],
+                            destinations.REPLACED if secret else option, after["revision"])
     return _public(before), _public(after)
 
 

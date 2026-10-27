@@ -192,7 +192,14 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         put(api, "access/rules", {"botops_direct": False})
         ana = turn(api, botops, person="ana-test", text="Change the Gateway address")
         current = get(api, "providers/gateway")
-        request = {"url": proposed.url, "expected_revision": current["revision"]}
+        request = {"url": proposed.url, "expected_revision": current["revision"], "credentials": "keep"}
+        from backend import destinations
+        old, new = destinations.address(original.url), destinations.address(proposed.url)
+
+        # Not told whether the saved key goes along: refused at once with what the owner must decide, and no card.
+        unsaid = act(api, ana, "PUT", "providers/gateway", {k: v for k, v in request.items() if k != "credentials"})
+        assert unsaid.status_code == 409 and unsaid.json()["error"]["code"] == "destination_change", unsaid.text
+        assert unsaid.json()["error"]["old"]["address"] == old and unsaid.json()["error"]["new"]["address"] == new
 
         secret = act(api, ana, "PUT", "providers/gateway", {**request, "key": KEY})
         assert secret.status_code == 422 and secret.json()["error"]["code"] == "secret_in_request", secret.text
@@ -204,8 +211,10 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         assert pending.status_code == 200 and pending.json()["needs_confirm"], pending.text
         card = pending.json()
         card_in_chat(api, card, "ana")
-        # The owner sees the address the key would go to before tapping.
-        assert {"field": "url", "new": proposed.url} in card["action"]["diff"], card["action"]
+        # The owner sees the address the key would go to before tapping: scheme, host and port, and that it keeps it.
+        assert {"field": "destination", "old": old, "new": new} in card["action"]["diff"], card["action"]
+        assert {"field": "credentials", "new": "keep: Gateway key"} in card["action"]["diff"]
+        assert "/v1/gateway" not in json.dumps(card["action"]["diff"]) + card["action"]["description"]
         assert proposed.calls == []                         # the saved key has not reached the new address
         assert get(api, "providers/gateway")["url"] == original.url
         assert KEY not in json.dumps(card)
@@ -231,9 +240,9 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         put(api, "access/rules", {"botops_direct": True})
         current = get(api, "providers/gateway")
         direct_rule_card = act(api, ana, "PUT", "providers/gateway",
-                               {"url": original.url, "expected_revision": current["revision"]})
+                               {"url": original.url, "expected_revision": current["revision"], "credentials": "keep"})
         assert direct_rule_card.status_code == 200 and direct_rule_card.json()["needs_confirm"], direct_rule_card.text
-        assert {"field": "url", "new": original.url} in direct_rule_card.json()["action"]["diff"]
+        assert {"field": "destination", "old": new, "new": old} in direct_rule_card.json()["action"]["diff"]
         assert get(api, "providers/gateway")["url"] == proposed.url
         assert original.calls == []
         assert confirm(api, direct_rule_card.json(), "ana-test")["action"]["status"] == "done"

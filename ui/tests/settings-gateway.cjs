@@ -16,6 +16,8 @@ const {unrouted} = require('./support/routes.cjs');
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', dialog => dialog.accept());
     const KEY = 'tgw_fixture_0123456789abcdef';
+    // Another service than the saved key's: the server holds the save until the owner keeps or clears the key.
+    const MOVED = 'https://elsewhere.example.test/v1/gateway';
     const tico = (id, name, under) => ({id, label: name, description: `Claude ${under} 5.5 underneath`, runtime: 'pi',
       provider: 'tico', efforts: ['low', 'high', 'max'], default_effort: 'high', harnesses: ['pi']});
     const catalog = {
@@ -64,6 +66,13 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/v2/providers/gateway') {
         if (req.method() === 'GET') return json(shown(role === 'owner'));
         sent.push({method: req.method(), body: req.postDataJSON?.() ?? null});
+        const asked = req.postDataJSON?.() ?? {};
+        if (req.method() === 'PUT' && asked.url === MOVED && !asked.credentials) {
+          return json({error: {code: 'destination_change', detail: 'This sends the saved Gateway key elsewhere.', retryable: false,
+            integration: 'gateway', name: 'Tico AI Gateway', old: {address: 'https://gateway.example.test:443'},
+            new: {address: 'https://elsewhere.example.test:443'}, credentials: ['Gateway key'], revision: gateway.revision,
+            choices: ['keep', 'clear']}}, 409);
+        }
         if (req.method() === 'PUT') {
           gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
             message: 'Connected.'};
@@ -126,6 +135,27 @@ const {unrouted} = require('./support/routes.cjs');
     await page.waitForFunction(() => document.querySelector('#set-gateway [data-gateway-url]')?.value === '');
     assert.deepEqual(sent.filter(row => row.method === 'PUT')[1].body,
       {url: 'https://gateway.example.test/v1/gateway', expected_revision: 1}, 'an empty field keeps the saved key');
+    // Another service while a key is saved: the owner is asked first, by scheme, host and port and the key's label, never
+    // the key or its preview. Cancel saves nothing; Clear sends the answer with the same revision.
+    await open();
+    await card.locator('[data-gateway-url]').fill(MOVED);
+    await card.locator('[data-gateway-save]').click();
+    const ask = page.locator('dialog.destination-dialog');
+    await ask.waitFor();
+    assert.equal(await ask.locator('[data-destination-old]').innerText(), 'https://gateway.example.test:443');
+    assert.equal(await ask.locator('[data-destination-new]').innerText(), 'https://elsewhere.example.test:443');
+    assert.match(await ask.innerText(), /Gateway key/);
+    assert.ok(!(await ask.innerText()).includes('tgw'), 'no key preview in the prompt');
+    await ask.locator('[data-destination-cancel]').click();
+    await page.locator('#set-gateway [data-gateway-status] .err').waitFor();
+    assert.equal(await card.locator('[data-gateway-status]').innerText(), 'Nothing was saved');
+    const puts = sent.filter(row => row.method === 'PUT').length;
+    await card.locator('[data-gateway-save]').click();
+    await ask.waitFor();
+    await ask.locator('[data-destination-clear]').click();
+    await page.waitForFunction(() => document.querySelector('#set-gateway [data-gateway-url]')?.value === '');
+    assert.deepEqual(sent.filter(row => row.method === 'PUT').slice(puts).map(row => row.body),
+      [{url: MOVED, expected_revision: 2}, {url: MOVED, expected_revision: 2, credentials: 'clear'}], 'asked, then answered');
     // What the Gateway says about the key reads plainly to the owner.
     const says = async (state, message, used, pill) => {
       gateway = {...gateway, state, message, used, working: !['revoked', 'unknown'].includes(state)};

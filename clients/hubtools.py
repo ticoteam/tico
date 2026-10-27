@@ -3490,10 +3490,16 @@ def webhook_show(api, args):
        "rate_per_hour": {"type": "integer", "minimum": 1},
        "allow_http": {"type": "boolean", "description": "Owner only"},
        "filter": _WEBHOOK_FILTER, "headers": _WEBHOOK_HEADERS,
-       "expected_revision": {"type": "integer", "minimum": 1, "description": "The revision you read; a stale one answers 409"},
+       "expected_revision": {"type": "integer", "minimum": 1, "description": "The revision you read; a stale one answers 409. "
+                             "Needed to change the address"},
+       "credentials": {"type": "string", "enum": ["keep", "clear"],
+                       "description": "When the new address is another destination and secret headers keep their saved "
+                                      "values (the update answers 409 destination_change): keep sends them there, clear "
+                                      "removes them and pauses the endpoint until they are typed again. Ask the person"},
        "on_behalf_of": ON_BEHALF_OF}, required=("id",), writes=True)
 def webhook_update(api, args):
-    body = {k: args[k] for k in ("name", "url", "events", "rate_per_hour", "allow_http", "filter", "headers", "expected_revision")
+    body = {k: args[k] for k in ("name", "url", "events", "rate_per_hour", "allow_http", "filter", "headers", "expected_revision",
+                                 "credentials")
             if args.get(k) is not None}
     return _as_person(api, args.get("on_behalf_of")).post(_hook_path(args, "update"), body, key=_key(args))
 
