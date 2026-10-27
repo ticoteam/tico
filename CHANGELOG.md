@@ -28,9 +28,11 @@ All notable changes to Tico are recorded here. The format follows
 - **Green checks clear review holds.** Fresh all-green pull-request checks can satisfy Review questions and clear a review-gate hold ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
 - **Review moves retry on the right board.** A refused cross-board move retries on its destination board, and an expired hold clears when no retry can resolve it ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
 - **Actionable notices release stale task deferrals.** Due, snooze, resume and completed-check notices can restart an Open task held only by an outdated next-run deferral; real waits still hold it ([Picking work back up](docs/tasks.md#picking-work-back-up)).
-- **Subtask results reach a Waiting parent sooner.** An unrelated open subtask no longer delays a result the parent is waiting for; other waits still apply ([Subtasks and PRs](docs/tasks.md#subtasks-and-pull-requests)).
+- **Subtask results reach a Waiting parent sooner.** An unrelated open subtask no longer delays a result the parent is waiting for; other waits still apply ([Subtasks and PRs](docs/tasks.md#subtasks-and-prs)).
 - **Review results survive varied note formats.** Valid verdicts in notes, comments and final replies are recognized for the current review cycle. A person can also finish their own check-titled child task without a review verdict ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
 - **Status pages skip finished company tasks.** They continue to include live tasks and private tasks while avoiding unnecessary reads of old completed work ([Status](docs/health-monitor.md)).
+- **Health's queue counts match Pipeline.** Health and `hub pipeline` count a bot's queued jobs the same way. Jobs behind an interrupted run awaiting review and jobs held on purpose are named separately, not shown as queued ([Health](docs/health-monitor.md)).
+- **Late Dev-ticket notices are reliable.** A notice is recorded only after a manager who can read the ticket receives it, so a ticket with no readable manager is told on a later pass. One ticket that fails no longer stops the rest of the sweep ([Waiting work](docs/tasks.md#work-that-is-waiting)).
 
 ## [0.4.12] - 2026-10-26
 
@@ -4480,7 +4482,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.12...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.15...HEAD
+[0.4.13]: https://github.com/ticoteam/tico/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/ticoteam/tico/compare/v0.4.11...v0.4.12
 [0.4.9]: https://github.com/ticoteam/tico/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
