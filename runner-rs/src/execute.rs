@@ -756,7 +756,7 @@ impl Runner {
         e
     }
 
-    /// Release capacity only if a lane really blocks; all subsequent preparation needs a fresh grant.
+    /// Release capacity only if preparation really blocks; subsequent preparation needs a fresh grant.
     async fn pre_start_lock<T>(&self, attempt: &Value, flags: &Flags,
         waiting: impl Future<Output = Result<T, Fail>>) -> Result<T, Fail> {
         let mut waiting = std::pin::pin!(waiting);
@@ -764,9 +764,13 @@ impl Runner {
         match first {
             std::task::Poll::Ready(result) => result,
             std::task::Poll::Pending => {
-                self.wait_before_start(attempt, "pre-start requirements").await?;
+                if let Err(error) = self.wait_before_start(attempt, "pre-start requirements").await {
+                    // The first poll may have started git; finish it with its locks before returning an API error.
+                    let _ = waiting.await;
+                    return Err(error);
+                }
                 let result = waiting.await?;
-                self.wait_start_place(attempt, flags).await?;
+                self.during_drain(&text_of(&attempt["id"]), self.wait_start_place(attempt, flags)).await?;
                 Ok(result)
             },
         }
@@ -916,6 +920,21 @@ impl Runner {
             let _one = self.push_lock.lock().await; // one push at a time on this computer
             publish_history(path, &repository, env).await
         };
+        self.published(bot, &repository, (state, detail))
+    }
+
+    /// Initial history publication shares the computer's push queue, but a queued turn holds no start place.
+    async fn publish_before_start(&self, attempt: &Value, flags: &Flags, bot: &str, path: &Path, env: &Env) -> Result<(&'static str, String), Fail> {
+        let repository = env.get(crate::gitcred::REPOSITORY_KEY).cloned().unwrap_or_default();
+        if repository.is_empty() { return Ok(("skipped", String::new())); }
+        let result = self.pre_start_lock(attempt, flags, async {
+            let _one = self.during_drain(&text_of(&attempt["id"]), async { Ok(self.push_lock.lock().await) }).await?;
+            Ok(publish_history(path, &repository, env).await)
+        }).await?;
+        Ok(self.published(bot, &repository, result))
+    }
+
+    fn published(&self, bot: &str, repository: &str, (state, detail): (&'static str, String)) -> (&'static str, String) {
         let note = if state == "failed" { format!("{repository}: {detail}") } else { String::new() };
         let mut notes = self.publish_notes.lock().unwrap();
         if state == "published" {
@@ -1304,18 +1323,32 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
+            let start_attempt = attempt.clone();
             if p.has_checkout() {
                 // A returning bot's old clone is caught up to GitHub once per placement (crate::placement).
                 crate::placement::catch_up(&bot, &attempt["generation"], &execution_path, &env).await;
                 // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
                 // run no turn on a copy that shares no history with GitHub's.
-                let (published, detail) = self.publish(&bot, &execution_path, &env).await;
+                let (published, detail) = self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, &env).await?;
                 if published == "failed" && detail.contains("unrelated history") {
                     return Err(Fail::runtime(format!("this computer's copy of {bot} shares no history with GitHub ({detail}); no turn runs on it")));
                 }
-                self.refresh_checkout(p, &mut attempt, &env).await;
+                let refresh = async {
+                    self.refresh_checkout(p, &mut attempt, &env).await;
+                    Ok(())
+                };
+                if p.task.is_empty() {
+                    refresh.await?;
+                } else {
+                    // A task refresh can wait on the shared git lock before pushing product files.
+                    self.pre_start_lock(&start_attempt, &flags, refresh).await?;
+                }
             }
-            conv.push_str(self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)?);
+            // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
+            // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
+            conv.push_str(self.pre_start_lock(&start_attempt, &flags, async {
+                self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
+            }).await?);
             if source_resume.is_some() {
                 // Save and lookup share the actual login binding and confirmed checkout placement.
                 conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
@@ -2413,6 +2446,7 @@ mod tests {
 
     impl Drop for RunControls {
         fn drop(&mut self) {
+            crate::sessions::WORKTREE_WAIT.with(|v| v.set(None));
             RENEW_EVERY.with(|v| v.borrow_mut().take());
             RUN_CLOCK.with(|clock| clock.borrow_mut().clear());
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
@@ -2591,6 +2625,53 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn failed_start_place_release_finishes_inflight_preparation_before_returning() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (409, r#"{"error":{"code":"synthetic_release_failure","detail":"synthetic release refused"}}"#),
+        ]).await;
+        let (runner, dir) = lease_runner(&url, "release-failure");
+        let turn = json!({"id": "a-release-fail", "start_reservation_seconds": 180});
+        let finished = AtomicBool::new(false);
+        let result = runner.pre_start_lock(&turn, &lease_flags(), async {
+            tokio::task::yield_now().await;
+            finished.store(true, Ordering::SeqCst);
+            // Returning the release error must not depend on the preparation succeeding.
+            Err::<(), _>(Fail::runtime("synthetic git failure"))
+        }).await;
+        assert!(finished.load(Ordering::SeqCst), "a release API error dropped preparation in flight");
+        assert!(result.unwrap_err().text.contains("synthetic release refused"));
+        assert_eq!(seen.lock().unwrap().len(), 1, "do not reserve after the release failed");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_the_fresh_start_grant_after_placement_finishes() {
+        let (url, seen, server) = recording_server_waiting_to_start(None, Some(false)).await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let turn = json!({"id": "a-regrant", "start_reservation_seconds": 180});
+        runner.state.record(&turn).unwrap();
+        runner.drain.register("a-regrant");
+        let flags = lease_flags();
+        let work = runner.pre_start_lock(&turn, &flags, async {
+            tokio::task::yield_now().await;
+            Ok(())
+        });
+        let drain = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while seen.lock().unwrap().len() < 2 { tokio::task::yield_now().await; }
+            }).await.expect("fixture never reached its fresh-grant capacity wait");
+            runner.shut_down();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async { tokio::join!(work, drain) })
+            .await.expect("fresh-grant wait ignored the pre-start drain");
+        assert!(result.is_err());
+        assert!(runner.drain.returning("a-regrant"));
+        assert!(runner.state.pending("a-regrant").unwrap().iter().any(|e| e["payload"]["yielded"].is_string()));
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn codex_logins_run_together_and_optional_queue_waits_end_on_a_lost_lease_a_stop_or_a_hard_stop() {
         let dir = std::env::temp_dir().join(format!("tico-login-wait-{}", uuid::Uuid::new_v4().simple()));
@@ -2709,6 +2790,61 @@ mod tests {
     }
 
     async fn recording_server_waiting_to_start(hold: Option<Arc<Notify>>, revoke_start: Option<bool>) -> (String, Arc<Mutex<Vec<(String, String, Value)>>>, tokio::task::JoinHandle<()>) {
+        recording_server_start_window(hold, revoke_start, None).await
+    }
+
+    /// A synthetic server clock: renewals keep the delivery alive but cannot extend a hard start deadline.
+    struct StartWindow {
+        now: u64,
+        until: Option<u64>,
+        expired: bool,
+        started: bool,
+        renewed_at: Option<u64>,
+        publish_repository: bool,
+    }
+
+    impl StartWindow {
+        fn answer(&mut self, path: &str, body: &Value) -> Option<(bool, Value)> {
+            if self.publish_repository && path.ends_with("/github/token") {
+                // No token or remote call: a non-git checkout skips history publication after the queue frees.
+                return Some((false, json!({"configured": true, "repository": "acme/synthetic-bot"})));
+            }
+            if !["/renew", "/start-place", "/started"].iter().any(|p| path.ends_with(p)) { return None; }
+            if !self.started && self.until.is_some_and(|until| self.now >= until) {
+                self.expired = true;
+            }
+            if self.expired {
+                return Some((true, json!({"error": {"code": "stale_lease", "detail": "Start reservation expired"}})));
+            }
+            if path.ends_with("/start-place") {
+                let waiting = body.get("waiting").is_some();
+                self.until = (!waiting).then_some(self.now + 180);
+                return Some((false, json!({"reserved": !waiting})));
+            }
+            if path.ends_with("/started") {
+                assert!(self.until.is_some(), "the runner must reserve before starting");
+                self.started = true;
+            } else {
+                self.renewed_at = Some(self.now);
+            }
+            Some((false, json!({"lease_seconds": 120})))
+        }
+    }
+
+    #[test]
+    fn start_window_server_refuses_expired_reservations_even_after_a_late_wait() {
+        let mut window = StartWindow { now: 0, until: Some(180), expired: false, started: false, renewed_at: None, publish_repository: false };
+        assert!(!window.answer("/renew", &json!({})).unwrap().0);
+        assert_eq!(window.until, Some(180), "renewals must not extend the hard reservation");
+        window.now = 181;
+        let (rejected, error) = window.answer("/renew", &json!({})).unwrap();
+        assert!(rejected && window.expired);
+        assert_eq!(error["error"]["code"], "stale_lease");
+        assert!(window.answer("/start-place", &json!({"waiting": "worktree"})).unwrap().0);
+    }
+
+    async fn recording_server_start_window(hold: Option<Arc<Notify>>, revoke_start: Option<bool>,
+        window: Option<Arc<Mutex<StartWindow>>>) -> (String, Arc<Mutex<Vec<(String, String, Value)>>>, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -2719,6 +2855,7 @@ mod tests {
                 let Ok((mut socket, _)) = listener.accept().await else { return };
                 let kept = kept.clone();
                 let hold = hold.clone();
+                let window = window.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 8192];
@@ -2744,12 +2881,14 @@ mod tests {
                     let mut first = text.lines().next().unwrap_or_default().split_whitespace();
                     let (method, path) = (first.next().unwrap_or_default().to_string(), first.next().unwrap_or_default().to_string());
                     let body = serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
-                    let rejected = revoke_start.is_some() && path.ends_with("/started");
+                    let model = window.as_ref().and_then(|w| w.lock().unwrap().answer(&path, &body));
+                    let rejected = model.as_ref().map_or(revoke_start.is_some() && path.ends_with("/started"), |(rejected, _)| *rejected);
                     let waiting = revoke_start.is_some_and(|after_start| !after_start ||
                         kept.lock().unwrap().iter().any(|(_, p, _)| p.ends_with("/started")));
                     // Events are acknowledged up to the last one sent, as the server does.
                     let answer = match body["events"].as_array().and_then(|e| e.last()) {
                         Some(last) => json!({"ack_seq": last["seq"]}),
+                        None if model.is_some() => model.unwrap().1,
                         None if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         None if path.ends_with("/start-place") => json!({"reserved": !waiting}),
                         None => json!({}),
@@ -3920,6 +4059,95 @@ for line in sys.stdin:
             assert!(runner.state.pending("a-start-wait").unwrap().is_empty(), "handback must flush its history");
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    async fn placement_wait_survives_start_window(kind: &str) {
+        let _controls = RunControls;
+        RENEW_EVERY.with(|v| *v.borrow_mut() = Some(Duration::from_millis(20)));
+        // Keep the production 120s/10s policy; compress only the retry fixture's local clock.
+        crate::sessions::WORKTREE_WAIT.with(|v| v.set(Some((Duration::from_millis(200), Duration::from_millis(20)))));
+        let window = Arc::new(Mutex::new(StartWindow { now: 0, until: Some(180), expired: false, started: false, renewed_at: None, publish_repository: kind == "publish" }));
+        let (url, seen, server) = recording_server_start_window(None, None, Some(window.clone())).await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let bot = format!("wait-{}", uuid::Uuid::new_v4().simple());
+        let attempt = json!({"id": "a-placement", "bot": bot, "token": "synthetic", "lease_seconds": 120,
+            "start_reservation_seconds": 180, "lane": "task:t-acme", "task": {"id": "t-acme"},
+            "conversation": {"id": "c1"}, "message": {"refs": {}},
+            "config": {"runtime": "pi", "harness": "pi", "model": "synthetic"}});
+        let main = crate::sessions::local_path(&runner.config, &bot, &attempt["config"]);
+        std::fs::create_dir_all(&main).unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/pi/turn.jsonl");
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(),
+            format!("cat > /dev/null; cat '{}'", fixture.display())]));
+        if matches!(kind, "refresh git" | "retry fallback") { crate::product_files::mark_unpushed(&bot); }
+        let checkout = if matches!(kind, "refresh git" | "publish") { None } else { Some(runner.lanes.checkout(&bot).lock_owned().await) };
+        let git = if matches!(kind, "retry fallback" | "publish") { None } else { Some(runner.lanes.git_lock(&main).lock_owned().await) };
+        let push = if kind == "publish" { Some(runner.push_lock.lock().await) } else { None };
+        let work = runner.clone().execute(attempt);
+        let release = async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let waiting = seen.lock().unwrap().iter().any(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_some());
+                    if waiting && runner.places.lock().unwrap().is_empty() { break; }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("placement did not release its reservation before waiting");
+            // Advance the SERVER past START_SECONDS while the actual lock remains held, then exercise real renewal.
+            window.lock().unwrap().now = 181;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if window.lock().unwrap().renewed_at == Some(181) { break; }
+                    tokio::task::yield_now().await;
+                }
+            }).await.expect("delivery did not renew beyond the original start deadline");
+            if kind == "retry fallback" {
+                // Both the retry span and its unbounded checkout fallback must hold no reservation.
+                tokio::time::sleep(Duration::from_millis(350)).await;
+            }
+            assert!(!window.lock().unwrap().expired);
+            assert_eq!(posted(&seen, "/attempts/a-placement/started"), 0, "the occupied lock must still fence the start");
+            assert!(runner.places.lock().unwrap().is_empty());
+            assert!(runner.lanes.lane(&bot, "task:t-acme").try_lock_owned().is_err(), "the task must keep its lane");
+            drop((git, checkout, push));
+        };
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let (result, ()) = tokio::join!(work, release);
+            result.unwrap();
+        }).await.expect("turn did not start after its lock was released");
+        server.abort();
+        crate::product_files::pushed(&bot);
+        let window = window.lock().unwrap();
+        assert!(window.started && !window.expired, "waiting work must neither expire nor lose its lease");
+        let requests = seen.lock().unwrap();
+        let started = requests.iter().position(|(_, p, _)| p.ends_with("/started")).unwrap();
+        let waiting = requests.iter().position(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_some()).unwrap();
+        assert!(requests[waiting + 1..started].iter().any(|(_, p, b)| p.ends_with("/start-place") && b.get("waiting").is_none()),
+            "a fresh reservation must follow the wait and precede the started post");
+        let completions: Vec<_> = requests.iter().filter(|(_, p, _)| p.ends_with("/complete")).collect();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].2["outcome"], "completed");
+        assert!(!requests.iter().any(|(_, _, b)| b.to_string().contains("Attempt lease lost while waiting")));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn initial_publish_push_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("publish").await;
+    }
+
+    #[tokio::test]
+    async fn task_worktree_git_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("task git").await;
+    }
+
+    #[tokio::test]
+    async fn refresh_checkout_git_wait_releases_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("refresh git").await;
+    }
+
+    #[tokio::test]
+    async fn worktree_retry_and_checkout_fallback_release_start_reservation_past_start_seconds() {
+        placement_wait_survives_start_window("retry fallback").await;
     }
 
     #[tokio::test]
