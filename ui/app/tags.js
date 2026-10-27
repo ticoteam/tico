@@ -149,30 +149,40 @@ function tagTaskRows(tasks) {
   return (tasks || []).map(task => `<a class="tag-task" href="#/task/${encodeURIComponent(task.id)}">${esc(task.title)} <span class="muted">${esc(STATUS_WORD[task.status] || task.status)}</span></a>`).join('') || '<div class="empty">No tasks</div>';
 }
 // A new tag is a name and notes; its key (made from the name) and its metadata wait under Advanced. A tag made from a
-// template asks for its key, since that names this instance (release-2026-10-02).
-const tagKeyOf = name => String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+// template asks for its key, since that names this instance (release-2026-10-02). Keys stop at 40 characters, where the
+// server cuts them (hubdb._labels), and never end in a hyphen: the server strips a posted key's edge hyphens before its
+// cut, so a key made here is saved exactly as the Key line shows it.
+const TAG_KEY_MAX = 40;
+const tagKeyOf = name => String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  .slice(0, TAG_KEY_MAX).replace(/-+$/, '');
+const tagKeyTyped = key => String(key || '').trim().toLowerCase().replace(/\s+/g, '-').replace(/^-+|-+$/g, '')
+  .slice(0, TAG_KEY_MAX).replace(/-+$/, '');
+const tagKeyFor = form => tagKeyTyped(form.elements.key.value) || tagKeyOf(form.elements.label?.value);
 function tagCreateForm(template = null) {
   const metadata = `<label>Metadata <textarea name="metadata" rows="2">${esc(JSON.stringify(template?.metadata || {}, null, 2))}</textarea></label>`;
   if (template) return `<form class="tag-form" data-tag-create>
-    <label>Key <input name="key" required placeholder="release-2026-10-02"></label>${metadata}
+    <label>Key <input name="key" required maxlength="${TAG_KEY_MAX}" placeholder="release-2026-10-02"></label>${metadata}
     <button type="submit">Create</button><p role="alert" data-tag-error></p></form>`;
   return `<form class="tag-form" data-tag-create>
     <label>Name <input name="label" required placeholder="bug"></label>
     <label>Notes <textarea name="markdown" rows="5" placeholder="- [ ] Check the result"></textarea></label>
     <label><input type="checkbox" name="is_template"> Template</label>
-    <details class="tag-advanced"><summary>Advanced</summary><label>Key <input name="key" placeholder="made from the name"></label>${metadata}</details>
+    <details class="tag-advanced"><summary>Advanced</summary><label>Key <input name="key" maxlength="${TAG_KEY_MAX}" placeholder="made from the name"></label>
+      <small class="tag-key-line" data-tag-key-line aria-live="polite">Key: made from the name</small>${metadata}</details>
     <button type="submit">Create</button><p role="alert" data-tag-error></p></form>`;
 }
 function bindTagCreate(root, template = null) {
   const form = $('[data-tag-create]', root);
   if (!form) return;
+  const line = $('[data-tag-key-line]', form);
+  if (line) form.oninput = () => { line.textContent = 'Key: ' + (tagKeyFor(form) || 'made from the name'); };
   form.onsubmit = async event => {
     event.preventDefault();
     const button = $('button[type=submit]', form); button.disabled = true;
     try {
       const metadata = JSON.parse(form.elements.metadata.value || '{}');
       if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) throw new Error('Metadata must be a JSON object');
-      const body = {key: form.elements.key.value.trim() || tagKeyOf(form.elements.label?.value), metadata};
+      const body = {key: tagKeyFor(form), metadata};
       if (!body.key) throw new Error('Give the tag a name');
       if (!template) Object.assign(body, {label: form.elements.label.value || body.key, is_template: form.elements.is_template.checked, markdown: form.elements.markdown.value});
       const result = await post(template ? '/v2/tags/' + encodeURIComponent(template.id) + '/instances' : '/v2/tags', body);
