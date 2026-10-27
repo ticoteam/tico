@@ -24,10 +24,21 @@ def restore_waits(c):
 
 
 def ready_waiting(c, runner_id):
+    """Whether this computer already holds a start waiting on capacity/stop. Cached for the read snapshot:
+    claim waiter order and held_starts ask once per computer."""
+    from . import read_cache
     from .org_turns import REASON
-    return bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
-                          "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                          "AND p.wait_reason IN ('computer busy',?) LIMIT 1", (runner_id, H.now(), REASON)).fetchone())
+    values = read_cache.cache(c)
+    key = ("start_places.ready_waiting", runner_id)
+    if values is not None and key in values:
+        return values[key]
+    out = bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
+                         "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
+                         "AND p.wait_reason IN ('computer busy',?) LIMIT 1",
+                         (runner_id, H.now(), REASON)).fetchone())
+    if values is not None:
+        values[key] = out
+    return out
 
 
 def held(c, runner_id):
