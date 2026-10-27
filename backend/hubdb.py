@@ -1323,6 +1323,9 @@ PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `turns.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
+# The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
+# but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
+BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
 
 
 def private_task_write(fn):
@@ -1415,7 +1418,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
         context = {"what": context.get("what")}
     row = {"id": new_id(), "ts": now(), "actor": str(actor), "rule": rule,
            "detail_json": _dump({"detail": recorded, **({"context": context} if context else {}),
-                                 **({"task": task} if task else {})}), "severity": severity}
+                                 **({"task": task} if task else {}),
+                                 **({"bulk": BULK_CALL.get()} if BULK_CALL.get() else {})}), "severity": severity}
     conn.execute("INSERT INTO refusals (id, ts, actor, rule, detail_json, severity) "
                  "VALUES (:id, :ts, :actor, :rule, :detail_json, :severity)", row)
     event(conn, actor, "refused", rule, {"detail": recorded, "severity": severity})
@@ -2043,21 +2047,34 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     lifted = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine.lifted' AND target=?",
                   (bot_actor(slug),))
     since = max(day, (lifted or {}).get("ts") or "")
-    counted, last, total = [], {}, 0
+    counted, last, total, calls, again = [], {}, 0, set(), False
     for refused in _rows(conn.execute("SELECT rule, detail_json, ts FROM refusals WHERE actor=? AND ts>=? "
                                       "AND rule NOT IN ('lint','queue_full') ORDER BY ts, id", (actor, since))):
+        detail = _json(refused["detail_json"], {}) or {}
         if refused["rule"] == "label":
             # A label refusal says who may make the change instead; retrying it is not reaching further, so
             # it counts once per task an hour (LABEL_REFUSAL_WINDOW_S). Nine in a minute quarantined a bot.
-            about = (_json(refused["detail_json"], {}) or {}).get("task")
+            about = detail.get("task")
             if about in last and parse_ts(refused["ts"]) - last[about] < timedelta(seconds=LABEL_REFUSAL_WINDOW_S):
                 continue
             last[about] = parse_ts(refused["ts"])
+        key = refused["detail_json"]
+        if call := detail.get("bulk"):
+            # One bulk change counts once, by its first counted refusal: a single call over 50 tasks the bot may not
+            # change is one refused try, not 50. Its words count as a repeat of the same refusal made one by one.
+            if call in calls:
+                again = again or call == BULK_CALL.get()
+                continue
+            calls.add(call)
+            key = _dump({k: v for k, v in detail.items() if k != "bulk"})
         total += 1
         # The target bot is paused, quarantined or planned: the sender broke nothing, and the same words come
         # back every time, so it opens no review and is no repeat. It still counts toward the day's backstop.
         if refused["rule"] != "target_inactive":
-            counted.append((refused["rule"], refused["detail_json"]))
+            counted.append((refused["rule"], key))
+    if again:
+        # This bulk change's first refusal already counted, reviewed and quarantined as need be.
+        return
     count, distinct = len(counted), len(set(counted))
     if rule == "target_inactive":
         # A sender retrying it in a loop still meets the day's backstop.

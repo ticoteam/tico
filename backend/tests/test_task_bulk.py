@@ -174,3 +174,35 @@ def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
     err, out = call(api, "hub_task_bulk", {"filter": {"label": "brief", "owner": "cmo"}, "action": "close"})
     assert not err and out["changed"] == 2
     assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"closed"}
+
+
+def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
+    # Rule 8 quarantines a bot at QUARANTINE_AT repeated refusals in a day. A bot's honest bulk close over 50 tasks it
+    # may not close is one refused try: each task's refusal stays on record, and the bot stays active.
+    token = bot_token(api, "ops")
+    with api.app.state.store.transaction() as c:
+        owned = [H.task_create(c, "human:ana", f"Review the account {i}", "Please.", "bot:ops", lint=False,
+                               deduplicate=False) for i in range(50)]
+
+    def refusals():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops'").fetchone()[0]
+
+    def state():
+        with api.app.state.store.read() as c:
+            return H.bot(c, "ops")["state"]
+
+    # A dry run still adds none.
+    out = bulk(api, {"owner": "ops"}, "close", token=token, dry_run=True)
+    assert (out["changed"], out["skipped"]) == (0, 50) and refusals() == 0
+    out = bulk(api, {"owner": "ops"}, "close", token=token)
+    assert (out["changed"], out["skipped"]) == (0, 50)
+    assert refusals() == 50 and state() == "active"
+
+    # It counts as the same refused close made one by one: nine more single tries are its nine repeats, and the
+    # tenth quarantines the bot, as ten single tries in a row would have.
+    for i in range(H.QUARANTINE_AT):
+        assert state() == "active", i
+        row = get(api, "tasks/" + owned[0]["id"])["task"]
+        post(api, "tasks/" + row["id"], {"version": row["version"], "close": True}, token=token, expected=403)
+    assert state() == "quarantined"
