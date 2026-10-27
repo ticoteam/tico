@@ -855,7 +855,10 @@ def update(c, who, hook_id, body, vault=None):
                    for h in headers]
     enabled, reason = hook["enabled"], hook["paused_reason"] or ""
     if needs_value(headers):
-        enabled, reason = 0, NEEDS_VALUE                  # nothing goes out without the header (Product: pause)
+        if enabled or reason == NEEDS_VALUE:
+            enabled, reason = 0, NEEDS_VALUE              # nothing goes out without the header (Product: pause)
+        # An endpoint already paused or turned off for another reason keeps that reason, so typing the values again
+        # never turns back on what someone paused on purpose.
     elif reason == NEEDS_VALUE:
         enabled, reason = 1, ""                           # every cleared value was typed again or removed
     c.execute("UPDATE webhooks SET name=?, url=?, host=?, events_json=?, rate_per_hour=?, allow_http=?, "

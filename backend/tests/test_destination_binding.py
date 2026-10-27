@@ -304,6 +304,20 @@ def test_clear_removes_secret_values_keeps_their_names_and_pauses_until_they_are
     assert SECRET not in everything(api)
 
 
+def test_a_clear_on_an_endpoint_paused_on_purpose_leaves_it_paused_once_the_values_are_typed_again(api, net):
+    made = hook(api)
+    paused = post(api, f"webhooks/{made['id']}/pause", {"reason": "Maintenance"})["webhook"]
+    assert update(api, made["id"], {"url": "https://other.acme.example/tico", "expected_revision": paused["revision"],
+                                    "credentials": "clear"}).status_code == 200
+    after = shown(api, made["id"])
+    assert after["enabled"] is False and after["paused_reason"] == "Maintenance"
+    assert update(api, made["id"], {"headers": [{"name": "x-api-key", "secret": True, "value": "typed-for-new"},
+                                                {"name": "x-env", "value": "prod"}],
+                                    "expected_revision": after["revision"]}).status_code == 200
+    again = shown(api, made["id"])
+    assert again["enabled"] is False and again["paused_reason"] == "Maintenance"
+
+
 def test_a_send_claimed_before_a_clear_is_never_sent_without_its_header(api, net):
     """Test 12, delivery worker: the send reads the address and headers from the stored row when it posts."""
     made = hook(api)
@@ -368,11 +382,15 @@ def test_botops_clearing_for_a_person_also_waits_for_their_tap(api, net, botops)
     made = hook(api)
     ana = turn(api, botops, person="ana-test", text="Move my webhook and drop its key")
     card = act(api, ana, "POST", f"webhooks/{made['id']}/update",
-               {"url": "https://other.acme.example/tico", "expected_revision": made["revision"], "credentials": "clear"})
+               {"url": "https://other.acme.example/tico", "expected_revision": made["revision"], "credentials": "clear",
+                "name": "Moved"})
     assert card.status_code == 200 and card.json()["needs_confirm"], card.text
+    # What else the request changes runs at the tap, so the card names it too.
+    assert {"field": "name", "new": "Moved"} in card.json()["action"]["diff"]
+    assert "name" in card.json()["action"]["description"]
     assert shown(api, made["id"])["enabled"] is True and shown(api, made["id"])["url"] == HOOK
     assert confirm(api, card.json(), "ana-test")["action"]["status"] == "done"
-    assert shown(api, made["id"])["enabled"] is False
+    assert shown(api, made["id"])["enabled"] is False and shown(api, made["id"])["name"] == "Moved"
     finish(api, botops, ana)
 
 

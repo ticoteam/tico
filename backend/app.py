@@ -5003,6 +5003,7 @@ def create_app(settings=None):
         raised once the person's role is checked) with what the person must decide, so no card keeps or clears
         anything without their word."""
         from . import destinations, webhooks
+        from .assistant import spoken
         if method == "PUT" and path == botops_act.API + "providers/gateway":
             moved, labels = gateway_connection.destination_change(c, body, settings), [gateway_connection.LABEL_KEY]
             current, integration, name = gateway_connection.revision(c), "gateway", gateway_client.LABEL
@@ -5022,12 +5023,28 @@ def create_app(settings=None):
         if not isinstance(body["expected_revision"], int) or body["expected_revision"] != int(current):
             return moved, None, None, Problem("version_conflict", name + " changed since you read it; read it again", 409)
         old, new, listed = moved["old"]["address"], moved["new"]["address"], ", ".join(labels)
+        # Whatever else the same request changes runs at the tap too, so the card names it (the address is shown
+        # only as its safe destination above, never as typed).
+        also = [k for k in body if k not in ("url", "credentials", "expected_revision")]
         what = (f"Send {name}'s saved {listed} to {new} instead of {old}" if option == destinations.KEEP
                 else f"Move {name} to {new} and clear its saved {listed}")
+        what += f", and change {', '.join(spoken(k) for k in also)}" if also else ""
         shown = [{"field": "destination", "old": old, "new": new},
                  *([{"field": "path", "new": moved["path"]}] if "path" in moved else []),
-                 {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed}]
+                 {"field": "credentials", "new": ("keep: " if option == destinations.KEEP else "clear: ") + listed},
+                 *({"field": k, "new": shown_value(body[k])} for k in also)]
         return moved, shown, what[:300], None
+
+    def shown_value(value):
+        """A short card value for a field that changes alongside a destination: a scalar as itself, a header list as
+        its names (a secret's value is refused before any card), anything else by size."""
+        if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            return value[:120]
+        if isinstance(value, list) and all(isinstance(h, dict) and "name" in h for h in value):
+            return ", ".join(str(h["name"])[:60] for h in value) or "none"
+        return f"{len(value)} item{'s' if len(value) != 1 else ''}" if isinstance(value, (list, dict)) else "changed"
 
     def botops_run_identity(c, attempt_id):
         """Whose rights this BotOps run carries (the GitHub token's scope, backend/github_app.py): the person's or bot's
