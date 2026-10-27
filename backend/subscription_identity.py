@@ -20,6 +20,19 @@ def identity(c, runner, profile):
     return {'id': sid, 'display_name': label}
 
 
+def display_names(c):
+    """{connection_id: display_name} for every renamed subscription in one pass (Operations shared_logins)."""
+    out = {}
+    for row in c.execute("SELECT key, value_json FROM registry_metadata WHERE key LIKE 'subscription:%'"):
+        try:
+            value = json.loads(row['value_json'] or '{}')
+        except ValueError:
+            value = {}
+        if isinstance(value, dict) and value.get('display_name'):
+            out[row['key']] = value['display_name']
+    return out
+
+
 def usage_label(c, sid):
     if sid.startswith('subscription:'):
         runner, profile = json.loads(sid.removeprefix('subscription:'))
