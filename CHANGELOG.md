@@ -7,6 +7,51 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.16] - 2026-10-27
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Urgent news reaches bots at once.** Incident news and requests for action skip the digest and reach batching bots right away. A task whose title starts with **Incident:** gets the incident tag ([Wake rules](docs/tasks.md#wake-rules)).
+- **Wait on a bot's prerequisite.** An owner can record a wait on the bot that owns a task's first open prerequisite. The task shows **Waiting on** that bot with the reason, and the owner is woken when it resolves ([Waiting work](docs/tasks.md#work-that-is-waiting)).
+- **Rules can run on task events.** A rule can run its actions when a task is created, enters a step, is done, declined or closed ([Wake rules](docs/tasks.md#wake-rules)).
+- **The Assistant changes settings like BotOps.** It follows the same settings list, classes and who-may answers as BotOps. Run workflows and product repository choices appear as Confirm cards ([Settings catalogue](docs/permissions.md#the-settings-catalogue)).
+- **Allow workflow edits per repository.** An owner or admin can let a bot edit workflow files in one repository. The GitHub App's Workflows permission must be on first ([Run workflows](docs/github-app.md#letting-a-bot-run-workflows)).
+- **Changing where an integration sends asks first.** Moving a Gateway connection or an outgoing webhook with secret headers to another service asks whether to keep or clear its saved credentials ([AI Gateway](docs/ai-gateway.md#changing-where-an-integration-sends), [Webhooks](docs/webhooks.md#changing-where-an-integration-sends)).
+
+### Changed
+- **Health and bot pages explain quarantines.** They say why a quarantine holds queued work and when it lifts on its own, with the UTC time. A quarantine a person set waits until they clear it ([Health Monitor](docs/health-monitor.md)).
+- **Quarantined builders show on Dev tickets.** Active ticket cards, columns and pages show the UTC resume time, or **until a person clears it** ([Tasks](docs/tasks.md)).
+- **Assistant chat takes pasted screenshots.** Paste a screenshot into the CEO Bot chat as you would in any bot chat ([Assistant](docs/assistant.md)).
+- **Sidebar bot names read as one.** Each bot name is one colour, with no grey shared words ([Navigation](docs/navigation.md)).
+- **Tasks page refreshes itself.** On a phone, pull down to refresh. The open list reloads every 15 minutes and after 10 minutes away ([Tasks](docs/tasks.md)).
+- **Run workflows per repository.** Under **All ticked repos**, each repository shows its own **Run workflows** and **Edit workflow files**. A choice you cannot change stays visible, greyed with its reason ([Run workflows](docs/github-app.md#letting-a-bot-run-workflows)).
+- **Learnings and Decisions show current files.** Panels show files up to 4 MB. A larger file keeps its last saved copy, with a banner giving its date ([Learnings](docs/learnings.md)).
+- **Backlog warnings count only readable tickets.** Private tickets and tickets owned by a bot that not everyone can read do not count toward a warning ([Tasks](docs/tasks.md)).
+- **Review and QA steps follow their check kind.** A step keeps its review or QA role when renamed, because Tico reads its check kind, not its name ([Task flow](docs/tasks.md#step-flow-what-a-step-does-with-a-ticket)).
+
+### Fixed
+- **Urgent notices get through dependencies.** Urgent news about a task waiting on an open dependency reaches its bot, without starting the held work ([Waiting work](docs/tasks.md#work-that-is-waiting)).
+- **One outage stays one notice.** A subscription, provider, GitHub-check or computer outage keeps affected work quiet and its session saved. It sends one start notice and one recovery notice ([Health Monitor](docs/health-monitor.md)).
+- **Long turns survive a slow server.** A live turn keeps its lease while a slow server delays its renewal, so the turn is not marked as lost ([Computers](docs/computers.md)).
+- **Requeued fallback jobs show their reset time.** Queued jobs and Health show when the provider limit resets in UTC. Saved reviews show the provider's own limit text ([Health Monitor](docs/health-monitor.md)).
+- **Runs past their time limit continue.** A run that reaches its time limit continues once in the same session. A second cut in a row holds it for review ([Why a run stopped](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Quarantined runs that may have acted wait for review.** They are no longer re-queued when the quarantine lifts, so a shell command or pull request is not repeated ([Health Monitor](docs/health-monitor.md)).
+- **Turns continue after model capacity stops them.** A bot that already acted continues once on the same thread. If capacity fails again, the run is held for review ([Sessions](docs/sessions.md#the-main-chat-and-task-sessions)).
+- **Asks to people accept PR references.** **PR #** followed by a number is allowed. An over-long ask gets a shorter rewrite that keeps its meaning ([The question card](docs/tasks.md#the-question-card)).
+- **Gate-refused moves retry.** A move Tico refused because a gate was open is remembered and retried once the gate clears ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Sub-goals get their first colour by hand.** The owner of a sub-goal can set its first colour, and can do so again on reopen ([Colours](docs/goals-and-kpis.md#the-colours)).
+- **Bulk changes count as one refusal.** A bulk change over tasks you cannot change is one refusal toward quarantine, not one per task ([Health Monitor](docs/health-monitor.md)).
+- **Check allocation skips inactive bots.** A planned or quarantined bot in a check pool no longer stops other checks from being assigned ([Check pools](docs/tasks.md#check-pools-who-takes-a-tickets-check)).
+- **A cleared setup command returns to the repository file.** Tag keys stop at 40 characters in the browser, as on the server ([Repositories](docs/repositories.md)).
+- **Run history reads are faster.** Bot reads of run history in SQL no longer time out. Who can read what does not change ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Pages respond faster on large teams.** Health, Operations and the turn fixer read less on each refresh ([Health Monitor](docs/health-monitor.md)).
+
+### Security
+- **Private work files a company task safely.** A bot working a private task can file a company-visible task in its own words, and the private parent stays sealed ([Company and private tasks](docs/tasks.md#company-and-private-tasks)).
+- **Private repairs go through a sealed subtask.** A bot working a private task can hand a repair to another bot in a sealed private subtask. A person's private task gets a refusal that names the route ([Company and private tasks](docs/tasks.md#company-and-private-tasks)).
+- **Settings by asking a bot follow your rights.** The Assistant and BotOps act with the rights of the person who asked, and a settings change that needs it gets a Confirm card ([Settings catalogue](docs/permissions.md#the-settings-catalogue)).
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
@@ -4461,7 +4506,8 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.12...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.16...HEAD
+[0.4.16]: https://github.com/ticoteam/tico/compare/v0.4.15...v0.4.16
 [0.4.12]: https://github.com/ticoteam/tico/compare/v0.4.11...v0.4.12
 [0.4.9]: https://github.com/ticoteam/tico/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
