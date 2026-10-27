@@ -158,16 +158,17 @@ def reserve(c, attempt, settings=None):
     return {"reserved": True, "start_until": until}
 
 
-def summary(c, runner_id, settings, default=None):
+def summary(c, runner_id, settings, default=None, *, classify=True):
     """Four numeric counts and bounded, neutral reasons; no task, bot or login identity leaks. Pass one company
     Default across every computer in a listing (Health, Operations, /computers): without it each summary rebuilds
-    pools/groups/spend while classifying queued bots."""
+    pools/groups/spend while classifying queued bots.
+
+    `classify=False` skips only claim_refusal for each queued bot (quota, readiness, sign-in, spend): Health below
+    its warning level, where its stuck and queue checks already name why a bot is not starting. Paused bots and a
+    busy computer still read as waits."""
     from .read_cache import value
-    return value(c, ("start_summary", runner_id), lambda: _summary(c, runner_id, settings, default))
-
-
-def _summary(c, runner_id, settings, default):
-    return _summaries(c, (runner_id,), settings, default)[runner_id]
+    return value(c, ("start_summary", runner_id, bool(classify)),
+                 lambda: _summaries(c, (runner_id,), settings, default, classify)[runner_id])
 
 
 def summaries(c, runner_ids, settings, default=None):
@@ -178,7 +179,7 @@ def summaries(c, runner_ids, settings, default=None):
     return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings, default))
 
 
-def _summaries(c, runner_ids, settings, default=None):
+def _summaries(c, runner_ids, settings, default=None, classify=True):
     from . import performance
     out = {rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids}
     groups = {rid: {} for rid in runner_ids}
@@ -220,7 +221,7 @@ def _summaries(c, runner_ids, settings, default=None):
         runner = runners.get(rid)
         ready = readiness_document(runner['readiness_json']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
-        if not why and runner:
+        if not why and runner and classify:
             refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
                                        default=default)
             why = reasons.get(refused, 'pre-start requirements' if refused else '')

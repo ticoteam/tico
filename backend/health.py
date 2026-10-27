@@ -191,9 +191,13 @@ def _computers(c, runners_online, settings, limits=None):
                                   for n, v in sorted(runtimes.items())
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
                                   or n in run_on.get(r["id"], ())]})
+    from . import org_turns
     from .start_places import summary, describe
+    # Below warning, Health's stuck and queue checks already say why a bot is not starting: the Turns line skips
+    # claim_refusal per queued bot. At warning it names quota and readiness waits again.
+    classify = org_turns.admission(c)['at_warning']
     for row in rows:
-        row["turn_counts"] = summary(c, row["id"], settings, limits)
+        row["turn_counts"] = summary(c, row["id"], settings, limits, classify=classify)
         row["turn_summary"] = describe(row["turn_counts"])
     return rows
 
