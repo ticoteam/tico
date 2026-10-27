@@ -2102,6 +2102,9 @@ def install_views(app, store, auth, mutate, task_view):
             from .repositories import computer_repositories
             # One pass for every computer's repository status (not one registry_metadata lookup per runner).
             repo_status = computer_repositories(c)
+            from .computer_keys import listing_by_runner
+            # One pass for every computer's own keys (not one SELECT per runner).
+            keys_by_runner = listing_by_runner(c)
             for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
                                  "accepts_member_bots,screen,performance,capabilities_json,restart_since,readiness_at "
                                  "FROM runners ORDER BY created"):
@@ -2142,9 +2145,9 @@ def install_views(app, store, auth, mutate, task_view):
                 # `bot_connections`: the connection each of its bots actually runs on. `signed_out`:
                 # {runtime: [profile, ...]} a person signed out here ('' is its own login); they stay signed out.
                 # `key_cleared`: [runtime, ...] of those, the computer's own login whose key a person cleared.
-                from .computer_keys import listing as computer_key_listing
                 profiles = subscriptions.computer_profiles(c, row, True)
-                keys = computer_key_listing(c, row["id"])
+                # Copy per computer so stripping previews for non-operators does not mutate the shared batch map.
+                keys = {runtime: dict(info) for runtime, info in (keys_by_runner.get(row["id"]) or {}).items()}
                 # `shared_keys`: {runtime: {env, preview}} of the shared key it runs on; `shared_with`: that key's
                 # name, whether it is the "Every computer" one, and every computer it serves.
                 served = shared_keys.get(row["id"]) or {}
