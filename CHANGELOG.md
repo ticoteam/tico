@@ -7,9 +7,6 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
-### Fixed
-- **Large hubs can finish Update now.** The pre-update database snapshot no longer runs `PRAGMA quick_check`, which on multi-gigabyte `hub.sqlite` files could exceed the updater's time limit and roll the install back before the switch. The copy from SQLite's backup API is confirmed by opening it and checking it has pages. `TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` is forwarded to the updater ([Updates](docs/updates.md#moving-a-hand-managed-install-onto-the-updater)).
-
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
