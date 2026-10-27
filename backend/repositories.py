@@ -34,6 +34,14 @@ def save_metadata(c, key, value):
               (key, json.dumps(value)))
 
 
+def release_cleared_overrides(c):
+    """Hand rows whose Settings command was cleared before a clear released them back to their tico.json /
+    conductor.json: they kept setup_source 'settings' with no command, so every sync skipped them. A save can no longer
+    make such a row, so this runs on every start and only ever matches rows from before."""
+    c.execute("UPDATE repositories SET setup_command=NULL,setup_source=NULL WHERE setup_source='settings' "
+              "AND TRIM(COALESCE(setup_command,''),' '||char(9)||char(10)||char(13))=''")
+
+
 def migrate(c):
     if metadata(c, 'repositories-access-migrated').get('done'):
         return
@@ -765,7 +773,10 @@ def install(app, store, service):
             if body.enabled is not None:
                 c.execute('UPDATE repositories SET enabled=? WHERE full_name=?', (int(body.enabled), name))
             if 'setup_command' in body.model_fields_set:
-                c.execute("UPDATE repositories SET setup_command=?,setup_source='settings' WHERE full_name=?", (body.setup_command, name))
+                # A cleared command hands the row back to the repository's tico.json / conductor.json on the next sync.
+                command = (body.setup_command or '').strip() or None
+                c.execute('UPDATE repositories SET setup_command=?,setup_source=? WHERE full_name=?',
+                          (command, 'settings' if command else None, name))
             c.execute('UPDATE repositories SET updated=? WHERE full_name=?', (H.now(), name))
             after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
             H.event(c, who.actor, 'repositories.changed', name, {'before': dict(before), 'after': after})
