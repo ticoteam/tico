@@ -55,13 +55,13 @@ def positive_effect(c, aid, body):
         return True
     if getattr(body, "pushes", None):
         return True
-    if getattr(body, "tokens_in", None) or getattr(body, "tokens_out", None):
+    # Output only: input tokens prove the prompt was sent, which a provider bills before erroring too.
+    if getattr(body, "tokens_out", None):
         return True
     usage = getattr(body, "usage", None)
     if usage is not None:
         parts = [usage, *list(getattr(usage, "segments", None) or [])]
-        if any(getattr(part, "input_tokens", 0) or getattr(part, "cached_tokens", 0)
-               or getattr(part, "output_tokens", 0) for part in parts):
+        if any(getattr(part, "output_tokens", 0) for part in parts):
             return True
     if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
         return True
@@ -716,7 +716,8 @@ def _readable_held(c, who, auth, bot):
     from . import read_cache
     actor = privacy.actor(who)
     values = read_cache.cache(c)
-    key = ("readable_held", actor, bot)
+    # task_sql's fence depends on the role as well as the actor.
+    key = ("readable_held", actor, who.role, bot)
     if values is not None and key in values:
         return iter(values[key])
     fence = auth.task_sql(c, who)
@@ -732,7 +733,8 @@ def _readable_held(c, who, auth, bot):
     for part in H.chunks(job_ids):
         marks = ",".join("?" * len(part))
         jobs.update({j["id"]: j for j in c.execute(f"SELECT * FROM jobs WHERE id IN ({marks})", part)})
-    started_counts, attempt_times = {}, {}
+    # A job with no started attempt counts 0 here, so quiet_source_wait never falls back to its own SELECT.
+    started_counts, attempt_times = dict.fromkeys(job_ids, 0), {}
     if job_ids:
         for part in H.chunks(job_ids):
             marks = ",".join("?" * len(part))

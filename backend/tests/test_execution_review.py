@@ -350,6 +350,17 @@ def test_a_sparse_failure_with_recorded_writes_is_held_not_retried(api):
     assert get(api, 'bots/finance/execution-review')['jobs'][0]['id'] == attempt['job_id']
 
 
+def test_a_sparse_failure_billed_only_for_its_prompt_still_goes_back_in_the_queue(api):
+    """A provider bills the prompt and then errors: input tokens alone are not evidence the turn did anything."""
+    machine, message, attempt = setup_attempt(api, bot='finance')
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'sparse-billed'}, machine['token'])
+    post(api, f"attempts/{attempt['id']}/complete",
+         {'outcome': 'failed', 'last_seq': 0, 'text': '', 'tokens_in': 9_000,
+          'usage': {'input_tokens': 9_000, 'cached_tokens': 2_000, 'model': 'gpt-6-sol', 'runtime': 'codex'}},
+         machine['token'])
+    assert job_state(api, attempt['job_id']) == 'queued'
+
+
 def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     """A run that may have acted is not run again on its own: it waits, named, for its operator or BotOps.
     Their resume runs it once more; a second stop is dismissed and BotOps finds out why."""
