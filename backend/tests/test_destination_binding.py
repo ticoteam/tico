@@ -378,6 +378,68 @@ def test_botops_moving_a_webhook_for_a_person_waits_for_their_tap(api, net, boto
     finish(api, botops, ana)
 
 
+def test_botops_never_resends_a_secret_header_with_a_move(api, net, botops):
+    """A secret listed without a value would keep its saved one; a request for a person can't name one at all."""
+    made = hook(api)
+    ana = turn(api, botops, person="ana-test", text="Point my webhook at the new receiver and keep its headers")
+    body = {"url": "https://other.acme.example/tico", "expected_revision": made["revision"], "credentials": "keep",
+            "headers": [{"name": "x-api-key", "secret": True}, {"name": "x-env", "value": "prod"}]}
+    refused = act(api, ana, "POST", f"webhooks/{made['id']}/update", body)
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "secret_in_request", refused.text
+    assert shown(api, made["id"])["url"] == HOOK and events(api) == []
+    finish(api, botops, ana)
+
+
+def test_kept_secret_headers_read_the_same_before_the_save_as_after_it():
+    """The card check (`kept_by`, before saving) and the save (`carried`, after) agree on what a new address gets."""
+    before = [{"name": "x-api-key", "secret": True, "value": "sealed-1"}, {"name": "x-env", "secret": False, "value": "p"},
+              {"name": "x-old", "secret": True, "value": "", "needs": True}]
+    assert W.kept_by(before, None) == ["x-api-key"]
+    assert W.kept_by(before, [{"name": "X-Api-Key", "secret": True}, {"name": "x-env", "value": "p"}]) == ["x-api-key"]
+    assert W.kept_by(before, [{"name": "x-api-key", "secret": True, "value": "typed"}]) == []
+    assert W.kept_by(before, [{"name": "x-old", "secret": True}, {"name": "x-env", "value": "p"}]) == []
+
+
+def as_ana(via, confirmed=False):
+    from dataclasses import replace
+    from backend.auth import Identity
+    return replace(Identity("human:ana", "owner", email="ana@acme.example"), via=via, confirmed=confirmed)
+
+
+def test_a_webhook_move_for_a_person_without_their_tap_is_refused_by_the_save_itself(api, net):
+    """However the request reached the save, a delegated move runs only from the person's tap."""
+    made = hook(api)
+    store, vault = api.app.state.store, api.app.state.vault
+    def move(who, option):
+        with store.transaction() as c:
+            W.update(c, who, made["id"], W.WebhookUpdate(url="https://other.acme.example/tico", credentials=option,
+                                                         expected_revision=made["revision"]), vault)
+    for via in ("botops", "assistant"):
+        for option in ("keep", "clear"):
+            with pytest.raises(Exception) as refused:
+                move(as_ana(via), option)
+            assert getattr(refused.value, "code", "") == "confirm_required", refused.value
+    assert shown(api, made["id"])["url"] == HOOK and events(api) == []
+    move(as_ana("botops", confirmed=True), "keep")
+    assert shown(api, made["id"])["url"] == "https://other.acme.example/tico" and len(events(api)) == 1
+
+
+def test_a_gateway_move_for_a_person_without_their_tap_is_refused_by_the_save_itself(api, monkeypatch):
+    setup(api, monkeypatch)
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
+    store, vault = api.app.state.store, api.app.state.vault
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+        before = gateway(api)
+        for option in ("keep", "clear"):
+            with pytest.raises(Exception) as refused, store.transaction() as c:
+                gateway_connection.save(c, vault, as_ana("botops"), {"url": "", "credentials": option,
+                                                                    "expected_revision": before["revision"]}, H.now())
+            assert getattr(refused.value, "code", "") == "confirm_required", refused.value
+        assert gateway(api)["url"] == before["url"] and gateway(api).get("key") and events(api) == []
+
+
 def test_botops_clearing_for_a_person_also_waits_for_their_tap(api, net, botops):
     made = hook(api)
     ana = turn(api, botops, person="ana-test", text="Move my webhook and drop its key")

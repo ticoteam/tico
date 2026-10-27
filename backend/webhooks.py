@@ -804,17 +804,32 @@ def destination_change(c, hook, url, kept, vault=None):
 UPDATE_PATH = re.compile(r"/api/v2/webhooks/([^/]+)/update")
 
 
+def kept_by(before, items):
+    """The saved secret headers a headers list (`items`, as sent) keeps with their saved value: a secret listed
+    without a value keeps the one it has (`clean_headers`). With no list, every saved secret is kept. The same answer
+    `carried` gives after the save, read before it, so a card and the save agree on what a new address receives."""
+    if items is None:
+        return carried(before, before)
+    saved = set(carried(before, before))
+    out = []
+    for item in items:
+        item = item if isinstance(item, dict) else getattr(item, "__dict__", {})
+        name = str(item.get("name") or "").strip().lower()
+        if item.get("secret") and item.get("value") in (None, "") and name in saved and name not in out:
+            out.append(name)
+    return out
+
+
 def pending_change(c, who, hook_id, body, vault=None):
     """For BotOps' Confirm card (backend/app.py `person_card`): (endpoint, destination change or None, kept secret
     header names) that `body`, an update asked for `who`, would make, without saving. Refused at once when `who` may not
-    change the endpoint, as the tap would be. A request for a person carries no secret header (botops_act refuses the
-    key), so a headers list in it keeps none of the saved secret values."""
+    change the endpoint, as the tap would be. A secret listed without a value keeps its saved one, as the save does."""
     hook = _row(c, hook_id)
     may_manage(who, hook)
     body = body if isinstance(body, dict) else {}
     url = body.get("url") or hook["url"]
-    before = headers_of(hook)
-    kept = carried(before, before) if body.get("headers") is None else []
+    items = body.get("headers")
+    kept = kept_by(headers_of(hook), items if isinstance(items, list) or items is None else [])
     return hook, destination_change(c, hook, url, kept, vault), kept
 
 
@@ -850,6 +865,7 @@ def update(c, who, hook_id, body, vault=None):
     moved = destination_change(c, hook, url, kept, vault)
     if moved and not option:
         raise destinations.held("webhook", moved, kept, hook["revision"], hook["name"])
+    destinations.require_tap(who, moved)
     if moved and option == destinations.CLEAR:
         headers = [{"name": h["name"], "secret": True, "value": "", "needs": True} if h["name"] in kept else h
                    for h in headers]

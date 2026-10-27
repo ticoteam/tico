@@ -237,6 +237,7 @@ def save(c, vault, who, body, now, settings=None):
     moved = destination_change(c, body, settings)
     if moved and not secret and not option:
         raise destinations.held("gateway", moved, [LABEL_KEY], before.get("revision"), G.LABEL)
+    destinations.require_tap(who, moved)
     after = {**before, "url": new_url if new_url != G.DEFAULT_BASE else "", "revision": int(before.get("revision") or 0) + 1,
              "updated": now, "updated_by": who.actor}
     if secret:

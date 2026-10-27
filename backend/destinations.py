@@ -122,6 +122,15 @@ def held(integration, moved, labels, revision, name=""):
         "credentials": list(labels), "revision": int(revision or 0), "choices": list(CHOICES)})
 
 
+def require_tap(who, moved):
+    """A destination change asked for a person (BotOps or the Assistant acting for them) runs only from that person's
+    own tap on its Confirm card, whatever the request says about the credentials: the card is made before the route
+    runs (backend/app.py `person_card`), and this holds even where it was not."""
+    if moved and getattr(who, "via", "") and not getattr(who, "confirmed", False):
+        raise Problem("confirm_required", "Moving saved credentials to another address needs the person's own tap on "
+                      "a Confirm card. Nothing was saved.", 403)
+
+
 def record(c, who, integration, target, moved, labels, option, revision):
     """The one audit event a destination change leaves: who, when (the event's own time), the safe old and new
     destination, which credentials were kept or cleared and what the editor chose."""
