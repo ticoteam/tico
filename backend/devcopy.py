@@ -64,6 +64,8 @@ EMPTY = (
     # Subscribe to updates: a part-way catch-up, where each bot is in a feed and what it was sent. Without a
     # cursor a subscriber starts again from the newest update, so the copy owes no bot a backlog.
     "feed_walks", "feed_cursors", "feed_deliveries",
+    # Which history rows are settled for SQL reads: the copy's own sweep settles its pruned history again.
+    "read_index", "read_deps", "read_dirty",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
