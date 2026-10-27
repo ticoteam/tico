@@ -7,6 +7,9 @@ All notable changes to Tico are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Set a task's Claude prompt-cache lifetime.** `hub task update <id> --cache-ttl 1h` or `5m` pins that task's session; `default` leaves the harness default. A subtask that continues the session uses the session root's value. Subagents started inside the session stay at five minutes ([Tasks](docs/tasks.md#subtasks-and-prs)).
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed

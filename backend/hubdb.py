@@ -1164,6 +1164,9 @@ def migrate(conn, adopt_legacy=False):
     # A review or QA child's verdict (approve|changes|pass|fail) and the pull request head it judged (record_verdict).
     add_column(conn, "tasks", "verdict", "TEXT")
     add_column(conn, "tasks", "verdict_head", "TEXT")
+    # Claude prompt-cache lifetime for this task's own session: 5m, 1h, or NULL for the harness default.
+    # A subtask that continues the session uses the session root's value. Subagents inside the session are not set.
+    add_column(conn, "tasks", "cache_ttl", "TEXT")
     # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
     add_column(conn, "approvals", "decided_via", "TEXT")
     add_column(conn, "approvals", "decided_for_json", "TEXT")
@@ -5734,7 +5737,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None):
+                verdict_head=None, cache_ttl=None, skip_step_wake=(), review_reader=None, receipt_owner=None):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -5749,6 +5752,9 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     it names the person again, as does anything that leaves the task unreadable to them.
     `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
     `verdict` and `verdict_head` record a review or QA subtask's verdict and the head it judged (record_verdict).
+    `cache_ttl` is the Claude prompt-cache lifetime of this task's session (`5m`, `1h`, or `""` for the harness
+    default). A subtask that continues the session uses the session root's value. Subagents inside the session stay
+    at Claude's five-minute default.
     """
     _writer(conn, actor)
     row = task(conn, task_id)
@@ -5776,7 +5782,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             ("body", body), ("due", due), ("goal", goal_id), ("step rank", step_rank), ("private", private),
             ("roles", roles), ("visibility", visibility), ("public title", public_title),
             ("public summary", public_summary), ("size", size), ("review PRs", review_prs), ("verdict", verdict),
-            ("verdict head", verdict_head), ("approval", approval_id)) if value is not None]
+            ("verdict head", verdict_head), ("approval", approval_id),
+            ("cache lifetime", cache_ttl)) if value is not None]
         if beyond or clear_size:
             refuse(conn, actor, "identity", f"The Task Manager sets status, step, notes, waits and owners only, "
                                             f"not {', '.join(beyond or ['size'])}")
@@ -5785,7 +5792,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     mover = task_mover(conn, actor, row, mover)
     labels_only = labels is not None and not clear_size and all(v is None for v in (
         status, note, owner, due, body, lane, rank, goal_id, type, step, step_rank, number, title, private,
-        waiting_on, roles, visibility, public_title, public_summary, size, verdict, verdict_head))
+        waiting_on, roles, visibility, public_title, public_summary, size, verdict, verdict_head, cache_ttl))
     # The bot that manages the task's type may change its labels whatever the type's `bots` setting
     # (_label_writer decides which); nothing else on the task becomes its to change.
     mine = mine or labels_only and is_bot(actor) and task_private_readable(conn, actor, row) and type_manager(conn, row) == actor_id(actor)
@@ -6090,7 +6097,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         row = {**row, "verdict": None, "verdict_head": None}
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
-    if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
+    if not sets and not state_change and not roles and not clear_size and not verdict_set and cache_ttl is None and all(
             v is None for v in (visibility, public_title, public_summary, size)):
         return row
     # A person finishing it is news for every bot on it; the bots that asked it open questions are read
@@ -6142,6 +6149,13 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         conn.execute("UPDATE tasks SET visibility='private' WHERE id=?", (task_id,))
         updated_row = task(conn, task_id)
     publication(conn, actor, updated_row, visibility, public_title, public_summary, approval_id)
+    if cache_ttl is not None:
+        value = None if cache_ttl == "" else str(cache_ttl)
+        if value not in (None, "5m", "1h"):
+            refuse(conn, actor, "kind", "A task cache lifetime is 5m, 1h, or empty to leave the harness default")
+        if (row.get("cache_ttl") or None) != value:
+            conn.execute("UPDATE tasks SET cache_ttl=?, updated=? WHERE id=?", (value, now(), task_id))
+            _task_event(conn, task_id, actor, "cache_ttl", row.get("cache_ttl"), value or "", "")
     if size is not None or clear_size:
         import math
         if size is not None and (not math.isfinite(size) or size < 0):

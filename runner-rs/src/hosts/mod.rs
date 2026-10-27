@@ -172,6 +172,17 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
+    /// Claude prompt-cache lifetime for this task's session (`5m` or `1h`). None leaves the harness default.
+    /// Subagents inside the session are never given a lifetime (hosts/claude.rs turn_env).
+    pub cache_ttl: Option<String>,
+}
+
+/// `5m` or `1h` from a task's `cache_ttl`; anything else, including unset, leaves the harness default.
+pub fn cache_ttl(value: &Value) -> Option<String> {
+    match value.as_str() {
+        Some(ttl @ ("5m" | "1h")) => Some(ttl.to_string()),
+        _ => None,
+    }
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.

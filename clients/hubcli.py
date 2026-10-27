@@ -1062,6 +1062,9 @@ def parser():
     s.add_argument("--verdict", choices=["approve", "changes", "pass", "fail"],
                    help="a review or QA subtask's verdict; the task that asked for it is woken with it")
     s.add_argument("--head", dest="verdict_head", help="the pull request head (commit sha) the verdict judged")
+    s.add_argument("--cache-ttl", dest="cache_ttl", choices=["5m", "1h", "default"],
+                   help="Claude prompt-cache lifetime for this task's session; default leaves the harness default. "
+                        "A subtask that continues this session uses it. Subagents inside the session stay at five minutes")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task update")
     s = task.add_parser("done", help="finish a task you own with its result; a review or QA subtask adds its --verdict "

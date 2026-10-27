@@ -3689,7 +3689,7 @@ def create_app(settings=None):
             if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
                                            body.goal_id, body.type, body.step, body.step_rank, body.number, body.private, body.visibility, body.public_title, body.public_summary, body.size,
-                                           body.verdict, body.verdict_head)):
+                                           body.verdict, body.verdict_head, body.cache_ttl)):
                 raise Problem("close", "Close and edit are separate operations", 422)
             note = body.note or ""
             if (note.strip() and getattr(who, "via", "") == "botops" and who.actor != "bot:" + BOTOPS

@@ -34787,6 +34787,18 @@
           "created": {
             "type": "string"
           },
+          "cache_ttl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "5m",
+              "1h",
+              null
+            ],
+            "description": "Claude prompt-cache lifetime of this task's session. Null leaves the harness default. A subtask that continues the session uses the session root's value. Subagents inside the session stay at five minutes"
+          },
           "updated": {
             "type": "string"
           },
@@ -37123,6 +37135,22 @@
               }
             ],
             "title": "Verdict Head"
+          },
+          "cache_ttl": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "5m",
+                  "1h",
+                  ""
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Ttl"
           },
           "roles": {
             "anyOf": [

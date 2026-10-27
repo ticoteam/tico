@@ -2760,6 +2760,17 @@ class Execution:
                     kept = root.get("checkpoint") if not root.get("checkpoint_blocked") else None
                     task.update({"checkpoint": kept, "checkpoint_at": root.get("checkpoint_at") if kept else None,
                                  "checkpoint_by": root.get("checkpoint_by") if kept else None})
+            # The provider session belongs to the session root. Its cache lifetime is that task's, not a
+            # subtask's. A check is its own root, so its own value applies. Unset leaves the harness default.
+            holder = task
+            if roots and task.get("session_task_id") != task["id"]:
+                root_row = H.task(c, task["session_task_id"])
+                holder = root_row if root_row and readable(root_row) else None
+            ttl = holder.get("cache_ttl") if holder else None
+            if ttl in ("5m", "1h"):
+                task["cache_ttl"] = ttl
+            else:
+                task.pop("cache_ttl", None)
             own_room = conv and conv.get("kind") == "task" and conv.get("task_id") == task["id"]
             from .chat_goals import clear_task_goal, task_goal_row
             if own_room and not goal and task.get("owner") == "bot:" + row["bot"]:

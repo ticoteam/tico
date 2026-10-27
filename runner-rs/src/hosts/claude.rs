@@ -1482,6 +1482,13 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() { std::env::vars().collect() } else { settings.env.clone() };
     env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
+    // A task can pin its own session's prompt cache. Unset leaves Claude's default (an hour on a subscription's
+    // main conversation, five minutes otherwise). Subagents started inside the session stay at five minutes:
+    // an inherited one-hour setting is dropped, and this turn never writes one.
+    env.remove("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL");
+    if let Some(ttl) = &settings.cache_ttl {
+        env.insert("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), ttl.clone());
+    }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
     // The login and the session files live under HOME; a trimmed environment must keep it.
@@ -1610,7 +1617,17 @@ mod tests {
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
         // Every bot's turn, with branches or not, and over an inherited setting that would turn it on.
         assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
+        assert!(!env.contains_key("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"));
         settings.env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "0".into());
+        settings.env.insert("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL".into(), "1h".into());
+        settings.env.insert("CLAUDE_CODE_PROMPT_CACHE_TTL".into(), "5m".into());
+        settings.cache_ttl = Some("1h".into());
+        let pinned = turn_env(&settings);
+        assert_eq!(pinned["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
+        assert_eq!(pinned["CLAUDE_CODE_PROMPT_CACHE_TTL"], "1h");
+        assert!(!pinned.contains_key("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"), "{pinned:?}");
+        settings.cache_ttl = None;
+        assert_eq!(turn_env(&settings)["CLAUDE_CODE_PROMPT_CACHE_TTL"], "5m");
         assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         assert_eq!(turn_env(&Settings { shared: true, ..settings })["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         std::fs::remove_dir_all(dir).unwrap();
