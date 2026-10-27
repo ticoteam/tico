@@ -132,6 +132,8 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=57').fetchone()
         assert all(c.execute('SELECT count(*) FROM ' + name).fetchone()[0] == count for name, count in counts.items())
         assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=53').fetchone()
+    # Task reads name tasks_private_parties: the upgrade's first start makes it, not only the next restart.
+    get(api, 'tasks')
     api.app.state.store.initialize(seed_market=False)
     assert get(api, 'tasks/' + task['id'])['task']['private']
 
