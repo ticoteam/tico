@@ -195,7 +195,7 @@ def _helper(c):
 def tend(c, settings, owner_id='', freed=0):
     """Update the open incident's finding, hand what the fixer cannot fix to BotOps once, and tell the owner when due.
     Returns the incident."""
-    value = org_turns.observe(c, settings)
+    value = org_turns.observe(c, settings, detailed=False)
     incident = org_turns.saved(c, org_turns.INCIDENT)
     if not incident.get('id'):
         return incident
@@ -208,7 +208,7 @@ def tend(c, settings, owner_id='', freed=0):
     else:
         last = (incident.get('finding') or {}).get('updated_at')
         if freed or not last or _older(last, FINDING_EVERY_S):
-            incident['finding'] = finding(c, settings, value)
+            incident['finding'] = finding(c, settings, org_turns.snapshot(c, settings))
         found = incident['finding']
         if not incident.get('task_id') and _older(incident['opened_at'], FIX_WINDOW_S):
             helper = _helper(c)
@@ -218,7 +218,8 @@ def tend(c, settings, owner_id='', freed=0):
                         c, H.KEEPER, f"Company turns incident {incident['id'][:8]}: what the turn fixer could not fix",
                         f"The company has been at or over its warning level since {incident['opened_at']} and the turn "
                         f"fixer freed every start it could prove dead.\n\n{found['text']}\n\nFind and fix what keeps "
-                        "turns busy; Settings > Health shows the finding as it changes.", H.bot_actor(helper))
+                        "turns busy; Settings > Health shows the finding as it changes.", H.bot_actor(helper),
+                        labels=["incident"])
                     incident['task_id'], incident['handed_to'] = task['id'], helper
                 except H.Refused as exc:
                     incident['handed_to'] = ''

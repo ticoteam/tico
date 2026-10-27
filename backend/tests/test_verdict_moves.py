@@ -404,6 +404,12 @@ def test_a_green_head_the_gate_refuses_stays_and_the_builder_hears_what_clears_i
         told = c.execute("SELECT body FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.review_gate') "
                          "IS NOT NULL", (task["conversation_id"],)).fetchall()
     assert len(told) == 1 and "receipt" in told[0][0]
+    # Tico remembers the refused move and makes it itself once the receipt names the new head.
+    from backend import move_retry
+    assert move_retry.tick(api.app.state.github_app, force=True) == []
+    receipt(api, task, NEW)
+    assert move_retry.tick(api.app.state.github_app, force=True) == [task["id"]]
+    assert step(api, task) == "Review 2"
 
 
 def test_qa_fixes_green_new_head_goes_back_to_in_qa(api):

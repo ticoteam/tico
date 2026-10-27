@@ -1,7 +1,8 @@
 """Stop quarantined turns through the normal Stop protocol and preserve their reason.
 
 The first runner call records the quarantine reason on the attempt. Renewal returns
-it with Stop; completion requeues the work until the bot becomes active again.
+it with Stop. Completion requeues the work of a run that is safe to repeat (`requeues`) until the bot becomes
+active again; any other run is held for review like a lost one, so a lift never repeats an outside action.
 """
 import json
 
@@ -46,4 +47,18 @@ def stopped_by(c, row):
     return (json.loads(found[0] or "{}") or {}).get("quarantine") if found else None
 
 
+def requeues(c, row):
+    """Whether a quarantine-stopped attempt's work goes back in the queue: only when running it again repeats nothing,
+    judged by `retry_facts` as the sweep judges any other lost run (read-only calls, a host that reports its calls, no
+    approval used), or when it never started and reported nothing. Any other run may already have pushed, sent or
+    paid, so its jobs are held for review (`auto_reconcile`) instead of running again when the quarantine lifts."""
+    from .execution import retry_facts
+    job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+    if not job:
+        return False
+    facts = retry_facts(c, {**dict(job), "attempt_id": row["id"]}, row["started"], H.now())
+    return facts["safe"] or not row["started"] and not facts["calls"] and not facts["consumed"]
+
+
 REQUEUED = "This run goes back in the queue and runs again when the quarantine lifts."
+HELD = "This run may already have changed something outside Tico, so it is held for review instead of running again."

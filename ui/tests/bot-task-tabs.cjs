@@ -19,7 +19,7 @@ const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bo
 const TASKS = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: 'bot:qa', blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner: 'bot:qa', status: 'doing', direction: 'in'}]}, blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
   task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
   task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
   task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
@@ -41,7 +41,14 @@ const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'b
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
   if (field === 'needs') return (t.owner === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
-  if (field === 'waiting_on') return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana' : true);
+  if (field === 'waiting_on') {
+    const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
+    const person = String(t.waiting_on || '').startsWith('human:');
+    const botWait = !person && !['gate', 'worktree'].includes(t.blocked_kind) && !t.ask?.to_actor?.startsWith('human:')
+      && !blockers.some(r => r.owner?.startsWith('human:')) && blockers[0]?.owner?.startsWith('bot:');
+    return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
+      : value === 'person' ? person : value === 'bot' ? botWait : true);
+  }
   if (field === 'type') return value.includes(t.type_id || 'general');
   if (field === 'asked_by') return t.requester === who;
   if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner) : t.owner === who;
@@ -385,7 +392,7 @@ async function open(browser, viewport, colorScheme, server) {
       await context.close();
     }
     // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
-    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner: 'bot:qa', status: 'waiting', waiting_on: 'bot:lead'})]};
+    const isolated = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
     const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
     await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
@@ -398,6 +405,18 @@ async function open(browser, viewport, colorScheme, server) {
     assert.equal(await readOnly.page.locator('#t-open .trow').count(), 0);
     assert.deepEqual(readOnly.errors, []);
     await readOnly.context.close();
+    const filtered = await open(browser, {width:1280,height:900}, 'light', {puts: [], page: 200, layouts: {lead: {
+      tabs: [{name: 'Bot waits', conditions: [{field: 'waiting_on', value: 'bot'}]},
+             {name: 'People waits', conditions: [{field: 'waiting_on', value: 'person'}]}], widgets: WIDGETS}}});
+    await filtered.page.goto('https://tico-ui.test/#/bot/lead/tasks');
+    await filtered.page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent === '1');
+    await filtered.page.locator('#bot-tab-t-c0').click();
+    assert.deepEqual(await filtered.page.locator('#t-c0 .ttl').allInnerTexts(), ['Wait for QA']);
+    assert.match(await filtered.page.locator('#t-c0 .trow-waits').innerText(), /Waiting on QA Engineer: Waiting for the test machine/);
+    await filtered.page.locator('#bot-tab-t-c1').click();
+    assert.deepEqual(await filtered.page.locator('#t-c1 .ttl').allInnerTexts(), ['Turn on the screen default']);
+    assert.deepEqual(filtered.errors, []);
+    await filtered.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -26,6 +26,7 @@ use crate::util::{log, mark, text_of, truthy};
 
 pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
+const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
 const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
 const OWN_INTERRUPT: &[&str] = &["Lease expired", "Execution interrupted after stop", "Timeout:", "Runner stopped during execution", "Computer lost or heartbeat stopped"];
 
@@ -400,6 +401,15 @@ fn serves_session(name: &str) -> bool {
     crate::follow::feature(name)
 }
 
+/// Whether the server takes `continues` and hands out `continue_thread` (backend/execution.py capacity_continuation).
+fn capacity_continue() -> bool {
+    #[cfg(test)]
+    if let Some(on) = tests::CAPACITY_CONTINUE.with(|on| on.get()) {
+        return on;
+    }
+    crate::follow::feature("capacity_continue")
+}
+
 /// Whether the server takes a turn's confirmed thread after its start (`attempt_thread`: POST attempts/{aid}/thread;
 /// an older one has no such route).
 fn thread_updates() -> bool {
@@ -565,6 +575,9 @@ pub(crate) struct Drove {
     pub(crate) limited: bool,
     /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
     pub(crate) capacity: bool,
+    /// The model was at capacity after the turn acted: no fallback or fresh thread may take it, but its own thread can
+    /// continue it in a later turn (backend/execution.py capacity_continuation).
+    pub(crate) continues: bool,
     pub(crate) retryable: bool,
     /// The turn running when the drive ended (a goal's continuation, a carried input's turn).
     pub(crate) turn: String,
@@ -576,7 +589,7 @@ pub(crate) struct Drove {
 
 impl Drove {
     fn interrupted() -> Drove {
-        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, capacity: false, retryable: false, turn: String::new(), yielded: false }
+        Drove { outcome: "interrupted".into(), reply: String::new(), tokens: json!({}), limited: false, capacity: false, continues: false, retryable: false, turn: String::new(), yielded: false }
     }
 }
 
@@ -1159,6 +1172,9 @@ impl Runner {
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
         let refs = attempt["message"]["refs"].clone();
+        // The thread a turn the model's capacity stopped after it acted left to continue (backend/execution.py
+        // capacity_continuation): only that thread, on the bot's own login, takes it; never a fallback or a fresh one.
+        let continuing = text_of(&attempt["continue_thread"]);
         let mut uses: Vec<String> = vec![runtime.clone()];
         if let Some(hop) = crate::fallback::configured(&config) {
             uses.push(hop.runtime);
@@ -1365,6 +1381,7 @@ impl Runner {
                 shared: crate::sessions::is_shared(&config),
                 mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
+                require_existing_session: !continuing.is_empty(),
             };
             let mut resumed = false;
             if side_run {
@@ -1383,8 +1400,10 @@ impl Runner {
                         session = Some(crate::continuity::Session::new(why, Some(error)));
                     }
                 }
-                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag).
-                if resumed && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
+                // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
+                // continuation compacts only the thread it continues; another one is left as it is for CONTINUE_LOST.
+                let other = !continuing.is_empty() && prev != &continuing && thread.as_deref() != Some(continuing.as_str());
+                if resumed && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
                         Ok(()) => session = Some(crate::continuity::Session::compacted()),
@@ -1403,14 +1422,16 @@ impl Runner {
                 session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
             }
             if thread.is_none() {
-                thread = Some(h.start_thread(&bot, &settings).await?);
+                // A capacity continuation must acknowledge its lost thread so the server holds it for review,
+                // without creating or saving a replacement session before that acknowledgement.
+                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
             }
             let th = thread.clone().unwrap();
             self.note_session(&aid, &bot, session.as_ref());
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && continuing.is_empty() && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -1419,7 +1440,7 @@ impl Runner {
                 left: left.clone(),
                 confirmed: Mutex::new(None),
             });
-            if fresh.is_none() && !side_run {
+            if fresh.is_none() && !side_run && continuing.is_empty() {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -1460,6 +1481,10 @@ impl Runner {
                 return Err(Fail::runtime(crate::drain::WAITING));
             }
             self.state.phase(&aid, "running")?;
+            if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
+                // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
+                return Err(Fail::runtime(CONTINUE_LOST));
+            }
             // A resumed thread already holds the repo rules unless they changed since it was given them.
             let digest = p.rules_digest.clone();
             attempt["_repo_rules_changed"] = json!(!digest.is_empty() && self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str()));
@@ -1535,8 +1560,9 @@ impl Runner {
                         self.confirm_thread(f, &session).await?;
                     }
                 }
-                // A fresh session that never came up leaves the previous session in place; a side session is never kept.
-                if !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
+                // A continuation already has its saved thread: never write it back over a Clear, a replacement,
+                // or a refused resume. A fresh session that never came up and a side session are not kept.
+                if continuing.is_empty() && !side_run && fresh.as_ref().is_none_or(|f| f.confirmed.lock().unwrap().is_some()) {
                     keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
                 }
                 Ok::<(), Fail>(())
@@ -1577,9 +1603,9 @@ impl Runner {
         } else {
             config.clone()
         };
-        let mut pending = if unavailable && drove.outcome != "completed" && !native_control { crate::fallback::configured(&fallback_config) } else { None };
+        let mut pending = if unavailable && drove.outcome != "completed" && !native_control && continuing.is_empty() { crate::fallback::configured(&fallback_config) } else { None };
         let turn_env = base_env.clone().unwrap_or_default();
-        if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared {
+        if pending.is_none() && (hit_limit || held.is_some()) && !native_control && prepared && continuing.is_empty() {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
@@ -1695,6 +1721,7 @@ impl Runner {
                     shared: crate::sessions::is_shared(&config),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
+                    require_existing_session: false,
                 };
                 let th = h.start_thread(&bot, &settings).await?;
                 thread = Some(th.clone());
@@ -1781,6 +1808,9 @@ impl Runner {
             fallback = None;
             subscription_unavailable = None;
         }
+        // A turn the model's capacity stopped after it acted continues its kept thread in the job's next turn, where the
+        // server takes that (backend/execution.py capacity_continuation): only the primary's, never a side session's.
+        let continues = drove.continues && fallback.is_none() && !side_run && capacity_continue();
         // A continuation resumes only the primary's kept session. A fallback's thread is a side session, never kept,
         // and the primary's does not hold what the fallback did, so an interrupted fallback turn is held for review.
         let resumable = fallback.is_none() && !side_run;
@@ -1806,6 +1836,8 @@ impl Runner {
         }
         if drove.capacity {
             log(&format!("Tico runner: {bot}: {ran_on} model is at capacity for now; the cloud will retry shortly"));
+        } else if continues {
+            log(&format!("Tico runner: {bot}: {ran_on} model is at capacity after the turn acted; its thread is kept and continues after a short wait"));
         } else if drove.limited {
             log(&format!("Tico runner: {bot} hit a {ran_on} usage limit; the cloud will retry later"));
         } else if drove.retryable && subscription_unavailable.is_none() {
@@ -1916,7 +1948,7 @@ impl Runner {
             }
         }
         if let Some(g) = goal.chat_goal.as_ref().filter(|g| g["status"] == "active") {
-            if drove.outcome != "completed" && !drove.limited && !drove.retryable && !drove.yielded {
+            if drove.outcome != "completed" && !drove.limited && !drove.retryable && !drove.yielded && !continues {
                 let note = goal.failure.clone().unwrap_or_else(|| format!("The harness run {}", drove.outcome));
                 let _ = self.state.append(&aid, "goal", &json!({"goal_id": g["id"], "revision": g["updated_at"], "status": "stopped", "note": note}));
             }
@@ -1987,6 +2019,9 @@ impl Runner {
         }
         if drove.retryable && !drove.limited {
             completion.insert("retryable".into(), json!(true));
+        }
+        if continues {
+            completion.insert("continues".into(), json!(true));
         }
         if held.is_some() {
             // The server held the bot's own login and it was never tried; with no fallback either, the turn ends
@@ -2234,7 +2269,7 @@ impl Runner {
 
     /// The assigned subscription cannot run here: a failed, retryable result that names it, and a heartbeat now.
     fn settle_unavailable(&self, aid: &str, u: &crate::profiles::Unavailable, drove: &mut Drove, rejected: &mut Option<(String, String)>, out: &mut Option<Value>) {
-        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, capacity: false, retryable: true, turn: drove.turn.clone(), yielded: false };
+        *drove = Drove { outcome: "failed".into(), reply: u.problem.clone(), tokens: json!({}), limited: false, capacity: false, continues: false, retryable: true, turn: drove.turn.clone(), yielded: false };
         *rejected = None;
         let _ = self.state.append(aid, "diagnostic", &json!({"text": u.problem, "detail": {"runtime": u.runtime}}));
         *out = Some(u.detail());
@@ -2273,6 +2308,7 @@ mod tests {
         pub(super) static RUN_RELAY: RefCell<Option<crate::gateway_relay::Relay>> = const { RefCell::new(None) };
         pub(super) static HOST_COMMAND: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
         pub(super) static THREAD_UPDATES: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+        pub(super) static CAPACITY_CONTINUE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
@@ -2287,6 +2323,7 @@ mod tests {
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
             THREAD_UPDATES.with(|on| on.set(None));
+            CAPACITY_CONTINUE.with(|on| on.set(None));
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
@@ -3182,6 +3219,12 @@ for line in sys.stdin:
         t, tid = "t%d" % count("turns"), params["threadId"]
         say({"id": i, "result": {"turn": {"id": t}}})
         say({"method": "turn/started", "params": {"threadId": tid, "turn": {"id": t}}})
+        if m.get("turn") == "capacity":
+            item = {"type": "commandExecution", "id": "cmd" + t, "command": "git status", "status": "completed", "exitCode": 0}
+            say({"method": "item/started", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": item}})
+            say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "failed", "error": {"message": "Selected model is at capacity"}}}})
+            continue
         say({"method": "item/completed", "params": {"threadId": tid, "turnId": t, "item": {"type": "agentMessage", "id": "i" + t, "text": "Done.", "phase": "final_answer"}}})
         say({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": t, "status": "completed"}}})
     elif method == "thread/compact/start":
@@ -3216,22 +3259,32 @@ for line in sys.stdin:
             let program = dir.join("codex");
             std::fs::write(&program, FAKE_CODEX).unwrap();
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let env: Env = [("PATH".to_string(), format!("{}:/usr/bin:/bin", dir.display()))].into_iter().collect();
+            let env: Env = [("PATH".to_string(), format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default()))].into_iter().collect();
             HOST_CODEX.with(|e| *e.borrow_mut() = Some(env));
             CodexRig { runner, dir, seen, server, _controls: controls }
         }
 
         /// One task turn (`n`, from 0) with the fake in `mode`; the config is merged over the bot's. The result Tico got.
         async fn turn(&self, n: usize, mode: Value, extra: Value) -> Value {
+            self.turn_continuing(n, mode, extra, None).await
+        }
+
+        async fn turn_continuing(&self, n: usize, mode: Value, extra: Value, continuing: Option<&str>) -> Value {
             std::fs::write(self.dir.join("mode.json"), mode.to_string()).unwrap();
             let mut config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"});
             config.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
-            let attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+            let mut attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c-watch", "kind": "task"},
                                  "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
                                           "checkpoint": "Build 40 green; waiting on build 41.", "checkpoint_at": "2026-10-22T08:00:00Z"},
                                  "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
                                  "history": [], "config": config});
+            if let Some(thread) = continuing {
+                attempt["continue_thread"] = json!(thread);
+            }
+            if let Some(epoch) = extra.get("test_session_epoch") {
+                attempt["session_epoch"] = epoch.clone();
+            }
             tokio::time::timeout(Duration::from_secs(60), self.runner.clone().execute(attempt)).await.expect("the turn did not end").unwrap();
             let seen = self.seen.lock().unwrap().clone();
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-codex-{n}/complete"))).map(|(_, _, b)| b).collect();
@@ -3269,6 +3322,64 @@ for line in sys.stdin:
             self.server.abort();
             std::fs::remove_dir_all(&self.dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_resumes_the_thread_that_ran_tools() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let done = rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        assert_eq!(done["outcome"], "failed", "{done}");
+        assert_eq!(done["continues"], true, "{done}");
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({}), Some(&first)).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
+        assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+        assert_eq!(rig.methods(), ["thread/start", "turn/start", "thread/resume", "turn/start"]);
+        let turns: Vec<Value> = rig.calls().into_iter().filter(|c| c["method"] == "turn/start").collect();
+        assert!(turns.iter().all(|c| c["params"]["threadId"] == first));
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_replaces_a_missing_or_refused_thread() {
+        for mode in ["missing", "refuse"] {
+            let rig = CodexRig::new().await;
+            CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+            rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+            let first = rig.saved().unwrap();
+            let done = rig.turn_continuing(1, json!({"resume": mode}), json!({}), Some(&first)).await;
+            assert_eq!(done["outcome"], "interrupted", "{done}");
+            assert_ne!(done["continues"], true, "{done}");
+            assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
+            assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "thread/start").count(), 1);
+            assert_eq!(rig.methods().iter().filter(|m| *m == "turn/start").count(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cleared_capacity_continuation_never_resurrects_its_session() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({"turn": "capacity"}), json!({})).await;
+        let first = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"test_session_epoch": 1}), Some(&first)).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(rig.saved().is_none(), "Clear must survive continuation settlement");
+        assert_eq!(rig.methods(), ["thread/start", "turn/start"]);
+        assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_codex_capacity_continuation_never_compacts_a_thread_it_does_not_continue() {
+        let rig = CodexRig::new().await;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        rig.turn(0, json!({}), json!({})).await;
+        let saved = rig.saved().unwrap();
+        let done = rig.turn_continuing(1, json!({}), json!({"compact_first": true}), Some("another-thread")).await;
+        assert_eq!(done["outcome"], "interrupted", "{done}");
+        assert!(!rig.methods().iter().any(|m| m == "thread/compact/start"), "{:?}", rig.methods());
+        assert_eq!(rig.saved().as_deref(), Some(saved.as_str()));
     }
 
     #[tokio::test]
@@ -3948,4 +4059,108 @@ else:
         std::fs::remove_dir_all(dir).ok();
     }
 
+
+    /// A synthetic Claude process: its first turn says something (it acted) and then the model is at capacity; a turn
+    /// that resumes its thread finishes. Every prompt it reads is kept in prompts.jsonl.
+    fn capacity_host(dir: &Path) {
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, os, pathlib, signal, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+signal.alarm(20)
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+with (root / 'prompts.jsonl').open('a') as f:
+    f.write(json.dumps(sys.stdin.readline()) + '\n')
+print(json.dumps({'type':'system','subtype':'init','session_id':'capacity-session'}), flush=True)
+if '--resume' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'success','result':'Finished the Acme invoice run.'}), flush=True)
+else:
+    print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':'Sent the Acme invoice'}]}}), flush=True)
+    print(json.dumps({'type':'result','subtype':'error_during_execution','is_error':True,
+                      'result':'Selected model is at capacity. Please try a different model.'}), flush=True)
+"#).unwrap();
+        HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec![crate::env::python().display().to_string(), script.display().to_string()]));
+        HOST_CLAUDE.with(|on| on.set(true));
+    }
+
+    fn capacity_attempt(id: &str, continue_thread: Option<&str>) -> Value {
+        // Codex's configuration on the synthetic Claude process, with a fallback ready: no fallback may take a turn
+        // whose thread already acted.
+        let mut attempt = json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+                                 "conversation": {"id": "c1"}, "message": {"refs": {}},
+                                 "config": {"runtime": "codex", "harness": "codex", "model": "synthetic", "session": "bot",
+                                            "fallback": {"harness": "claude", "model": "synthetic-fallback"}}});
+        if let Some(th) = continue_thread {
+            attempt["continue_thread"] = json!(th);
+        }
+        attempt
+    }
+
+    fn completion(seen: &Mutex<Vec<(String, String, Value)>>, aid: &str) -> Value {
+        let done: Vec<Value> = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/{aid}/complete"))).map(|(_, _, b)| b.clone()).collect();
+        assert_eq!(done.len(), 1, "{done:?}");
+        done[0].clone()
+    }
+
+    #[tokio::test]
+    async fn a_turn_at_capacity_after_it_acted_keeps_its_thread_and_the_next_turn_continues_it() {
+        for server_takes_it in [false, true] {
+            let _controls = RunControls;
+            CAPACITY_CONTINUE.with(|on| on.set(Some(server_takes_it)));
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, "capacity");
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            capacity_host(&dir);
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-cap", None))).await.expect("the turn ends").unwrap();
+            let done = completion(&seen, "a-cap");
+            assert_eq!(done["outcome"], "failed", "{done:?}");
+            assert_ne!(done["limited"], true, "a turn that acted is not a limit a fallback or a replay may retry: {done:?}");
+            // The primary's thread is kept whatever the server takes: a person resuming the held run continues it.
+            assert_eq!(runner.state.session("ops", "bot", "codex").unwrap().as_deref(), Some("capacity-session"));
+            if !server_takes_it {
+                // An older server holds it for review as before: the runner does not ask it to continue.
+                assert_ne!(done["continues"], true, "{done:?}");
+                server.abort();
+                std::fs::remove_dir_all(dir).ok();
+                continue;
+            }
+            assert_eq!(done["continues"], true, "{done:?}");
+            // The server queues the job again and, after the capacity hold, hands it out naming that thread.
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-next", Some("capacity-session")))).await.expect("the continuation ends").unwrap();
+            assert_eq!(completion(&seen, "a-next")["outcome"], "completed");
+            let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            assert_eq!(args.len(), 2, "no fallback or fresh thread ran: {args:?}");
+            let resumed: Vec<_> = args[1].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert!(resumed.windows(2).any(|pair| pair == ["--resume", "capacity-session"]), "{args:?}");
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_continuation_whose_thread_is_gone_is_held_for_review_without_running() {
+        let _controls = RunControls;
+        CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "capacity-lost");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        capacity_host(&dir);
+        // This computer never ran the thread the stopped turn left (the bot moved, or its session was cleared).
+        tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(capacity_attempt("a-lost", Some("capacity-session")))).await.expect("the turn ends").unwrap();
+        assert_eq!(posted(&seen, "/attempts/a-lost/started"), 1, "started, so the server holds it rather than queueing it again");
+        let done = completion(&seen, "a-lost");
+        assert_eq!(done["outcome"], "interrupted", "{done:?}");
+        assert!(done["fallback"].is_null(), "{done:?}");
+        assert!(!dir.join("prompts.jsonl").exists(), "no fresh thread or fallback was given the request");
+        assert!(runner.state.session("ops", "bot", "codex").unwrap().is_none(), "lost continuation must not save its thread");
+        let events = seen.lock().unwrap().iter().filter(|(_, p, _)| p.ends_with("/attempts/a-lost/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect::<Vec<_>>();
+        assert!(events.iter().any(|e| e.to_string().contains("could not be resumed")), "{events:?}");
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

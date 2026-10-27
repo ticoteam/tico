@@ -116,6 +116,8 @@ def check(event):
     if event.get("op") not in OPS or not isinstance(event.get("key"), str) or not event["key"].strip():
         return None
     clean = {"op": event["op"]}
+    if event.get("incident") is True:
+        clean["incident"] = True
     for name, limit in LIMITS.items():
         value = event.get(name)
         if isinstance(value, str):

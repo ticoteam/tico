@@ -61,6 +61,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                     [--on PERSON]          with --status waiting: the person it waits on (their Needs you);
                                            --note is then your ask to them, one or two plain sentences:
                                            "Approve the video tool trial on Thursday? If yes, I'll send the invite."
+                    [--on bot:SLUG]        with --status waiting: an active bot owning a task this one is
+                                           blocked by (hub task wait); --note is the reason shown
     hub task close <id> [--note "..."]
     hub task wait <id> --on task:<id>|pr:<url>|release:<tag>
                                            wait on a task, a PR merging or a release; one wake when it happens
@@ -1047,7 +1049,9 @@ def parser():
     s.add_argument("--on", dest="waiting_on",
                    help="with --status waiting: the person it waits on, so it is in their Needs you; '' clears it. "
                         "--note is then your ask to them: one or two plain sentences saying what you need and what "
-                        "happens after, with no ids, hashes, file paths or tool names")
+                        "happens after, at most 40 words, with no ids, hashes, file paths or tool names (\"PR #1555\" is "
+                        "fine). Or bot:<slug>, an active bot that owns the first open task this one is blocked by "
+                        "(hub task wait <id> --on task:<its task>); --note is then the reason shown beside its name")
     s.add_argument("--goal", help='the goal this task serves; "" takes it off')
     s.add_argument("--quiet", action="store_true", help="keep detailed notes on the task")
     s.add_argument("--type", help="task type id or name")

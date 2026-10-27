@@ -591,6 +591,19 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             def __init__(self):
                 self.statements = {}
 
+            # Provenance helpers share this request's snapshot cache through the restricted source wrapper.
+            @property
+            def read_cache(self):
+                return conn.read_cache
+
+            @property
+            def in_transaction(self):
+                return conn.in_transaction
+
+            @property
+            def total_changes(self):
+                return conn.total_changes
+
             def execute(self, statement, args=()):
                 source = self.statements.get(statement)
                 if source is None:

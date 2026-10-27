@@ -184,10 +184,11 @@ const clockTime = at => new Date(at).toLocaleTimeString([], {hour: 'numeric', mi
 // bot's own words, never that something was read or edited: the check reads only the text it refused.
 function quarantineWhy(slug) {
   const q = v2StatusOf(slug)?.quarantine || {}, r = q.review || {};
-  if (q.auto) return `It hit repeated refused actions and resumes by itself ${q.resumes_at ? `at ${clockTime(q.resumes_at)}` : 'within an hour'}.`;
+  if (q.why) return q.why;
+  if (q.auto) return `Quarantined for repeated refused writes (rule 8): resumes by itself ${q.resumes_at ? `at ${new Date(q.resumes_at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : 'after its cooldown'}; a person who manages it can clear it sooner.`;
   const found = r.found === 'secrets/' ? 'a secrets/ path' : r.found ? `another bot's folder (${r.found})` : "a secrets path or another bot's folder";
   const what = r.what ? `${/^[aeiou]/i.test(r.what) ? 'an' : 'a'} ${r.what}` : 'repeated writes';
-  return `The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
+  return `Quarantined until a person clears it. The safety check stopped ${what} that named ${found}. It matched text only; nothing was sent or changed.`;
 }
 const QUARANTINE_RESUME_NOTE = 'Resume releases this pause; the checks stay on.';
 async function quarantineResume(slug) {

@@ -28,6 +28,8 @@ REFUSAL_HOURS = 24
 FAILED = ("failed", "interrupted", "expired")
 MAX_EXCEPTIONS = 500
 MAX_LINES = 40                  # lines in the wake; the rest is in `hub pipeline`
+# A manager's held notes (verdicts, results, ticket news) are read at least this often, list or not: its own clock.
+NOTES_HOURS = 24
 EVENT = "exceptions.sent"
 WAKE = "exceptions"
 PROFILE = "manager"
@@ -57,6 +59,22 @@ def _check_children(c, ids):
             if CHECK_TITLE.match(str(row["title"] or "").strip()):
                 out[row["id"]] = row["to_task"]
     return out
+
+
+def _finished_check(c, ticket, step, since):
+    """The newest check of this step's kind filed below the ticket since it entered the step and finished since, or
+    None: the check was filed, and what stands is the ticket not moving on."""
+    from .check_pools import kind
+    want = kind(step["name"]).lower()
+    for row in c.execute(
+            "SELECT t.id, t.title, t.owner, coalesce(t.done_at, t.closed_at, t.updated) AS ended FROM task_relations r "
+            "JOIN tasks t ON t.id=r.from_task WHERE r.kind='parent' AND r.to_task=? AND t.created>=? "
+            f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) ORDER BY ended DESC, t.id",
+            (ticket["id"], since, *H.ACTIVE_STATUSES)):
+        title = str(row["title"] or "").strip().lower()
+        if title == want or title.startswith(want + ":") or title.startswith(want + " "):
+            return dict(row)
+    return None
 
 
 def _entered(c, ids):
@@ -169,7 +187,12 @@ def _stuck(c, out, rows, children, at):
             if (not found or not check_pools._prs(c, item, found[0])
                     or check_pools.waiting(c, item["id"]) or start > cutoff or _waits(c, item, at)):
                 continue
-            out.add(subject, "stuck", f"no check filed at {label['step']} and none waiting", start, **extra)
+            done = _finished_check(c, item, found[0], start)
+            if not done:
+                out.add(subject, "stuck", f"no check filed at {label['step']} and none waiting", start, **extra)
+            elif done["ended"] <= cutoff:
+                out.add(subject, "stuck", f"{done['title']} finished and the ticket has not moved on "
+                        f"(owner {label['owner']})", done["ended"], **extra)
             continue
         last = max(x for x in (start, (newest or {}).get("finished") or (newest or {}).get("created")) if x)
         if last > cutoff or _waits(c, item, at):
@@ -358,7 +381,8 @@ def render(entries, more=0):
 
 def deliver(c, at=None):
     """The hourly pass: each engineering type whose manager reads the list gets one wake with it, only when an entry
-    is new since the last list it was sent. Returns the managers woken."""
+    is new since the last list it was sent, or when a note has been held for it NOTES_HOURS (one read a day of what
+    waited for its next run). Returns the managers woken."""
     from . import rules
     from .roadmap_flow import ENGINEERING
     at = at or H.now()
@@ -376,16 +400,27 @@ def deliver(c, at=None):
                          (EVENT, typ["id"])).fetchone()
         sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
         new = [k for k in keys if k not in sent]
-        if new:
+        held, oldest = c.execute("SELECT count(*), min(created) FROM notes WHERE to_actor=? AND carried_by IS NULL "
+                                 "AND cancelled_at IS NULL", (reader,)).fetchone()
+        daily = (bool(held) and slug not in woke and oldest <= H.shift(at, hours=-NOTES_HOURS)
+                 and not c.execute("SELECT 1 FROM events WHERE action=? AND target=? AND ts>? "
+                                   "AND json_extract(detail_json,'$.daily')=1 LIMIT 1",
+                                   (EVENT, typ["id"], H.shift(at, hours=-NOTES_HOURS))).fetchone())
+        if new or daily:
             shown = entries[:MAX_LINES]
-            text = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new). Fix each cause: move a ticket by "
-                    "hand, reassign it, or close a duplicate. Tickets that move on their own are not listed.\n\n"
-                    + render(shown, len(entries) - len(shown)))
-            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"]}, wake=True)
+            head = (f"Exceptions on {typ['name']}: {len(entries)} ({len(new)} new)." if new else
+                    f"Daily read on {typ['name']}: {held} held note(s) since {oldest[:16]}Z, and "
+                    f"{len(entries)} exception(s), none new.")
+            text = (head + " Fix each cause: move a ticket by hand, reassign it, or close a duplicate. Tickets that "
+                    "move on their own are not listed.\n\n" + render(shown, len(entries) - len(shown)))
+            ok, _detail = rules._tell_bot(c, WAKE, slug, text, {"wake": WAKE, "type": typ["id"],
+                                                                **({} if new else {"daily": True})}, wake=True)
             if not ok:
                 continue        # nobody could be told: the same entries are new again on the next pass
             woke.append(slug)
-        if new or set(keys) != sent:
+        if new or daily or set(keys) != sent:
             # The list as it stands is what the next pass compares with; an entry that cleared and comes back is new.
-            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new)})
+            # A wake while notes are held reads them: the daily read counts from it.
+            H.event(c, H.KEEPER, EVENT, typ["id"], {"keys": keys, "bot": slug, "woke": bool(new or daily),
+                                                    **({"daily": 1} if (new or daily) and held else {})})
     return woke

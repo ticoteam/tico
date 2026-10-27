@@ -5,7 +5,7 @@ import pytest
 
 from backend import step_backlog as SB
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.test_api import api, restrict  # noqa: F401
 
 
 def board(c, backlog):
@@ -53,6 +53,64 @@ def test_per_owner_counts_each_owner_and_tells_the_owner_one_level_up_and_a_name
         tickets(c, typ, "bot:cpo", 2)
         [(step, owner, n, who)] = SB.sweep(c, later(0))
         assert (step, owner, n, who) == ("Inbox", "bot:ops", 3, ["bot:ops", "bot:coo", "human:ana"])
+
+
+def test_a_private_ticket_changes_nothing_a_warning_says(api):
+    with api.app.state.store.transaction() as c:
+        typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
+        hidden = H.task_create(c, "human:ana", "Private plan", "x", "bot:cpo", type=typ["id"], step="Inbox",
+                               private=True, lint=False)
+        tickets(c, typ, "bot:ops", 3)
+        assert SB.sweep(c, later(0)) == [], "the private ticket does not push the step over"
+        H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        assert [(s, n, t) for s, _, n, t in SB.sweep(c, later(0))] == [("Inbox", 4, ["bot:coo"])]
+        [(room, body)] = c.execute("SELECT json_extract(refs_json,'$.task'), body FROM messages "
+                                   "WHERE body LIKE 'Backlog:%'").fetchall()
+        assert body.startswith("Backlog: 4 tickets wait at Inbox (over 3; ops 4)")
+        assert room != hidden["id"] and not H.task_private(c, H.task(c, room)), "never written into a private room"
+        assert "cpo" not in body
+        [event] = c.execute("SELECT target, json_extract(detail_json,'$.count') FROM events WHERE action=?",
+                            (SB.EVENT,)).fetchall()
+        assert tuple(event) == (room, 4)
+
+
+def test_a_ticket_of_a_bot_not_every_member_reads_is_not_counted(api):
+    with api.app.state.store.transaction() as c:
+        restrict(c, "cpo", people=["human:ana"])
+        typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
+        [hidden] = tickets(c, typ, "bot:cpo", 1)
+        tickets(c, typ, "bot:ops", 3)
+        assert SB.sweep(c, later(0)) == [], "the restricted bot's ticket does not push the step over"
+        assert told(c) == []
+        H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        assert [n for _, _, n, _ in SB.sweep(c, later(0))] == [4]
+        [(room, body)] = c.execute("SELECT json_extract(refs_json,'$.task'), body FROM messages "
+                                   "WHERE body LIKE 'Backlog:%'").fetchall()
+        assert room != hidden["id"], "the oldest ticket is the restricted bot's, and it never hosts the warning"
+        assert "cpo" not in body
+
+
+def test_a_ticket_a_restricted_bot_asked_for_is_not_counted(api):
+    with api.app.state.store.transaction() as c:
+        restrict(c, "cpo", people=["human:ana"])
+        typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
+        [asked] = tickets(c, typ, "bot:ops", 1)
+        c.execute("UPDATE tasks SET requester='bot:cpo' WHERE id=?", (asked["id"],))
+        H.task_create(c, "human:ana", "Ticket bot:ops 1", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        H.task_create(c, "human:ana", "Ticket bot:ops 2", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        assert SB.sweep(c, later(0)) == [], "a ticket the restricted bot asked for does not push the step over"
+        assert told(c) == []
+
+
+def test_per_owner_a_private_ticket_never_makes_an_owner_over(api):
+    with api.app.state.store.transaction() as c:
+        typ = board(c, {"over": 2, "per": "owner", "notify": ["owner"]})
+        tickets(c, typ, "bot:ops", 2)
+        H.task_create(c, "human:ana", "Private plan", "x", "bot:ops", type=typ["id"], step="Inbox", private=True,
+                      lint=False)
+        assert SB.sweep(c, later(0)) == []
+        assert told(c) == []
 
 
 @pytest.mark.parametrize("backlog", [{"over": -1}, {"over": 3, "per": "team"}, {"over": 3, "notify": ["owner"]},

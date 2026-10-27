@@ -231,7 +231,13 @@ def prime_attempts(c, aids):
             events[row[0]].append(row[2])
             if row[1] == INPUT_MOVED:
                 moved[row[0]].append(row[2])
+        details = [H._json(detail, {}) or {} for rows in events.values() for detail in rows]
+        prime_references(c, details)
+        moved_ids = {detail.get("message_id") for detail in details
+                     if isinstance(detail, dict) and isinstance(detail.get("message_id"), str)}
+        _prime_inputs(c, H.prime_messages(c, moved_ids).values())
         meetings.prime_attempts(inputs, moved)
+        tasks = set()
         for aid in chunk:
             try:
                 ids = set(carried[aid])
@@ -242,6 +248,8 @@ def prime_attempts(c, aids):
             except Problem:
                 continue
             values[("attempt_tasks", aid)] = provenance_clock.cached(c, ("attempt_tasks", aid), lambda ids=ids: ids)
+            tasks.update(ids)
+        _task_rows(c, tasks)
 
 
 def _parent_ids(message, refs):
@@ -260,6 +268,7 @@ def _prime_inputs(c, rows):
     rows = H.prime_message_rows(c, rows)
     prime_references(c, [H._json(row["refs_json"], {}) or {} for row in rows])
     H.prime_conversations(c, {row["conversation_id"] for row in rows})
+    meeting_sources(c).prime_conversations({row["conversation_id"] for row in rows})
 
 
 def prime_queued(c, messages):
@@ -288,19 +297,25 @@ def prime_messages(c, messages):
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
     parents = set().union(*(_parent_ids(m, r) for m, r in zip(messages, refs))) if messages else set()
-    ancestry = [H._json(row["refs_json"], {}) or {}
-                for row in H.prime_message_rows(c, H.prime_messages(c, parents).values())]
+    # Views and joins may carry extra columns. Only rows fetched from messages seed its stored-row cache.
+    stored = H.prime_messages(c, parents | {m.get("id") for m in messages})
+    ancestry_rows = [dict(row) for row in H.prime_message_rows(c, stored.values())]
+    ancestry = [H._json(row["refs_json"], {}) or {} for row in ancestry_rows]
     prime_references(c, refs + ancestry)
-    rooms = {m.get("conversation_id") for m in messages}
+    rooms = {m.get("conversation_id") for m in messages + ancestry_rows}
     H.prime_conversations(c, rooms)
     if read_cache.cache(c) is not None:
         meeting_sources(c).prime_conversations(rooms)
     runs = set()
-    for ref in refs:
+    for ref in refs + ancestry:
         if isinstance(ref, dict):
             run = ref.get("run")
             runs.add(ref.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
     prime_attempts(c, runs)
+    about = {H.message_task_id({**m, "refs": r}, H.conversation(c, m["conversation_id"])
+                              if m.get("conversation_id") else None)
+             for m, r in zip(messages + ancestry_rows, refs + ancestry) if isinstance(r, dict)}
+    _task_rows(c, about - {None, ""})
 
 
 # Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
@@ -348,11 +363,7 @@ def readable_messages(c, actor, messages):
     rather than one query per message. A message not stored is checked as given, as message_readable does."""
     snapshot(c)
     ids = sorted({dict(m).get("id") for m in messages} - {None, ""})
-    stored = {}
-    for start in range(0, len(ids), 500):
-        chunk = ids[start:start + 500]
-        stored.update((row["id"], dict(row)) for row in c.execute(
-            "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+    stored = H.prime_messages(c, ids)
     prime_messages(c, list(stored.values()))
     return [m for m in messages if (message_readable(c, actor, stored[mid], current=True)
                                     if (mid := dict(m).get("id")) in stored else message_readable(c, actor, m))]
@@ -909,6 +920,27 @@ def prime_blobs(c, bids):
     snapshot(c)
     if read_cache.cache(c) is None:
         return
+    pending, seen = {bid for bid in bids if bid}, set()
+    tasks, attempts, messages = set(), set(), {}
+    # A decision visits at most 100 distinct blobs. Read each ancestry level together,
+    # including parents outside the listed files, without caching a path-dependent answer.
+    for _ in range(100):
+        pending -= seen
+        if not pending:
+            break
+        seen.update(pending)
+        pending, linked_tasks, linked_attempts, linked_messages = _prime_blob_links(c, pending)
+        tasks.update(linked_tasks)
+        attempts.update(linked_attempts)
+        messages.update(linked_messages)
+    H.prime_message_rows(c, messages.values())
+    prime_messages(c, messages.values())
+    prime_attempts(c, attempts)
+    _task_rows(c, tasks)
+
+
+def _prime_blob_links(c, bids):
+    parent_ids, task_ids, attempt_ids, message_rows = set(), set(), set(), {}
     for part in H.chunks(sorted({bid for bid in bids if bid})):
         marks = ",".join("?" * len(part))
         wanted = set(part)
@@ -917,19 +949,24 @@ def prime_blobs(c, bids):
                              f"WHERE poster_blob_id IN ({marks}) OR thumb_blob_id IN ({marks})", part * 2):
             for bid in {row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
                 parents[bid].append(row)
+            parent_ids.add(row["blob_id"])
         for row in c.execute(f"SELECT task_id,blob_id FROM task_assets WHERE blob_id IN ({marks})", part):
             tasks[row["blob_id"]].append(row)
+            task_ids.add(row["task_id"])
         for row in c.execute("SELECT f.task_id,f.scope,v.attempt_id,v.blob_id,v.poster_blob_id,v.thumb_blob_id "
                              "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
                              f"WHERE v.blob_id IN ({marks}) OR v.poster_blob_id IN ({marks}) "
                              f"OR v.thumb_blob_id IN ({marks})", part * 3):
             for bid in {row["blob_id"], row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
                 files[bid].append(row)
+            if row["task_id"]:
+                task_ids.add(row["task_id"])
+            if row["scope"].startswith("task:"):
+                task_ids.add(row["scope"][5:])
+            attempt_ids.add(row["attempt_id"])
         assets = c.execute(f"SELECT blob_id,message_id FROM message_assets WHERE blob_id IN ({marks})", part).fetchall()
-        found = {}
-        for chunk in H.chunks(sorted({row["message_id"] for row in assets})):
-            found.update((row["id"], row) for row in c.execute(
-                "SELECT * FROM messages WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk))
+        found = H.prime_messages(c, {row["message_id"] for row in assets})
+        message_rows.update(found)
         for row in assets:
             if row["message_id"] in found:
                 messages[row["blob_id"]].append(found[row["message_id"]])
@@ -940,11 +977,13 @@ def prime_blobs(c, bids):
         read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
+    return parent_ids, task_ids, attempt_ids, message_rows
 
 
 def blob_readable(c, actor, bid, seen=None, memo=None):
     """A task attachment cannot regain access through uploader ownership or another link.
-    `memo` is attempt_tasks' cache for one read transaction."""
+    `memo` is attempt_tasks' cache for one read transaction. Only linkage rows are cached
+    for blobs: a cycle or depth refusal depends on this walk, not just the blob."""
     snapshot(c)
     seen = set() if seen is None else seen
     if bid in seen:
@@ -968,7 +1007,7 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
     linked = bool(ids)
     for row in read_cache.rows(c, BLOB_MESSAGES_SQL, (bid,)):
         linked = True
-        if not message_readable(c, actor, row):
+        if not message_readable(c, actor, row, current=True):
             return False
     # Attached to a task that was deleted, and to nothing else: its uploader may not open it either.
     if not linked and read_cache.one(c, BLOB_TRASHED_SQL, (bid,)):

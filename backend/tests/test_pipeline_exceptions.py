@@ -270,11 +270,12 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
         cases = [("bot:ops", "say", {"task": parent["id"]}, "Looked at it.\nVERDICT: approve PR #7 head " + HEAD),
                  ("keeper", "notice", {"task": parent["id"], "handoff": "verdict"}, "Review 1 gave changes."),
                  ("keeper", "notice", {"task": parent["id"], "subtask": "x", "wake": "subtask_finished"}, "Done."),
-                 ("keeper", "notice", {"task": parent["id"], "blocker_done": "x"}, "The blocker finished.")]
+                 ("keeper", "notice", {"task": parent["id"], "blocker_done": "x"}, "The blocker finished."),
+                 ("keeper", "notice", {"task": parent["id"], "wake": "blocker"}, "A setup blocker needs you.")]
         for name, outcome in (("manager", rules.NOTE), ("lead", rules.WAKE), ("doer", rules.WAKE)):
             profile(c, "coo", name)
             got = [rules.judge(c, actor, "bot:coo", kind, refs, body, conv) for actor, kind, refs, body in cases]
-            assert [d.outcome for d in got] == [outcome] * 4, (name, got)
+            assert [d.outcome for d in got] == [outcome] * len(cases), (name, got)
         # A person still wakes a manager, verdict or not.
         profile(c, "coo", "manager")
         person = rules.judge(c, "human:ana", "bot:coo", "say", {"task": parent["id"]}, "VERDICT: approve", conv)
@@ -344,3 +345,45 @@ def test_a_reviewers_recorded_waits_keep_its_check_off_the_list_and_unwoken_unti
         before = unheld_jobs(c, "ops")
         assert step_age.turn_ended(c) == [check["id"]], "and its reviewer is woken"
         assert unheld_jobs(c, "ops") == before + 1
+
+
+def test_a_finished_check_is_filed_so_an_idle_ticket_is_listed_as_not_moving_on_not_as_missing_its_check(api):
+    with api.app.state.store.transaction() as c:
+        typ = board(c)
+        c.execute("UPDATE task_steps SET check_pool=? WHERE type_id=? AND name='In QA'", (json.dumps(["ops"]), typ["id"]))
+        qa = c.execute("SELECT id FROM task_steps WHERE type_id=? AND name='In QA'", (typ["id"],)).fetchone()[0]
+        row = ticket(c, typ, "Fix Cursor", minutes=120)
+        H.task_link(c, "bot:cpo", row["id"], "https://github.com/acme/app/pull/41", kind="pr")
+        c.execute("UPDATE tasks SET step_id=?, status='review' WHERE id=?", (qa, row["id"]))
+        settled(c)
+        [missing] = listed(c, typ, "stuck")
+        assert "no check filed at In QA" in missing["cause"], "nothing filed: the missing check is the exception"
+        check = check_of(c, row, "QA: PR #41")
+        ended = H.shift(H.now(), minutes=-60)
+        c.execute("UPDATE tasks SET status='done', done_at=?, updated=? WHERE id=?", (ended, ended, check["id"]))
+        settled(c)
+        [entry] = listed(c, typ, "stuck")
+        assert "no check filed" not in entry["cause"]
+        assert "QA: PR #41 finished and the ticket has not moved on (owner cpo)" in entry["cause"]
+        assert entry["since"] == ended and entry["key"] == missing["key"]
+        c.execute("UPDATE tasks SET done_at=?, updated=? WHERE id=?", (H.now(), H.now(), check["id"]))
+        assert listed(c, typ, "stuck") == [], "a check that just finished: the builder has time to move it on"
+
+
+def test_a_manager_reads_its_held_notes_once_a_day_with_no_new_entry(api):
+    with api.app.state.store.transaction() as c:
+        board(c)
+
+        def note(hours_ago):
+            c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created) VALUES(?,?,?,?,?)",
+                      (H.new_id(), "keeper", "bot:coo", "Review 1 approved #7.", H.shift(H.now(), hours=-hours_ago)))
+
+        note(2)
+        assert PE.deliver(c) == [], "a note two hours old waits: no list entry, no turn"
+        note(25)
+        assert PE.deliver(c) == ["coo"], "a note held a day: one read"
+        [wake] = c.execute("SELECT body FROM messages WHERE to_actor='bot:coo' AND "
+                           "json_extract(refs_json,'$.daily')").fetchall()
+        assert wake[0].startswith("Daily read on Dev tickets: 2 held note(s)")
+        assert PE.deliver(c) == [], "its run has not carried them yet: still one read a day"
+        assert PE.deliver(c, H.shift(H.now(), hours=PE.NOTES_HOURS + 1)) == ["coo"], "a day on, read again"

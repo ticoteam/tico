@@ -75,7 +75,7 @@ you create named Dev tickets. Move any tasks off a step before you delete it or 
 | Review 1 | review | Builder | Reviewer 1 comments |
 | Review 1 Fixes | doing | Builder | Builder acts on the feedback (skipped if there is none) |
 | Review 2 | review | Builder | Reviewer 2 comments on the updated change (skipped for small changes) |
-| Review 2 Fixes | doing | Builder | Builder acts on the feedback, then merges |
+| Review 2 Fixes | doing | Builder | Builder acts on the feedback, then moves the ticket to In QA; the merge follows QA's pass |
 | In QA | review | Builder | QA runs the acceptance tests |
 | QA Fixes | doing | QA | A test failed; the Builder fixes it and moves the ticket back to In QA |
 | Pending Release | review | QA | Passed; waits for the next release, where Security tests the release build. Arriving here is a note to the Release Manager, not a wake |
@@ -114,11 +114,13 @@ ticket stays at its step with a Waiting tag.
   the owner's last run on a working ticket, or on an open check below it, finished with nothing live, queued or held
   after it and nothing recorded to wait on, the owner is woken once per stay at the step, a reviewer included.
 - **Head of Engineering works by exception.** On the **Manager** profile it has no step on any ticket: a ticket's
-  steps, its subtasks' results, checks, verdicts and late or backlog notices are notes for its next run, not wakes.
+  steps, its subtasks' results, checks, verdicts, blockers and refused moves on tickets it asked for, and late or
+  backlog notices are notes for its next run, not wakes. An incident still wakes it.
   About hourly (Settings > Routines, *Engineering exceptions*) Tico builds the board's exceptions list and wakes it
   only when the list has an entry the last one did not:
   - a ticket, or the open check below it, with no live, queued or held run for 45 minutes and nothing recorded to wait
-    on, or at a check step with no check filed and none waiting, with its owner and since when;
+    on, or at a check step with no check filed and none waiting, or whose check finished 45 minutes ago without the
+    ticket moving on, with its owner and since when;
   - a run on it that failed, was cut or is uncertain, with no later run that finished (one entry however many cuts);
   - a check waiting for a reviewer for 45 minutes, or at once when the step's pool is empty;
   - a builder over its step's slots, or a step over its backlog;
@@ -129,7 +131,8 @@ ticket stays at its step with a Waiting tag.
 
   It reads the list any time with `hub pipeline` (`exceptions`), and fixes the cause by hand: moves a ticket
   (`hub task update <id> --step ...`), reassigns it (`--owner`) or closes a duplicate. People and tasks given to it
-  still wake it at once. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
+  still wake it at once. With no new entry, the same pass wakes it once a day when a note has been held for it a day,
+  so what waited is read. On the Lead profile it keeps the late and backlog notices instead, and gets no list.
 - **Bots move a ticket by its step** (`hub task update <id> --step "Review 1"`), not by its status. Several steps
   share a status, and setting a status lands on the first step that has it.
 

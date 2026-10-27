@@ -87,9 +87,15 @@ FLOOR_EVENTS = {
     "needs_action": "a message its sender flagged needs-action",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
     "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
+    "incident_news": "news about a task marked as an incident wakes the bot at once",
+    "task_action": "a stale-check suggestion on a task it owns needs its action now",
+    "task_blocker": "a blocker or refused move on a task it owns or asked for needs action now",
+    "direct_review_request": "a review or sign-off asked of this bot needs action now",
     "builder_handoff": "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or "
                        "a merge",
 }
+# Structured task news that wakes at once when no row already wakes it or keeps it quiet.
+URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
           "gate": "verdict", "handoff": "builder_handoff"}
@@ -149,11 +155,12 @@ BATCH_EVENTS = {"completion": "a finished request", "review": "review comments",
                 "rule": "a notice a rule batched"}
 AWAITED_NAMES = frozenset(v[0] for v in AWAITED_EVENTS.values())
 # What a Manager-profile bot hears of as a note though it wakes every other bot: a ticket's verdicts and builder
-# hand-offs (wake_rules.always_wakes keys) and its subtasks' and blockers' results (wake_rules.awaited keys). Its
-# hourly run reads them; a person, an approval, a needs-action flag, a reply it waits on and its own wake_once,
-# resume, watcher, milestone and worktree waits still wake it.
+# hand-offs (wake_rules.always_wakes keys), its subtasks' and blockers' results (wake_rules.awaited keys) and a
+# blocker or refused move on a ticket it asked for (urgent_rule's task_blocker). Its exceptions list carries what of
+# those does not move on; a person, an approval, a needs-action flag, a reply it waits on, an incident, its own
+# wake_once, resume, watcher, milestone and worktree waits still wake it.
 MANAGER_NOTE = "profile_manager_note"
-MANAGER_QUIET = frozenset({"gate", "handoff", "subtask", "blocker_done"})
+MANAGER_QUIET = frozenset({"gate", "handoff", "subtask", "blocker_done", "task_blocker"})
 EVENTS = {**FLOOR_EVENTS, **WAKE_EVENTS, **NOTE_EVENTS, **{v[0]: v[1] for v in AWAITED_EVENTS.values()},
           **{"batch_" + k: v for k, v in BATCH_EVENTS.items()}}
 # refs.wake spellings the writers use -> the event a rule names.
@@ -319,6 +326,8 @@ def _builtins():
         add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     add("ask", "ask", WAKE, FLOOR_EVENTS["ask"], "always", True)
     add("answer", "answer", WAKE, FLOOR_EVENTS["answer"], "always", True)
+    for event in URGENT_EVENTS:
+        add(event, event, WAKE, FLOOR_EVENTS[event], "always", True)
     for key, (event, words) in AWAITED_EVENTS.items():
         add("awaited_" + key, event, WAKE, words, "awaited")
     add("own_write", "status_or_relation", IGNORE, "the bot's own write caused it", "filter")
@@ -576,6 +585,37 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
     return None
 
 
+def incident_task(conn, task):
+    """The persisted marker, never a title match when judging news."""
+    if not task:
+        return False
+    if "incident" in H.task_labels(task):
+        return True
+    task_type = conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
+    return bool(task_type and task_type[0].strip().lower() in ("incident", "incidents"))
+
+
+def urgent_rule(conn, actor, target, refs, conv, event):
+    """Structured task news that wakes at once when no row already wakes it or keeps it quiet. A row that
+    wakes keeps its own rule name; an explicit ignore or quiet marker keeps the silence. Own writes stay quiet."""
+    from . import wake_rules
+    if wake_rules.CAUSE.get() == target or actor == target:
+        return None
+    ctx = _Context(conn, actor, target, refs, conv, None)
+    task = ctx.task
+    if task:
+        if incident_task(conn, task):
+            return "incident_news"
+        party = target in (task.get("owner"), task.get("requester"))
+        if refs.get("stale_check") and target == task.get("owner"):
+            return "task_action"
+        if party and (event in ("blocker", "task_blocked") or refs.get("review_gate")):
+            return "task_blocker"
+    if event in ("review_request", "review_handback"):
+        return "direct_review_request"
+    return None
+
+
 # ----------------------------------------------------------------------------- the decision
 def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
     """The decision for a message about to be written to `target`, or None when `target` is not a bot. Fail open.
@@ -606,19 +646,23 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(IGNORE, NO_RUN)
     cause = wake_rules.CAUSE.get()
     floor = wake_rules.always_wakes(conn, actor, target, kind, refs, body, cause, in_reply_to)
-    if floor in MANAGER_QUIET and _manager(conn, target):
+    if _quiet(conn, target, floor):
         return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if floor:
         return Decision(WAKE, floor_rule(floor, kind))
     event = event_of(actor, kind, refs, body)
     row = _table_decision(conn, event, actor, target, refs, conv)
-    if row:
-        return row
-    row = _pr_decision(conn, event, target, refs, conv)
-    if row:
+    if row is None:
+        row = _pr_decision(conn, event, target, refs, conv)
+    if row is not None:
+        if row.outcome in (WAKE, IGNORE):
+            return row
+        urgent = urgent_rule(conn, actor, target, refs, conv, event)
+        if urgent and not _quiet(conn, target, urgent):
+            return Decision(WAKE, urgent)
         return row
     key = wake_rules.awaited(refs)
-    if key in MANAGER_QUIET and _manager(conn, target):
+    if _quiet(conn, target, key):
         return Decision(NOTE, MANAGER_NOTE, HOLD_ROW)
     if key:
         return Decision(WAKE, "awaited_" + key)
@@ -633,11 +677,17 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     if held:
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
+    if outcome == WAKE:
+        return Decision(outcome, rule)
+    urgent = urgent_rule(conn, actor, target, refs, conv, event)
+    if urgent and not _quiet(conn, target, urgent):
+        return Decision(WAKE, urgent)
     return Decision(outcome, rule, HOLD_ROW if outcome == NOTE else None)
 
 
-def _manager(conn, target):
-    return profile_of(conn, H.actor_id(target)) == "manager"
+def _quiet(conn, target, key):
+    """Whether this floor, awaited or urgent key is only a note for the target (MANAGER_QUIET)."""
+    return key in MANAGER_QUIET and profile_of(conn, H.actor_id(target)) == "manager"
 
 
 def decide(conn, actor, target, kind, refs, body, conv, in_reply_to=None):
@@ -666,6 +716,11 @@ def stamp(refs, decision):
     """The message's refs with the rule that decided it. A row's `batch` stamps the hold the jobs trigger reads
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
+    out.pop("wake_immediate", None)
+    if decision.outcome == WAKE and decision.rule in (*URGENT_EVENTS, "needs_action", "ask"):
+        # Urgent news and a question or flagged action for the bot skip every hold; the trigger reads this.
+        out.pop("wake_batch", None)
+        out["wake_immediate"] = True
     if decision.outcome == BATCH and not out.get("wake_batch"):
         out["wake_batch"] = "rule"
     if decision.outcome != BATCH and decision.rule not in BUILTIN_IDS and out.get("wake_batch") in BATCH_EVENTS:
@@ -1230,11 +1285,12 @@ def drop_step_noise(conn):
 
 def step_entered(conn, actor, row, *, skip=()):
     """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
-    else hears nothing. Only rows that name `step_entered` start this, so a team without them writes no message on a
-    step move. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
+    else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
+    Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
     Callers can skip recipients already notified by the event that moved the task."""
     try:
-        if not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
+        incident = incident_task(conn, row)
+        if not incident and not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone():
             return
         step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
         flow = _release_flow()
@@ -1244,7 +1300,8 @@ def step_entered(conn, actor, row, *, skip=()):
         conv = H.conversation(conn, row.get("conversation_id"))
         for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
             refs = {"task": row["id"], "news": "step_entered"}
-            if _table_decision(conn, "step_entered", actor, target, refs, conv, row):
+            if (incident and target in (row.get("owner"), row.get("requester"))) or \
+                    _table_decision(conn, "step_entered", actor, target, refs, conv, row):
                 H._wake(conn, row, target, f"{row['title']} entered {step[0] if step else 'a new step'}.",
                         {"news": "step_entered", **({"at_step": row["step_id"]} if row.get("step_id") else {})})
     except Exception:  # noqa: BLE001 - a step move never fails for the news about it

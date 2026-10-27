@@ -213,6 +213,21 @@ waits in the trash and gets them back when restored. The MCP tool is `hub_task_w
 `POST /api/v2/tasks/{id}/waits` with `{"on": "pr:<url>", "remove": false}`; each task answer carries
 `milestone_waits`.
 
+When the task waits on a bot doing prerequisite work (a builder, a reviewer, QA), wait on that bot's task, then
+name the bot with `--on` and give the reason in the note:
+
+```sh
+hub task wait <task> --on task:<the bot's task>
+hub task update <task> --status waiting --on bot:pr-reviewer --note "Needs the receipt-gate fix merged and QA'd first."
+```
+
+The task and its card show "Waiting on Builder (OpenAI)" with that reason. The blocker holds the task, so its owner
+is not woken while the prerequisite stays open. When that task is done, declined or closed and nothing else blocks
+this one, its owner is woken once with the outcome ("Unblocked: … is finished" or "was declined") and picks it back
+up. `--on bot:<slug>` is accepted only for an active bot that owns the first open task this one is blocked by, the
+one its views name: a bot alone does not say which of its work must finish, so an inactive bot, an unknown name or a
+bot that does not own that task is refused with how to link it, and nothing changes. A subtask needs neither: its result comes back to its parent on its own.
+
 When the task waits on a person to act instead (a decision, access, a host only they can fix),
 name them with `--on` and say plainly what you need in the note:
 
@@ -246,9 +261,18 @@ once the question is answered, declined or closed, the next one on the topic ope
 the earlier wording is refused ("reworded"), so the person answers what the card says now. A key is compared by its
 letters and digits in any script, case folded; one with none is refused.
 
-The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links
-or tool names. Without one the update is refused, saying what failed. A task with an open structured question to
-the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
+The note must be a plain ask: one or two sentences, at most 40 words, with no ids, hashes, file paths, `s3://` links,
+tool names or error output. A pull request may be named, in exactly the form `PR #1555`; a bare `#1555` is refused like
+any other reference number. Without a plain ask the update is refused, saying what failed and what to do now. An ask
+refused only for its length or sentence count comes back with a rewrite: its one request and the sentence saying what
+happens after, which passes as it is. Retry once with it and put the rest in a comment (or, for a task given to a
+person, below it in the body), so nothing is lost. When no shorter wording keeps the same decision (it asks two
+things, including indirect or conditional requests, asks nothing, or the request alone is too long or not plain),
+the refusal says exactly what to change instead. A second request such as "And sign the contract" needs repair;
+an outcome such as "If yes, I'll sign it, send it and close the task" stays together. An affirmative "If yes" takes
+priority over a negative branch such as "If you do not approve" or "If you agree not to merge";
+nothing is sent and the task stays as it was. Every refusal is recorded and none counts toward a quarantine.
+A task with an open structured question to the person (`hub task question`) is already the card: it waits on them as itself, and its note is only warned
 about. Only the bot that owns the task or its managers name the person, and a private task can only ask a person who can read it,
 or, on a private task with no person on it, the one person it brings in as its guest (see "A private task with no
 person on it: its guest").
