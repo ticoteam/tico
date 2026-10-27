@@ -90,6 +90,19 @@ def test_a_ticket_of_a_bot_not_every_member_reads_is_not_counted(api):
         assert "cpo" not in body
 
 
+def test_a_ticket_a_restricted_bot_asked_for_is_not_counted(api):
+    with api.app.state.store.transaction() as c:
+        restrict(c, "cpo", people=["human:ana"])
+        typ = board(c, {"over": 3, "per": "step", "notify": ["manager"]})
+        [asked] = tickets(c, typ, "bot:ops", 1)
+        c.execute("UPDATE tasks SET requester='bot:cpo' WHERE id=?", (asked["id"],))
+        H.task_create(c, "human:ana", "Ticket bot:ops 1", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        H.task_create(c, "human:ana", "Ticket bot:ops 2", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
+        assert SB.sweep(c, later(0)) == [], "a ticket the restricted bot asked for does not push the step over"
+        assert told(c) == []
+
+
 def test_per_owner_a_private_ticket_never_makes_an_owner_over(api):
     with api.app.state.store.transaction() as c:
         typ = board(c, {"over": 2, "per": "owner", "notify": ["owner"]})
