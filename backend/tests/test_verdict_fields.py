@@ -117,7 +117,8 @@ def test_last_inline_verdict_is_stored_and_delivered_once(api, source):
         assert (results[0]["refs"]["verdict"], results[0]["refs"]["verdict_head"]) == ("approve", "06d18530")
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "Review 2: import", "QA: import"])
+@pytest.mark.parametrize("title", ["Review 1: import", "Review 2: import", "QA: import",
+                                    "Post Release QA: PR #412"])
 def test_done_without_any_verdict_is_refused_without_finishing_or_waking(api, title):
     parent, review = pair(api, title)
     with api.app.state.store.transaction() as c:
@@ -148,7 +149,8 @@ def test_an_ordinary_child_can_finish_without_a_verdict(api):
         assert H.task(c, child["id"])["status"] == "done"
 
 
-@pytest.mark.parametrize("title", ["Review 1: import", "QA: import", "Security: confirm the vendor contract"])
+@pytest.mark.parametrize("title", ["Review 1: import", "QA: import", "Security: confirm the vendor contract",
+                                    "Post Release QA: PR #412"])
 def test_a_person_owned_child_titled_as_a_check_finishes_without_a_verdict(api, title):
     task_bot(api, lanes=True, others=("finance",))
     with api.app.state.store.transaction() as c:

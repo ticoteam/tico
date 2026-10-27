@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import time
+from contextlib import nullcontext
 
 import httpx
 import pytest
@@ -246,6 +247,8 @@ def gateway_setup(api, hq, monkeypatch):
     connection_setup(api, monkeypatch)
     from backend import gateway_connection
     monkeypatch.setattr(gateway_connection, "check_soon", lambda *args, **kwargs: hq.gateway_soon.append(args))
+    # Enrollment schedules a check directly too; these tests own every tick instead of racing that thread.
+    monkeypatch.setattr(gateway_connection, "check_later", lambda *args, **kwargs: None)
     monkeypatch.delenv("TICO_GATEWAY_INVITE", raising=False)
     hq.gateway = []
 
@@ -268,6 +271,9 @@ def gateway_row(api):
 
 
 def test_a_linked_server_gets_its_gateway_key_from_its_company_and_loses_it_with_the_link(api, hq, monkeypatch):
+    from backend import gateway_connection as GC
+    deferred = []
+    monkeypatch.setattr(GC, "check_later", lambda *args, **kwargs: deferred.append(args))
     gateway_setup(api, hq, monkeypatch)
     assert tick(api) is None and hq.seen == []                  # not linked, no invite: nothing to ask
     connected(api, hq)
@@ -292,12 +298,14 @@ def test_a_linked_server_gets_its_gateway_key_from_its_company_and_loses_it_with
     assert not view["connected"] and "key" not in record and record["install"] == body["install"]
     calls = len(hq.seen)
     assert tick(api) is None and len(hq.seen) == calls
-    from backend import gateway_connection as GC
     with api.app.state.store.read() as c:
         assert not GC.maintained(c, api.app.state.store.settings) and GC.health(c, api.app.state.store.settings) is None
     # Linked again: the same install asks again.
     connected(api, hq)
-    assert tick(api) == "enrolled" and hq.gateway[-1] == body
+    # An uncontrolled post-enrollment check can hold this lock when the explicit tick runs. Model that ordering
+    # without a real thread or a timer: setup must intercept check_later as well as check_soon.
+    with (GC._auto_lock if deferred else nullcontext()):
+        assert tick(api) == "enrolled" and hq.gateway[-1] == body
 
 
 def test_a_pasted_key_wins_and_hq_refusals_are_kept_like_enrolls(api, hq, monkeypatch):

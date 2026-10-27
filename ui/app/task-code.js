@@ -124,14 +124,19 @@ function taskWorktreeWaitHTML(w) {
   const what = w.state === 'reserved' ? 'setting up' : 'no room yet';
   return `<li class="code-line wt wait" data-worktree-wait="${esc(w.id || '')}"><span class="code-main" title="${esc(w.reason || '')}"><span class="code-repo">${esc(repoShort(w.repo))}</span><span class="code-dot">·</span><span>Waiting for a worktree · ${esc(what)} · ${esc(ageShort(w.since))}</span></span></li>`;
 }
+// A check filed to its step's pool with no reviewer free yet (backend/check_pools.py): the first free one takes it.
+function taskCheckWaitHTML(w) {
+  return `<li class="code-line wt wait" data-check-wait="${esc(w.id || '')}"><span class="code-main" title="${esc(w.reason || '')}"><span class="code-repo">${esc(w.title || w.step || 'Check')}</span><span class="code-dot">·</span><span>${esc(w.label || 'Waiting for a reviewer')} · ${esc(ageShort(w.since))}</span></span></li>`;
+}
 function taskCodeHTML(t) {
   const links = taskCodeLinks(t), waits = Array.isArray(t.worktree_waits) ? t.worktree_waits : [];
-  if (!links.length && !waits.length) return '';
+  const checks = Array.isArray(t.check_waits) ? t.check_waits : [];
+  if (!links.length && !waits.length && !checks.length) return '';
   const mover = canMove();
   // Worktrees first, then pull requests; each in the order they were added.
   const sorted = [...links.filter(l => l.kind === 'worktree'), ...links.filter(l => l.kind === 'pr')];
   return `<section class="rail-sec task-code" aria-labelledby="task-code-h"><h3 class="rail-h" id="task-code-h">Code</h3>
-    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}</ul></section>`;
+    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}${checks.map(taskCheckWaitHTML).join('')}</ul></section>`;
 }
 
 // ---- Subtasks: the children (one level shown, each expandable), with the roll-up line

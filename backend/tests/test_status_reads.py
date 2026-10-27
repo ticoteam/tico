@@ -207,11 +207,14 @@ def test_status_task_reads_skip_finished_tasks_and_keep_the_same_rows(api, monke
     def read():
         steps = [0]
         with store.read_transaction() as c:
-            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
             inputs = privacy.status_inputs(c, slugs)
-            c.set_progress_handler(None, 1)
             actors = ["bot:" + slug for slug in slugs]
             marks = " IN (" + ",".join("?" * len(actors)) + ")"
+            # Only the task read is counted: each new task also gets a room under a random id, and where those ids
+            # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
+            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {tuple(t) for t in c.execute(
                 f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner{marks} OR requester{marks}) "

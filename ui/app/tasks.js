@@ -418,8 +418,11 @@ function boardColumnsHTML(columns, {head = ''} = {}) {
       <button type="button" class="bfold-open" data-board-unfold="${esc(column.fold)}" title="${esc(column.hint || 'Show')}" aria-label="${esc(`Show ${column.name}`)}"><h2>${esc(column.name)}</h2><span class="cnt tnum">${esc(String(count))}</span></button>
     </section>`;
     const fold = column.foldable ? `<button type="button" class="bfold-x" data-board-fold="${esc(column.foldable)}" aria-label="Fold" title="Fold">${TL_ICON.caret}</button>` : '';
+    const scope = column.scope ? ` data-board-type="${esc(column.scope.type)}" data-board-step="${esc(column.scope.step)}"` : '';
+    const all = column.items.length && tasksCanSelect()
+      ? `<button type="button" class="bcol-all" data-board-select="${esc(column.id)}"${scope} aria-label="${esc(`Select all in ${column.name}`)}" title="Select all in this column">${TL_ICON.all}</button>` : '';
     return `<section class="bcol${empty ? ' is-empty' : ''}" data-col="${esc(column.id)}"${drop} aria-label="${esc(column.name)}${column.hint ? `: ${esc(column.hint)}` : ''}">
-      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${fold}</header>
+      <header${column.hint ? ` title="${esc(column.hint)}"` : ''}><h2>${esc(column.name)}</h2><span class="cnt tnum">${count}</span>${RELEASE_COLUMN.test(column.name) ? '<span class="board-release-slot" data-release-slot></span>' : ''}${all}${fold}</header>
       ${empty ? '' : `<div class="bcol-body">${column.items.map(taskCard).join('') || '<div class="empty">Nothing here</div>'}</div>`}
     </section>`;
   }).join('')}</div>`;

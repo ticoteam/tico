@@ -921,6 +921,66 @@ def task_done(api, args):
     return task_update(api, {**args, "status": "done"})
 
 
+# hub_task_bulk's filter: what hub_task_list filters by, plus ids.
+TASK_BULK_FILTER = ("owner", "requester", "status", "lane", "label", "type", "step", "number", "updated_since",
+                    "member", "role", "snoozed", "ids")
+
+
+@tool("hub_task_bulk", "One change to every task a filter selects, in one call: move them to a step, set a status or "
+      "an owner, add or remove tags, or close them. The filter is hub_task_list's (owner, requester, status, label, "
+      "type, step, ...) plus `ids`, and must name at least one. Each task changes as hub_task_update or hub_task_close "
+      "would change it, with your rights: a task you may not change is skipped with the reason and the rest still "
+      "change. At most 200 tasks match a call; more is refused, so narrow the filter. `dry_run` answers the same counts "
+      "and changes nothing: run it first.",
+      {"filter": {"type": "object", "additionalProperties": False, "description": "Which tasks: at least one of these",
+                  "properties": {
+                      "owner": _s("Owner: a bot slug, a human id, or `me`"),
+                      "requester": _s("Requester: a bot slug, a human id, or `me`"),
+                      "status": {"type": "array", "items": {"type": "string", "enum": list(TASK_STATUSES)},
+                                 "description": "Only these statuses"},
+                      "lane": {"type": "string", "enum": ["company", "product"]},
+                      "label": _s("Only tasks carrying this tag"),
+                      "type": _s("Only tasks of this type (id or name)"),
+                      "step": _s("Only tasks in this step (id or name; with `type`, that type's step)"),
+                      "number": {"type": "integer", "minimum": 1, "maximum": 999999999},
+                      "updated_since": _s("Only tasks changed after this ISO-8601 time with a timezone"),
+                      "member": _s("Only tasks this person or bot is on in some role"),
+                      "role": _s("With member: only tasks they are on in this role"),
+                      "snoozed": {"type": "string", "enum": ["hide", "only", "all"]},
+                      "ids": {"type": "array", "items": {"type": "string"}, "maxItems": 100,
+                              "description": "Only these tasks (ids or numbers)"}}},
+       "action": {"type": "string", "enum": ["step", "status", "owner", "tags", "close"]},
+       "step": _s("With action step: the step to move them to (id or name within each task's type)"),
+       "status": {"type": "string", "enum": [s for s in TASK_STATUSES if s != "closed"],
+                  "description": "With action status"},
+       "owner": _s("With action owner: hand them to this bot or person"),
+       "add": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to add"},
+       "remove": {"type": "array", "items": {"type": "string"}, "description": "With action tags: tags to take off"},
+       "note": _s("What changed, or why; goes with each task's change"),
+       "dry_run": {"type": "boolean", "default": False, "description": "Count what would change; change nothing"}},
+      required=("filter", "action"), writes=True)
+def task_bulk(api, args):
+    where = dict(args.get("filter") or {})
+    for name in TASK_BULK_FILTER:               # the CLI's --where-owner, --where-step, ...
+        if args.get("where_" + name) not in (None, []):
+            where[name] = args["where_" + name]
+    for name in ("owner", "requester", "member"):
+        if where.get(name):
+            where[name] = _target(api, where[name])
+    if isinstance(where.get("status"), list):
+        where["status"] = ",".join(where["status"])
+    action = args["action"]
+    body = {"filter": where, "action": action, "dry_run": bool(args.get("dry_run"))}
+    if action in ("step", "status", "owner"):
+        value = args.get(action) if args.get(action) is not None else args.get("value")
+        body[action] = _target(api, value) if action == "owner" and value else value
+    if action == "tags":
+        body["add"], body["remove"] = list(args.get("add") or []), list(args.get("remove") or [])
+    if args.get("note"):
+        body["note"] = args["note"]
+    return api.post("task-bulk", body, key=_key(args))
+
+
 def _roles(api, args):
     """{role: [actors]} from `roles` (the tool's object) and `role` (the CLI's `--role name=a,b`, repeatable;
     `name=` clears the role), each person or bot resolved as an owner would be."""
@@ -3314,7 +3374,8 @@ _RULE_FIELDS = {
                                               "For a webhook event only trigger (the webhook's id) and type (order.* "
                                               "matches a prefix)"},
     "params": {"type": "object", "description": "An action rule names params.action: close, move_step, set_wait, relate, "
-                                                "note, wake_bot {bot, text}, send_webhook {webhook, type, data}, "
+                                                "note, assign {owner (a bot or person)}, add_tag {tag}, remove_tag {tag} "
+                                                "(a tag or a list), wake_bot {bot, text},send_webhook {webhook, type, data}, "
                                                 "create_task {owner (a bot), title, body} or forward {webhook} (the last two "
                                                 "only on webhook.received); text, data, title and body may hold {{path}} "
                                                 "placeholders (data.order, type, trigger.name). "

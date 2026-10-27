@@ -107,15 +107,29 @@ function taskBoardKeys(state, ev) {
 }
 function taskBoardClick(state, ev) {
   if (TASKS_ST !== state || state.view !== 'board') return;
-  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold],[data-card-owner]');
+  const hit = ev.target.closest('[data-board-owner],[data-board-blocked],[data-board-unfocus],[data-board-unfold],[data-board-fold],[data-card-owner],[data-board-select]');
   if (!hit) return;
   ev.stopPropagation(); ev.preventDefault();
-  if (hit.dataset.cardOwner) taskBoardOwnerMenu(state, hit);
+  if (hit.dataset.boardSelect) taskBoardSelectColumn(state, hit);
+  else if (hit.dataset.cardOwner) taskBoardOwnerMenu(state, hit);
   else if (hit.dataset.boardOwner) taskBoardOwnerToggle(state, hit.dataset.boardOwner);
   else if (hit.dataset.boardBlocked) taskBoardFocus(state, hit.dataset.boardBlocked);
   else if (hit.hasAttribute('data-board-unfocus')) { state.boardFocus = null; tasksRender(state); }
   else if (hit.dataset.boardUnfold) taskBoardFoldSet(state, hit.dataset.boardUnfold, false);
   else if (hit.dataset.boardFold) taskBoardFoldSet(state, hit.dataset.boardFold, true);
+}
+// Select all in this column: every card it shows. A type's step column is also a filter the server can run (that type,
+// that step, the open statuses a board shows), so the bulk change reaches the step's tasks as the board has them.
+function taskBoardSelectColumn(state, button) {
+  const column = button.closest('.bcol'); if (!column) return;
+  const keys = [...column.querySelectorAll('.bcard[data-task-key]')].map(card => card.dataset.taskKey);
+  const name = column.querySelector('h2')?.textContent || '';
+  const byId = tasksById(state);
+  // A finished or declined card in the column is shown, but the open statuses would miss it: its tasks go by id.
+  const open = keys.every(k => ['open', 'doing', 'waiting', 'review', 'ready'].includes(byId.get(k.slice(1))?.status || 'open'));
+  const base = button.dataset.boardStep && open
+    ? {type: button.dataset.boardType, step: button.dataset.boardStep, status: 'open,doing,waiting,review,ready'} : null;
+  tasksBulkSelectAll(state, keys, base, name ? `in ${name}` : 'in this column');
 }
 
 // ---- dragging a card, on a desktop pointer. The page carries it rather than the browser's drag and drop, so the
