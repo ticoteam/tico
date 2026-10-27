@@ -203,6 +203,70 @@ def _summary(c, runner_id, settings, default):
     return out
 
 
+def summaries(c, runner_ids, settings):
+    """`summary` for many computers in two scans. Each computer's counts are the ones `summary` would build
+    on its own, including the same claim refusal for each queued bot."""
+    from .read_cache import value
+    ids = tuple(sorted({rid for rid in runner_ids if rid}))
+    return value(c, ("start_summaries", ids), lambda: _summaries(c, ids, settings))
+
+
+def _summaries(c, runner_ids, settings):
+    from . import performance
+    out = {rid: dict(running=0, starting=0, waiting=0, queued=0, start_seconds=START_SECONDS) for rid in runner_ids}
+    groups = {rid: {} for rid in runner_ids}
+    if not runner_ids:
+        return out
+
+    def add(rid, reason, count, since):
+        out[rid]['waiting'] += count
+        old = groups[rid].setdefault(reason, {'reason': reason, 'count': 0, 'oldest': since})
+        old['count'] += count
+        old['oldest'] = min(old['oldest'], since)
+
+    now = H.now()
+    marks = ",".join("?" * len(runner_ids))
+    for row in c.execute("SELECT a.runner_id,a.state,a.created,a.lease_until,p.start_until,p.wait_reason,"
+                         "p.waiting_since,p.managed FROM attempts a LEFT JOIN start_places p ON p.attempt_id=a.id "
+                         f"WHERE a.runner_id IN ({marks}) AND a.state IN ('leased','running')", runner_ids):
+        rid = row['runner_id']
+        if row['state'] == 'running':
+            out[rid]['running'] += 1
+        elif row['wait_reason']:
+            add(rid, row['wait_reason'], 1, row['waiting_since'] or row['created'])
+        elif row['lease_until'] > now and (not row['managed'] or (row['start_until'] or '') > now):
+            out[rid]['starting'] += 1
+        else:
+            out[rid]['queued'] += 1
+    from .execution import claim_refusal
+    from .store import readiness_document
+    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
+    overloaded = {rid: performance.load_status(c, rid)['overloaded'] for rid in runner_ids}
+    reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
+               'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
+               'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget'}
+    for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
+                         "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.slug=j.bot "
+                         "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
+                         "GROUP BY a.runner_id,j.bot", runner_ids):
+        rid = row['runner_id']
+        runner = runners.get(rid)
+        ready = readiness_document(runner['readiness_json']) if runner else {}
+        why = 'bot paused' if row['bot_state'] != 'active' else ''
+        if not why and runner:
+            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready)
+            why = reasons.get(refused, 'pre-start requirements' if refused else '')
+        if not why and overloaded[rid]:
+            why = 'computer busy'
+        if why:
+            add(rid, why, row['n'], row['oldest'])
+        else:
+            out[rid]['queued'] += row['n']
+    for rid in out:
+        out[rid]['waits'] = sorted(groups[rid].values(), key=lambda g: (g['oldest'], g['reason']))
+    return out
+
+
 def describe(counts):
     parts = [f"{counts['running']} running", f"{counts['starting']} starting"]
     now = H.parse_ts(H.now())

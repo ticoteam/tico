@@ -1201,7 +1201,10 @@ def create_app(settings=None):
             f"SELECT task_id,schedule_id FROM schedule_occurrences WHERE task_id IN ({marks})", ids)}
 
         links = {tid: [] for tid in ids}
-        for link in c.execute(f"SELECT * FROM task_links WHERE task_id IN ({marks}) ORDER BY created", ids):
+        for link in c.execute(
+                f"SELECT id,task_id,kind,url,title,state,added_by,created,pr_sha,pr_merged_at,repo,number,branch,"
+                f"computer_id,path,checks,mergeable,review_state,pending_comments,updated "
+                f"FROM task_links WHERE task_id IN ({marks}) ORDER BY created", ids):
             # Not a link's record, its empty columns or its own write time (a computer's heartbeat rewrites that every
             # minute): the task's read and its /links have them, and every open tab gets each list change.
             links[link["task_id"]].append({k: v for k, v in dict(link).items()
@@ -5295,10 +5298,17 @@ def create_app(settings=None):
     def turns(request: Request, bot: str, since: str | None = None):
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # A snapshot, so the page's messages and runs are read together and stay cached for each check.
+        with store.read_transaction() as c:
             auth.require_read(c, who, bot)
+            since_at = views.since_time(since)
+            found = list(H.turns(c, bot, since=since_at))
+            stored = H.prime_messages(c, [turn["message_id"] for turn in found])
+            privacy.prime_messages(c, list(stored.values()))
+            privacy.prime_attempts(c, [turn["id"] for turn in found])
+            views.prime_attempt_details(c, [turn["id"] for turn in found])
             result = []
-            for turn in H.turns(c, bot, since=views.since_time(since)):
+            for turn in found:
                 msg = H.message(c, turn["message_id"])
                 if not msg:
                     continue
@@ -5309,7 +5319,7 @@ def create_app(settings=None):
                 except Problem:
                     continue
                 result.append({**turn, **views.attempt_details(c, turn)})
-            result.extend(views.failed_attempts(c, who, auth, bot, views.since_time(since)))
+            result.extend(views.failed_attempts(c, who, auth, bot, since_at))
             result.sort(key=lambda row: row.get("started") or "", reverse=True)
             from .usage_records import ran_on
             made = ran_on(c, [row["id"] for row in result])
