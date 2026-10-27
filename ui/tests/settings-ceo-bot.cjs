@@ -76,7 +76,7 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
   try {
     {
       const {page, errors, posted} = await open(browser);
-      await page.locator('[data-settings-tab="ceo"]').click();
+      await page.locator('[data-settings-tab="bots"]').click();
       const levels = page.locator('#set-ceo-bot [data-ceo-level]');
       await levels.first().waitFor();
       assert.equal(await levels.count(), 3);
@@ -110,10 +110,10 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
       await page.close();
     }
     {
-      // Named by the owner: the tab and the heading use that name.
+      // Named by the owner: the card in Bots and its heading use that name.
       const {page, errors} = await open(browser, {name: 'Atlas'});
-      assert.equal((await page.locator('[data-settings-tab="ceo"]').innerText()).trim(), 'Atlas');
-      await page.locator('[data-settings-tab="ceo"]').click();
+      await page.locator('[data-settings-tab="bots"]').click();
+      assert.equal((await page.locator('#settings-ceo h2').innerText()).trim(), 'Atlas');
       await page.locator('#set-ceo-bot [data-ceo-level]').first().waitFor();
       assert.match(await page.locator('#set-ceo-bot').innerText(), /How much your Atlas does/);
       assert.deepEqual(errors, []);
@@ -136,7 +136,7 @@ async function open(browser, {role = 'owner', name = 'CEO Bot'} = {}) {
     }
     for (const opts of [{role: 'admin'}, {role: 'viewer'}]) {
       const {page, errors} = await open(browser, opts);
-      assert.equal(await page.locator('[data-settings-tab="ceo"]').count(), 0, JSON.stringify(opts));
+      assert.equal(await page.locator('#settings-ceo').count(), 0, JSON.stringify(opts));
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -61,7 +61,7 @@ const {unrouted} = require('./support/routes.cjs');
     const choices = page.locator('#set-prov [data-provider-presets]');
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=devices]').click();
+      await page.locator('[data-settings-tab=models]').click();
       await page.evaluate(() => renderSettingsProviders());
       await choices.waitFor();
     };

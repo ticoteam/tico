@@ -168,7 +168,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await shot('desktop-gateway.png');
 
     // 5. Decisions: a company level next to the other model settings, saved with the rest.
-    await page.evaluate(() => { settingsShow('devices'); renderSettingsProviders(); });
+    await page.evaluate(() => { settingsShow('models'); renderSettingsProviders(); });
     const level = page.locator('#set-prov [data-provider-decide]');
     await level.waitFor();
     assert.equal(await level.inputValue(), 'low');

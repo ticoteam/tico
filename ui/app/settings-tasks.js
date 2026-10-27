@@ -59,6 +59,8 @@ function taskSettingsRow(r, type) {
   const change = !!r.can_change, on = isJob ? r.on : r.enabled;
   const quiet = r.then !== 'wake' && !(r.then === 'action' && r.params?.action === 'wake_bot');
   const link = taskSettingsLink(isJob ? {job: r.key} : {rule: r.id, bot: r.scope_kind === 'bot' ? r.scope_id : '', type: r.scope_kind === 'type' ? r.scope_id : ''});
+  // The routine timer's routines are edited in Automation → Bot routines, not on the timer's own row.
+  const edit = r.key === 'routine_timer' ? '#/settings/routines' : link;
   const state = (r.built_in && !change) || (isJob && !r.switch) ? 'Always on' : on === false ? 'Off' : 'On';
   const profile = r.profile || (r.created_by === 'profile' ? r.note?.match(/^From the ([^:]+) profile:/i)?.[1] : '');
   const usage = isJob || r.usage_available === false ? 'Run count unavailable' : `${r.runs_7d || 0} runs, ${r.no_op_7d ?? Math.round((r.no_op_rate_7d || 0) * (r.runs_7d || 0))} idle`;
@@ -68,7 +70,7 @@ function taskSettingsRow(r, type) {
     ${profile ? `<p class="settings-cell-note">From its ${esc(profile)} profile</p>` : ''}</div>
     <div class="task-setting-meta"><span class="pill">${esc(source)}</span><span class="pill">${esc(r.task_effect || (quiet ? 'Quiet' : 'Wakes'))}</span>
       <span title="Last 7 days">${esc(usage)}</span><span>${state}</span>
-      ${change ? `<a class="ghost" aria-label="${on === false ? 'Switch on' : 'Switch off'} in the editor" href="${esc(link)}">${on === false ? 'Switch on' : 'Switch off'}</a><a class="ghost" href="${esc(link)}">Edit</a>` : ''}</div></article>`;
+      ${change ? `<a class="ghost" aria-label="${on === false ? 'Switch on' : 'Switch off'} in the editor" href="${esc(link)}">${on === false ? 'Switch on' : 'Switch off'}</a><a class="ghost" href="${esc(edit)}">Edit</a>` : ''}</div></article>`;
 }
 function taskSettingsAdd(section, step = '') {
   if (!taskSettingsMayAdd()) return '';
@@ -97,7 +99,7 @@ function taskSettingsPaint() {
   el.innerHTML = `<label class="task-setting-picker">Type <select aria-label="Task settings type"><option value="">All tasks</option>${TASK_TYPES.map(t => `<option value="${esc(t.id)}"${t.id === TASK_SETTINGS_TYPE ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
     ${mayChange ? '' : `<p class="settings-cell-note">Ask ${esc(settingsOwnerName() || 'the team owner')} to change these.</p>`}
     ${TASK_SETTING_SECTIONS.map(sectionHTML).join('')}
-    ${[...footer].map(([bot,n]) => `<p class="settings-cell-note">${esc(bot ? empName(bot) + ' has' : 'There are')} ${n} more wake rules that are not about tasks. <a href="${esc(taskSettingsLink(bot ? {bot} : {}))}">See them in Rules.</a></p>`).join('')}`;
+    ${[...footer].map(([bot,n]) => `<p class="settings-cell-note">${esc(bot ? empName(bot) + ' has' : 'There are')} ${n} more wake rules that are not about tasks. <a href="${esc(taskSettingsLink(bot ? {bot} : {}))}">See them in Automation → Rules.</a></p>`).join('')}`;
   el.querySelector('select').onchange = e => { TASK_SETTINGS_TYPE = e.target.value; taskSettingsPaint(); };
 }
 async function taskSettingsLoad() {

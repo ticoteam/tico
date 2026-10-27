@@ -153,12 +153,13 @@ const noSideways = page => page.evaluate(() => document.documentElement.scrollWi
   const shot = async (page, name, el = '#settings-webhooks') => { if (shots) await page.locator(el).screenshot({path: path.join(shots, name + '.png')}); };
   try {
     {
-      // #/triggers lands on Settings > Webhooks, Incoming; the list has the built-in Tico Team row.
+      // #/triggers lands on Settings > Connections > Webhooks, Incoming; the list has the built-in Tico Team row.
       const {page, errors, state} = await open(browser, '#/triggers');
       const pane = page.locator('#settings-webhooks');
       await pane.locator('[data-wh-open="shop"]').waitFor();
-      assert.equal(new URL(page.url()).hash, '#/settings/webhooks');
-      assert.equal(await page.locator('[data-settings-tab="webhooks"]').innerText(), 'Webhooks');
+      assert.equal(new URL(page.url()).hash, '#/settings/connections');
+      assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await pane.locator('h2').innerText(), 'Webhooks');
       assert.equal(await pane.locator('[data-wh-tab="incoming"]').getAttribute('aria-checked'), 'true');
       assert.match(await pane.locator('[data-wh-open="shop"]').innerText(), /12 in 24h · 2 refused/);
       assert.match(await pane.locator('[data-wh-open="_tico"]').innerText(), /Built-in/);

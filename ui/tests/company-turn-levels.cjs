@@ -42,7 +42,7 @@ const {unrouted} = require('./support/routes.cjs');
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));
       });
-      await page.goto('https://tico-ui.test/#/settings/devices');
+      await page.goto('https://tico-ui.test/#/settings/limits');
       const warning = page.locator('#turn-levels-form [name=warning_per_person]');
       const stop = page.locator('#turn-levels-form [name=stop_per_person]');
       await warning.waitFor();

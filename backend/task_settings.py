@@ -40,7 +40,7 @@ JOBS = {
     "task_manager_report": ("open", "Task Manager: per department, list quiet tasks, overdue asks, review tickets without a PR and merged work whose step did not move."),
     "stall_triage": ("open", "Ask Decide what to do with a quiet task: set a wait, close it, or wake once."),
     "propose_demotions": ("open", "Suggest turning noisy wake rules into notes; changes nothing itself."),
-    "routine_timer": ("open", "Start each bot routine (these file tasks). Edit them in Tasks → Routines."),
+    "routine_timer": ("open", "Start each bot routine (these file tasks). Edit them in Automation → Bot routines."),
     "stale_review": ("after", "Suggest what to do with open tasks that look finished or forgotten."),
 }
 

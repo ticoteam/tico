@@ -367,7 +367,7 @@ function onbSummaryHTML(state) {
     ${label('Team size', a.team_size)}
     ${label('AI providers', PROVIDER_PRESETS.find(row => row.id === state.providers?.preset)?.label
       || (state.providers?.providers || []).filter(row => (state.providers.enabled || []).includes(row.id)).map(row => row.label).join(', ')
-      || 'Choose later in Settings > Computers')}
+      || 'Choose later in Settings > AI models')}
     ${label('Computers', onbMachineStatus(r))}
     ${frSummaryTeamHTML(state)}
   </div>`;
@@ -535,7 +535,7 @@ async function onbAdvance(state, key) {
   }
   if (key === 'providers') {
     const chosen = providersCollect($('#onb-prov'));
-    // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > Computers).
+    // Nothing ticked is fine: the team is created first and its bots run once a provider is added (Settings > AI models).
     if (!chosen.enabled.length && !state.providers.enabled?.length) {
       state.providers = {...state.providers, enabled: [], default: {runtime: '', model: ''}};
       state.step += 1; onbRender(state); return;

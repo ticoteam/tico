@@ -196,7 +196,7 @@ JOBS = [
     Job("still_needed", "Unanswered questions",
         "On weekday mornings, sends questions unanswered for two business days back to their bots.",
         REMINDERS, "Hourly", 3600, then=("resend_questions",)),
-    Job("routine_timer", "Bot routine timer", "Starts each bot routine below when it is due.",
+    Job("routine_timer", "Bot routine timer", "Starts each bot routine when it is due.",
         HOUSEKEEPING, "Every 10 seconds", 10, then=("start_routines",)),
     Job("stall_checks", "Stall checks",
         "Wakes the bot on a task nothing is moving, and drops queued work its bot can no longer read.",

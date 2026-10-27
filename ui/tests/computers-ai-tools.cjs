@@ -103,7 +103,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     const row = id => page.locator(`#set-machines tr[data-computer-row="${id}"]`);
     await row('box').waitFor();
     // Opening the tab paints the list, then re-reads presence and says "checking…" until that answers.
@@ -460,7 +460,7 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     const afterLeaving = presenceReads;
     await page.clock.fastForward(65000);
     assert.equal(presenceReads, afterLeaving);
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.evaluate(() => SETTINGS_PRESENCE.pending);
     assert.ok(presenceReads > afterLeaving);
     await page.clock.resume();

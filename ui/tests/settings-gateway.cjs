@@ -97,7 +97,7 @@ const {unrouted} = require('./support/routes.cjs');
     const card = page.locator('#set-gateway');
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=devices]').click();
+      await page.locator('[data-settings-tab=models]').click();
       await page.evaluate(() => renderSettingsProviders());
       await card.waitFor();
     };

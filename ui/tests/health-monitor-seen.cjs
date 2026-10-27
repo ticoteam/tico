@@ -56,7 +56,6 @@ const shots = process.env.TICO_SHOTS || '';
     const shot = async name => { if (shots) await page.screenshot({path: path.join(shots, name + '.png')}); };
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
     await page.locator('[data-settings-tab=health]').click();
     const row = key => page.locator(`#hl-page [data-hl-finding="${key}"]`);
     await row('computer_silent:r1').waitFor({timeout: t(5000)});

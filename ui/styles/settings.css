@@ -14,6 +14,8 @@
 .settings-group-divider{border:0;border-top:1px solid var(--line);margin:6px 0}
 .settings-group-pick{display:none}
 .settings-group-line{margin:0 0 12px;color:var(--muted)}
+/* A card's first line: what it controls, in plain words. */
+.settings-card-line{margin:0 0 12px;color:var(--muted)}
 @media (max-width:760px){
   .settings-layout{grid-template-columns:minmax(0,1fr);gap:12px}
   .settings-groups{position:static}

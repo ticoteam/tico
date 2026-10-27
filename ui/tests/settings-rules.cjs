@@ -344,13 +344,13 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
         await row(page, 'r-team').waitFor();
         await page.evaluate(() => { S.emps ||= []; });
         const links = [
-          ['#/settings/ceo', 'ceo'],       // includes the CEO-level person-only refusal link
-          ['#/settings/devices', 'devices'],
+          ['#/settings/ceo', 'bots'],       // includes the CEO-level person-only refusal link
+          ['#/settings/devices', 'computers'],
           ['#/settings/bots', 'bots'],
-          ['#/settings/recurring', 'recurring'],
+          ['#/settings/recurring', 'automation'],
           ['#/settings/tasks', 'tasks'],
           ['#/settings/health', 'health'],
-          ['#/settings/bots/settings-turn-budgets', 'bots'], // existing tab/card form
+          ['#/settings/bots/settings-turn-budgets', 'limits'], // the old tab/card form opens the card where it is now
         ];
         for (const [href, tab] of links) {
           await page.evaluate(() => { location.hash = '#/updates'; });
@@ -363,7 +363,7 @@ const row = (page, id) => page.locator(`[data-rule="${id}"]`);
         await page.evaluate(() => { location.hash = '#/updates'; });
         await page.waitForFunction(() => S.route === '#/updates');
         await page.evaluate(() => { location.hash = '#/settings/webhooks/outgoing'; });
-        await page.waitForFunction(() => location.hash === '#/settings/webhooks' && SETTINGS_TAB === 'webhooks' && WH.tab === 'outgoing');
+        await page.waitForFunction(() => location.hash === '#/settings/connections' && SETTINGS_TAB === 'connections' && WH.tab === 'outgoing');
         assert.deepEqual(errors, []);
         await page.close();
       }

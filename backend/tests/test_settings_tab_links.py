@@ -1,23 +1,25 @@
 """Every in-app link that names a Settings tab names one that exists. A link to #/settings carries the tab it means
 (data-gs-tab in the UI, a fix's "tab" from the server); ui/getting-started.js switches to it, and settingsShow
-(ui/app/settings.js) quietly falls back to Computers for a name it does not know, so a wrong name opens the wrong tab."""
+(ui/app/settings.js) quietly falls back to You for a name it does not know, so a wrong name opens the wrong group."""
 import ast
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = "#/settings"
-# Names settingsShow takes besides the tabs: old ones it maps (tags, types, providers; team, assistant, privacy and
-# storage, now sections of General), the Models section of Computers (models), History's Runs view (runs), or ones it
-# sends to the Tools page (credentials, cloud).
-ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy", "storage", "runs", "credentials",
-           "cloud"}
+# Names settingsShow takes besides the groups and the old names in SETTINGS_PLACES: ones it sends to the Tools page.
+ALIASES = {"credentials", "cloud"}
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
-    assert {"devices", "bots", "health"} <= tabs
-    return tabs | ALIASES
+    js = (ROOT / "ui/app/settings.js").read_text()
+    groups = set(re.findall(r"\{key: '([a-z]+)', label:", js))
+    assert {"you", "computers", "bots", "health", "policies"} <= groups
+    # The old tab and section names (devices, general, repos...) each open the group and card they moved to.
+    places = js[js.index("const SETTINGS_PLACES = {"):]
+    places = set(re.findall(r"(?:^|[{,\s])'?([a-z-]+)'?: \['", places[:places.index("\n};")]))
+    assert {"devices", "general", "gateway", "team", "runs"} <= places
+    return groups | places | ALIASES
 
 
 def ui_links():
@@ -63,7 +65,7 @@ def server_links():
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
     # The links people hit most: chat's waiting line, the Goal Manager, first run, the Librarian.
-    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "devices"), ("ui/app/goals.js", "models"),
+    assert {("ui/app/chat.js", "models"), ("ui/app/chat.js", "computers"), ("ui/app/goals.js", "models"),
             ("ui/first-run.js", "models")} <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 
