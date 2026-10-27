@@ -49,6 +49,28 @@ const effective = (data) => {
   return own;
 };
 
+// A save as the server reads it (backend set_access): an option left out of a write grant or a ticked repository keeps
+// what is stored, an explicit true or false sets it, and Read for all ticked repos clears their ticks.
+const FLAGS = ['run_workflows', 'edit_workflows'];
+const kept = (bot, body) => {
+  const out = {};
+  if (body.chosen) out.chosen = body.chosen.map(c => {
+    const was = (bot.chosen || []).find(o => o.full_name === c.full_name) || {};
+    return {full_name: c.full_name, access: c.access, ...Object.fromEntries(FLAGS
+      .filter(f => c.access === 'write' && (c[f] === undefined ? was[f] : c[f])).map(f => [f, true]))};
+  });
+  const ticks = new Map((bot.all_repos || []).map(r => [r.full_name, {...r}]));
+  for (const r of body.all_repos || []) {
+    const row = ticks.get(r.full_name) || {full_name: r.full_name};
+    for (const f of FLAGS) if (r[f] !== undefined) row[f] = r[f];
+    ticks.set(r.full_name, row);
+  }
+  out.all_repos = (body.all_access || bot.all_access) !== 'write' ? [] : [...ticks.values()]
+    .map(r => ({full_name: r.full_name, ...Object.fromEntries(FLAGS.filter(f => r[f]).map(f => [f, true]))}))
+    .filter(r => FLAGS.some(f => r[f]));
+  return out;
+};
+
 async function open(browser, {role = 'owner', admin = false, connected = true, viewport = {width: 1440, height: 900}, theme = 'dark', bot: botMore = {}} = {}) {
   const data = fixtures(); data.github_connected = connected; data.bot = {...data.bot, ...botMore};
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -110,7 +132,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
         data.inflight = (data.inflight || 0) + 1; data.maxInflight = Math.max(data.maxInflight || 0, data.inflight);
         if (data.hold) { const gate = data.hold; data.hold = null; await gate; }        // held until the test releases it
         data.inflight -= 1;
-        data.bot = {...data.bot, ...body};
+        data.bot = {...data.bot, ...body, ...kept(data.bot, body)};
       }
       if (method === 'GET' && data.holdGet) { const gate = data.holdGet; data.holdGet = null; data.getHeld = true; await gate; }
       return json({...data.bot, effective: effective(data)});         // GET and PUT both answer the whole access (backend access())
@@ -398,6 +420,39 @@ async function saves(browser) {
   assert.deepEqual(writes.slice(from).map(w => w.body.mode), ['own', 'all']);
   assert.equal(data.bot.mode, 'all', 'the newer choice is saved');
   assert.equal(await box.locator('input[type=radio][value=all]').isChecked(), true);
+  // An option ticked, then unticked while that save is on its way: the next save sends the untick, and it stays off.
+  const quickUntick = async (option, attr, name) => {
+    const control = box.locator(`${name} [${attr}]`);
+    const hold = gate(); data.hold = hold.held;
+    const start = writes.length;
+    await control.check();
+    await until(() => writes.length === start + 1, 'the tick is on its way');
+    await control.uncheck();
+    hold.release();
+    await until(() => writes.length === start + 2, 'the untick is sent');
+    await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved', null, {timeout: t(5000)});
+    return {control, sent: writes.slice(start).map(w => w.body)};
+  };
+  await box.locator('.brepo-all label:has(input[value=write])').click();
+  await until(() => data.bot.all_access === 'write' && data.bot.mode === 'all', 'Write for all ticked repos');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  for (const [option, attr] of [['run_workflows', 'data-brepo-run'], ['edit_workflows', 'data-brepo-edit']]) {
+    const {control, sent} = await quickUntick(option, attr, '[data-brepo-all="acme/web"]');
+    assert.deepEqual(sent.map(b => b.all_repos), [[{full_name: 'acme/web', [option]: true}], [{full_name: 'acme/web', [option]: false}]]);
+    assert.deepEqual(data.bot.all_repos, [], 'nothing ticked on the server');
+    assert.equal(effective(data).some(r => r[option]), false);
+    assert.equal(await control.isChecked(), false, option + ' stays unticked after Saved');
+  }
+  // The same under Chosen repos.
+  await box.locator('label:has(input[type=radio][value=chosen])').click();
+  await until(() => data.bot.mode === 'chosen', 'Chosen repos');
+  await page.waitForFunction(() => document.querySelector('#bot-editor [data-brepo-status]')?.textContent === 'Saved');
+  {
+    const {control, sent} = await quickUntick('run_workflows', 'data-brepo-run', '[data-brepo="acme/web"]');
+    assert.deepEqual(sent.map(b => b.chosen.find(c => c.full_name === 'acme/web').run_workflows), [true, false]);
+    assert.equal(data.bot.chosen.find(c => c.full_name === 'acme/web').run_workflows, undefined);
+    assert.equal(await control.isChecked(), false);
+  }
   assert.deepEqual(errors, []);
   console.log('saves: ok');
   await page.close();

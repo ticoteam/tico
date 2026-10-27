@@ -325,6 +325,12 @@ async function botReposMount(host, slug) {
             BOT_REPO_FLAGS.filter(([flag]) => state.flags[flag].has(full_name) || state.served[flag].has(full_name))
               .map(([flag]) => [flag, state.flags[flag].has(full_name)])))})),
           ...allTicks()};
+        // An option this save turns on may be on once it lands, so an untick made meanwhile goes as an explicit off:
+        // a later save that left it out would keep it.
+        for (const [flag] of BOT_REPO_FLAGS) {
+          for (const c of body.chosen) if (c[flag]) state.served[flag].add(c.full_name);
+          for (const r of body.all_repos || []) if (r[flag]) state.all_served[flag].add(r.full_name);
+        }
         try {
           const saved = await put(`/v2/bots/${encodeURIComponent(slug)}/repositories`, body);
           view = saved?.mode ? saved : await read();
