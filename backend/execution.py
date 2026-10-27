@@ -2051,8 +2051,12 @@ class Execution:
         with self.stall_lock:
             if sum(map(len, self.calls.values())) >= 4096:
                 cutoff = H.shift(arrived, seconds=-self.store.settings.lease_seconds)
-                self.calls = {k: kept for k, v in self.calls.items()
-                              if (kept := {t: x for t, x in v.items() if x[1] > cutoff})}
+                for other in list(self.calls):
+                    kept = {t: x for t, x in self.calls[other].items() if x[1] > cutoff}
+                    if kept:
+                        self.calls[other] = kept
+                    else:
+                        del self.calls[other]
             self.calls.setdefault(aid, {})[call] = (who.runner_id, arrived)
         try:
             yield arrived

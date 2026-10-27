@@ -104,3 +104,13 @@ def test_only_the_attempts_own_runner_keeps_it(api):
     expire(api, a["id"])
     assert claim(api, r) is None
     assert state(api, a["id"])["state"] == "expired"
+
+
+def test_old_unlanded_calls_are_pruned(api, monkeypatch):
+    from backend.auth import Identity
+    execution = api.app.state.execution
+    old = H.shift(H.now(), seconds=-api.app.state.store.settings.lease_seconds - 1)
+    execution.calls = {f"gone-{n}": {object(): ("r", old)} for n in range(4096)}
+    with execution.calling(Identity("runner:r", "runner", runner_id="r"), "live"):
+        pass
+    assert execution.calls == {}
